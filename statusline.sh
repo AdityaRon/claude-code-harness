@@ -58,4 +58,16 @@ if [[ -n "$SID" ]]; then
   fi
 fi
 
-printf '%s%s\n' "$LINE" "$PLAN_SEG"
+# Workflow link (OSC-8) to this session's latest run script, if a pointer exists.
+WF_SEG=""
+if [[ -n "$SID" ]]; then
+  WPTR="${CLAUDE_WORKFLOW_STATE_DIR:-$HOME/.claude/state/workflows}/$SID.path"
+  if [[ -f "$WPTR" ]]; then
+    read -r WF < "$WPTR"
+    if [[ -n "$WF" && -f "$WF" ]]; then
+      WF_SEG=$(printf ' │ \033]8;;file://%s\033\\\342\224\200 \342\232\231 wf\033]8;;\033\\' "$WF")
+    fi
+  fi
+fi
+
+printf '%s%s%s\n' "$LINE" "$PLAN_SEG" "$WF_SEG"

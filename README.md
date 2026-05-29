@@ -64,6 +64,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 
 | Hook | Event | Behaviour |
 |---|---|---|
+| `workflow-record` | PostToolUse → Workflow | Logs each workflow run's persisted `.js` script path to the audit log and records a per-session pointer the status line links to, so buried run scripts are easy to find and open in your editor. Discoverability only — no rendering. |
 | `plan-to-html` | PreToolUse → ExitPlanMode | Renders the proposed plan as a styled, self-contained HTML file and opens it in your browser, so long plans are comfortable to read before you approve/reject in the terminal. Runs `async` — never blocks or delays the approval prompt. Markdown is base64-embedded (no escaping can break the page) and decoded as UTF-8 client-side via [marked](https://marked.js.org/) and rendered with a GitHub-dark theme plus [highlight.js](https://highlightjs.org/) syntax highlighting for fenced code; falls back to readable raw markdown when offline. Plans authored as a **full HTML document** are served verbatim (no double-wrap). Output lands in `~/.claude/plans-html/` (newest 50 kept), and the session's latest plan is linked from the **status line** as a clickable OSC-8 hyperlink. |
 
 ### Settings shipped
@@ -97,7 +98,8 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
     session-snapshot.sh
     pre-compact.sh
     plan-to-html.sh
-  statusline.sh          ← model | repo:branch | context | tokens | cost | [rate limits] | clickable plan link
+    workflow-record.sh
+  statusline.sh          ← model | repo:branch | context | tokens | cost | [rate limits] | plan + workflow links
   logs/
     audit.log            ← append-only audit trail, 0600, rotated
   transcripts/
@@ -108,6 +110,8 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
       <session_id>.json  ← per-session edit snapshot, 0600, newest 50 kept
     plans/
       <session_id>.path  ← pointer to the session's latest rendered plan (statusline link)
+    workflows/
+      <session_id>.path  ← pointer to the session's latest workflow run script (statusline link)
   plans-html/
     plan-20260528-143022.html  ← rendered plan, opened in browser, newest 50 kept
 ```

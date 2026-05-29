@@ -125,6 +125,10 @@
       {
         "matcher": "Edit|Write|Bash",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
+      },
+      {
+        "matcher": "Workflow",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/workflow-record.sh", "async": true }]
       }
     ],
     "PostToolUseFailure": [
