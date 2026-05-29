@@ -97,7 +97,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
     session-snapshot.sh
     pre-compact.sh
     plan-to-html.sh
-  statusline.sh          ← model | context | tokens | cost | clickable plan link
+  statusline.sh          ← model | repo:branch | context | tokens | cost | [rate limits] | clickable plan link
   logs/
     audit.log            ← append-only audit trail, 0600, rotated
   transcripts/

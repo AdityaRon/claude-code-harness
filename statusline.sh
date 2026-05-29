@@ -1,53 +1,63 @@
 #!/usr/bin/env bash
-# Single-process statusline — parsing/formatting done in one jq call.
-# Shows: model │ context bar + % │ tokens (in/out/cache) │ cost │ ‹ plan link ›
-# The plan segment is an OSC-8 hyperlink to this session's most recently
-# rendered plan HTML (written by plan-to-html.sh), so it is one click to review.
+# Single-jq statusline: one jq pass formats everything except the git branch
+# (resolved subprocess-free from .git/HEAD, worktree-aware) and the plan link
+# (from the session pointer file). No external tools, no git subprocess.
+# model │ repo:branch │ context bar+% │ tokens │ cost │ [rate limits] │ plan
 export PATH="/opt/homebrew/bin:$PATH"
 exec 2>/dev/null
 
 INPUT=$(cat)
 
-# Clickable link to this session's latest rendered plan, if one exists.
-PLAN_SEG=""
-SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty')
-if [[ -n "$SID" ]]; then
-  PTR="${CLAUDE_PLAN_STATE_DIR:-$HOME/.claude/state/plans}/$SID.path"
-  if [[ -f "$PTR" ]]; then
-    PLAN=$(cat "$PTR")
-    if [[ -n "$PLAN" && -f "$PLAN" ]]; then
-      # OSC-8 hyperlink: ESC ] 8 ;; file://<path> ESC \  <label>  ESC ] 8 ;; ESC \
-      PLAN_SEG=$(printf ' │ \033]8;;file://%s\033\\\342\224\200 \360\237\223\204 plan\033]8;;\033\\' "$PLAN")
-    fi
-  fi
-fi
-
-LINE=$(printf '%s' "$INPUT" | jq -r '
-  def fmt: if . >= 1000000 then "\(. / 1000000 * 10 | floor / 10)M"
-           elif . >= 1000 then "\(. / 1000 * 10 | floor / 10)k"
-           else "\(.)" end;
-
+# One jq pass -> TAB-separated: <formatted line w/ __BR__ token>\t<session_id>\t<current_dir>
+IFS=$'\t' read -r LINE SID CDIR < <(printf '%s' "$INPUT" | jq -r '
+  def fmt: if . >= 1000000 then "\(./1000000*10|floor/10)M"
+           elif . >= 1000 then "\(./1000*10|floor/10)k" else "\(.)" end;
   (.model.display_name // "...") as $model |
+  ((.workspace.project_dir // .workspace.current_dir // .cwd // "") | split("/") | last) as $base |
+  (if ($base|length) > 18 and ($base|test("[-_]"))
+     then ($base | split("[-_]"; "") | map(.[0:1]) | join("")) else $base end) as $repo |
   ((.context_window.used_percentage // 0) | floor) as $pct |
   (.cost.total_cost_usd // 0) as $cost |
   (.context_window.current_usage.input_tokens // 0) as $in |
   (.context_window.current_usage.output_tokens // 0) as $out |
   (.context_window.current_usage.cache_read_input_tokens // 0) as $cache |
-
-  # color: green <50, yellow <70, red >=70
+  (.rate_limits.five_hour.used_percentage) as $r5 |
+  (.rate_limits.seven_day.used_percentage) as $r7 |
   (if $pct >= 70 then "\u001b[91m" elif $pct >= 50 then "\u001b[33m" else "\u001b[32m" end) as $c |
-  "\u001b[0m" as $r |
-
-  # bar: 10 chars
-  ([$pct / 10 | floor, 0] | max) as $filled |
-  ([10 - $filled, 0] | max) as $empty |
-  ("▓" * $filled + "░" * $empty) as $bar |
-
-  # warning at high usage
-  (if $pct >= 80 then " \($c)USE /compact\($r)"
-   elif $pct >= 70 then " \($c)⚠\($r)"
-   else "" end) as $warn |
-
-  "\($model) │ \($c)\($bar)\($r) \($pct)%\($warn) │ in:\($in | fmt) out:\($out | fmt) cache:\($cache | fmt) │ $\($cost * 100 | floor / 100)"
+  "\u001b[0m" as $r | "\u001b[2m" as $dim | "\u001b[36m" as $cy |
+  ([$pct / 10 | floor, 0] | max) as $f |
+  ([10 - $f, 0] | max) as $e |
+  (("▓" * $f) + ("░" * $e)) as $bar |
+  (if $pct >= 80 then " \($c)USE /compact\($r)" elif $pct >= 70 then " \($c)⚠\($r)" else "" end) as $warn |
+  (if $r5 != null then " │ \($dim)5h:\($r5|floor)% 7d:\(($r7 // 0)|floor)%\($r)" else "" end) as $rl |
+  "\($model) │ \($cy)\($repo)__BR__\($r) │ \($c)\($bar)\($r) \($pct)%\($warn) │ \($dim)in:\($in|fmt) out:\($out|fmt) cache:\($cache|fmt)\($r) │ $\($cost * 100 | floor / 100)\($rl)"
+  + "\t" + (.session_id // "") + "\t" + (.workspace.current_dir // .cwd // "")
 ')
+
+# Git branch without a subprocess: walk up for .git (dir, or worktree pointer
+# file), then read HEAD. Falls back to a short SHA when detached.
+branch=""; gitdir=""; d="$CDIR"
+while [[ -n "$d" && "$d" != "/" ]]; do
+  if [[ -d "$d/.git" ]]; then gitdir="$d/.git"; break
+  elif [[ -f "$d/.git" ]]; then read -r _ gitdir < "$d/.git"; break; fi
+  d="${d%/*}"
+done
+if [[ -n "$gitdir" && -f "$gitdir/HEAD" ]]; then
+  read -r ref < "$gitdir/HEAD"
+  if [[ "$ref" == ref:* ]]; then branch="${ref#ref: refs/heads/}"; else branch="${ref:0:7}"; fi
+fi
+if [[ -n "$branch" ]]; then LINE="${LINE/__BR__/:$branch}"; else LINE="${LINE/__BR__/}"; fi
+
+# Plan link (OSC-8) to this session's latest rendered plan, if a live pointer exists.
+PLAN_SEG=""
+if [[ -n "$SID" ]]; then
+  PTR="${CLAUDE_PLAN_STATE_DIR:-$HOME/.claude/state/plans}/$SID.path"
+  if [[ -f "$PTR" ]]; then
+    read -r PLAN < "$PTR"
+    if [[ -n "$PLAN" && -f "$PLAN" ]]; then
+      PLAN_SEG=$(printf ' │ \033]8;;file://%s\033\\\342\224\200 \360\237\223\204 plan\033]8;;\033\\' "$PLAN")
+    fi
+  fi
+fi
+
 printf '%s%s\n' "$LINE" "$PLAN_SEG"

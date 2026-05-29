@@ -16,6 +16,17 @@ OUT=$(run '{"model":{"display_name":"Opus 4.8"},"context_window":{"used_percenta
 printf '%s' "$OUT" | grep -q "Opus 4.8" && pass "shows model" || fail "shows model" "$OUT"
 printf '%s' "$OUT" | grep -q "42%" && pass "shows percent" || fail "shows percent" "$OUT"
 
+echo "=== Repo name abbreviated when long ==="
+OUT=$(run '{"workspace":{"project_dir":"/x/lacework-security-content"},"model":{"display_name":"Opus"},"context_window":{"used_percentage":3}}')
+printf '%s' "$OUT" | grep -q "lsc" && pass "long repo name acronymized" || fail "long repo name acronymized" "$OUT"
+
+echo ""
+echo "=== Rate-limit segment shows only when present ==="
+OUT=$(run '{"model":{"display_name":"Opus"},"context_window":{"used_percentage":3},"rate_limits":{"five_hour":{"used_percentage":63},"seven_day":{"used_percentage":21}}}')
+printf '%s' "$OUT" | grep -q "5h:63%" && pass "rate limit shown when present" || fail "rate limit shown when present" "$OUT"
+OUT=$(run '{"model":{"display_name":"Opus"},"context_window":{"used_percentage":3}}')
+printf '%s' "$OUT" | grep -q "5h:" && fail "no rate limit when absent" "$OUT" || pass "no rate limit when absent"
+
 echo ""
 echo "=== Plan link appears when a pointer exists ==="
 PLAN="$TMP/plan-x.html"; echo "<html></html>" > "$PLAN"
