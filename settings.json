@@ -113,6 +113,10 @@
       {
         "matcher": "WebFetch",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/network-guard.sh" }]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/plan-to-html.sh", "async": true }]
       }
     ],
     "PostToolUse": [
