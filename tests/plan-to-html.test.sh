@@ -38,6 +38,8 @@ grep -q "marked.parse" "$OUT" && pass "uses marked renderer" || fail "uses marke
 grep -q "marked.min.js" "$OUT" && pass "loads marked from CDN" || fail "loads marked from CDN" ""
 grep -q "TextDecoder" "$OUT" && pass "decodes as UTF-8" || fail "decodes as UTF-8" ""
 grep -q 'window.marked' "$OUT" && grep -q 'createElement("pre")' "$OUT" && pass "has offline fallback" || fail "has offline fallback" ""
+grep -q "highlight.min.js" "$OUT" && grep -q "hljs.highlightElement" "$OUT" && pass "syntax highlighting wired" || fail "syntax highlighting wired" ""
+grep -q "#0d1117" "$OUT" && pass "rich dark theme applied" || fail "rich dark theme applied" ""
 
 echo ""
 echo "=== Base64 round-trips the markdown (incl. non-ASCII) ==="

@@ -44,37 +44,50 @@ cat > "$out" <<HTML
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Claude Plan — $ts</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
 <style>
-  :root { color-scheme: light dark; }
-  body {
-    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    max-width: 820px; margin: 0 auto; padding: 3rem 1.5rem 6rem;
-    color: #1a1a1a; background: #fafafa;
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2430; --border:#30363d;
+    --fg:#e6edf3; --muted:#9da7b3; --accent:#58a6ff; --green:#3fb950;
+    --amber:#d29922; --red:#f85149; --purple:#bc8cff; --orange:#ffa657;
   }
-  @media (prefers-color-scheme: dark) {
-    body { color: #e6e6e6; background: #161616; }
-    code, pre { background: #232323 !important; }
-    a { color: #6cb6ff; }
-    th { background: #232323; }
-    table, th, td { border-color: #333; }
-  }
-  h1, h2, h3 { line-height: 1.25; margin-top: 2rem; }
-  h1 { border-bottom: 2px solid #8884; padding-bottom: .3rem; }
-  h2 { border-bottom: 1px solid #8884; padding-bottom: .2rem; }
-  code { background: #00000010; padding: .15em .4em; border-radius: 4px; font-size: .9em; }
-  pre { background: #00000010; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-  pre code { background: none; padding: 0; }
-  blockquote { border-left: 3px solid #8886; margin: 1rem 0; padding: .2rem 1rem; color: #8888; }
-  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
-  th, td { border: 1px solid #ccc; padding: .5rem .75rem; text-align: left; }
-  th { background: #00000008; }
-  .meta { color: #8888; font-size: .85rem; margin-bottom: 2rem; }
-  .fallback { white-space: pre-wrap; word-wrap: break-word; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15.5px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:900px;margin:0 auto;padding:40px 28px 90px;}
+  .meta{color:var(--muted);font-size:12.5px;letter-spacing:.02em;margin-bottom:26px;
+    border-bottom:1px solid var(--border);padding-bottom:14px}
+  h1{font-size:30px;line-height:1.25;margin:0 0 14px;letter-spacing:-.02em}
+  h2{font-size:21px;margin:38px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+  h3{font-size:16.5px;margin:24px 0 8px;color:var(--purple)}
+  h4{font-size:14.5px;margin:18px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  p,li{margin:9px 0}
+  ul,ol{padding-left:24px}
+  strong{color:#fff}
+  code{background:var(--panel2);color:var(--orange);padding:2px 6px;border-radius:5px;
+    font:13px/1.5 "SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  pre{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:14px 16px;overflow-x:auto;margin:14px 0}
+  pre code{background:none;padding:0;font-size:13px}
+  blockquote{border-left:3px solid var(--accent);background:rgba(88,166,255,.07);
+    padding:12px 18px;border-radius:0 8px 8px 0;margin:16px 0;color:var(--fg)}
+  blockquote p{margin:6px 0}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+  th,td{border:1px solid var(--border);padding:8px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel);font-weight:600}
+  tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+  hr{border:none;border-top:1px solid var(--border);margin:28px 0}
+  .fallback{white-space:pre-wrap;word-wrap:break-word;color:var(--fg)}
 </style>
 </head>
 <body>
+<div class="wrap">
 <div class="meta">Plan rendered $ts · Claude Code harness</div>
 <article id="content"></article>
+</div>
 <script>
   var bytes = Uint8Array.from(atob("$b64"), function (c) { return c.charCodeAt(0); });
   var md = new TextDecoder("utf-8").decode(bytes);
@@ -83,6 +96,10 @@ cat > "$out" <<HTML
   // markdown so the plan is never lost when offline.
   if (window.marked && typeof marked.parse === "function") {
     el.innerHTML = marked.parse(md);
+    // Syntax-highlight fenced code blocks when highlight.js is available.
+    if (window.hljs) {
+      document.querySelectorAll("pre code").forEach(function (b) { hljs.highlightElement(b); });
+    }
   } else {
     var pre = document.createElement("pre");
     pre.className = "fallback";
