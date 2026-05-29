@@ -13,9 +13,7 @@ IFS=$'\t' read -r LINE SID CDIR < <(printf '%s' "$INPUT" | jq -r '
   def fmt: if . >= 1000000 then "\(./1000000*10|floor/10)M"
            elif . >= 1000 then "\(./1000*10|floor/10)k" else "\(.)" end;
   (.model.display_name // "...") as $model |
-  ((.workspace.project_dir // .workspace.current_dir // .cwd // "") | split("/") | last) as $base |
-  (if ($base|length) > 18 and ($base|test("[-_]"))
-     then ($base | split("[-_]"; "") | map(.[0:1]) | join("")) else $base end) as $repo |
+  (.workspace.repo.name // ((.workspace.project_dir // .workspace.current_dir // .cwd // "") | split("/") | last) // "") as $repo |
   ((.context_window.used_percentage // 0) | floor) as $pct |
   (.cost.total_cost_usd // 0) as $cost |
   (.context_window.current_usage.input_tokens // 0) as $in |
