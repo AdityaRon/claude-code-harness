@@ -65,7 +65,16 @@ if [[ -n "$SID" ]]; then
   if [[ -f "$WPTR" ]]; then
     read -r WF < "$WPTR"
     if [[ -n "$WF" && -f "$WF" ]]; then
-      WF_SEG=$(printf ' │ \033]8;;file://%s\033\\\342\224\200 \342\232\231 wf\033]8;;\033\\' "$WF")
+      # Open workflow scripts (code) in a text editor, not the .js default app.
+      # Honor CLAUDE_EDITOR_URI, else auto-detect an installed GUI editor.
+      ed="${CLAUDE_EDITOR_URI:-}"
+      if [[ -z "$ed" ]]; then
+        if [[ -d "/Applications/Visual Studio Code.app" ]]; then ed="vscode://file"
+        elif [[ -d "/Applications/Cursor.app" ]]; then ed="cursor://file"
+        elif [[ -d "/Applications/Zed.app" ]]; then ed="zed://file"
+        else ed="file://"; fi
+      fi
+      WF_SEG=$(printf ' │ \033]8;;%s%s\033\\\342\224\200 \342\232\231 wf\033]8;;\033\\' "$ed" "$WF")
     fi
   fi
 fi

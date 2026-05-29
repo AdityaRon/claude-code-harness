@@ -42,11 +42,12 @@ printf '%s' "$OUT" | grep -qF "8;;file://" && pass "uses OSC-8 hyperlink" || fai
 echo ""
 echo "=== Workflow link appears when a workflow pointer exists ==="
 export CLAUDE_WORKFLOW_STATE_DIR="$TMP/wf"; mkdir -p "$CLAUDE_WORKFLOW_STATE_DIR"
+export CLAUDE_EDITOR_URI="testeditor://file"
 WF="$TMP/run.js"; echo "// wf" > "$WF"
 echo "$WF" > "$CLAUDE_WORKFLOW_STATE_DIR/sess-1.path"
 OUT=$(run '{"session_id":"sess-1","model":{"display_name":"Opus"},"context_window":{"used_percentage":5}}')
 printf '%s' "$OUT" | grep -q "wf" && pass "wf segment present" || fail "wf segment present" "$OUT"
-printf '%s' "$OUT" | grep -qF "$WF" && pass "wf links to script" || fail "wf links to script" "$OUT"
+printf '%s' "$OUT" | grep -qF "testeditor://file$WF" && pass "wf opens via editor URI" || fail "wf opens via editor URI" "$OUT"
 
 echo ""
 echo "=== No plan segment without a pointer ==="

@@ -64,7 +64,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 
 | Hook | Event | Behaviour |
 |---|---|---|
-| `workflow-record` | PostToolUse → Workflow | Logs each workflow run's persisted `.js` script path to the audit log and records a per-session pointer the status line links to, so buried run scripts are easy to find and open in your editor. Discoverability only — no rendering. |
+| `workflow-record` | PostToolUse → Workflow | Logs each workflow run's persisted `.js` script path to the audit log and records a per-session pointer the status line links to. Clicking the `wf` link opens the script in your editor (auto-detects VS Code / Cursor / Zed; override with `CLAUDE_EDITOR_URI`). Discoverability only — no rendering. |
 | `plan-to-html` | PreToolUse → ExitPlanMode | Renders the proposed plan as a styled, self-contained HTML file and opens it in your browser, so long plans are comfortable to read before you approve/reject in the terminal. Runs `async` — never blocks or delays the approval prompt. Markdown is base64-embedded (no escaping can break the page) and decoded as UTF-8 client-side via [marked](https://marked.js.org/) and rendered with a GitHub-dark theme plus [highlight.js](https://highlightjs.org/) syntax highlighting for fenced code; falls back to readable raw markdown when offline. Plans authored as a **full HTML document** are served verbatim (no double-wrap). Output lands in `~/.claude/plans-html/` (newest 50 kept), and the session's latest plan is linked from the **status line** as a clickable OSC-8 hyperlink. |
 
 ### Settings shipped
@@ -144,6 +144,11 @@ Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers
 **Render plans without auto-opening a browser** (e.g. headless / remote sessions):
 ```json
 { "env": { "CLAUDE_PLAN_HTML_NO_OPEN": "1" } }
+```
+
+**Open workflow scripts in a specific editor** (the status-line `wf` link). Auto-detects VS Code/Cursor/Zed; override the URI scheme:
+```json
+{ "env": { "CLAUDE_EDITOR_URI": "cursor://file" } }
 ```
 
 **Enable the OS sandbox** (drafted off-by-default with a read-only allowlist). Flip it on globally in `~/.claude/settings.json`, or per-project in `.claude/settings.json`:
