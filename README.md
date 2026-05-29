@@ -59,6 +59,12 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 | `pre-compact` | PreCompact | Backs up the full session transcript before compaction. Keeps last 20. |
 | `notify` | Notification | Desktop alert when Claude needs input (async) |
 
+### Readability
+
+| Hook | Event | Behaviour |
+|---|---|---|
+| `plan-to-html` | PreToolUse → ExitPlanMode | Renders the proposed plan as a styled, self-contained HTML file and opens it in your browser, so long plans are comfortable to read before you approve/reject in the terminal. Runs `async` — never blocks or delays the approval prompt. Markdown is base64-embedded (no escaping can break the page) and decoded as UTF-8 client-side via [marked](https://marked.js.org/); falls back to readable raw markdown when offline. Output lands in `~/.claude/plans-html/` (newest 50 kept). |
+
 ### Settings shipped
 
 | Setting | Value | Effect |
@@ -86,6 +92,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
     session-start.sh
     session-snapshot.sh
     pre-compact.sh
+    plan-to-html.sh
   logs/
     audit.log            ← append-only audit trail, 0600, rotated
   transcripts/
@@ -94,6 +101,8 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
   state/
     sessions/
       <session_id>.json  ← per-session edit snapshot, 0600, newest 50 kept
+  plans-html/
+    plan-20260528-143022.html  ← rendered plan, opened in browser, newest 50 kept
 ```
 
 ## Testing the harness
@@ -102,7 +111,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 bash doctor.sh
 ```
 
-Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 170+ cases across all 6 guards, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, interpreter inline-code escapes, file-upload shapes, and mutating HTTP methods).
+Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 215+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, interpreter inline-code escapes, file-upload shapes, and mutating HTTP methods) and the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap).
 
 ## Customization
 
@@ -114,6 +123,16 @@ Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers
 **Point the audit log elsewhere:**
 ```json
 { "env": { "CLAUDE_AUDIT_LOG": "~/logs/claude.log" } }
+```
+
+**Change where rendered plans are written:**
+```json
+{ "env": { "CLAUDE_PLANS_HTML_DIR": "~/Desktop/claude-plans" } }
+```
+
+**Render plans without auto-opening a browser** (e.g. headless / remote sessions):
+```json
+{ "env": { "CLAUDE_PLAN_HTML_NO_OPEN": "1" } }
 ```
 
 ## Per-project additions (not in this harness)
