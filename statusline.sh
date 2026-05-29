@@ -24,7 +24,7 @@ IFS=$'\t' read -r LINE SID CDIR < <(printf '%s' "$INPUT" | jq -r '
   (.rate_limits.five_hour.used_percentage) as $r5 |
   (.rate_limits.seven_day.used_percentage) as $r7 |
   (if $pct >= 70 then "\u001b[91m" elif $pct >= 50 then "\u001b[33m" else "\u001b[32m" end) as $c |
-  "\u001b[0m" as $r | "\u001b[2m" as $dim | "\u001b[36m" as $cy |
+  "\u001b[0m" as $r | "\u001b[38;5;248m" as $dim | "\u001b[36m" as $cy |
   ([$pct / 10 | floor, 0] | max) as $f |
   ([10 - $f, 0] | max) as $e |
   (("▓" * $f) + ("░" * $e)) as $bar |
