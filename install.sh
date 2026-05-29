@@ -11,7 +11,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "Installing Claude Code harness..."
 
 # ---- Directories ------------------------------------------------------
-mkdir -p ~/.claude/hooks ~/.claude/logs ~/.claude/transcripts ~/.claude/state/sessions ~/.claude/plans-html
+mkdir -p ~/.claude/hooks ~/.claude/logs ~/.claude/transcripts ~/.claude/state/sessions ~/.claude/state/plans ~/.claude/plans-html
 echo "  ✓ directories"
 
 # ---- Hooks + lib ------------------------------------------------------
