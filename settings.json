@@ -1,5 +1,7 @@
 {
-  "checkpointingEnabled": true,
+  "fileCheckpointingEnabled": true,
+  "effortLevel": "xhigh",
+  "skipAutoPermissionPrompt": true,
   "includeCoAuthoredBy": true,
   "statusLine": {
     "type": "command",
@@ -121,7 +123,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|Bash",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
       }
     ],
@@ -158,6 +160,32 @@
         ]
       }
     ]
+  },
+  "sandbox": {
+    "enabled": false,
+    "failIfUnavailable": false,
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "*.github.com",
+        "*.githubusercontent.com",
+        "registry.npmjs.org",
+        "*.npmjs.org",
+        "registry.yarnpkg.com",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "*.pythonhosted.org",
+        "crates.io",
+        "static.crates.io",
+        "proxy.golang.org",
+        "sum.golang.org",
+        "*.golang.org",
+        "rubygems.org",
+        "api.anthropic.com",
+        "*.anthropic.com",
+        "*.claude.com"
+      ]
+    }
   },
   "env": {
     "CLAUDE_AUDIT_LOG": "~/.claude/logs/audit.log",

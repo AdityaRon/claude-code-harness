@@ -35,8 +35,13 @@ case "$EVENT" in
     ;;
   *)
     TOOL=$(sanitize "$(jq_get '.tool_name')")
-    FILE=$(sanitize "$(jq_get '.tool_input.file_path')")
-    [[ -z "$FILE" ]] && FILE=$(sanitize "$(jq_get '.tool_input.path')")
-    log_audit "$TS | ${TOOL:-unknown} | ${FILE:-unknown} | $DIR"
+    if [[ "$TOOL" == "Bash" ]]; then
+      CMD=$(sanitize "$(jq_get '.tool_input.command')")
+      log_audit "$TS | Bash | ${CMD:-unknown} | $DIR"
+    else
+      FILE=$(sanitize "$(jq_get '.tool_input.file_path')")
+      [[ -z "$FILE" ]] && FILE=$(sanitize "$(jq_get '.tool_input.path')")
+      log_audit "$TS | ${TOOL:-unknown} | ${FILE:-unknown} | $DIR"
+    fi
     ;;
 esac

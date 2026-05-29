@@ -88,5 +88,37 @@ COUNT=$(ls -1 "$CLAUDE_PLANS_HTML_DIR"/plan-*.html 2>/dev/null | wc -l | tr -d '
 check_eq "retention cap" "50" "$COUNT"
 
 echo ""
+echo "=== Full-HTML plan is served verbatim (not double-wrapped) ==="
+rm -f "$CLAUDE_PLANS_HTML_DIR"/plan-*.html
+HTMLPLAN='<!DOCTYPE html><html><head><style>.x{color:red}</style></head><body><div>hi</div></body></html>'
+run_hook "ExitPlanMode" "$HTMLPLAN"
+OUTH=$(newest)
+[[ "$(cat "$OUTH")" == "$HTMLPLAN" ]] && pass "html plan written verbatim" || fail "html plan written verbatim" ""
+grep -q "marked.parse" "$OUTH" && fail "html plan not wrapped" "wrapper present" || pass "html plan not wrapped"
+
+echo ""
+echo "=== Bare <html> (no doctype), case-insensitive + leading space ==="
+rm -f "$CLAUDE_PLANS_HTML_DIR"/plan-*.html
+run_hook "ExitPlanMode" $'   <HTML>\n<body>x</body></HTML>'
+grep -q "marked.parse" "$(newest)" && fail "bare html detected" "wrapper present" || pass "bare html detected (verbatim)"
+
+echo ""
+echo "=== Markdown merely mentioning <html> stays markdown ==="
+rm -f "$CLAUDE_PLANS_HTML_DIR"/plan-*.html
+run_hook "ExitPlanMode" $'# Plan\n\nWe will edit the <html> tag in index.'
+grep -q "marked.parse" "$(newest)" && pass "inline <html> mention stays markdown" || fail "inline <html> mention stays markdown" ""
+
+echo ""
+echo "=== Session plan pointer is recorded ==="
+rm -f "$CLAUDE_PLANS_HTML_DIR"/plan-*.html
+export CLAUDE_PLAN_STATE_DIR="$TMP/plans-state"
+payload=$(jq -nc '{tool_name:"ExitPlanMode", tool_input:{plan:"# p"}, session_id:"sess-xyz", hook_event_name:"PreToolUse"}')
+printf '%s' "$payload" | bash "$HOOK" >/dev/null 2>&1
+PTR="$CLAUDE_PLAN_STATE_DIR/sess-xyz.path"
+[[ -f "$PTR" ]] && pass "pointer file written" || fail "pointer file written" "$PTR"
+PTGT=$(cat "$PTR" 2>/dev/null)
+[[ -f "$PTGT" ]] && pass "pointer targets an existing html file" || fail "pointer targets existing file" "tgt=$PTGT"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

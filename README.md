@@ -28,7 +28,7 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 | `sensitive-file-guard` | PreToolUse → Read/Edit/Write | Blocks access to `.env*`, `*.pem`, `*.key`, SSH keys, AWS credentials. Resolves symlinks so a symlinked path can't bypass. |
 | `git-guard` | PreToolUse → Bash | Denies force-push, `.git/hooks` writes, `core.hooksPath` tampering, `filter-branch`, broad `git add` |
 | `interpreter-guard` | PreToolUse → Bash | Denies `python -c` / `node -e` / `ruby -e` / `bash -c` etc. when the inline code references env vars, dotfiles, sockets, or subprocess APIs. Closes the interpreter-bypass route. |
-| `network-guard` | PreToolUse → Bash, WebFetch | Denies file-body uploads via `curl -d @…`, `-F @…`, `-T` |
+| `network-guard` | PreToolUse → Bash, WebFetch | Denies file-body uploads via `curl -d @…`, `-F @…`, `-T`, **and pipe-to-shell remote code execution** (piping curl/wget into a shell or interpreter, process substitution, or command substitution) |
 | `secret-scanner` | PreToolUse → Write/Edit/MultiEdit | Scans the payload before it hits disk; denies AWS keys, JWTs, PEM blocks, GitHub/Slack/Stripe/Google/Anthropic/OpenAI tokens |
 
 ### Security — prompt user (`ask`)
@@ -44,6 +44,7 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 | Hook | Event | Behaviour |
 |---|---|---|
 | `audit` | PostToolUse → Edit/Write | Logs every file Claude touches |
+| `audit` | PostToolUse → Bash | Logs every Bash command Claude runs (sanitized to one line) |
 | `audit` | PostToolUseFailure | Logs failed tool calls with error summary |
 | `audit` | ConfigChange | Logs any settings file modified mid-session |
 | `audit` | Stop | Logs session turn count and cost on exit |
@@ -63,13 +64,16 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 
 | Hook | Event | Behaviour |
 |---|---|---|
-| `plan-to-html` | PreToolUse → ExitPlanMode | Renders the proposed plan as a styled, self-contained HTML file and opens it in your browser, so long plans are comfortable to read before you approve/reject in the terminal. Runs `async` — never blocks or delays the approval prompt. Markdown is base64-embedded (no escaping can break the page) and decoded as UTF-8 client-side via [marked](https://marked.js.org/); falls back to readable raw markdown when offline. Output lands in `~/.claude/plans-html/` (newest 50 kept). |
+| `plan-to-html` | PreToolUse → ExitPlanMode | Renders the proposed plan as a styled, self-contained HTML file and opens it in your browser, so long plans are comfortable to read before you approve/reject in the terminal. Runs `async` — never blocks or delays the approval prompt. Markdown is base64-embedded (no escaping can break the page) and decoded as UTF-8 client-side via [marked](https://marked.js.org/); falls back to readable raw markdown when offline. Plans authored as a **full HTML document** are served verbatim (no double-wrap). Output lands in `~/.claude/plans-html/` (newest 50 kept), and the session's latest plan is linked from the **status line** as a clickable OSC-8 hyperlink. |
 
 ### Settings shipped
 
 | Setting | Value | Effect |
 |---|---|---|
-| `checkpointingEnabled` | `true` | Git checkpoint before large changes |
+| `fileCheckpointingEnabled` | `true` | Snapshots files before edits so `/rewind` can restore them |
+| `effortLevel` | `xhigh` | Default reasoning effort (portable across machines) |
+| `skipAutoPermissionPrompt` | `true` | Pre-accepts the auto-mode opt-in dialog |
+| `sandbox` | off by default | OS sandbox (Seatbelt/bubblewrap) drafted with a read-only network allowlist (npm/pypi/crates/go/github/anthropic). Flip `sandbox.enabled` to `true` to confine commands. See Customization. |
 | `includeCoAuthoredBy` | `true` | Adds `Co-authored-by: Claude` to commits |
 | `permissions.allow` | Scoped allowlist (≈60 entries) | Covers common safe ops: `npm test/run lint/build`, `pytest`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. No wildcards like `Bash(python:*)` — those would let Claude bypass every guard. |
 | `permissions.deny` | `git push --force`, `sudo`, `rm -rf`, `gh auth token`, … | Deny always wins over allow |
@@ -93,6 +97,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
     session-snapshot.sh
     pre-compact.sh
     plan-to-html.sh
+  statusline.sh          ← model | context | tokens | cost | clickable plan link
   logs/
     audit.log            ← append-only audit trail, 0600, rotated
   transcripts/
@@ -101,6 +106,8 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
   state/
     sessions/
       <session_id>.json  ← per-session edit snapshot, 0600, newest 50 kept
+    plans/
+      <session_id>.path  ← pointer to the session's latest rendered plan (statusline link)
   plans-html/
     plan-20260528-143022.html  ← rendered plan, opened in browser, newest 50 kept
 ```
@@ -111,7 +118,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 bash doctor.sh
 ```
 
-Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 215+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, interpreter inline-code escapes, file-upload shapes, and mutating HTTP methods) and the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap).
+Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 240+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, interpreter inline-code escapes, file-upload shapes, and mutating HTTP methods) and the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap).
 
 ## Customization
 
@@ -134,6 +141,12 @@ Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers
 ```json
 { "env": { "CLAUDE_PLAN_HTML_NO_OPEN": "1" } }
 ```
+
+**Enable the OS sandbox** (drafted off-by-default with a read-only allowlist). Flip it on globally in `~/.claude/settings.json`, or per-project in `.claude/settings.json`:
+```json
+{ "sandbox": { "enabled": true } }
+```
+Extend its allowlist under `sandbox.network.allowedDomains`.
 
 ## Per-project additions (not in this harness)
 

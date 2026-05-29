@@ -26,10 +26,16 @@ mkdir -p "$outdir" 2>/dev/null || exit 0
 ts=$(date +%Y%m%d-%H%M%S)
 out="$outdir/plan-$ts.html"
 
+# Some plans are authored as a full HTML document rather than markdown. Serve
+# those verbatim: otherwise marked renders an HTML page *inside* our HTML page
+# (duplicate <html>/<head>/<style>/<body>), and the plan's own body{margin:0}
+# clobbers our centered layout.
+if printf '%s' "$plan" | head -c 256 | grep -iqE '^[[:space:]]*<(!doctype[[:space:]]+html|html([[:space:]>]|$))'; then
+  printf '%s' "$plan" > "$out"
+else
 # Base64-embed the markdown so no quoting/escaping can ever break the HTML, then
 # decode it as UTF-8 in the browser (em-dashes, arrows, box-drawing all survive).
 b64=$(printf '%s' "$plan" | base64 | tr -d '\n')
-
 cat > "$out" <<HTML
 <!doctype html>
 <html lang="en">
@@ -87,6 +93,17 @@ cat > "$out" <<HTML
 </body>
 </html>
 HTML
+fi
+
+# Record this session's latest plan path so the statusline can link to it.
+sid=$(jq_get '.session_id')
+if [[ -n "$sid" ]]; then
+  pdir=$(expand_tilde "${CLAUDE_PLAN_STATE_DIR:-$HOME/.claude/state/plans}")
+  if mkdir -p "$pdir" 2>/dev/null; then
+    printf '%s\n' "$out" > "$pdir/$sid.path" 2>/dev/null || true
+    chmod 600 "$pdir/$sid.path" 2>/dev/null || true
+  fi
+fi
 
 # Retention: keep the newest 50 rendered plans.
 ls -1t "$outdir"/plan-*.html 2>/dev/null | tail -n +51 | while read -r old; do

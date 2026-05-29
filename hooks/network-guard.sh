@@ -83,6 +83,23 @@ case "$TOOL" in
       exit 0
     fi
 
+    # Remote code execution: piping curl/wget output into a shell/interpreter.
+    #   curl … | sh      wget … | bash      curl … | sudo bash
+    if printf '%s\n' "$CMD" | grep -qE '\b(curl|wget)\b[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(bash|sh|zsh|ksh|dash|fish|python3?|perl|ruby|node|php)\b'; then
+      emit_deny "Blocked: piping curl/wget output into a shell/interpreter (remote code execution). Download to a file, inspect it, then run."
+      exit 0
+    fi
+    #   bash <(curl …)   sh <(wget …)   — process substitution
+    if printf '%s\n' "$CMD" | grep -qE '\b(bash|sh|zsh|ksh|dash|python3?|perl|ruby|node)\b[^<]*<\([[:space:]]*(curl|wget)\b'; then
+      emit_deny "Blocked: executing curl/wget output via process substitution (remote code execution). Download to a file, inspect it, then run."
+      exit 0
+    fi
+    #   bash -c "$(curl …)"   eval "$(wget …)"   eval `curl …`  — command substitution
+    if printf '%s\n' "$CMD" | grep -qE '\b(eval|bash|sh|zsh)\b[^;&]*(\$\(|`)[[:space:]]*(curl|wget)\b'; then
+      emit_deny "Blocked: executing curl/wget output via command substitution (remote code execution). Download to a file, inspect it, then run."
+      exit 0
+    fi
+
     # File-body upload patterns (exfil shape). Defense-in-depth — env-guard
     # already denies bare --data-binary etc., this layer specifically matches
     # the local-file-reference forms.
