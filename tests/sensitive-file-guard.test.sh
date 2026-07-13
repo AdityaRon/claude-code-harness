@@ -64,6 +64,25 @@ check "key.json (config)"        allow "config/key.json"
 check "pem.md"                   allow "docs/pem.md"
 
 echo ""
+echo "=== Additional credential files — H3 (expect: deny) ==="
+check "prod.env"                 deny "config/prod.env"
+check "local.env"                deny "local.env"
+check ".npmrc"                   deny "$HOME/.npmrc"
+check ".git-credentials"         deny "$HOME/.git-credentials"
+check ".pgpass"                  deny "$HOME/.pgpass"
+check ".kube/config"             deny "$HOME/.kube/config"
+check ".ssh/config"              deny "$HOME/.ssh/config"
+check ".docker/config.json"      deny "$HOME/.docker/config.json"
+check "credentials.json"         deny "gcp/credentials.json"
+check "service-account.json"     deny "keys/my-service-account-abc.json"
+
+echo ""
+echo "=== Additional anti-false-positive (expect: allow) ==="
+check "environment.ts"           allow "src/environment.ts"
+check "kube helper"              allow "src/kube/client.ts"
+check "config.json (plain)"      allow "tsconfig.json"
+
+echo ""
 echo "=== JSON-escape safety (expect: deny, and output must be valid JSON) ==="
 WEIRD='weird "quoted" \path/.env'
 payload=$(jq -nc --arg p "$WEIRD" '{tool_input:{file_path:$p}}')

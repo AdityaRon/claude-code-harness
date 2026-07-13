@@ -16,6 +16,7 @@
 source "$(dirname "$0")/lib.sh"
 
 read_input
+require_jq_or_deny
 TOOL=$(jq_get '.tool_name')
 
 # Default allowlist. Extendable via CLAUDE_NET_ALLOWLIST in settings.json env.
@@ -78,7 +79,19 @@ case "$TOOL" in
   Bash)
     CMD=$(jq_get '.tool_input.command')
     [[ -z "$CMD" ]] && exit 0
-    # Only concern ourselves with curl/wget invocations.
+
+    # Other egress channels beyond curl/wget. scp/rsync/sftp copy files to a
+    # remote host; a local HTTP server exposes the working tree. All → ask.
+    if printf '%s\n' "$CMD" | grep -qE '\b(scp|rsync|sftp)\b[^|;&]*([A-Za-z0-9._-]+@[A-Za-z0-9._-]+:|[A-Za-z0-9._-]+\.[A-Za-z]{2,}:)'; then
+      emit_ask "scp/rsync/sftp transfers files to a remote host. Confirm the destination is trusted and the files contain no secrets."
+      exit 0
+    fi
+    if printf '%s\n' "$CMD" | grep -qE '(python3?\s+-m\s+http\.server|php\s+-S|ruby\s+-run\s+-e\s+httpd|npx\s+http-server)'; then
+      emit_ask "This starts a local HTTP server exposing files on the network. Confirm this is intended and scoped."
+      exit 0
+    fi
+
+    # Beyond this point we only concern ourselves with curl/wget invocations.
     if ! printf '%s\n' "$CMD" | grep -qE '\b(curl|wget)\b'; then
       exit 0
     fi
@@ -106,7 +119,7 @@ case "$TOOL" in
     #   -d @file   --data @file   --data-binary @file   --data-urlencode @file
     #   -F key=@file   -F @file   --form key=@file
     #   -T /local/path   --upload-file /local/path
-    if printf '%s\n' "$CMD" | grep -qE '\b(curl|wget)\b[^|;&]*(-d|--data|--data-binary|--data-urlencode|--data-raw)\s+@'; then
+    if printf '%s\n' "$CMD" | grep -qE '\b(curl|wget)\b[^|;&]*(-d|--data|--data-binary|--data-urlencode|--data-raw)(\s+|=)?@'; then
       emit_deny "Blocked: curl/wget uploading a local file as request body (@file). Move data into code, or run manually if legitimate."
       exit 0
     fi

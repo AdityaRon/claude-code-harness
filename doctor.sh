@@ -2,7 +2,7 @@
 # Runs every test in tests/ and reports totals.
 # Exit code = number of failing suites.
 set -u
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 
 if ! command -v jq &>/dev/null; then
   echo "FATAL: jq is required. Install via: brew install jq" >&2

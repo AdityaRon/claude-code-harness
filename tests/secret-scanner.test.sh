@@ -73,6 +73,20 @@ check_edit  "AWS access key"   deny "const K = \"AKIA${ZZ}IOSFODNN7EXAMPLE\";"
 check_edit  "GitHub PAT"       deny "ghp${ZZ}_0123456789abcdefghij0123456789abcdef"
 
 echo ""
+echo "=== Additional secret shapes — M3 (expect: deny) ==="
+check_write "OpenAI project key" deny "OPENAI=sk-${ZZ}proj-abcdefghijklmnopqrstuvwxyz0123"
+check_write "Slack webhook"      deny "url = \"https://hooks.slack.com/servi${ZZ}ces/T00000000/B00000000/abcdefghijklmnopqrstuvwx\""
+check_write "GCP SA type"        deny "{ \"type\": \"service${ZZ}_account\", \"project_id\": \"x\" }"
+check_write "GCP private_key"    deny "{ \"private${ZZ}_key\": \"-----BEGIN${ZZ} PRIVATE KEY-----\" }"
+
+echo ""
+echo "=== NotebookEdit is scanned — M2 (expect: deny) ==="
+nb_payload=$(jq -nc --arg n "KEY = \"AKIA${ZZ}IOSFODNN7EXAMPLE\"" '{tool_name:"NotebookEdit", tool_input:{new_source:$n, notebook_path:"/tmp/x.ipynb"}}')
+nb_out=$(printf '%s\n' "$nb_payload" | bash "$HOOK" 2>/dev/null)
+nb_got=$([ -z "$nb_out" ] && echo allow || printf '%s\n' "$nb_out" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
+if [[ "$nb_got" = "deny" ]]; then echo "  OK (deny): NotebookEdit cell scanned"; PASS=$((PASS+1)); else echo "  FAIL: NotebookEdit not scanned"; FAIL=$((FAIL+1)); fi
+
+echo ""
 echo "=== Legitimate content (expect: allow) ==="
 check_write "TODO comment"     allow '// TODO: load secrets from env, not inline'
 check_write "env.example"      allow 'AWS_ACCESS_KEY_ID=your-access-key-here'

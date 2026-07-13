@@ -20,9 +20,19 @@ sanitize() {
 
 case "$EVENT" in
   Stop)
+    # The Stop payload does not carry turn count or cost, so derive the turn
+    # count (assistant messages) from the transcript when available. Cost is
+    # not exposed to hooks; don't log a dead placeholder for it.
     TURNS=$(jq_get '.num_turns')
-    COST=$(jq_get '.usage.total_cost_usd')
-    log_audit "$TS | session_end | turns=${TURNS:-?} cost_usd=${COST:-?} | $DIR"
+    if [[ -z "$TURNS" ]]; then
+      TRANSCRIPT=$(jq_get '.transcript_path')
+      TRANSCRIPT=$(expand_tilde "$TRANSCRIPT")
+      if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]] && command -v jq &>/dev/null; then
+        TURNS=$(jq -rs '[.[] | select((.message.role? // .role?) == "assistant")] | length' "$TRANSCRIPT" 2>/dev/null)
+      fi
+    fi
+    SID=$(jq_get '.session_id')
+    log_audit "$TS | session_end | turns=${TURNS:-n/a} session=${SID:-?} | $DIR"
     ;;
   PostToolUseFailure)
     TOOL=$(sanitize "$(jq_get '.tool_name')")

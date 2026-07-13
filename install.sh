@@ -59,6 +59,15 @@ else
   # Allow entries are unioned so projects / users can extend.
   BACKUP="$TARGET.bak.$(date +%Y%m%d%H%M%S)"
   cp "$TARGET" "$BACKUP"
+
+  # The harness fully owns the hooks block (below). Warn loudly if the user had
+  # their own hooks so they aren't silently dropped — they're preserved in the
+  # timestamped backup and can be merged back by hand.
+  if jq -e '(.hooks // {}) | length > 0' "$TARGET" >/dev/null 2>&1; then
+    echo "  ⚠ existing 'hooks' block found — the harness replaces it. Your previous"
+    echo "     hooks are preserved in: $BACKUP  (merge any custom ones back manually)."
+  fi
+
   TMP=$(mktemp)
   jq -s '
     .[0] as $old | .[1] as $new |

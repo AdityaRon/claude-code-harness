@@ -24,18 +24,18 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 
 | Hook | Event | Behaviour |
 |---|---|---|
-| `env-guard` | PreToolUse → Bash | Blocks commands that read, dump, or exfiltrate env values or dotfiles (`cat .env`, `printenv`, `curl --data @creds`, `nc`, `eval $(env)`, etc.) |
-| `sensitive-file-guard` | PreToolUse → Read/Edit/Write | Blocks access to `.env*`, `*.pem`, `*.key`, SSH keys, AWS credentials. Resolves symlinks so a symlinked path can't bypass. |
-| `git-guard` | PreToolUse → Bash | Denies force-push, `.git/hooks` writes, `core.hooksPath` tampering, `filter-branch`, broad `git add` |
-| `interpreter-guard` | PreToolUse → Bash | Denies `python -c` / `node -e` / `ruby -e` / `bash -c` etc. when the inline code references env vars, dotfiles, sockets, or subprocess APIs. Closes the interpreter-bypass route. |
-| `network-guard` | PreToolUse → Bash, WebFetch | Denies file-body uploads via `curl -d @…`, `-F @…`, `-T`, **and pipe-to-shell remote code execution** (piping curl/wget into a shell or interpreter, process substitution, or command substitution) |
-| `secret-scanner` | PreToolUse → Write/Edit/MultiEdit | Scans the payload before it hits disk; denies AWS keys, JWTs, PEM blocks, GitHub/Slack/Stripe/Google/Anthropic/OpenAI tokens |
+| `env-guard` | PreToolUse → Bash | Blocks commands that read, dump, copy, or exfiltrate env values or dotfiles (`cat .env`, `printenv`, `echo $API_KEY`, `cp .env /tmp/x`, `dd if=.env`, `… < .env`, `curl --data @creds`, `nc`, `eval $(env)`, etc.) |
+| `sensitive-file-guard` | PreToolUse → Read/Edit/Write/MultiEdit/NotebookEdit | Blocks access to `*.env`, `*.pem`, `*.key`, SSH keys, AWS creds, `.npmrc`, `.git-credentials`, `.pgpass`, `.kube/config`, `.ssh/config`, `.docker/config.json`, `credentials.json`, service-account JSON. Resolves symlinks so a symlinked path can't bypass. |
+| `git-guard` | PreToolUse → Bash | Denies force-push, `.git/hooks` writes, `core.hooksPath` tampering (including via `-c`), shell-body (`!`) aliases, `filter-branch`, broad `git add`. Normalizes `git -c k=v` / `-C dir` global-option prefixes so they can't break the match. |
+| `interpreter-guard` | PreToolUse → Bash | Denies `python -c` / `node -e` / `ruby -e` / `perl -ne` / `php -r` / `bash -c` and heredocs when the payload references env vars, dotfiles, sockets, or subprocess APIs. Raises the bar on the interpreter-bypass route — but string-obfuscated payloads can still evade a regex; the OS sandbox is the real containment. |
+| `network-guard` | PreToolUse → Bash, WebFetch | Denies file-body uploads via `curl -d @…` / `-d@…` / `--data=@…`, `-F @…`, `-T`, **and pipe-to-shell remote code execution** (piping curl/wget into a shell or interpreter, process substitution, or command substitution). Prompts on `scp`/`rsync`/`sftp` to a remote host and on local HTTP servers. |
+| `secret-scanner` | PreToolUse → Write/Edit/MultiEdit/NotebookEdit | Scans the payload before it hits disk; denies AWS keys, JWTs, PEM blocks, GitHub/Slack(token+webhook)/Stripe/Google/Anthropic/OpenAI(incl. `sk-proj-`) tokens and GCP service-account keys |
 
 ### Security — prompt user (`ask`)
 
 | Hook | Triggers |
 |---|---|
-| `git-guard` | `git push --delete`, `git push origin :branch`, `git remote set-url`, `git config user.email`, glob staging (`git add '*.ts'`) |
+| `git-guard` | `git push --delete`, `git push origin :branch`, `git remote set-url`, `git config user.email`, non-shell `git config alias.*`, glob staging (`git add '*.ts'`) |
 | `interpreter-guard` | Long inline scripts with no obvious sensitive token |
 | `network-guard` | `curl -X POST/PUT/PATCH/DELETE` (any host), `curl`/`wget`/`WebFetch` to non-allowlisted domain |
 
@@ -47,7 +47,7 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 | `audit` | PostToolUse → Bash | Logs every Bash command Claude runs (sanitized to one line) |
 | `audit` | PostToolUseFailure | Logs failed tool calls with error summary |
 | `audit` | ConfigChange | Logs any settings file modified mid-session |
-| `audit` | Stop | Logs session turn count and cost on exit |
+| `audit` | Stop | Logs a session-end line with the turn count (derived from the transcript — cost isn't exposed to hooks) and session id |
 
 All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 backups retained).
 
@@ -65,7 +65,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 | Hook | Event | Behaviour |
 |---|---|---|
 | `workflow-record` | PostToolUse → Workflow | Logs each workflow run's persisted `.js` script path to the audit log and records a per-session pointer the status line links to. Clicking the `wf` link opens the script in your editor (auto-detects VS Code / Cursor / Zed; override with `CLAUDE_EDITOR_URI`). Discoverability only — no rendering. |
-| `plan-to-html` | PreToolUse → ExitPlanMode | Renders the proposed plan as a styled, self-contained HTML file and opens it in your browser, so long plans are comfortable to read before you approve/reject in the terminal. Runs `async` — never blocks or delays the approval prompt. Markdown is base64-embedded (no escaping can break the page) and decoded as UTF-8 client-side via [marked](https://marked.js.org/) and rendered with a GitHub-dark theme plus [highlight.js](https://highlightjs.org/) syntax highlighting for fenced code; falls back to readable raw markdown when offline. Plans authored as a **full HTML document** are served verbatim (no double-wrap). Output lands in `~/.claude/plans-html/` (newest 50 kept), and the session's latest plan is linked from the **status line** as a clickable OSC-8 hyperlink. |
+| `plan-to-html` | PreToolUse → ExitPlanMode | Renders the proposed plan as a styled HTML file and opens it in your browser, so long plans are comfortable to read before you approve/reject in the terminal. (The page loads `marked`/`highlight.js` from a CDN for rendering and gracefully falls back to readable raw markdown when offline — it is not fully self-contained.) Runs `async` — never blocks or delays the approval prompt. Markdown is base64-embedded (no escaping can break the page) and decoded as UTF-8 client-side via [marked](https://marked.js.org/) and rendered with a GitHub-dark theme plus [highlight.js](https://highlightjs.org/) syntax highlighting for fenced code; falls back to readable raw markdown when offline. Plans authored as a **full HTML document** are served verbatim (no double-wrap). Output lands in `~/.claude/plans-html/` (newest 50 kept), and the session's latest plan is linked from the **status line** as a clickable OSC-8 hyperlink. |
 
 ### Settings shipped
 
@@ -122,7 +122,9 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 bash doctor.sh
 ```
 
-Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 240+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, interpreter inline-code escapes, file-upload shapes, and mutating HTTP methods) and the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap).
+Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 320+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, and the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap).
+
+CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS and lints every hook with `shellcheck` on each push and PR.
 
 ## Customization
 
@@ -156,6 +158,14 @@ Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers
 { "sandbox": { "enabled": true } }
 ```
 Extend its allowlist under `sandbox.network.allowedDomains`.
+
+## Known limitations
+
+These guards are defense-in-depth, not a security boundary. Be clear-eyed about what they do **not** cover:
+
+- **Regex guards have a ceiling.** Command-string matching can always be evaded by a determined agent (string-obfuscated interpreter payloads, novel tool invocations, multi-step stage-then-exfil across separate commands). The guards raise the bar and catch the obvious/accidental cases; the **OS sandbox** is the only real containment for the evasion class — see *Enable the OS sandbox*.
+- **MCP connectors are not covered.** `network-guard` sees Bash `curl`/`wget` and the `WebFetch` tool, but MCP tools (Slack, Google Drive, Atlassian, …) can read files and send data outbound with no guard in the middle. Control that surface by only connecting MCP servers you trust.
+- **Guards fail *closed* without jq**, so a missing-jq machine blocks all Bash/file tool calls rather than allowing them unchecked. Keep `jq` installed (the installer checks for it).
 
 ## Per-project additions (not in this harness)
 

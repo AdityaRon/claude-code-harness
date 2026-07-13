@@ -3,16 +3,18 @@
 source "$(dirname "$0")/lib.sh"
 
 read_input
+require_jq_or_deny
 FILE=$(jq_get '.tool_input.file_path')
 [[ -z "$FILE" ]] && FILE=$(jq_get '.tool_input.path')
+[[ -z "$FILE" ]] && FILE=$(jq_get '.tool_input.notebook_path')
 [[ -z "$FILE" ]] && exit 0
 
 # Canonicalize to defeat symlink / /private/var bypass attempts.
 CANON=$(canonical_path "$FILE")
 
 BLOCKED=(
-  '(^|/)\.env$'
-  '(^|/)\.env\.'
+  '\.env$'                     # .env, prod.env, local.env (any *.env)
+  '(^|/)\.env\.'               # .env.local, .env.production
   '(^|/)\.envrc$'
   '\.pem$'
   '\.key$'
@@ -21,6 +23,15 @@ BLOCKED=(
   '\.aws/credentials'
   '(^|/)\.netrc$'
   '(^|/)secrets\.'
+  '(^|/)\.npmrc$'
+  '(^|/)\.pypirc$'
+  '(^|/)\.git-credentials$'
+  '(^|/)\.pgpass$'
+  '(^|/)\.kube/config$'
+  '(^|/)\.ssh/config$'
+  '(^|/)\.docker/config\.json$'
+  '(^|/)credentials\.json$'
+  'service[_-]account.*\.json$'
 )
 
 for P in "${BLOCKED[@]}"; do

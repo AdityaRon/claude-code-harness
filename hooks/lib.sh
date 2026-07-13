@@ -21,6 +21,17 @@ read_input() {
   export INPUT
 }
 
+# Fail closed for PreToolUse guards: without jq we cannot reliably parse the
+# tool input to make a security decision, so deny rather than silently allow.
+# Call this immediately after read_input in every deny-capable Bash/file guard.
+# Only denies when there is actually input to evaluate (a real tool call).
+require_jq_or_deny() {
+  command -v jq &>/dev/null && return 0
+  [[ -z "$INPUT" ]] && return 0
+  emit_deny "Blocked: the security harness cannot parse this tool call because jq is not installed, and it will not allow commands it cannot inspect. Install jq (brew install jq) and retry."
+  exit 0
+}
+
 # Extract a field from $INPUT using jq. Empty if jq is missing or field absent.
 jq_get() {
   local expr="$1"

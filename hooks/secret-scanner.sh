@@ -7,13 +7,15 @@
 source "$(dirname "$0")/lib.sh"
 
 read_input
+require_jq_or_deny
 TOOL=$(jq_get '.tool_name')
 
 case "$TOOL" in
-  Write)      CONTENT=$(jq_get '.tool_input.content') ;;
-  Edit)       CONTENT=$(jq_get '.tool_input.new_string') ;;
-  MultiEdit)  CONTENT=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.edits[]?.new_string // ""' 2>/dev/null) ;;
-  *)          exit 0 ;;
+  Write)         CONTENT=$(jq_get '.tool_input.content') ;;
+  Edit)          CONTENT=$(jq_get '.tool_input.new_string') ;;
+  MultiEdit)     CONTENT=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.edits[]?.new_string // ""' 2>/dev/null) ;;
+  NotebookEdit)  CONTENT=$(jq_get '.tool_input.new_source') ;;
+  *)             exit 0 ;;
 esac
 
 [[ -z "$CONTENT" ]] && exit 0
@@ -36,6 +38,10 @@ PATTERNS=(
   'SSH private key header::-----BEGIN OPENSSH PRIVATE KEY-----'
   'Anthropic API key::sk-ant-[A-Za-z0-9-]{20,}'
   'OpenAI API key::sk-[A-Za-z0-9]{40,}'
+  'OpenAI project key::sk-proj-[A-Za-z0-9_-]{20,}'
+  'Slack incoming webhook::https://hooks\.slack\.com/services/[A-Za-z0-9/_+-]{20,}'
+  'GCP service account key::"type":\s*"service_account"'
+  'GCP private key field::"private_key":\s*"-----BEGIN'
 )
 
 for entry in "${PATTERNS[@]}"; do

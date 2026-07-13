@@ -1,29 +1,37 @@
 #!/usr/bin/env bash
 # Interpreter-bypass guard.
 #
-# Wildcard allows for python/node/ruby/perl/bash -c let Claude sidestep
+# Wildcard allows for python/node/ruby/perl/php/bash -c let Claude sidestep
 # every regex-based guard by writing a tiny script that reads env vars or
-# dotfiles. This hook inspects inline-code flags (-c, -e, --eval, -) and
-# denies when the payload references env vars, dotfile paths, raw sockets,
-# or network exfil APIs.
+# dotfiles. This hook inspects inline-code flags (-c, -e, --eval, combined
+# short flags like -ne, -r, a trailing -, and heredoc payloads) and denies
+# when the payload references env vars, dotfile paths, raw sockets, or
+# network exfil APIs.
 #
 # The hook is conservative: only triggers when BOTH an interpreter is used
-# AND the inline payload contains a sensitive token. Running "python script.py"
+# AND the payload contains a sensitive token. Running "python script.py"
 # or "node server.js" is untouched.
+#
+# This raises the bar but is NOT airtight: string-obfuscated payloads
+# (getattr(os, "en"+"viron"), base64/hex-encoded source) can still evade a
+# token list. The OS sandbox is the real containment for that class — see
+# README "Enable the OS sandbox".
 source "$(dirname "$0")/lib.sh"
 
 read_input
+require_jq_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
 
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
 # Interpreters that commonly accept inline code.
-INTERP='(python3?|node|ruby|perl|bash|sh|zsh|deno|bun)'
+INTERP='(python3?|node|ruby|perl|php|bash|sh|zsh|deno|bun)'
 
-# Inline-code flags: -c, -e, --eval, or a trailing "-" meaning "read from stdin"
-# immediately after the interpreter.
-INLINE='(-c\b|-e\b|--eval\b|--exec\b|\s-(\s|$))'
+# Inline-code flags. The `-[A-Za-z]*[ce]` form catches combined short flags
+# (perl -ne, perl -pe, ruby -ne) that would evade a bare -c/-e. -r is php/ruby
+# inline. A trailing "-" means "read from stdin".
+INLINE='(-[A-Za-z]*[ce]\b|--eval\b|--exec\b|-r\b|\s-(\s|$))'
 
 # Sensitive tokens that should not appear inside inline code payloads.
 # (Matches both source-code references and network exfil APIs.)
@@ -66,9 +74,13 @@ SENSITIVE_TOKENS=(
   'Buffer\.from\([^)]*[\x27"]base64'
 )
 
-# Does the command invoke an interpreter with inline code?
+# Does the command invoke an interpreter with inline code (flag) or a heredoc?
+# Heredocs (python3 <<EOF … EOF) carry a payload with no -c flag, so match them
+# too and let the token scan below inspect the heredoc body.
 INTERP_INLINE_RE="${A}${INTERP}\s+[^|;&]*${INLINE}"
-if ! printf '%s\n' "$CMD" | grep -qE "$INTERP_INLINE_RE"; then
+INTERP_HEREDOC_RE="${A}${INTERP}\b[^|;&]*<<-?"
+if ! printf '%s\n' "$CMD" | grep -qE "$INTERP_INLINE_RE" \
+   && ! printf '%s\n' "$CMD" | grep -qE "$INTERP_HEREDOC_RE"; then
   exit 0
 fi
 

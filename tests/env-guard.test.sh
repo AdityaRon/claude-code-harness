@@ -96,5 +96,30 @@ check "commit msg nc"                 allow "git commit -m 'something nc somethi
 check "string literal .env in code"   allow "echo 'the file is .env here'"
 
 echo ""
+echo "=== Print env var value — H4 (expect: deny) ==="
+check "echo secret var"    deny 'echo $AWS_SECRET_ACCESS_KEY'
+check "echo braced key"    deny 'echo ${OPENAI_API_KEY}'
+check "printf token"       deny 'printf %s "$GITHUB_TOKEN"'
+check "echo password"      deny 'echo $DB_PASSWORD'
+
+echo ""
+echo "=== Copy / duplicate a dotfile — H4 (expect: deny) ==="
+check "cp .env elsewhere"  deny "cp .env /tmp/pub.txt"
+check "mv aws creds"       deny "mv ~/.aws/credentials /tmp/c"
+check "install pem"        deny "install -m600 server.pem /tmp/p"
+check "dd if=.env"         deny "dd if=.env of=/tmp/x"
+
+echo ""
+echo "=== Redirection read of a dotfile — H4 (expect: deny) ==="
+check "read loop < .env"   deny "while read l; do echo x; done < .env"
+check "cmd < aws creds"    deny "grepper < ~/.aws/credentials"
+
+echo ""
+echo "=== Copy anti-false-positive (expect: allow) ==="
+check "cp normal file"     allow "cp src/index.ts dist/index.ts"
+check "echo plain var"     allow 'echo $HOME'
+check "mv build output"    allow "mv build/app /usr/local/bin/app"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

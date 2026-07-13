@@ -67,6 +67,25 @@ check "bash build.sh"       allow "bash scripts/build.sh"
 check "ruby rake.rb"        allow "ruby rake.rb"
 
 echo ""
+echo "=== Interpreter bypasses — H5 (expect: deny) ==="
+check "php -r getenv"       deny 'php -r "echo getenv(\"AWS_SECRET\");"'
+check "perl -ne combined"   deny 'perl -ne "print" .env'
+check "perl -pe combined"   deny 'perl -pe "s/x/y/" .aws/credentials'
+check "python heredoc"      deny 'python3 <<EOF
+import os
+print(os.environ["AWS_KEY"])
+EOF'
+check "bash heredoc env"    deny 'bash <<EOF
+printenv
+EOF'
+
+echo ""
+echo "=== Interpreter heredoc benign (expect: allow) ==="
+check "python heredoc calc" allow 'python3 <<EOF
+print(2 + 2)
+EOF'
+
+echo ""
 echo "=== Anti-false-positive (expect: allow) ==="
 check "commit msg os.environ" allow "git commit -m 'refactor os.environ lookups'"
 check "grep for process.env"  allow "grep -r process.env src/"
