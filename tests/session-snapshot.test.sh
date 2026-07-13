@@ -92,7 +92,10 @@ if [[ ! -f "$CLAUDE_STATE_DIR/.json" ]]; then pass "no snapshot without session_
 
 echo ""
 echo "=== Snapshot permissions are 0600 ==="
-PERMS=$(stat -f %A "$CLAUDE_STATE_DIR/sess-basic.json" 2>/dev/null || stat -c %a "$CLAUDE_STATE_DIR/sess-basic.json" 2>/dev/null)
+# GNU stat (-c) first, then BSD stat (-f) fallback. BSD stat cleanly rejects
+# -c and falls through, but GNU stat treats -f as filesystem mode without
+# failing, so BSD-first yields empty output on Linux.
+PERMS=$(stat -c %a "$CLAUDE_STATE_DIR/sess-basic.json" 2>/dev/null || stat -f %A "$CLAUDE_STATE_DIR/sess-basic.json" 2>/dev/null)
 check_eq "snapshot perms" "600" "$PERMS"
 
 echo ""

@@ -77,7 +77,7 @@ log_audit() {
   # Rotate if >10MB
   if [[ -f "$log" ]]; then
     local size
-    size=$(stat -f%z "$log" 2>/dev/null || stat -c%s "$log" 2>/dev/null || echo 0)
+    size=$(stat -c%s "$log" 2>/dev/null || stat -f%z "$log" 2>/dev/null || echo 0)
     if [[ "$size" -gt 10485760 ]]; then
       for i in 4 3 2 1; do
         [[ -f "${log}.${i}" ]] && mv -f "${log}.${i}" "${log}.$((i+1))" 2>/dev/null
