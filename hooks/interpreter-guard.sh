@@ -6,7 +6,8 @@
 # dotfiles. This hook inspects inline-code flags (-c, -e, --eval, combined
 # short flags like -ne, -r, a trailing -, and heredoc payloads) and denies
 # when the payload references env vars, dotfile paths, raw sockets, or
-# network exfil APIs.
+# network exfil APIs. It sees through common command runners (poetry run,
+# env, timeout, nohup, …) so wrapping an interpreter doesn't evade the check.
 #
 # The hook is conservative: only triggers when BOTH an interpreter is used
 # AND the payload contains a sensitive token. Running "python script.py"
@@ -24,6 +25,15 @@ CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
 
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
+
+# Command runners that wrap another command, moving the interpreter off the
+# command boundary and evading the anchored match below:
+#   poetry run python -c …   env X=1 node -e …   timeout 5 ruby -e …   nohup python -c …
+# RUNSEG matches one runner plus its typical args (flags, a duration, or VAR=val
+# for env). The arg shapes deliberately do NOT match a bare word, so the runner
+# never swallows the interpreter token that follows. IB = boundary + any runners.
+RUNSEG='(poetry\s+run|sudo|env|nohup|setsid|command|time|timeout|nice|ionice|xargs|stdbuf|caffeinate)(\s+(--?[A-Za-z0-9][A-Za-z0-9-]*|[0-9]+[smhd]?|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]|;&]*))*\s+'
+IB="${A}(${RUNSEG})*"
 
 # Interpreters that commonly accept inline code.
 INTERP='(python3?|node|ruby|perl|php|bash|sh|zsh|deno|bun)'
@@ -77,8 +87,8 @@ SENSITIVE_TOKENS=(
 # Does the command invoke an interpreter with inline code (flag) or a heredoc?
 # Heredocs (python3 <<EOF … EOF) carry a payload with no -c flag, so match them
 # too and let the token scan below inspect the heredoc body.
-INTERP_INLINE_RE="${A}${INTERP}\s+[^|;&]*${INLINE}"
-INTERP_HEREDOC_RE="${A}${INTERP}\b[^|;&]*<<-?"
+INTERP_INLINE_RE="${IB}${INTERP}\s+[^|;&]*${INLINE}"
+INTERP_HEREDOC_RE="${IB}${INTERP}\b[^|;&]*<<-?"
 if ! printf '%s\n' "$CMD" | grep -qE "$INTERP_INLINE_RE" \
    && ! printf '%s\n' "$CMD" | grep -qE "$INTERP_HEREDOC_RE"; then
   exit 0
@@ -95,7 +105,7 @@ done
 # Interpreter with inline code but no obvious sensitive token — ask.
 # This catches novel payloads without producing false positives on trivial
 # one-liners like `python -c "print(1)"`.
-if printf '%s\n' "$CMD" | grep -qE "${A}${INTERP}\s+.{120,}${INLINE}|${A}${INTERP}\s+[^|;&]*${INLINE}[^|;&]{200,}"; then
+if printf '%s\n' "$CMD" | grep -qE "${IB}${INTERP}\s+.{120,}${INLINE}|${IB}${INTERP}\s+[^|;&]*${INLINE}[^|;&]{200,}"; then
   emit_ask "Long inline script passed to an interpreter. Review the payload before running — inline code bypasses file-based review."
   exit 0
 fi

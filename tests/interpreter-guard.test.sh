@@ -86,6 +86,22 @@ print(2 + 2)
 EOF'
 
 echo ""
+echo "=== Wrapped in a command runner still inspected (expect: deny) ==="
+check "poetry run python -c"   deny 'poetry run python -c "import os; print(os.environ[\"AWS_KEY\"])"'
+check "env VAR= python -c"     deny 'env FOO=1 python3 -c "import os; print(os.environ[\"TOKEN\"])"'
+check "timeout python -c"      deny 'timeout 5 python3 -c "import os; print(os.getenv(\"SECRET\"))"'
+check "nohup node -e"          deny 'nohup node -e "console.log(process.env.TOKEN)"'
+check "sudo python -c"         deny 'sudo python3 -c "import os; print(os.environ[\"X\"])"'
+
+echo ""
+echo "=== Benign wrapped commands (expect: allow) ==="
+check "poetry run manage.py"   allow "poetry run python manage.py runserver"
+check "poetry run pytest"      allow "poetry run pytest -q"
+check "poetry run print"       allow 'poetry run python -c "print(1+1)"'
+check "timeout train.py"       allow "timeout 30 python3 train.py"
+check "env node server.js"     allow "env NODE_ENV=production node server.js"
+
+echo ""
 echo "=== Anti-false-positive (expect: allow) ==="
 check "commit msg os.environ" allow "git commit -m 'refactor os.environ lookups'"
 check "grep for process.env"  allow "grep -r process.env src/"
