@@ -11,6 +11,11 @@ require_jq_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
 
+# Committed template files (.env.example / .sample / .template / .dist / .tpl)
+# are safe to read, copy, and commit — neutralize them before matching so they
+# don't trip the .env patterns below.
+SCAN=$(printf '%s' "$CMD" | sed -E 's/\.env\.(example|sample|template|dist|tpl)/.envTEMPLATE/g')
+
 # Command boundary: start-of-line, pipe, logical chain, subshell, semicolon, &.
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
@@ -20,14 +25,19 @@ READERS='(cat|less|more|head|tail|xxd|od|strings|nl|awk|sed|grep|rg|base64|gpg|o
 COPIERS='(cp|mv|install|tee|ln)'
 # Bash dot-source shortcut: `. <file>`
 DOTSOURCE='\.'
-DOTFILES='(\.env(\b|\.)|\.envrc\b|\.aws/credentials|\.netrc\b|id_rsa\b|id_ed25519\b|\.pem\b|\.key\b)'
+# Credential files. Kept in sync with sensitive-file-guard so the Read/Edit/Write
+# path and the Bash path block the same set (cat ~/.git-credentials etc.).
+DOTFILES='(\.env(\b|\.)|\.envrc\b|\.aws/credentials|\.netrc\b|id_rsa\b|id_ed25519\b|\.pem\b|\.key\b|\.git-credentials\b|\.npmrc\b|\.pgpass\b|\.kube/config|\.docker/config\.json)'
 
 # Env dumpers (whole-command or chained).
 ENV_DUMP='(printenv|^env$|^env\b[^=]*$|^export\s*$|^set\s*$|declare\s+-(p|x)\b|compgen\s+-e)'
 
-# Printing a secret-ish env var value to stdout (leaks it into the transcript).
-#   echo $AWS_SECRET_ACCESS_KEY   printf %s "$OPENAI_API_KEY"
-PRINT_VAR='(echo|printf)\b[^|;&]*\$\{?[A-Za-z_]*(TOKEN|KEY|SECRET|PASSWORD|PASSWD|API|AUTH|CREDENTIAL)'
+# A $VAR whose NAME signals a secret: contains SECRET/PASSWORD anywhere, or ends
+# in KEY/TOKEN/CREDENTIAL(S) as a trailing segment (preceded by _ or var start).
+# Deliberately does NOT treat bare API/AUTH/KEY substrings as secret, so common
+# vars like $API_URL, $SSH_AUTH_SOCK, $DONKEY are not flagged.
+SECRET_VAR_CONTAINS='\$\{?[A-Za-z0-9_]*(SECRET|PASSWORD|PASSWD)'
+SECRET_VAR_SUFFIX='\$\{?([A-Za-z0-9_]*_)?(KEY|TOKEN|CREDENTIALS?)([^A-Za-z0-9_]|$)'
 
 # Reading a dotfile via input redirection, with no reader command at all.
 #   while read l; do …; done < .env      cmd < .aws/credentials
@@ -36,9 +46,10 @@ REDIR_READ="<\s*['\"]?[^|;&<>]*${DOTFILES}"
 # dd reading a dotfile:  dd if=.env of=/tmp/x
 DD_READ="\bdd\b[^|;&]*if=[^|;&]*${DOTFILES}"
 
-# curl/wget exfil: body/data flags OR URL containing a KEY/TOKEN/SECRET/PASSWORD-ish var expansion.
-NET_EXFIL_BODY='(curl|wget)\b[^|;&]*(--data-binary|--data-urlencode|--data|--data-raw|-d\b|-F\b|--form|--upload-file|--post-data|-T\b)'
-NET_EXFIL_VAR='(curl|wget)\b[^|;&]*\$\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|PASSWD|API|AUTH)'
+# curl/wget uploading a LOCAL FILE as the body (@file) or via -T/--upload-file.
+# Plain POSTs (-d name=foo) are left to network-guard's "ask"; only the exfil
+# shapes are hard-denied here. Secret-var exfil is caught by the VAR rules.
+NET_EXFIL_FILE='(curl|wget)\b[^|;&]*((-d|--data|--data-binary|--data-urlencode|--data-raw|--post-data)(=|\s)*@|(-F|--form|--post-file)\s+[^|;&@]*@|(-T|--upload-file)\b)'
 
 # Sockets.
 SOCKETS='\b(nc|ncat|socat)\b'
@@ -51,17 +62,19 @@ BLOCKED=(
   "${A}${COPIERS}\s+[^|;&]*${DOTFILES}"
   "${A}${DOTSOURCE}\s+[^|;&]*${DOTFILES}"
   "${A}${ENV_DUMP}"
-  "${A}${PRINT_VAR}"
+  "(echo|printf)\b[^|;&]*${SECRET_VAR_CONTAINS}"
+  "(echo|printf)\b[^|;&]*${SECRET_VAR_SUFFIX}"
   "${REDIR_READ}"
   "${DD_READ}"
-  "${A}${NET_EXFIL_BODY}"
-  "${A}${NET_EXFIL_VAR}"
+  "${A}${NET_EXFIL_FILE}"
+  "(curl|wget)\b[^|;&]*${SECRET_VAR_CONTAINS}"
+  "(curl|wget)\b[^|;&]*${SECRET_VAR_SUFFIX}"
   "${A}${SOCKETS}"
   "${A}${EVAL_ENV}"
 )
 
 for P in "${BLOCKED[@]}"; do
-  if printf '%s\n' "$CMD" | grep -qE "$P"; then
+  if printf '%s\n' "$SCAN" | grep -qE "$P"; then
     emit_deny "Blocked: command may read or exfiltrate sensitive env values / dotfiles. Reference variables by name in code; do not print, dump, or transmit their values."
     exit 0
   fi

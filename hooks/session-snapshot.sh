@@ -35,7 +35,6 @@ FILES_JSON=$(jq -rcs '
 [[ -z "$FILES_JSON" ]] && FILES_JSON='[]'
 
 # Build the edited_files array: resolve each path to absolute, hash contents.
-EDITED_FILES_JSON=$(printf '%s' "$FILES_JSON" | jq -c --arg cwd "$CWD" '[]' 2>/dev/null)
 TMP=$(mktemp 2>/dev/null) || exit 0
 printf '[' > "$TMP"
 FIRST=1

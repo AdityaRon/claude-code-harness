@@ -19,6 +19,10 @@ require_jq_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
 
+# Committed template files (.env.example / .sample / .template / .dist / .tpl)
+# are safe to stage; neutralize them so `git add .env.example` isn't blocked.
+SCAN=$(printf '%s' "$CMD" | sed -E 's/\.env\.(example|sample|template|dist|tpl)/.envTEMPLATE/g')
+
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
 # Global options that git accepts BETWEEN `git` and the subcommand. Left
@@ -39,7 +43,9 @@ if printf '%s\n' "$CMD" | grep -qiE "${A}git\b[^|;&]*-c[= ]core\.hookspath"; the
 fi
 
 # --- Force-push guard ---------------------------------------------------
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\s.*(-f\b|--force\b|--force-with-lease\b)"; then
+# -f must be a standalone flag (space/boundary on both sides) so a branch name
+# ending in "-f" (e.g. `git push origin wip-f`) doesn't trip it.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]-f([[:space:]]|$)|--force\b|--force-with-lease\b)"; then
   emit_deny "Blocked: force-push is not allowed. Use regular git push, or ask the user to run this manually."
   exit 0
 fi
@@ -74,10 +80,13 @@ SENSITIVE=(
   'id_ed25519'
   '\.aws/credentials'
   '\.netrc(\s|$)'
-  'secrets\.'
+  '\.git-credentials(\s|$)'
+  '\.pgpass(\s|$)'
+  # Config-shaped secret files only — not secrets.py / secrets.ts (source code).
+  'secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)'
 )
 for P in "${SENSITIVE[@]}"; do
-  if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s.*${P}"; then
+  if printf '%s\n' "$SCAN" | grep -qE "${A}${GIT}add\s.*${P}"; then
     emit_deny "Blocked: git add targets a sensitive file. Do not stage credentials or secret files."
     exit 0
   fi
