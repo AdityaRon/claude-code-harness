@@ -33,6 +33,9 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 
 ### Security — prompt user (`ask`)
 
+> Under the shipped `defaultMode: auto`, these prompts are resolved by the auto-mode
+> classifier rather than by you. See [Auto mode](#auto-mode).
+
 | Hook | Triggers |
 |---|---|
 | `git-guard` | `git push --delete`, `git push origin :branch`, `git remote set-url`, `git config user.email`, non-shell `git config alias.*`, glob staging (`git add '*.ts'`) |
@@ -47,7 +50,7 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 | `audit` | PostToolUse → Bash | Logs every Bash command Claude runs (sanitized to one line) |
 | `audit` | PostToolUseFailure | Logs failed tool calls with error summary |
 | `audit` | ConfigChange | Logs any settings file modified mid-session |
-| `audit` | Stop | Logs a session-end line with the turn count (derived from the transcript — cost isn't exposed to hooks) and session id |
+| `audit` | SessionEnd | Logs a session-end line **once per session** — turn count (derived from the transcript; cost isn't exposed to hooks), session id, and why the session ended (`clear` / `logout` / `exit`). Previously wired to `Stop`, which fires at *every* turn end and so wrote a mislabelled `session_end` line per turn. The hook still accepts `Stop` if you rewire it. |
 
 All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 backups retained).
 
@@ -71,13 +74,63 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 
 | Setting | Value | Effect |
 |---|---|---|
+| `permissions.defaultMode` | `auto` | Every session starts in **auto mode** — a model classifier adjudicates permission prompts instead of stopping for a keystroke. See [Auto mode](#auto-mode) for what this changes about the guards. |
 | `fileCheckpointingEnabled` | `true` | Snapshots files before edits so `/rewind` can restore them |
 | `effortLevel` | `xhigh` | Default reasoning effort (portable across machines) |
-| `skipAutoPermissionPrompt` | `true` | Pre-accepts the auto-mode opt-in dialog |
+| `skipAutoPermissionPrompt` | `true` | Pre-accepts the auto-mode opt-in dialog, so auto mode is live on first launch rather than waiting behind a dialog |
 | `sandbox` | off by default | OS sandbox (Seatbelt/bubblewrap) drafted with a read-only network allowlist (npm/pypi/crates/go/github/anthropic). Flip `sandbox.enabled` to `true` to confine commands. See Customization. |
 | `includeCoAuthoredBy` | `true` | Adds `Co-authored-by: Claude` to commits |
 | `permissions.allow` | Scoped allowlist (≈70 entries) | Covers common safe ops: `npm test/run lint/build`, `pytest`, `python3`, `poetry run/install/lock`, `gh run/search`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. Interpreter wildcards (`python3`, `poetry run`) are allowed because a permission `allow` only skips the *prompt* — the PreToolUse guards still run, and `interpreter-guard` inspects inline `-c`/`-e`/heredoc code even when wrapped in a runner (`poetry run python -c …`). `gh api` is deliberately **not** allowlisted (it can POST/DELETE via the GitHub API with no network-guard coverage). With the OS sandbox off, an auto-approved `python3 script.py` runs the script's contents unscanned — enable the sandbox for containment. |
 | `permissions.deny` | `git push --force`, `sudo`, `rm -rf`, `gh auth token`, … | Deny always wins over allow |
+
+## Auto mode
+
+The harness ships `permissions.defaultMode: "auto"`. Instead of stopping for a
+keystroke on every unrecognised action, a model classifier approves or denies
+the prompt; read-only work (reading files, searching code) doesn't go to the
+classifier at all. Verify the mode with `/status`, or override per session with
+`claude --permission-mode manual`.
+
+**It only works in user settings.** Claude Code will not let a repo-level
+`.claude/settings.json` grant `defaultMode: auto`, and the ignored value
+*shadows* your user-level mode — so don't copy this harness's `settings.json`
+into a project. The installer writes `~/.claude/settings.json`, which is the
+right place. `install.sh` owns this key: an existing `defaultMode` is replaced
+(with a notice) rather than winning the merge, so re-running the installer
+actually flips an older install onto auto.
+
+**What this changes about the guards:**
+
+- **The `deny` tier is unaffected.** PreToolUse hooks run before the permission
+  system, so a guard that denies still blocks the call in any mode.
+- **The `ask` tier is no longer a question to you.** Everything the guards
+  escalate as *ask* — `git push --delete`, `curl -X POST`, `scp` to a remote
+  host, long inline interpreter scripts — is now adjudicated by the classifier
+  on your behalf. Treat the ask rows in the tables above as "someone else
+  decides", and promote anything you want stopped unconditionally into
+  `permissions.deny` or `autoMode.hard_deny`.
+- **Some `permissions.allow` entries are disregarded.** Auto mode ignores allow
+  entries it classes as classifier-bypassing, so a broad wildcard may not buy
+  you the silence it used to. Run `/doctor` inside a session to list which of
+  your entries it's ignoring.
+
+**Tuning the classifier.** Auto mode reads its rules from a top-level
+`autoMode` key — `{environment, allow, soft_deny, hard_deny}`:
+
+```bash
+claude auto-mode defaults   # the shipped rules (17 allow, 65 soft_deny, 1 hard_deny, 20 environment)
+claude auto-mode config     # the effective rules: yours where set, defaults otherwise
+claude auto-mode critique   # AI review of your custom rules
+claude auto-mode reset      # drop your autoMode section, back to shipped defaults
+```
+
+**The harness deliberately ships no `autoMode` block.** `auto-mode config`
+describes the resolution as *"your settings where set, defaults otherwise"* —
+i.e. setting a category looks like it **replaces** the shipped rules for that
+category, not adds to them. Shipping a handful of `soft_deny` rules could
+therefore silently drop the 65 that come with Claude Code, which is a bad trade
+for a security harness. Write your own rules if you want them, then confirm
+what survived with `claude auto-mode config` before trusting it.
 
 ## File layout after install
 
@@ -122,7 +175,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 bash doctor.sh
 ```
 
-Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 320+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, and the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap).
+Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 390+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap), and the settings merge (`merge-settings.jq` — that a stale `defaultMode` is replaced, allow/deny lists are unioned, user keys survive, and re-running the installer is a no-op).
 
 CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS and lints every hook with `shellcheck` on each push and PR.
 
@@ -164,6 +217,7 @@ Extend its allowlist under `sandbox.network.allowedDomains`.
 These guards are defense-in-depth, not a security boundary. Be clear-eyed about what they do **not** cover:
 
 - **Regex guards have a ceiling.** Command-string matching can always be evaded by a determined agent (string-obfuscated interpreter payloads, novel tool invocations, multi-step stage-then-exfil across separate commands). The guards raise the bar and catch the obvious/accidental cases; the **OS sandbox** is the only real containment for the evasion class — see *Enable the OS sandbox*.
+- **Auto mode removes you from the loop on the `ask` tier.** With `defaultMode: auto` the classifier resolves the prompts a human used to see. That is the point of the mode, but it means the guards' *ask* rules are advice to a model rather than a stop sign — see [Auto mode](#auto-mode). Set `defaultMode` to `manual` if you want every one of them back in your hands.
 - **MCP connectors are not covered.** `network-guard` sees Bash `curl`/`wget` and the `WebFetch` tool, but MCP tools (Slack, Google Drive, Atlassian, …) can read files and send data outbound with no guard in the middle. Control that surface by only connecting MCP servers you trust.
 - **Guards fail *closed* without jq**, so a missing-jq machine blocks all Bash/file tool calls rather than allowing them unchecked. Keep `jq` installed (the installer checks for it).
 
