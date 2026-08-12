@@ -161,6 +161,37 @@ OPEN_RE='\b(pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|b
 # "resolved" — matching it would invert the signal entirely.
 CLOSED_RE='\b(merged|shipped|deployed|landed|resolved|verified in prod)\b'
 
+# The index is skipped as a memory (it is a list of links, not a claim), which
+# left a blind spot: a stale claim written into an index one-liner was never
+# examined at all — and the index is the part loaded into context every single
+# session, so it is the worst place to leave one. Found in a real store, where a
+# hook still said "awaiting new doc dump" for work that had merged months
+# earlier while the memory it pointed at was already correct.
+#
+# Age-gate each line by the memory it links to, not by the index's own mtime:
+# the index is rewritten whenever any entry changes, so its mtime says nothing
+# about how long a given line has been wrong.
+scan_index() {
+  local dir="$1" slug="$2" line target age
+  # Separate statement: within one `local`, $dir is not yet assigned.
+  local idx="$dir/MEMORY.md"
+  local n=0
+
+  [ -f "$idx" ] || return 0
+  while IFS= read -r line; do
+    n=$((n + 1))
+    printf '%s' "$line" | grep -qiE "$OPEN_RE" || continue
+    target=$(printf '%s' "$line" | sed -n 's/.*](\([^)]*\.md\)).*/\1/p' | head -1)
+    if [ -n "$target" ] && [ -f "$dir/$target" ]; then
+      age=$(age_days "$dir/$target")
+      [ "$age" -lt "$TRIAGE_MIN_AGE_DAYS" ] && continue
+      emit TRIAGE "$slug" "MEMORY.md:$n" "index line asserts open state about ${target} (${age}d old)"
+    else
+      emit TRIAGE "$slug" "MEMORY.md:$n" "index line asserts open state"
+    fi
+  done < "$idx"
+}
+
 scan_store() {
   local dir="$1" slug="$2" f base claims line kind ref expected result actual age ids id_count note
 
@@ -242,6 +273,7 @@ for store in "$PROJECTS"/*; do
   [ -n "$ONLY_STORE" ] && [ "$slug" != "$ONLY_STORE" ] && continue
   STORES_SCANNED=$((STORES_SCANNED+1))
   scan_store "$store/memory" "$slug"
+  scan_index "$store/memory" "$slug"
 done
 
 # A mistyped slug must not exit 0 — silence would read as "nothing is stale"
