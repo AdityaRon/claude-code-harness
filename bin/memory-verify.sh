@@ -66,6 +66,7 @@ N_STALE=0
 N_TRIAGE=0
 N_SKIP=0
 N_VERIFIED=0
+HEADER_SHOWN=""
 
 # Emit one finding. Fields are positional to stay bash-3.2 friendly.
 emit() {
@@ -79,9 +80,15 @@ emit() {
   if [ "$AS_JSON" -eq 1 ]; then
     jq -nc --arg s "$status" --arg st "$store" --arg f "$file" --arg d "$detail" \
       '{status:$s, store:$st, file:$f, detail:$d}'
-  else
-    printf '  %-8s %-52s %s\n' "$status" "$file" "$detail"
+    return 0
   fi
+  # Print the store name lazily, on its first finding — most stores are clean,
+  # and a column of bare headers buries the few that need attention.
+  if [ "$store" != "$HEADER_SHOWN" ]; then
+    printf '\n%s\n' "$store"
+    HEADER_SHOWN="$store"
+  fi
+  printf '  %-8s %-52s %s\n' "$status" "$file" "$detail"
 }
 
 # Age in whole days, preferring the frontmatter `modified:` stamp over mtime —
@@ -139,9 +146,15 @@ resolve_gh() {
 
 # Open-state language, i.e. the memory asserts something is still in flight.
 # Matched case-insensitively (memories write "PENDING", "Pending" and "pending"
-# interchangeably) and on word boundaries — without \b, "held" also matches
-# "withheld".
-OPEN_RE='\b(pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|blocked on|still open|in review|will land|held)\b'
+# interchangeably) and on word boundaries.
+#
+# "held" and "in review" were dropped after auditing 11 real memories: between
+# them they produced three false positives ("held-out error" from a regression
+# fit, "load-bearing in review", and "held" used as a disposition label in an
+# included/held/skipped list) and not one true positive. Every genuine stale
+# claim in that sample was caught by pending / awaiting / draft pr. Prose reuses
+# state words freely, so a term only earns its place if it survives real text.
+OPEN_RE='\b(pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|blocked on|still open|will land)\b'
 # Closed-state language. Co-occurrence with the above inside one file is the
 # append-don't-revise contradiction: an update was added, the stale sentence
 # stayed. Boundaried for the same reason, and because "unresolved" contains
@@ -150,17 +163,11 @@ CLOSED_RE='\b(merged|shipped|deployed|landed|resolved|verified in prod)\b'
 
 scan_store() {
   local dir="$1" slug="$2" f base claims line kind ref expected result actual age ids id_count note
-  local printed_header=0
 
   for f in "$dir"/*.md; do
     [ -f "$f" ] || continue
     base=$(basename "$f")
     [ "$base" = "MEMORY.md" ] && continue
-
-    if [ "$AS_JSON" -eq 0 ] && [ "$printed_header" -eq 0 ]; then
-      printf '\n%s\n' "$slug"
-      printed_header=1
-    fi
 
     claims=$(verify_lines "$f")
     if [ -n "$claims" ]; then

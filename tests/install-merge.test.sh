@@ -6,7 +6,7 @@
 # ("default", from a previous install or the /config UI) must end up on the
 # harness value, since a plain `$new * $old` merge lets the stale value win.
 set -u
-FILTER="merge-settings.jq"
+FILTER="config/merge-settings.jq"
 PASS=0; FAIL=0
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
@@ -79,19 +79,19 @@ OUT=$(merge '{"env":{"CLAUDE_AUDIT_LOG":"~/mine.log"},"tui":"fullscreen"}' "$HAR
 
 echo ""
 echo "=== The shipped settings.json is valid and sets auto mode ==="
-[[ "$(jq -r '.permissions.defaultMode' settings.json)" == "auto" ]] \
-  && pass "shipped settings.json uses auto" || fail "shipped settings.json uses auto" "$(jq -r '.permissions.defaultMode' settings.json)"
+[[ "$(jq -r '.permissions.defaultMode' config/settings.json)" == "auto" ]] \
+  && pass "shipped settings.json uses auto" || fail "shipped settings.json uses auto" "$(jq -r '.permissions.defaultMode' config/settings.json)"
 
 echo ""
 echo "=== The shipped settings.json merges cleanly onto itself (idempotent) ==="
 # `unique` sorts the allow/deny lists, so compare content as sets rather than
 # byte-for-byte: re-running install.sh must not add, drop, or alter anything.
 norm(){ jq -S '.permissions.allow |= sort | .permissions.deny |= sort' "$1"; }
-printf '%s' "$(merge "$(cat settings.json)" "$(cat settings.json)")" > "$TMP/self.json"
-if [[ "$(norm "$TMP/self.json")" == "$(norm settings.json)" ]]; then
+printf '%s' "$(merge "$(cat config/settings.json)" "$(cat config/settings.json)")" > "$TMP/self.json"
+if [[ "$(norm "$TMP/self.json")" == "$(norm config/settings.json)" ]]; then
   pass "self-merge is a no-op"
 else
-  fail "self-merge is a no-op" "$(diff <(norm "$TMP/self.json") <(norm settings.json) | head -20)"
+  fail "self-merge is a no-op" "$(diff <(norm "$TMP/self.json") <(norm config/settings.json) | head -20)"
 fi
 
 echo ""

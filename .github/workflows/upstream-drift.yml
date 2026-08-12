@@ -15,15 +15,15 @@ on:
   push:
     # Also run when the assumptions themselves are edited.
     paths:
-      - 'settings.json'
-      - 'upstream-contract.json'
-      - 'upstream-check.sh'
+      - 'config/settings.json'
+      - 'config/upstream-contract.json'
+      - 'bin/upstream-check.sh'
       - '.github/workflows/upstream-drift.yml'
   pull_request:
     paths:
-      - 'settings.json'
-      - 'upstream-contract.json'
-      - 'upstream-check.sh'
+      - 'config/settings.json'
+      - 'config/upstream-contract.json'
+      - 'bin/upstream-check.sh'
 
 jobs:
   drift:
@@ -54,7 +54,7 @@ jobs:
         id: check
         run: |
           set +e
-          bash upstream-check.sh 2>&1 | tee drift.log
+          bash bin/upstream-check.sh 2>&1 | tee drift.log
           echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Publish the report
@@ -73,10 +73,10 @@ jobs:
         run: |
           case "${{ steps.check.outputs.status }}" in
             1)
-              echo "::error title=Harness broken by upstream::The harness depends on something Claude Code changed. See the job summary, fix the harness, then update upstream-contract.json."
+              echo "::error title=Harness broken by upstream::The harness depends on something Claude Code changed. See the job summary, fix the harness, then update config/upstream-contract.json."
               ;;
             2)
-              echo "::warning title=Claude Code grew::New capabilities exist that nobody has assessed. Adopt them, or record the decision in upstream-contract.json's notes_on_unused_events to acknowledge."
+              echo "::warning title=Claude Code grew::New capabilities exist that nobody has assessed. Adopt them, or record the decision in config/upstream-contract.json's notes_on_unused_events to acknowledge."
               ;;
             *)
               echo "::error title=Drift check could not run::upstream-check.sh exited ${{ steps.check.outputs.status }}."

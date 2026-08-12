@@ -3,7 +3,7 @@
 # stubs GitHub, so the suite is hermetic: no real memories are read, no network
 # call is made, and CI needs no gh credential.
 set -u
-SCRIPT="memory-verify.sh"
+SCRIPT="bin/memory-verify.sh"
 PASS=0; FAIL=0
 
 TMP=$(mktemp -d)
@@ -197,6 +197,14 @@ AFTER=$(shasum -a 256 "$STORE/immutable.md" | awk '{print $1}')
 check_eq "file untouched after a run" "$BEFORE" "$AFTER"
 
 echo ""
+echo "=== A clean store prints nothing at all, not a bare header ==="
+rm -f "$STORE"/*.md
+mem quiet.md 40 "Nothing in flight here; this just records how the loader works."
+OUT=$(run)
+check_absent "no store header when there is nothing to say" "teststore" "$OUT"
+check_contains "still reports totals" "0 stale, 0 triage" "$OUT"
+
+echo ""
 echo "=== State words are matched on word boundaries ==="
 rm -f "$STORE"/*.md
 mem unres.md 40 "PENDING review. The root cause is still unresolved."
@@ -207,6 +215,29 @@ rm -f "$STORE"/*.md
 mem withheld.md 40 "Payment was withheld last quarter."
 OUT=$(run)
 check_absent "'withheld' does not mean 'held'" "withheld.md" "$OUT"
+
+echo ""
+echo "=== Prose that merely reuses state words is not an open claim ==="
+# All three are real sentences from the memories this was first run against.
+rm -f "$STORE"/*.md
+mem heldout.md  40 "Fitted on two tenants; predicts 702s vs actual 741s (5% held-out error)."
+mem bearing.md  40 "The claim will recur on future additions and is load-bearing in review."
+mem disposn.md  40 "Every candidate gets a disposition: included / held / skipped-with-reason."
+OUT=$(run)
+check_absent "'held-out' is a statistic"        "heldout.md" "$OUT"
+check_absent "'in review' as prose, not status" "bearing.md" "$OUT"
+check_absent "'held' as a disposition label"    "disposn.md" "$OUT"
+
+echo ""
+echo "=== but the terms that earn their place still fire ==="
+rm -f "$STORE"/*.md
+mem p1.md 40 "PENDING: merge and release."
+mem p2.md 40 "Notebook committed but NOT pushed — awaiting a go for push/PR."
+mem p3.md 40 "Shipped behind draft PR 1493; do not land yet."
+OUT=$(run)
+check_contains "pending fires"  "p1.md" "$OUT"
+check_contains "awaiting fires" "p2.md" "$OUT"
+check_contains "draft pr fires" "p3.md" "$OUT"
 
 echo ""
 echo "=== A store that does not exist is an error, not a clean bill of health ==="

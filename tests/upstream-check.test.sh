@@ -8,7 +8,7 @@
 # output format changing. No Claude Code install needed — CLAUDE_DOCTOR_CMD
 # substitutes a stub that behaves like `claude doctor`.
 set -u
-CHECK="upstream-check.sh"
+CHECK="bin/upstream-check.sh"
 PASS=0; FAIL=0
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
@@ -44,7 +44,7 @@ export CLAUDE_DOCTOR_CMD="bash $TMP/stub.sh"
 # A stand-in for the CLI file that check 4b greps. Without this the tests would
 # scan the real ~150MB binary once per settings key per invocation — slow, and it
 # would make results depend on the machine's Claude install rather than fixtures.
-ALL_KEYS=$(jq -r 'keys[] | select(. != "hooks" and . != "permissions" and . != "env" and . != "sandbox" and . != "statusLine")' settings.json)
+ALL_KEYS=$(jq -r 'keys[] | select(. != "hooks" and . != "permissions" and . != "env" and . != "sandbox" and . != "statusLine")' config/settings.json)
 : > "$TMP/fullcli"
 for k in $ALL_KEYS; do echo "$k" >> "$TMP/fullcli"; done
 
@@ -102,7 +102,7 @@ echo "=== ADVISORY: a settings key the CLI no longer mentions (renamed/removed) 
 # doctor does not flag unknown top-level keys, so a renamed setting becomes a
 # silent no-op. Stand in a fake CLI file that mentions every harness key except
 # one and check it is called out.
-ALL_KEYS=$(jq -r 'keys[] | select(. != "hooks" and . != "permissions" and . != "env" and . != "sandbox" and . != "statusLine")' settings.json)
+ALL_KEYS=$(jq -r 'keys[] | select(. != "hooks" and . != "permissions" and . != "env" and . != "sandbox" and . != "statusLine")' config/settings.json)
 DROPPED="skipAutoPermissionPrompt"
 : > "$TMP/fakecli"
 for k in $ALL_KEYS; do
@@ -133,11 +133,11 @@ printf '%s' "$OUT" | grep -q "cannot locate the CLI files" \
 
 echo ""
 echo "=== The contract file is well-formed and covers every live event ==="
-jq -e '.acknowledged_hook_events | length > 0' upstream-contract.json >/dev/null 2>&1 \
+jq -e '.acknowledged_hook_events | length > 0' config/upstream-contract.json >/dev/null 2>&1 \
   && pass "contract lists acknowledged events" || fail "contract lists acknowledged events" "bad json"
 MISSING=""
 for ev in $(printf '%s' "$ALL_EVENTS" | tr -d ' ' | tr ',' '\n'); do
-  jq -e --arg e "$ev" '.acknowledged_hook_events | index($e) != null' upstream-contract.json >/dev/null 2>&1 \
+  jq -e --arg e "$ev" '.acknowledged_hook_events | index($e) != null' config/upstream-contract.json >/dev/null 2>&1 \
     || MISSING="$MISSING $ev"
 done
 [ -z "$MISSING" ] && pass "every 2.1.228 event is acknowledged" || fail "every 2.1.228 event is acknowledged" "missing:$MISSING"
@@ -146,9 +146,9 @@ echo ""
 echo "=== Every event the harness hooks is acknowledged in the contract ==="
 UNACK=""
 while IFS= read -r ev; do
-  jq -e --arg e "$ev" '.acknowledged_hook_events | index($e) != null' upstream-contract.json >/dev/null 2>&1 \
+  jq -e --arg e "$ev" '.acknowledged_hook_events | index($e) != null' config/upstream-contract.json >/dev/null 2>&1 \
     || UNACK="$UNACK $ev"
-done < <(jq -r '.hooks | keys[]' settings.json)
+done < <(jq -r '.hooks | keys[]' config/settings.json)
 [ -z "$UNACK" ] && pass "settings.json events all acknowledged" || fail "settings.json events all acknowledged" "unacked:$UNACK"
 
 echo ""

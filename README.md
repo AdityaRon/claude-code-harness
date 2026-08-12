@@ -141,6 +141,30 @@ therefore silently drop the 65 that come with Claude Code, which is a bad trade
 for a security harness. Write your own rules if you want them, then confirm
 what survived with `claude auto-mode config` before trusting it.
 
+## Repo layout
+
+Two entry points sit at the root; everything else is grouped by what it is.
+
+```
+install.sh               ← run once per machine
+doctor.sh                ← run every suite in tests/
+bin/                     ← executables the harness installs or you invoke
+  statusline.sh
+  memory-verify.sh       ← memory staleness check (see Memory staleness)
+  upstream-check.sh      ← scheduled drift guard (see Upstream drift)
+config/
+  settings.json          ← the settings the installer merges in
+  merge-settings.jq      ← how that merge is performed
+  upstream-contract.json ← the upstream facts the harness relies on
+hooks/                   ← one file per hook, plus shared lib.sh
+skills/                  ← agent skills, one directory each
+tests/                   ← one <name>.test.sh per hook or script
+docs/                    ← research notes
+```
+
+Paths inside `~/.claude` after install are flat — the grouping above is for
+reading the repo, not for the installed tree.
+
 ## File layout after install
 
 ```
@@ -188,7 +212,7 @@ what survived with `claude auto-mode config` before trusting it.
 bash doctor.sh
 ```
 
-Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 390+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap), and the settings merge (`merge-settings.jq` — that a stale `defaultMode` is replaced, allow/deny lists are unioned, user keys survive, and re-running the installer is a no-op).
+Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 390+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap), and the settings merge (`config/merge-settings.jq` — that a stale `defaultMode` is replaced, allow/deny lists are unioned, user keys survive, and re-running the installer is a no-op).
 
 CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS and lints every hook with `shellcheck` on each push and PR.
 
@@ -204,10 +228,10 @@ A push-triggered CI run can never catch this, because upstream changes when the
 repo stands still. So:
 
 ```bash
-bash upstream-check.sh
+bash bin/upstream-check.sh
 ```
 
-`upstream-check.sh` compares the harness against the **installed** CLI, using only
+`bin/upstream-check.sh` compares the harness against the **installed** CLI, using only
 auth-free commands (`claude doctor`, `claude --version`) so CI needs no credentials.
 It checks that the shipped `settings.json` still validates, that every hook event
 the harness registers still exists, and that the shipped `defaultMode` is still

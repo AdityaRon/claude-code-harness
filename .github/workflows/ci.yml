@@ -36,8 +36,6 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Lint hooks and scripts
-        # Glob the repo root rather than naming each script, so a new top-level
-        # tool is linted the day it lands instead of the day someone remembers.
-        # Covers statusline.sh, doctor.sh, install.sh, upstream-check.sh and
-        # memory-verify.sh — the union of what both branches listed by hand.
-        run: shellcheck -S warning hooks/*.sh ./*.sh
+        # Glob the directories rather than naming each script, so a new tool is
+        # linted the day it lands instead of the day someone remembers.
+        run: shellcheck -S warning hooks/*.sh bin/*.sh ./*.sh

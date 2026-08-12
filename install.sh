@@ -38,14 +38,14 @@ for f in "${HOOKS[@]}"; do
 done
 
 # ---- Statusline -------------------------------------------------------
-cp "$REPO/statusline.sh" ~/.claude/statusline.sh
+cp "$REPO/bin/statusline.sh" ~/.claude/statusline.sh
 chmod +x ~/.claude/statusline.sh
 echo "  ✓ statusline.sh"
 
 # ---- Memory tools -----------------------------------------------------
 # Not a hook: checking memories against GitHub costs a network call, which has
 # no business running on every session start. Invoked on demand instead.
-cp "$REPO/memory-verify.sh" ~/.claude/memory-verify.sh
+cp "$REPO/bin/memory-verify.sh" ~/.claude/memory-verify.sh
 chmod +x ~/.claude/memory-verify.sh
 echo "  ✓ memory-verify.sh"
 
@@ -59,7 +59,7 @@ done
 
 # ---- Settings (merge-safe) -------------------------------------------
 TARGET=~/.claude/settings.json
-SOURCE="$REPO/settings.json"
+SOURCE="$REPO/config/settings.json"
 
 if [[ ! -f "$TARGET" ]]; then
   cp "$SOURCE" "$TARGET"
@@ -92,14 +92,14 @@ else
     echo "     Keep your own with: jq '.permissions.defaultMode=\"$OLD_MODE\"' ~/.claude/settings.json"
   fi
 
-  if [[ ! -f "$REPO/merge-settings.jq" ]]; then
-    echo "  ✗ merge-settings.jq missing from $REPO — settings.json left untouched."
+  if [[ ! -f "$REPO/config/merge-settings.jq" ]]; then
+    echo "  ✗ config/merge-settings.jq missing from $REPO — settings.json left untouched."
     echo "     Re-clone the repo, or copy settings.json into place by hand."
     exit 1
   fi
 
   TMP=$(mktemp)
-  if ! jq -s -f "$REPO/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
+  if ! jq -s -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
     rm -f "$TMP"
     echo "  ✗ settings.json merge failed — left untouched (backup: $BACKUP)"
     exit 1
