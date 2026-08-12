@@ -1,12 +1,31 @@
-# Research addendum to MEMORY-HYGIENE-BRIEF.md
+# Research addendum: what Claude Code already does about memory hygiene
 
-Read this **after** the brief. Written 2026-08-11 against Claude Code **2.1.227**.
-It exists because the brief's §1 premise — "garbage-collected by nobody" — is **no longer accurate**.
-Claude Code ships a memory-hygiene mechanism today, and most of it is simply **not enabled on this
-machine**. Re-scope before building anything.
+Written 2026-08-11 against Claude Code **2.1.227**. It began as an addendum to a local working
+document (a hand audit of the live memory stores, not included here because it quotes internal
+work), whose premise was that file-based memory is "garbage-collected by nobody". That premise is
+**not accurate**: Claude Code ships a memory-hygiene mechanism today, and the question is whether it
+is enabled for you. Re-scope before building anything.
 
-Claims below were checked on this machine (strings from the shipped binary, live settings, live store
-contents) or read from the cited source. Where something is inferred rather than observed, it says so.
+Claims below were checked against the shipped binary, live settings, and live store contents, or
+read from the cited source. Where something is inferred rather than observed, it says so.
+
+## Errata — verified against 2.1.228 on 2026-08-12
+
+Two claims below were re-checked and did not hold. Both are left in place so the reasoning is
+readable, but read them with these corrections:
+
+- **§1 "most of it is simply not enabled" understates it.** Auto Dream is gated on the
+  `tengu_onyx_plover` GrowthBook flag, and the check short-circuits *before* the `autoDreamEnabled`
+  setting is read (`if (!available) return false`). Where the flag is off there is **no toggle to
+  turn on** — the `/memory` row is hidden and the setting is inert. The recommendation to "open
+  /memory and enable it" is therefore not always actionable.
+- **§2's ~200-line index cap is unsubstantiated.** No such line limit was found in 2.1.228.
+  `MEMORY.md` is loaded through the ordinary CLAUDE.md loader. The nearest constant is a 200 000-entry
+  guard in the *sync* scanner — a different path. The real constraint is token budget, which is what
+  the `/context` advisory measures (it fires above both 5% of context and 5000 tokens).
+
+Also worth separating: `tengu_memory_threshold_crossed` is a Node process RAM monitor, unrelated to
+the memory store, and should not be read as a store-size nudge.
 
 ---
 
@@ -72,20 +91,20 @@ on disk and is never recalled — but caused by index *length*, not absence from
 **Live headroom on this machine** (index lines vs. sibling files):
 
 ```
- 84  84   -Users-adityasamalla-Desktop-repos          <- leading indicator, ~42% of cap
- 26  27   -...-lacework-security-content              <- 1 unindexed file (the brief's known LSC orphan)
- 25  22   -Users-adityasamalla
-  6   6   -...-genai-service
-  4   4   -...-insights-oncall-tools
-  4   4   -...-incident-builder
-  2   2   -...-helm3-utils
-  1   1   -...-claude-code-harness
+ 84  84   <store-a>    <- largest; leading indicator
+ 26  27   <store-b>    <- 1 unindexed file (a known orphan)
+ 25  22   <store-c>
+  6   6   <store-d>
+  4   4   <store-e>
+  4   4   <store-f>
+  2   2   <store-g>
+  1   1   <store-h>    <- this repo
 ```
 
 Not yet a live problem — but it caps how far "just keep appending one-liners" scales, and it makes an
 index-length check cheap and worth having. Store topology otherwise **confirms the brief**: 8 stores,
-158 `.md` files. (Note a 9th slug now exists for a *git worktree* of this repo —
-`…-claude-code-harness--claude-worktrees-default-mode-auto` — so worktrees fragment stores further.)
+158 `.md` files. (Note a 9th slug appears for a *git worktree* of this repo — the worktree path is
+sanitized into its own slug — so worktrees fragment stores further.)
 
 ---
 
@@ -123,7 +142,7 @@ rewriting, dedup, locking for *synced* stores, mass-delete protection, secret-sc
 
 1. **Mode 1, external-claim verification.** Nothing — built-in or community — checks a memory against
    *external truth*. Auto Dream reasons over memory content and session logs; both community tools flag
-   staleness by **age**, not by fact. The brief's `verify: {gh: lacework/services#33305}` frontmatter
+   staleness by **age**, not by fact. The brief's `verify: {gh: acme/api#4821}` frontmatter
    idea is genuinely novel and remains the **highest-leverage** item. Both proven-false memories were
    one `gh pr view` away. The brief's caveat stands: it only helps memories written *after* the
    convention exists, and the writing convention lives in Anthropic's system prompt — but the harness
