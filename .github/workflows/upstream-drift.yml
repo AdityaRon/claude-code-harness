@@ -1,0 +1,85 @@
+name: Upstream drift
+
+# The harness encodes assumptions about Claude Code — which hook events exist,
+# which permission modes are valid, what settings.json may contain. Claude Code
+# auto-updates, so those assumptions rot without a single commit landing here.
+#
+# That is why this runs on a SCHEDULE and not only on push: a push-triggered job
+# can never catch upstream moving while the repo stands still.
+on:
+  schedule:
+    # Mondays, 06:17 UTC. Offset off the hour — scheduled runs are queued, and
+    # the top of the hour is the most contended slot on GitHub's schedulers.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+  push:
+    # Also run when the assumptions themselves are edited.
+    paths:
+      - 'settings.json'
+      - 'upstream-contract.json'
+      - 'upstream-check.sh'
+      - '.github/workflows/upstream-drift.yml'
+  pull_request:
+    paths:
+      - 'settings.json'
+      - 'upstream-contract.json'
+      - 'upstream-check.sh'
+
+jobs:
+  drift:
+    name: contract vs. installed CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      # npm rather than `curl … | bash`: piping a remote script into a shell is
+      # precisely what this harness's own network-guard denies, so it has no
+      # business in the harness's CI. (`claude gateway` would need the native
+      # build; nothing here does.)
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      # A missing or broken CLI must fail the job, never skip quietly —
+      # upstream-check.sh exits 0 with SKIP when `claude` is absent, which is
+      # right on a contributor's laptop and wrong here.
+      - name: Verify the CLI runs (no auth required)
+        run: |
+          claude --version
+          claude doctor >/dev/null
+
+      - name: Check the upstream contract
+        id: check
+        run: |
+          set +e
+          bash upstream-check.sh 2>&1 | tee drift.log
+          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the report
+        if: always()
+        run: |
+          {
+            echo "## Upstream drift — \`$(claude --version 2>/dev/null || echo unknown)\`"
+            echo
+            echo '```'
+            cat drift.log 2>/dev/null || echo "(no output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Interpret the result
+        if: steps.check.outputs.status != '0'
+        run: |
+          case "${{ steps.check.outputs.status }}" in
+            1)
+              echo "::error title=Harness broken by upstream::The harness depends on something Claude Code changed. See the job summary, fix the harness, then update upstream-contract.json."
+              ;;
+            2)
+              echo "::warning title=Claude Code grew::New capabilities exist that nobody has assessed. Adopt them, or record the decision in upstream-contract.json's notes_on_unused_events to acknowledge."
+              ;;
+            *)
+              echo "::error title=Drift check could not run::upstream-check.sh exited ${{ steps.check.outputs.status }}."
+              ;;
+          esac
+          exit 1

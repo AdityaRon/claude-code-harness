@@ -188,6 +188,52 @@ Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers
 
 CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS and lints every hook with `shellcheck` on each push and PR.
 
+## Keeping up with Claude Code
+
+This harness hard-codes facts about Claude Code — which hook events exist, which
+permission modes are valid, what `settings.json` may contain. Claude Code
+**auto-updates**, so those facts rot with no commit landing here. That has already
+happened twice: auto mode became the product default, and `SessionEnd` appeared
+while the session summary was still wired to `Stop`.
+
+A push-triggered CI run can never catch this, because upstream changes when the
+repo stands still. So:
+
+```bash
+bash upstream-check.sh
+```
+
+`upstream-check.sh` compares the harness against the **installed** CLI, using only
+auth-free commands (`claude doctor`, `claude --version`) so CI needs no credentials.
+It checks that the shipped `settings.json` still validates, that every hook event
+the harness registers still exists, and that the shipped `defaultMode` is still
+accepted — then reports events upstream has that nobody here has assessed.
+
+It works by asking the CLI an impossible question: `claude doctor` prints the full
+list of valid hook events *only* inside the warning for an unknown one, so the
+check registers a sentinel event to make it enumerate them. Note that doctor
+**exits 0 even when it rejects your settings**, so the output is parsed rather than
+trusted.
+
+| Exit | Meaning | Action |
+|---|---|---|
+| 0 | contract holds | none |
+| 1 | **breakage** — the harness relies on something upstream changed | fix the harness |
+| 2 | upstream grew — new capability nobody has assessed | adopt it, or record the decision |
+| 3 | the check itself could not run | install `jq` / the CLI |
+
+`upstream-contract.json` holds the assumptions. `acknowledged_hook_events` is *not*
+"events we use" — it is "events a human has looked at and decided about", and
+`notes_on_unused_events` records why each unused one was skipped. When upstream adds
+an event the check fails with exit 2 until someone either hooks it or writes down
+why not. **That deliberate nag is the mechanism that keeps this harness current
+instead of quietly stale.**
+
+`.github/workflows/upstream-drift.yml` runs it **weekly on a schedule** plus on
+demand, and on any push touching the assumptions. It installs the CLI via npm
+rather than `curl … | bash` — piping a remote script into a shell is exactly what
+this harness's own `network-guard` denies.
+
 ## Customization
 
 **Extend the network allowlist per-project:**
