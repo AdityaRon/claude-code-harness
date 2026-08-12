@@ -146,9 +146,15 @@ resolve_gh() {
 
 # Open-state language, i.e. the memory asserts something is still in flight.
 # Matched case-insensitively (memories write "PENDING", "Pending" and "pending"
-# interchangeably) and on word boundaries — without \b, "held" also matches
-# "withheld".
-OPEN_RE='\b(pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|blocked on|still open|in review|will land|held)\b'
+# interchangeably) and on word boundaries.
+#
+# "held" and "in review" were dropped after auditing 11 real memories: between
+# them they produced three false positives ("held-out error" from a regression
+# fit, "load-bearing in review", and "held" used as a disposition label in an
+# included/held/skipped list) and not one true positive. Every genuine stale
+# claim in that sample was caught by pending / awaiting / draft pr. Prose reuses
+# state words freely, so a term only earns its place if it survives real text.
+OPEN_RE='\b(pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|blocked on|still open|will land)\b'
 # Closed-state language. Co-occurrence with the above inside one file is the
 # append-don't-revise contradiction: an update was added, the stale sentence
 # stayed. Boundaried for the same reason, and because "unresolved" contains

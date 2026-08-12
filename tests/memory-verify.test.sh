@@ -217,6 +217,29 @@ OUT=$(run)
 check_absent "'withheld' does not mean 'held'" "withheld.md" "$OUT"
 
 echo ""
+echo "=== Prose that merely reuses state words is not an open claim ==="
+# All three are real sentences from the memories this was first run against.
+rm -f "$STORE"/*.md
+mem heldout.md  40 "Fitted on two tenants; predicts 702s vs actual 741s (5% held-out error)."
+mem bearing.md  40 "The claim will recur on future additions and is load-bearing in review."
+mem disposn.md  40 "Every candidate gets a disposition: included / held / skipped-with-reason."
+OUT=$(run)
+check_absent "'held-out' is a statistic"        "heldout.md" "$OUT"
+check_absent "'in review' as prose, not status" "bearing.md" "$OUT"
+check_absent "'held' as a disposition label"    "disposn.md" "$OUT"
+
+echo ""
+echo "=== but the terms that earn their place still fire ==="
+rm -f "$STORE"/*.md
+mem p1.md 40 "PENDING: merge and release."
+mem p2.md 40 "Notebook committed but NOT pushed — awaiting a go for push/PR."
+mem p3.md 40 "Shipped behind draft PR 1493; do not land yet."
+OUT=$(run)
+check_contains "pending fires"  "p1.md" "$OUT"
+check_contains "awaiting fires" "p2.md" "$OUT"
+check_contains "draft pr fires" "p3.md" "$OUT"
+
+echo ""
 echo "=== A store that does not exist is an error, not a clean bill of health ==="
 OUT=$(bash "$SCRIPT" --store no-such-store 2>&1)
 RC=$(bash "$SCRIPT" --store no-such-store >/dev/null 2>&1; echo $?)
