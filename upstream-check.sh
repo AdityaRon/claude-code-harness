@@ -87,7 +87,12 @@ live_modes(){
 say "Claude Code upstream drift check"
 say ""
 
-if command -v claude >/dev/null 2>&1; then
+# When doctor is stubbed we are under test: don't spawn the real CLI just to read
+# a version string. It is a ~150MB binary and the suite invokes this script
+# repeatedly, which turned a 1s suite into a 24s one.
+if [ -n "${CLAUDE_DOCTOR_CMD:-}" ]; then
+  VERSION="(stubbed)"
+elif command -v claude >/dev/null 2>&1; then
   VERSION=$(claude --version 2>/dev/null || echo unknown)
 else
   VERSION="(stubbed)"

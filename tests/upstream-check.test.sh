@@ -41,7 +41,14 @@ STUB
 chmod +x "$TMP/stub.sh"
 export CLAUDE_DOCTOR_CMD="bash $TMP/stub.sh"
 
-run(){ STUB_EVENTS="$1" STUB_MODES="$2" bash "$CHECK" 2>&1; }
+# A stand-in for the CLI file that check 4b greps. Without this the tests would
+# scan the real ~150MB binary once per settings key per invocation — slow, and it
+# would make results depend on the machine's Claude install rather than fixtures.
+ALL_KEYS=$(jq -r 'keys[] | select(. != "hooks" and . != "permissions" and . != "env" and . != "sandbox" and . != "statusLine")' settings.json)
+: > "$TMP/fullcli"
+for k in $ALL_KEYS; do echo "$k" >> "$TMP/fullcli"; done
+
+run(){ STUB_EVENTS="$1" STUB_MODES="$2" CLAUDE_CLI_BIN="${CLAUDE_CLI_BIN:-$TMP/fullcli}" bash "$CHECK" 2>&1; }
 
 echo "=== Contract holds when upstream matches (exit 0) ==="
 OUT=$(run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
