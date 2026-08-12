@@ -100,6 +100,10 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
     plan-to-html.sh
     workflow-record.sh
   statusline.sh          ← model | repo:branch | context | tokens | cost | [rate limits] | plan + workflow links
+  memory-verify.sh       ← checks memories against GitHub; run on demand, not a hook
+  skills/
+    memory-audit/
+      SKILL.md           ← /memory-audit — resolves the claims a script cannot
   logs/
     audit.log            ← append-only audit trail, 0600, rotated
   transcripts/
@@ -173,3 +177,50 @@ Each repo manages its own:
 - `CLAUDE.md` — PR format, reviewer names, workflow rules
 - `.claude/settings.json` — project-specific deny rules, auto-formatter, test runner
 - Slack notifications — via MCP connector, instructed through CLAUDE.md
+
+## Memory staleness
+
+Claude Code stores memories under `~/.claude/projects/<slug>/memory/`, and ships
+its own hygiene pass (auto-dream) that merges duplicates, resolves
+contradictions, and rewrites relative dates. That pass reasons over memory
+content and session logs — it never leaves the machine.
+
+So one failure mode survives it: a memory whose claim was overtaken by the
+outside world. *"Draft PR #4821, held, land only if…"* stays internally
+consistent forever, while the PR merged two months ago. Nothing in the file
+disagrees; GitHub does.
+
+`memory-verify.sh` closes that gap, and `/memory-audit` handles the half that
+needs judgment.
+
+```bash
+bash ~/.claude/memory-verify.sh                    # every store
+bash ~/.claude/memory-verify.sh --store <slug>     # one store
+bash ~/.claude/memory-verify.sh --json             # for the skill
+```
+
+Exit codes: `0` nothing to do · `1` something is provably stale · `2` needs
+triage · `3` could not run.
+
+A memory becomes mechanically checkable by carrying a `verify:` block:
+
+```yaml
+verify:
+  - gh acme/api#4821 merged
+  - jira PROJ-123 Done
+```
+
+Anything with a block is resolved directly against GitHub. Anything without one
+is reported as `TRIAGE` — because real memories cite bare `#4821` rather than
+`owner/repo#4821`, and often cite twenty of them, so choosing *which* reference
+is the claim under test needs a model. That is `/memory-audit`: it resolves the
+ambiguous ones, proposes corrections, and writes a `verify:` block back, so each
+audited memory is mechanical from then on.
+
+The script is read-only by contract — it never edits, moves, or deletes a
+memory, and `/memory-audit` proposes rather than deletes. Deleting on a
+heuristic destroys knowledge silently, which is worse than staleness.
+
+**Note:** auto-dream is gated behind a server-side rollout flag
+(`tengu_onyx_plover`). Where it is off, the built-in hygiene described above is
+not running at all — check `/memory` to see whether it is available to you.

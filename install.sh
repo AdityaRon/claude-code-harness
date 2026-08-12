@@ -11,7 +11,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "Installing Claude Code harness..."
 
 # ---- Directories ------------------------------------------------------
-mkdir -p ~/.claude/hooks ~/.claude/logs ~/.claude/transcripts ~/.claude/state/sessions ~/.claude/state/plans ~/.claude/state/workflows ~/.claude/plans-html
+mkdir -p ~/.claude/hooks ~/.claude/logs ~/.claude/transcripts ~/.claude/state/sessions ~/.claude/state/plans ~/.claude/state/workflows ~/.claude/plans-html ~/.claude/skills
 echo "  ✓ directories"
 
 # ---- Hooks + lib ------------------------------------------------------
@@ -41,6 +41,21 @@ done
 cp "$REPO/statusline.sh" ~/.claude/statusline.sh
 chmod +x ~/.claude/statusline.sh
 echo "  ✓ statusline.sh"
+
+# ---- Memory tools -----------------------------------------------------
+# Not a hook: checking memories against GitHub costs a network call, which has
+# no business running on every session start. Invoked on demand instead.
+cp "$REPO/memory-verify.sh" ~/.claude/memory-verify.sh
+chmod +x ~/.claude/memory-verify.sh
+echo "  ✓ memory-verify.sh"
+
+for skill in "$REPO"/skills/*/; do
+  [[ -d "$skill" ]] || continue
+  name=$(basename "$skill")
+  mkdir -p ~/.claude/skills/"$name"
+  cp "$skill"SKILL.md ~/.claude/skills/"$name"/SKILL.md
+  echo "  ✓ skills/$name"
+done
 
 # ---- Settings (merge-safe) -------------------------------------------
 TARGET=~/.claude/settings.json
