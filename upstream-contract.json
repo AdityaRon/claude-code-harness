@@ -1,0 +1,82 @@
+{
+  "_comment": [
+    "What this harness assumes about Claude Code. upstream-check.sh compares these",
+    "assumptions against the installed CLI and fails when they stop being true.",
+    "",
+    "acknowledged_hook_events is not 'events we use' — it is 'events a human has",
+    "looked at and made a decision about'. When upstream adds one, the check fails",
+    "until someone either hooks it or adds it here, which is the acknowledgement.",
+    "That is the mechanism that keeps the harness current instead of quietly stale."
+  ],
+
+  "last_verified_version": "2.1.228 (Claude Code)",
+  "last_verified_date": "2026-08-12",
+
+  "acknowledged_hook_events": [
+    "ConfigChange",
+    "CwdChanged",
+    "DirectoryAdded",
+    "Elicitation",
+    "ElicitationResult",
+    "FileChanged",
+    "InstructionsLoaded",
+    "MessageDisplay",
+    "Notification",
+    "PermissionDenied",
+    "PermissionRequest",
+    "PostCompact",
+    "PostToolBatch",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PreCompact",
+    "PreToolUse",
+    "SessionEnd",
+    "SessionStart",
+    "Setup",
+    "Stop",
+    "StopFailure",
+    "SubagentStart",
+    "SubagentStop",
+    "TaskCompleted",
+    "TaskCreated",
+    "TeammateIdle",
+    "UserPromptExpansion",
+    "UserPromptSubmit",
+    "WorktreeCreate",
+    "WorktreeRemove"
+  ],
+
+  "notes_on_unused_events": {
+    "PermissionRequest": "Candidate: with defaultMode auto the classifier resolves prompts a human used to see, so auditing its decisions would restore the lost record.",
+    "PostCompact": "Candidate: pre-compact.sh backs up the transcript; a post-compact counterpart could record what survived.",
+    "PermissionDenied": "Candidate: pairs with PermissionRequest for a complete decision trail.",
+    "SubagentStart": "Not adopted: subagent activity is already visible via PostToolUse.",
+    "SubagentStop": "Not adopted: same reason.",
+    "UserPromptSubmit": "Not adopted deliberately: it sees every prompt, which is the most privacy-sensitive surface in the harness.",
+    "TaskCreated": "Not adopted: background-task lifecycle is not a security or continuity concern.",
+    "TaskCompleted": "Not adopted: same reason.",
+    "Setup": "Not adopted: install.sh already owns first-run setup.",
+    "TeammateIdle": "Not applicable to a single-developer harness.",
+    "Elicitation": "Not adopted: MCP elicitation is out of scope (MCP is an explicit known limitation).",
+    "ElicitationResult": "Not adopted: same reason.",
+    "PostToolBatch": "Not adopted: audit.sh already logs each tool call individually.",
+    "StopFailure": "Candidate: would catch a Stop hook erroring, which currently fails silently.",
+    "InstructionsLoaded": "Not adopted: CLAUDE.md loading is not audited.",
+    "CwdChanged": "Not adopted: audit.sh already records cwd per entry.",
+    "DirectoryAdded": "Candidate: --add-dir widens the file surface the guards protect.",
+    "FileChanged": "Not adopted: external file changes are not the harness's concern.",
+    "MessageDisplay": "Not adopted: presentation-layer only.",
+    "UserPromptExpansion": "Not adopted: presentation-layer only."
+  },
+
+  "expected_default_mode": "auto",
+
+  "upstream_features_that_overlap_this_harness": {
+    "_comment": "Reviewed 2026-08-12. If the harness duplicates one of these, delete the harness copy rather than maintaining two.",
+    "auto-mode classifier": "Adjudicates the permission prompts the guards' ask tier used to send to a human. See README 'Auto mode'.",
+    "autoMode.{allow,soft_deny,hard_deny,environment}": "Native rule layer; the harness deliberately ships none, because setting a category appears to replace the shipped defaults.",
+    "auto-dream memory consolidation": "Background memory hygiene with its own lock and rollback. See MEMORY-HYGIENE-RESEARCH.md — do not rebuild it.",
+    "shared/team memory sync": "Server-side concurrent-write rejection, mass-delete guard, and secret scanning on memory writes.",
+    "sandbox": "OS-level containment; the real boundary the regex guards only approximate."
+  }
+}

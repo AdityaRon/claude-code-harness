@@ -83,16 +83,27 @@ else
     echo "     hooks are preserved in: $BACKUP  (merge any custom ones back manually)."
   fi
 
+  # permissions.defaultMode is harness-owned (see below), so an existing value
+  # gets replaced rather than winning the merge. Say so before it happens.
+  OLD_MODE=$(jq -r '.permissions.defaultMode // empty' "$TARGET" 2>/dev/null)
+  NEW_MODE=$(jq -r '.permissions.defaultMode // empty' "$SOURCE" 2>/dev/null)
+  if [[ -n "$OLD_MODE" && "$OLD_MODE" != "$NEW_MODE" ]]; then
+    echo "  ⚠ permissions.defaultMode: \"$OLD_MODE\" → \"$NEW_MODE\" (harness-owned)."
+    echo "     Keep your own with: jq '.permissions.defaultMode=\"$OLD_MODE\"' ~/.claude/settings.json"
+  fi
+
+  if [[ ! -f "$REPO/merge-settings.jq" ]]; then
+    echo "  ✗ merge-settings.jq missing from $REPO — settings.json left untouched."
+    echo "     Re-clone the repo, or copy settings.json into place by hand."
+    exit 1
+  fi
+
   TMP=$(mktemp)
-  jq -s '
-    .[0] as $old | .[1] as $new |
-    $new
-    * $old                                                      # user wins for overlapping top-level keys
-    | .permissions.allow = (($old.permissions.allow // []) + ($new.permissions.allow // []) | unique)
-    | .permissions.deny  = (($old.permissions.deny  // []) + ($new.permissions.deny  // []) | unique)
-    | .hooks             = $new.hooks                           # harness fully owns hooks
-    | .statusLine        = $new.statusLine                      # harness owns statusline
-  ' "$TARGET" "$SOURCE" > "$TMP"
+  if ! jq -s -f "$REPO/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
+    rm -f "$TMP"
+    echo "  ✗ settings.json merge failed — left untouched (backup: $BACKUP)"
+    exit 1
+  fi
   mv "$TMP" "$TARGET"
   echo "  ✓ settings.json (merged; backup: $BACKUP)"
 fi

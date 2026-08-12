@@ -3,7 +3,10 @@
 #   PostToolUse      — file edits/writes (async)
 #   PostToolUseFailure — failed tool calls (async)
 #   ConfigChange     — settings file modified mid-session (async)
-#   Stop             — session summary (blocking, so cost is captured before exit)
+#   SessionEnd       — session summary, once per session (blocking)
+#   Stop             — same summary shape; accepted so the hook still works if
+#                      wired to Stop, but note Stop fires at every turn end, so
+#                      the harness wires the summary to SessionEnd instead.
 source "$(dirname "$0")/lib.sh"
 
 read_input
@@ -19,10 +22,10 @@ sanitize() {
 }
 
 case "$EVENT" in
-  Stop)
-    # The Stop payload does not carry turn count or cost, so derive the turn
-    # count (assistant messages) from the transcript when available. Cost is
-    # not exposed to hooks; don't log a dead placeholder for it.
+  Stop|SessionEnd)
+    # Neither payload carries turn count or cost, so derive the turn count
+    # (assistant messages) from the transcript when available. Cost is not
+    # exposed to hooks; don't log a dead placeholder for it.
     TURNS=$(jq_get '.num_turns')
     if [[ -z "$TURNS" ]]; then
       TRANSCRIPT=$(jq_get '.transcript_path')
@@ -32,7 +35,10 @@ case "$EVENT" in
       fi
     fi
     SID=$(jq_get '.session_id')
-    log_audit "$TS | session_end | turns=${TURNS:-n/a} session=${SID:-?} | $DIR"
+    # SessionEnd carries why the session ended (clear / logout / exit / other);
+    # Stop does not, so the field is appended only when present.
+    REASON=$(sanitize "$(jq_get '.reason')")
+    log_audit "$TS | session_end | turns=${TURNS:-n/a} session=${SID:-?}${REASON:+ reason=$REASON} | $DIR"
     ;;
   PostToolUseFailure)
     TOOL=$(sanitize "$(jq_get '.tool_name')")
