@@ -197,6 +197,14 @@ AFTER=$(shasum -a 256 "$STORE/immutable.md" | awk '{print $1}')
 check_eq "file untouched after a run" "$BEFORE" "$AFTER"
 
 echo ""
+echo "=== A clean store prints nothing at all, not a bare header ==="
+rm -f "$STORE"/*.md
+mem quiet.md 40 "Nothing in flight here; this just records how the loader works."
+OUT=$(run)
+check_absent "no store header when there is nothing to say" "teststore" "$OUT"
+check_contains "still reports totals" "0 stale, 0 triage" "$OUT"
+
+echo ""
 echo "=== State words are matched on word boundaries ==="
 rm -f "$STORE"/*.md
 mem unres.md 40 "PENDING review. The root cause is still unresolved."
