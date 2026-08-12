@@ -21,9 +21,9 @@
 # Portability: no mapfile/associative arrays — macOS ships bash 3.2.
 set -u
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SETTINGS="$REPO/settings.json"
-CONTRACT="$REPO/upstream-contract.json"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SETTINGS="$REPO/config/settings.json"
+CONTRACT="$REPO/config/upstream-contract.json"
 DOCTOR_CMD=${CLAUDE_DOCTOR_CMD:-"claude doctor"}
 SENTINEL_EVENT="HarnessDriftSentinel"
 SENTINEL_MODE="harness-drift-sentinel"

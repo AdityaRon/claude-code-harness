@@ -3,7 +3,7 @@
 # stubs GitHub, so the suite is hermetic: no real memories are read, no network
 # call is made, and CI needs no gh credential.
 set -u
-SCRIPT="memory-verify.sh"
+SCRIPT="bin/memory-verify.sh"
 PASS=0; FAIL=0
 
 TMP=$(mktemp -d)

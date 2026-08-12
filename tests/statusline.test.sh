@@ -2,7 +2,7 @@
 # Tests for statusline.sh — verifies the base line renders and the session
 # plan link appears only when a live pointer exists.
 set -u
-HOOK="statusline.sh"
+HOOK="bin/statusline.sh"
 PASS=0; FAIL=0
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_PLAN_STATE_DIR="$TMP/plans"
