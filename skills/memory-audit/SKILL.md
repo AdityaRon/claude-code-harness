@@ -118,9 +118,18 @@ Record what you expect to *stay* true. `merged` is stable; `open` will go stale
 by design — which is the point, since that is the claim worth re-checking.
 
 **5. Keep the index honest.** If you rename or delete a memory, update the
-matching `- [Title](file.md) — hook` line in that store's `MEMORY.md`. If you
-only edited the body, the index line usually still stands — but re-read it, as
-it may repeat the stale claim.
+matching `- [Title](file.md) — hook` line in that store's `MEMORY.md`.
+
+`memory-verify.sh` reports index lines as `MEMORY.md:<line>`, aged by the memory
+they link to. Treat those exactly like any other finding — resolve the claim,
+then rewrite the one-liner. They matter more than their size suggests: the index
+is the part loaded into context every session, so a stale hook there is read far
+more often than the memory behind it, and the two can disagree. A real store had
+a hook saying a PR was a draft awaiting validation while the memory it pointed
+at already recorded that PR as merged and validated.
+
+The index gets no `verify:` block of its own — put that on the memory it links
+to, and keep the hook consistent with it.
 
 ## Rules
 

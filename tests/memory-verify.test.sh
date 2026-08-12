@@ -159,12 +159,24 @@ check_contains "real refs kept"           "#1441"         "$OUT"
 check_contains "long lists capped"        "and 2 more"    "$OUT"
 
 echo ""
-echo "=== The index itself is not treated as a memory ==="
+echo "=== The index is checked for claims, but is not itself a memory ==="
+# It is a list of links, so it gets no verify-block resolution and is never
+# counted as a memory — but its one-liners are prose that can go stale, and
+# they are the part loaded into context every session.
 rm -f "$STORE"/*.md
-printf -- "- [Thing](thing.md) — PENDING, awaiting review\n" > "$STORE/MEMORY.md"
+{
+  echo "verify:"
+  echo "  - gh acme/api#4821 open"
+  echo "- [Thing](thing.md) — a stable note about the loader"
+} > "$STORE/MEMORY.md"
 OUT=$(run)
-check_absent "MEMORY.md skipped" "MEMORY.md" "$OUT"
-check_eq     "exit 0 with only an index" "0" "$(run_rc)"
+check_absent "verify block in the index is not resolved" "STALE" "$OUT"
+check_eq     "nothing to report"                          "0" "$(run_rc)"
+
+rm -f "$STORE"/*.md
+printf -- "- [Gone](gone.md) — PENDING, awaiting review\n" > "$STORE/MEMORY.md"
+OUT=$(run)
+check_contains "claim about a missing target still flagged" "MEMORY.md:1" "$OUT"
 
 echo ""
 echo "=== Counters survive multiple claims in one file (subshell regression) ==="
@@ -238,6 +250,35 @@ OUT=$(run)
 check_contains "pending fires"  "p1.md" "$OUT"
 check_contains "awaiting fires" "p2.md" "$OUT"
 check_contains "draft pr fires" "p3.md" "$OUT"
+
+echo ""
+echo "=== A stale claim in the index itself is caught ==="
+# The index is skipped as a memory, which used to mean a stale hook was never
+# examined — despite being the part loaded into context every session.
+rm -f "$STORE"/*.md
+mem thing.md 40 "This one is fine and says nothing about being in flight."
+printf -- "- [Thing](thing.md) — awaiting the new dump before regenerating\n" > "$STORE/MEMORY.md"
+OUT=$(run)
+check_contains "index line flagged"        "MEMORY.md:1" "$OUT"
+check_contains "names the linked memory"   "thing.md"    "$OUT"
+check_contains "ages by the linked memory" "40d old"     "$OUT"
+
+echo ""
+echo "=== ...but a fresh index line is not nagged about ==="
+rm -f "$STORE"/*.md
+mem recent.md 2 "Body says nothing in flight."
+printf -- "- [Recent](recent.md) — awaiting review\n" > "$STORE/MEMORY.md"
+OUT=$(run)
+check_absent "young linked memory left alone" "MEMORY.md" "$OUT"
+
+echo ""
+echo "=== A clean index stays silent ==="
+rm -f "$STORE"/*.md
+mem calm.md 40 "Nothing in flight."
+printf -- "- [Calm](calm.md) — how the loader resolves paths\n" > "$STORE/MEMORY.md"
+OUT=$(run)
+check_absent "no index noise when clean" "MEMORY.md" "$OUT"
+check_eq     "exit 0"                    "0" "$(run_rc)"
 
 echo ""
 echo "=== A store that does not exist is an error, not a clean bill of health ==="

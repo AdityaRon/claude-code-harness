@@ -350,6 +350,12 @@ is the claim under test needs a model. That is `/memory-audit`: it resolves the
 ambiguous ones, proposes corrections, and writes a `verify:` block back, so each
 audited memory is mechanical from then on.
 
+`MEMORY.md` itself is checked too, reported as `MEMORY.md:<line>` and aged by
+the memory each line links to. The index is skipped as a *memory* — it is a list
+of links, so it gets no `verify:` resolution — but its one-liners are prose that
+goes stale like any other, and the index is the part loaded into context every
+session. A stale hook there is read far more often than the memory behind it.
+
 The script is read-only by contract — it never edits, moves, or deletes a
 memory, and `/memory-audit` proposes rather than deletes. Deleting on a
 heuristic destroys knowledge silently, which is worse than staleness.
