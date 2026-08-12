@@ -91,6 +91,15 @@ the prompt; read-only work (reading files, searching code) doesn't go to the
 classifier at all. Verify the mode with `/status`, or override per session with
 `claude --permission-mode manual`.
 
+**This pins auto mode rather than enabling it.** As of Claude Code 2.1.227 auto
+*is* the product default: `--permission-mode` accepts
+`acceptEdits | auto | bypassPermissions | manual | dontAsk | plan` with no
+`default` in the list, and a settings value of `"default"` means "whatever the
+product default is" — which is now auto. So a machine sitting on `"default"`
+already gets the classifier; setting `"auto"` explicitly just states the intent
+and stops it drifting if that default changes again. The real opt-out is
+`"manual"`.
+
 **It only works in user settings.** Claude Code will not let a repo-level
 `.claude/settings.json` grant `defaultMode: auto`, and the ignored value
 *shadows* your user-level mode — so don't copy this harness's `settings.json`
