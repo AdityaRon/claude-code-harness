@@ -31,6 +31,7 @@
       "Bash(gh run:*)",
       "Bash(gh search:*)",
       "Bash(gh auth status:*)",
+      "Bash(gh api:*)",
       "Bash(python3:*)",
       "Bash(poetry run:*)",
       "Bash(poetry install:*)",
@@ -77,7 +78,15 @@
       "Bash(sort:*)",
       "Bash(uniq:*)",
       "Bash(tr:*)",
-      "Bash(diff:*)"
+      "Bash(diff:*)",
+      "Bash(cd:*)",
+      "Bash(date:*)",
+      "Bash(sed:*)",
+      "Bash(awk:*)",
+      "Bash(cut:*)",
+      "Bash(printf:*)",
+      "Bash(pgrep:*)",
+      "Bash(test:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",
