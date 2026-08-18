@@ -33,9 +33,11 @@
       "Bash(gh auth status:*)",
       "Bash(gh api:*)",
       "Bash(python3:*)",
+      "Bash(python:*)",
       "Bash(poetry run:*)",
       "Bash(poetry install:*)",
       "Bash(poetry lock:*)",
+      "Bash(node:*)",
       "Bash(npm test:*)",
       "Bash(npm run test:*)",
       "Bash(npm run lint:*)",
@@ -86,7 +88,10 @@
       "Bash(cut:*)",
       "Bash(printf:*)",
       "Bash(pgrep:*)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(basename:*)",
+      "Bash(dirname:*)",
+      "Bash(comm:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",
