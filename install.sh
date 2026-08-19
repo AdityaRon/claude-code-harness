@@ -21,6 +21,7 @@ HOOKS=(
   sensitive-file-guard.sh
   git-guard.sh
   interpreter-guard.sh
+  kubectl-guard.sh
   network-guard.sh
   secret-scanner.sh
   audit.sh

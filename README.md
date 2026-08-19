@@ -28,6 +28,7 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 | `sensitive-file-guard` | PreToolUse → Read/Edit/Write/MultiEdit/NotebookEdit | Blocks access to `*.env`, `*.pem`, `*.key`, SSH keys, AWS creds, `.npmrc`, `.git-credentials`, `.pgpass`, `.kube/config`, `.ssh/config`, `.docker/config.json`, `credentials.json`, service-account JSON. Resolves symlinks so a symlinked path can't bypass. |
 | `git-guard` | PreToolUse → Bash | Denies force-push, `.git/hooks` writes, `core.hooksPath` tampering (including via `-c`), shell-body (`!`) aliases, `filter-branch`, broad `git add`. Normalizes `git -c k=v` / `-C dir` global-option prefixes so they can't break the match. |
 | `interpreter-guard` | PreToolUse → Bash | Denies `python -c` / `node -e` / `ruby -e` / `perl -ne` / `php -r` / `bash -c` and heredocs when the payload references env vars, dotfiles, sockets, or subprocess APIs — including when wrapped in a command runner (`poetry run`, `env`, `timeout`, `nohup`, …). Raises the bar on the interpreter-bypass route — but string-obfuscated payloads can still evade a regex; the OS sandbox is the real containment. |
+| `kubectl-guard` | PreToolUse → Bash | Denies every mutating `kubectl` verb (`delete`, `apply`, `patch`, `replace`, `edit`, `scale`, `drain`, `cordon`, `taint`, `exec`, `cp`, `run`, `debug`, `proxy`, `rollout undo/restart`, `auth reconcile`, `config use-context`, …) wherever the verb sits in the command. Exists because `kubectl` takes its global flags **before** the verb, so a prefix-matched rule like `Bash(kubectl delete:*)` misses `kubectl --namespace vm delete pod foo` — no allow/deny pair in `settings.json` can express this. Read-only verbs (`get`, `describe`, `logs`, `top`, `port-forward`, `rollout status`, `auth can-i`, `config view`, …) pass silently; flag *values* are skipped so `--context delete-me get pods` is still a read. |
 | `network-guard` | PreToolUse → Bash, WebFetch | Denies file-body uploads via `curl -d @…` / `-d@…` / `--data=@…`, `-F @…`, `-T`, **and pipe-to-shell remote code execution** (piping curl/wget into a shell or interpreter, process substitution, or command substitution). Prompts on `scp`/`rsync`/`sftp` to a remote host and on local HTTP servers. |
 | `secret-scanner` | PreToolUse → Write/Edit/MultiEdit/NotebookEdit | Scans the payload before it hits disk; denies AWS keys, JWTs, PEM blocks, GitHub/Slack(token+webhook)/Stripe/Google/Anthropic/OpenAI(incl. `sk-proj-`) tokens and GCP service-account keys |
 
@@ -40,6 +41,7 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 |---|---|
 | `git-guard` | `git push --delete`, `git push origin :branch`, `git remote set-url`, `git config user.email`, non-shell `git config alias.*`, glob staging (`git add '*.ts'`) |
 | `interpreter-guard` | Long inline scripts with no obvious sensitive token |
+| `kubectl-guard` | A `kubectl` subcommand on neither the read-only nor the mutating list (fails closed) |
 | `network-guard` | `curl -X POST/PUT/PATCH/DELETE` (any host), `curl`/`wget`/`WebFetch` to non-allowlisted domain |
 
 ### Audit (async, non-blocking)
@@ -80,7 +82,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 | `skipAutoPermissionPrompt` | `true` | Pre-accepts the auto-mode opt-in dialog, so auto mode is live on first launch rather than waiting behind a dialog |
 | `sandbox` | off by default | OS sandbox (Seatbelt/bubblewrap) drafted with a read-only network allowlist (npm/pypi/crates/go/github/anthropic). Flip `sandbox.enabled` to `true` to confine commands. See Customization. |
 | `includeCoAuthoredBy` | `true` | Adds `Co-authored-by: Claude` to commits |
-| `permissions.allow` | Scoped allowlist (≈70 entries) | Covers common safe ops: `npm test/run lint/build`, `pytest`, `python3`, `poetry run/install/lock`, `gh run/search`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. Interpreter wildcards (`python3`, `poetry run`) are allowed because a permission `allow` only skips the *prompt* — the PreToolUse guards still run, and `interpreter-guard` inspects inline `-c`/`-e`/heredoc code even when wrapped in a runner (`poetry run python -c …`). `gh api` is deliberately **not** allowlisted (it can POST/DELETE via the GitHub API with no network-guard coverage). With the OS sandbox off, an auto-approved `python3 script.py` runs the script's contents unscanned — enable the sandbox for containment. |
+| `permissions.allow` | Scoped allowlist (≈83 entries) | Covers common safe ops: `npm test/run lint/build`, `pytest`, `python3`, `poetry run/install/lock`, `gh run/search`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. Interpreter wildcards (`python3`, `poetry run`) are allowed because a permission `allow` only skips the *prompt* — the PreToolUse guards still run, and `interpreter-guard` inspects inline `-c`/`-e`/heredoc code even when wrapped in a runner (`poetry run python -c …`). `gh api` and `kubectl` are both allowlisted, but they are not equally safe. `kubectl` is covered by `kubectl-guard`, which denies every mutating verb wherever it sits in the command. `gh api` has **no** equivalent coverage — it can POST/DELETE through the GitHub API and `network-guard` never inspects it, so that entry is a deliberate convenience trade rather than a guarded one. With the OS sandbox off, an auto-approved `python3 script.py` runs the script's contents unscanned — enable the sandbox for containment. |
 | `permissions.deny` | `git push --force`, `sudo`, `rm -rf`, `gh auth token`, … | Deny always wins over allow |
 
 ## Auto mode
@@ -176,6 +178,7 @@ reading the repo, not for the installed tree.
     sensitive-file-guard.sh
     git-guard.sh
     interpreter-guard.sh
+    kubectl-guard.sh
     network-guard.sh
     secret-scanner.sh
     audit.sh
@@ -212,7 +215,7 @@ reading the repo, not for the installed tree.
 bash doctor.sh
 ```
 
-Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 390+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap), and the settings merge (`config/merge-settings.jq` — that a stale `defaultMode` is replaced, allow/deny lists are unioned, user keys survive, and re-running the installer is a no-op).
+Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 530+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap), and the settings merge (`config/merge-settings.jq` — that a stale `defaultMode` is replaced, allow/deny lists are unioned, user keys survive, and re-running the installer is a no-op).
 
 CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS and lints every hook with `shellcheck` on each push and PR.
 

@@ -43,6 +43,7 @@ echo "=== Guards fail closed without jq (expect: deny) ==="
 check_deny_no_jq "env-guard"            env-guard.sh            '{"tool_input":{"command":"ls -la"}}'
 check_deny_no_jq "git-guard"            git-guard.sh            '{"tool_input":{"command":"git status"}}'
 check_deny_no_jq "interpreter-guard"    interpreter-guard.sh    '{"tool_input":{"command":"echo hi"}}'
+check_deny_no_jq "kubectl-guard"        kubectl-guard.sh        '{"tool_input":{"command":"kubectl get pods"}}'
 check_deny_no_jq "network-guard"        network-guard.sh        '{"tool_name":"Bash","tool_input":{"command":"ls"}}'
 check_deny_no_jq "sensitive-file-guard" sensitive-file-guard.sh '{"tool_input":{"file_path":"src/index.ts"}}'
 check_deny_no_jq "secret-scanner"       secret-scanner.sh       '{"tool_name":"Write","tool_input":{"content":"hello","file_path":"/tmp/x"}}'

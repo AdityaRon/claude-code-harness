@@ -91,7 +91,8 @@
       "Bash(test:*)",
       "Bash(basename:*)",
       "Bash(dirname:*)",
-      "Bash(comm:*)"
+      "Bash(comm:*)",
+      "Bash(kubectl:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",
@@ -122,6 +123,7 @@
           { "type": "command", "command": "~/.claude/hooks/env-guard.sh" },
           { "type": "command", "command": "~/.claude/hooks/git-guard.sh" },
           { "type": "command", "command": "~/.claude/hooks/interpreter-guard.sh" },
+          { "type": "command", "command": "~/.claude/hooks/kubectl-guard.sh" },
           { "type": "command", "command": "~/.claude/hooks/network-guard.sh" }
         ]
       },
