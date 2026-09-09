@@ -115,7 +115,7 @@ else
   fi
 
   TMP=$(mktemp)
-  if ! jq -s -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
+  if ! jq -s --arg home "$HOME" -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
     rm -f "$TMP"
     echo "  ✗ settings.json merge failed — left untouched (backup: $BACKUP)"
     exit 1

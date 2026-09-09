@@ -2,6 +2,7 @@
 # Central audit log. Handles:
 #   PostToolUse      — file edits/writes (async)
 #   PostToolUseFailure — failed tool calls (async)
+#   PermissionDenied — a tool call auto mode refused (async)
 #   ConfigChange     — settings file modified mid-session (async)
 #   SessionEnd       — session summary, once per session (blocking)
 #   Stop             — same summary shape; accepted so the hook still works if
@@ -44,6 +45,27 @@ case "$EVENT" in
     TOOL=$(sanitize "$(jq_get '.tool_name')")
     ERR=$(sanitize "$(jq_get '.error')")
     log_audit "$TS | FAILED | ${TOOL:-unknown} | ${ERR:-unknown error} | $DIR"
+    ;;
+  PermissionDenied)
+    # Under defaultMode auto the classifier resolves prompts a human used to
+    # see, so this log recorded every ATTEMPT but never the verdict. Working
+    # out what was actually being refused meant re-deriving the rule matcher
+    # over 40k logged commands; with this arm it is a grep.
+    #
+    # Needs its own case: falling through to the catch-all below would log a
+    # refused command in the same shape as one that ran.
+    #
+    # Log-only. No `retry` field is emitted, so the denial stands exactly as
+    # decided — this arm observes, it does not overturn.
+    TOOL=$(sanitize "$(jq_get '.tool_name')")
+    WHY=$(sanitize "$(jq_get '.denial_reason')")
+    if [[ "$TOOL" == "Bash" ]]; then
+      TARGET=$(sanitize "$(jq_get '.tool_input.command')")
+    else
+      TARGET=$(sanitize "$(jq_get '.tool_input.file_path')")
+      [[ -z "$TARGET" ]] && TARGET=$(sanitize "$(jq_get '.tool_input.path')")
+    fi
+    log_audit "$TS | DENIED | ${TOOL:-unknown} | ${TARGET:-unknown} | ${WHY:-no reason given} | $DIR"
     ;;
   ConfigChange)
     FILE=$(sanitize "$(jq_get '.file_path')")

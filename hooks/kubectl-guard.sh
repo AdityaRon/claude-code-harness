@@ -39,8 +39,18 @@ require_jq_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
 
+# Normalise BEFORE the bail-out, not after. The bail-out's own pattern requires
+# whitespace or a slash in front of `kubectl`, and `$(` is neither — so
+# `echo "$(kubectl delete pod foo)"` exited here and was allowed silently, no
+# matter what the scan below did. See the tokenizer note further down.
+SCAN=$(normalize_wrappers "$CMD" | sed -E 's/\$\(/ /g; s/`/ /g')
+
 # Cheap bail-out: no kubectl anywhere, nothing to do.
-printf '%s\n' "$CMD" | grep -qE '(^|[[:space:]/])kubectl([[:space:]]|$)' || exit 0
+# Both sides use "not a word character" rather than "whitespace": a quote can
+# sit on either side (`'kubectl' delete …`), and requiring whitespace after the
+# binary let that form skip the scan. `.` and `-` stay in the word class so
+# this does not fire on `kubectl-guard.sh` or a `kubectl.exe`-style name.
+printf '%s\n' "$SCAN" | grep -qE '(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)' || exit 0
 
 # Global flags that consume the NEXT token as their value. Without this,
 # `kubectl --context delete-me get pods` would read "delete-me" as the verb.
@@ -118,12 +128,22 @@ next_bare_token() {
 # Tokenize on whitespace. Quoting is not honoured, deliberately: a quoted flag
 # value that splits into several tokens yields an unrecognised verb, which
 # escalates. Failing closed on ambiguity is the intended behaviour.
-read -ra TOKENS <<<"$CMD"
+#
+# SCAN (built above, before the bail-out) turns `$(` and a backtick into
+# separators. Without that the first token of `echo "$(kubectl delete pod foo)"`
+# is the literal `"$(kubectl`, which equals neither `kubectl` nor */kubectl, so
+# the body was never inspected. git-guard covers this case already because `$(`
+# is one of its boundary alternatives.
+read -ra TOKENS <<<"$SCAN"
 
 i=0
 n=${#TOKENS[@]}
 while (( i < n )); do
   tok="${TOKENS[$i]}"
+  # A quote can still cling to the token (`'kubectl'`, `"kubectl`). Strip quote
+  # characters for the binary comparison only — the verb scan below keeps using
+  # raw tokens, so flag parsing is unchanged.
+  tok="${tok//[\"\']/}"
   # Match `kubectl` and any path ending in /kubectl.
   if [[ "$tok" = "kubectl" || "$tok" = */kubectl ]]; then
     (( i++ ))

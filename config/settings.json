@@ -92,7 +92,48 @@
       "Bash(basename:*)",
       "Bash(dirname:*)",
       "Bash(comm:*)",
-      "Bash(kubectl:*)"
+      "Bash(kubectl:*)",
+
+      "Bash(git grep:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git show-ref:*)",
+      "Bash(git cat-file:*)",
+      "Bash(git blame:*)",
+      "Bash(git describe:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git shortlog:*)",
+      "Bash(git remote -v:*)",
+      "Bash(git remote get-url:*)",
+      "Bash(git worktree list:*)",
+      "Bash(git tag -l:*)",
+      "Bash(git config --get:*)",
+      "Bash(gh auth switch:*)",
+
+      "Bash(export PATH=:*)",
+      "Bash(export JAVA_HOME=:*)",
+      "Bash(sleep:*)",
+      "Bash(bash -n:*)",
+
+      "Bash(tsh status:*)",
+      "Bash(tsh login:*)",
+      "Bash(tsh clusters:*)",
+      "Bash(tsh kube ls:*)",
+      "Bash(tsh kube login:*)",
+
+      "Bash(docker ps:*)",
+      "Bash(docker info:*)",
+      "Bash(docker images:*)",
+      "Bash(docker inspect:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker version:*)",
+      "Bash(docker stats:*)",
+
+      "Bash(~/.claude/skills/vm-query/vm-query.sh:*)",
+      "Bash(~/.claude/skills/es-logs/es-logs.sh:*)",
+      "Bash(~/.claude/skills/ld-flags/ld-flags.py:*)",
+      "Bash(~/.claude/skills/spark-pods/describe-pods.sh:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",
@@ -106,7 +147,20 @@
       "Bash(sudo:*)",
       "Bash(rm -rf:*)",
       "Bash(rm -rf /:*)",
-      "Bash(chmod -R 777:*)"
+      "Bash(chmod -R 777:*)",
+
+      "Bash(git * push --force:*)",
+      "Bash(git * push -f:*)",
+      "Bash(git * reset --hard:*)",
+      "Bash(git * clean -f:*)",
+      "Bash(git * clean -fd:*)",
+      "Bash(git * branch -D:*)",
+      "Bash(git * branch -d:*)",
+
+      "Bash(kubectl delete:*)",
+      "Bash(kubectl * delete:*)",
+      "Bash(kubectl -n * delete:*)",
+      "Bash(kubectl --context * delete:*)"
     ]
   },
   "hooks": {
@@ -159,6 +213,12 @@
       }
     ],
     "PostToolUseFailure": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
+      }
+    ],
+    "PermissionDenied": [
       {
         "matcher": "",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]

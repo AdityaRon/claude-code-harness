@@ -9,6 +9,7 @@
 #   7. push --delete / push :branch (remote branch deletion)
 #   8. history rewrites (filter-branch, update-ref)
 #   9. glob staging ('*.env'-style patterns)
+#  10. destructive worktree ops (reset --hard, clean -f, branch -d/-D)
 #
 # All regexes are anchored to command boundaries so text inside commit
 # messages, heredocs, and single-quoted strings does not false-positive.
@@ -18,6 +19,12 @@ read_input
 require_jq_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+
+# Strip assignment/wrapper prefixes before anything below matches. The anchor A
+# admits only real command boundaries, so `VAR=1 git push -f`, `env FOO=bar git
+# push -f`, `nohup git push -f` and `timeout 60 git push -f` each defeated every
+# check in this file while the bare form was denied. See normalize_wrappers.
+CMD=$(normalize_wrappers "$CMD")
 
 # Committed template files (.env.example / .sample / .template / .dist / .tpl)
 # are safe to stage; neutralize them so `git add .env.example` isn't blocked.
@@ -47,6 +54,28 @@ fi
 # ending in "-f" (e.g. `git push origin wip-f`) doesn't trip it.
 if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]-f([[:space:]]|$)|--force\b|--force-with-lease\b)"; then
   emit_deny "Blocked: force-push is not allowed. Use regular git push, or ask the user to run this manually."
+  exit 0
+fi
+
+# --- Destructive worktree operations -----------------------------------
+# These are already named in permissions.deny, but a deny RULE is prefix-shaped
+# and never saw `git -C <path> reset --hard`: -C is not one of the wrappers
+# Claude Code strips, so the rule text `git reset --hard` does not match. GOPT
+# above DOES see it, which makes this hook the layer that closes the gap.
+# Kept deliberately in lockstep with permissions.deny — relaxing one without
+# the other leaves a rule that reads as protection but is not.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}reset\s+[^|;&]*--hard\b"; then
+  emit_deny "Blocked: git reset --hard discards committed and uncommitted work with no recovery path. Use git checkout <file> or git revert, or ask the user to run this manually."
+  exit 0
+fi
+# -[a-zA-Z]*f catches -f, -fd, -df, -xdf and --force; --dry-run has no f after
+# a hyphen and so does not trip it.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}clean\s+[^|;&]*-[a-zA-Z]*f"; then
+  emit_deny "Blocked: git clean -f permanently deletes untracked files. Remove the files you mean by name instead."
+  exit 0
+fi
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}branch\s+[^|;&]*(-D\b|-d\b|--delete\b)"; then
+  emit_deny "Blocked: deleting a git branch. Both -d and -D are blocked, matching permissions.deny. Run it manually if the branch is really finished."
   exit 0
 fi
 

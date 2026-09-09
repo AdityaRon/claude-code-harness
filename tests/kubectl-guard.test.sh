@@ -112,5 +112,31 @@ check "read-only chain, both sides"     allow 'kubectl -n vm get svc && kubectl 
 check "read then mutate in one chain"   ask    'kubectl -n vm get svc && kubectl -n vm delete pod foo'
 
 echo ""
+echo "=== Command substitution (expect: ask) ==="
+# `$(` and a backtick glue onto the next word, so the first token was
+# `"$(kubectl` — equal to neither `kubectl` nor */kubectl. Worse, the cheap
+# bail-out required whitespace or a slash before `kubectl`, so these exited
+# before the verb scan ran at all and were allowed silently.
+check "substitution in echo"     ask   'echo "$(kubectl delete pod foo)"'
+check "substitution in backticks" ask  'echo `kubectl delete pod foo`'
+check "substitution in assignment" ask 'X=$(kubectl delete pod foo)'
+check "substitution, backtick assign" ask 'OUT=`kubectl delete pod foo`'
+check "substitution, read-only verb" allow 'X=$(kubectl get pods -n vm)'
+
+echo ""
+echo "=== Assignment and wrapper prefixes (expect: ask) ==="
+check "VAR= prefix"              ask   'CTX=abc kubectl delete pod foo -n vm'
+check "assignment with \$HOME"    ask   'PATH=$HOME/bin kubectl delete pod foo'
+check "timeout prefix"           ask   'timeout 60 kubectl delete pod foo'
+check "nohup prefix"             ask   'nohup kubectl delete pod foo'
+check "quoted binary"            ask   "'kubectl' delete pod foo"
+
+echo ""
+echo "=== Reads stay silent after normalisation (expect: allow) ==="
+check "port-forward"             allow 'kubectl port-forward svc/vmselect-vm 8481:8481 -n vm'
+check "context flag first"       allow 'kubectl --context teleport.prod-prodn1 get svc -A'
+check "no kubectl, has a \$("     allow 'echo "$(date +%s)"'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

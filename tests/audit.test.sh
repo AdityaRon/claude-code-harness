@@ -57,5 +57,35 @@ run '{"hook_event_name":"SomeFutureEvent","tool_name":"Bash","tool_input":{"comm
 grep -qF "| Bash | echo hi |" "$CLAUDE_AUDIT_LOG" && pass "unknown event falls through" || fail "unknown event falls through" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
 
 echo ""
+echo "=== PermissionDenied records the verdict, not just the attempt ==="
+# The whole point of this arm: a refused command must be distinguishable from
+# one that ran. Falling through to the catch-all would log the same shape.
+run '{"hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"kubectl delete pod foo"},"denial_reason":"Blocked by classifier"}'
+grep -qF "| DENIED | Bash | kubectl delete pod foo | Blocked by classifier |" "$CLAUDE_AUDIT_LOG" \
+  && pass "denied bash command logged with reason" \
+  || fail "denied bash command logged with reason" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+
+run '{"hook_event_name":"PermissionDenied","tool_name":"Write","tool_input":{"file_path":"/tmp/blocked.txt"},"denial_reason":"Blocked by classifier"}'
+grep -qF "| DENIED | Write | /tmp/blocked.txt |" "$CLAUDE_AUDIT_LOG" \
+  && pass "denied file write logged" \
+  || fail "denied file write logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+
+run '{"hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/x"}}'
+grep -qF "| DENIED | Bash | rm -rf /tmp/x | no reason given |" "$CLAUDE_AUDIT_LOG" \
+  && pass "missing denial_reason does not drop the record" \
+  || fail "missing denial_reason does not drop the record" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+
+# A denial must never be mistaken for a successful call. Anchor on the FIELD
+# POSITION, not a substring: an ordinary call logs `<ts> | Bash | <cmd> |`,
+# whereas a denial logs `<ts> | DENIED | Bash | <cmd> |`, and the ordinary
+# shape is a substring of the denial one — so a plain -F grep passes either way.
+run '{"hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"UNIQUEDENY42"},"denial_reason":"Blocked by classifier"}'
+if grep -qE '^[0-9TZ:-]+ \| Bash \| UNIQUEDENY42 ' "$CLAUDE_AUDIT_LOG"; then
+  fail "denial is not logged as an ordinary call" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+else
+  pass "denial is not logged as an ordinary call"
+fi
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
