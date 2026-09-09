@@ -22,8 +22,8 @@
     "capability no one has noticed will not appear here on its own — that is a",
     "standing limitation, and the check prints it rather than implying coverage."
   ],
-  "last_verified_version": "2.1.250 (Claude Code)",
-  "last_verified_date": "2026-08-27",
+  "last_verified_version": "2.1.266 (Claude Code)",
+  "last_verified_date": "2026-09-09",
   "acknowledged_surface": {
     "_comment": [
       "Capability -> the decision a human made about it. Verified by substring",
@@ -53,10 +53,12 @@
     "PermissionDenied",
     "PermissionRequest",
     "PostCompact",
+    "PostModelSwitch",
     "PostToolBatch",
     "PostToolUse",
     "PostToolUseFailure",
     "PreCompact",
+    "PreModelSwitch",
     "PreToolUse",
     "SessionEnd",
     "SessionStart",
@@ -74,9 +76,11 @@
     "WorktreeRemove"
   ],
   "notes_on_unused_events": {
-    "PermissionRequest": "Candidate: with defaultMode auto the classifier resolves prompts a human used to see, so auditing its decisions would restore the lost record.",
+    "PermissionRequest": "STRONG candidate, payload confirmed 2026-09-09: receives tool_name, tool_input, tool_use_id, permission_mode and effort, and returns {decision: allow|deny|ask, decisionReason}. With defaultMode auto the classifier resolves prompts a human used to see, so auditing its decisions would restore the lost record. Note the limitation: it fires where a permission DECISION is requested, so it is PermissionDenied below that carries the auto-mode denial.",
     "PostCompact": "Candidate: pre-compact.sh backs up the transcript; a post-compact counterpart could record what survived.",
-    "PermissionDenied": "Candidate: pairs with PermissionRequest for a complete decision trail.",
+    "PermissionDenied": "STRONGEST candidate, payload confirmed 2026-09-09: receives tool_name, tool_input, tool_use_id, denial_reason and permission_mode, and returns {retry}. This is the one gap that bit during this review: a session hit a classifier denial and audit.log recorded the attempt but NOT the verdict, so the friction census had to be reconstructed by re-deriving the matcher's rules over 40,346 logged commands instead of just reading the denials. Hooking this makes that measurement a lookup. Caveat: denial_reason is reportedly the fixed string 'Blocked by classifier' rather than a detailed explanation, so it identifies WHICH command was denied, not why.",
+    "PreModelSwitch": "Acknowledged 2026-09-09, not adopted. Appeared between 2.1.250 and 2.1.266. Fires before a model switch is applied and CAN block it, returning permissionDecision allow/deny plus a reason. Not hooked: this harness does not police which model runs, and gating the model picker would be friction with no security gain. Revisit if model choice ever becomes a cost or compliance control.",
+    "PostModelSwitch": "ADOPTED 2026-09-09 (audit.sh). Fires after a model switch; cannot block, returns systemMessage/additionalContext only. This entry first read 'not hooked, because audit.sh already records the tool calls either side of a switch, so the change is visible in the log' -- that was wrong and is kept here as the correction: every audit line is <ts> | <tool> | <target> | <dir> with no model field, so a switch left no trace whatsoever. For a long background session producing analysis, an unrecorded fallback silently changes the reliability of everything after it.",
     "SubagentStart": "Not adopted: subagent activity is already visible via PostToolUse.",
     "SubagentStop": "Not adopted: same reason.",
     "UserPromptSubmit": "Not adopted deliberately: it sees every prompt, which is the most privacy-sensitive surface in the harness.",
@@ -99,7 +103,7 @@
   "upstream_features_that_overlap_this_harness": {
     "_comment": "Reviewed 2026-08-12. If the harness duplicates one of these, delete the harness copy rather than maintaining two.",
     "auto-mode classifier": "Adjudicates the permission prompts the guards' ask tier used to send to a human. See README 'Auto mode'.",
-    "autoMode.{allow,soft_deny,hard_deny,environment}": "Native rule layer; the harness deliberately ships none, because setting a category appears to replace the shipped defaults.",
+    "autoMode.{allow,soft_deny,hard_deny,environment}": "Native rule layer. VERIFIED 2026-09-09, replacing an earlier guess that read 'appears to replace the shipped defaults': a category set WITHOUT the literal string \"$defaults\" in its array does replace the entire default list for that section -- for soft_deny that discards every built-in soft block including force push, curl-pipe-bash, production deploys and auto-mode bypass; for hard_deny it discards the built-in data-exfiltration rule. Including \"$defaults\" splices the defaults in at that position, so entries can go before or after them. The harness shipping none was therefore the right call, but the reason is now a fact with a documented escape hatch rather than an assumption, so adding entries is safe PROVIDED \"$defaults\" is always present. autoMode.environment is prose describing which repos, buckets and domains are trusted, and is the documented lever for reducing classifier denials -- preferred over widening permissions.allow, because the two are independent gates: permissions is consulted first, the classifier second.",
     "auto-dream memory consolidation": "Background memory hygiene with its own lock and rollback. See MEMORY-HYGIENE-RESEARCH.md — do not rebuild it.",
     "shared/team memory sync": "Server-side concurrent-write rejection, mass-delete guard, and secret scanning on memory writes.",
     "sandbox": "OS-level containment; the real boundary the regex guards only approximate."

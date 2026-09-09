@@ -131,5 +131,49 @@ check "alias --global !"       deny "git config --global alias.x '!id'"
 check "alias plain (ask)"      ask  "git config alias.st status"
 
 echo ""
+echo "=== Prefixes that used to defeat every check above (expect: deny) ==="
+# The boundary anchor admits only ^ | & ; && || $( and a backtick. A leading
+# assignment or wrapper is none of those, so each of these was ALLOWED SILENTLY
+# while the bare form was denied. normalize_wrappers in lib.sh strips them.
+check "VAR= prefix"              deny "VAR=1 git push -f origin main"
+check "env VAR= prefix"          deny "env FOO=bar git push -f origin main"
+check "nohup prefix"             deny "nohup git push -f origin main"
+check "timeout prefix"           deny "timeout 60 git push -f origin main"
+check "nice prefix"              deny "nice git push --force"
+check "stacked prefixes"         deny "env A=1 B=2 nohup timeout 60 git push -f origin main"
+check "assignment with \$HOME"    deny "PATH=\$HOME/bin git push -f origin main"
+check "substitution assignment"  deny "X=\$(git push --force)"
+
+echo ""
+echo "=== Destructive worktree ops, incl. the -C form (expect: deny) ==="
+# permissions.deny names these, but a deny rule is prefix-shaped and never saw
+# `git -C <path> …` — -C is not a wrapper Claude Code strips. This hook does.
+check "reset --hard"             deny "git reset --hard HEAD~3"
+check "reset --hard -C"          deny "git -C /tmp/x reset --hard HEAD~3"
+check "reset --hard VAR="        deny "VAR=1 git reset --hard origin/main"
+check "clean -fd"                deny "git clean -fd"
+check "clean -fd -C"             deny "git -C /tmp/x clean -fd"
+check "clean --force"            deny "git clean --force"
+check "branch -D"                deny "git branch -D topic"
+check "branch -D -C"             deny "git -C /tmp/x branch -D topic"
+
+echo ""
+echo "=== Read-only and near-miss forms must stay silent (expect: allow) ==="
+# Guards against over-blocking: these are the shapes the widened allowlist
+# relies on, plus the near-misses the new patterns could plausibly catch.
+check "git grep"                 allow "git grep -n needle"
+check "git grep -C"              allow "git -C /tmp/x grep -n needle"
+check "git rev-parse"            allow "git rev-parse --abbrev-ref HEAD"
+check "git worktree list"        allow "git worktree list"
+check "git worktree add"         allow "git worktree add /tmp/wt -b topic"
+check "git clean --dry-run"      allow "git clean --dry-run"
+check "git clean -n"             allow "git clean -n"
+check "git branch --show-current" allow "git branch --show-current"
+check "git branch -a"            allow "git branch -a"
+check "git reset without --hard" allow "git reset HEAD~1"
+check "--hard inside a message"  allow "git commit -m 'reset --hard is in the runbook'"
+check "git add by name"          allow "git add src/main.py"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

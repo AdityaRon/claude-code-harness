@@ -11,6 +11,42 @@ expand_tilde() {
   printf '%s\n' "${p/#\~/$HOME}"
 }
 
+# Strip tokens that sit in front of a command without changing what runs:
+# env assignments (FOO=bar), `env`, and the wrapper commands Claude Code itself
+# strips before matching a permission rule (timeout/time/nice/nohup/stdbuf/
+# command/builtin/noglob).
+#
+# Why this is shared: guards that anchor their regexes to a command boundary
+# only admit ^, |, &, ;, &&, ||, $( and a backtick. A leading assignment or
+# wrapper is none of those, so `VAR=1 git push -f` and `nohup git push -f`
+# matched nothing and were allowed silently, while the bare form was denied.
+# kubectl-guard was immune only because it tokenises and scans for the binary
+# anywhere; git-guard is regex-anchored and was not. Normalising here keeps one
+# implementation instead of two divergent ones.
+#
+# Stripping is applied per segment so a boundary is preserved:
+#   `cd /x && VAR=1 nohup git push -f`  ->  `cd /x && git push -f`
+# Four passes handle stacked prefixes (`env A=1 B=2 nohup timeout 60 git …`);
+# a fixed count avoids sed label/branch syntax, which differs on BSD and GNU.
+# Output feeds pattern matching only — never execution — so a mangled quote is
+# harmless, and ambiguity makes the guards fail closed by design.
+normalize_wrappers() {
+  local s="$1" i
+  # Give a command-substitution opener its own whitespace BEFORE the assignment
+  # rule runs. Without this the assignment pattern swallows the substitution
+  # body — `X=$(kubectl delete pod foo)` normalised to `delete pod foo)`, and
+  # the kubectl scan then found nothing at all. The openers are separated, not
+  # removed: git-guard anchors on `$(` as a command boundary.
+  s=$(printf '%s' "$s" | sed -E 's/\$\(/ $( /g; s/`/ ` /g')
+  for i in 1 2 3 4; do
+    s=$(printf '%s' "$s" | sed -E \
+      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+/\1\2/g' \
+      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(env|command|builtin|noglob|nohup|time|nice|stdbuf)[[:space:]]+/\1\2/g' \
+      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)timeout[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[0-9]+[smhd]?[[:space:]]+/\1\2/g')
+  done
+  printf '%s' "$s"
+}
+
 # Read full stdin once into $INPUT. Safe to call with no stdin.
 read_input() {
   if [[ -t 0 ]]; then

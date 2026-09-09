@@ -26,7 +26,7 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 |---|---|---|
 | `env-guard` | PreToolUse → Bash | Blocks commands that read, dump, copy, or exfiltrate env values or dotfiles (`cat .env`, `printenv`, `echo $API_KEY`, `cp .env /tmp/x`, `dd if=.env`, `… < .env`, `curl --data @creds`, `nc`, `eval $(env)`, etc.) |
 | `sensitive-file-guard` | PreToolUse → Read/Edit/Write/MultiEdit/NotebookEdit | Blocks access to `*.env`, `*.pem`, `*.key`, SSH keys, AWS creds, `.npmrc`, `.git-credentials`, `.pgpass`, `.kube/config`, `.ssh/config`, `.docker/config.json`, `credentials.json`, service-account JSON. Resolves symlinks so a symlinked path can't bypass. |
-| `git-guard` | PreToolUse → Bash | Denies force-push, `.git/hooks` writes, `core.hooksPath` tampering (including via `-c`), shell-body (`!`) aliases, `filter-branch`, broad `git add`. Normalizes `git -c k=v` / `-C dir` global-option prefixes so they can't break the match. |
+| `git-guard` | PreToolUse → Bash | Denies force-push, `reset --hard`, `clean -f`, `branch -d/-D`, `.git/hooks` writes, `core.hooksPath` tampering (including via `-c`), shell-body (`!`) aliases, `filter-branch`, broad `git add`. Normalizes `git -c k=v` / `-C dir` global-option prefixes, and (via `normalize_wrappers`) leading env assignments and wrapper commands, so neither can break the match. |
 | `interpreter-guard` | PreToolUse → Bash | Denies `python -c` / `node -e` / `ruby -e` / `perl -ne` / `php -r` / `bash -c` and heredocs when the payload references env vars, dotfiles, sockets, or subprocess APIs — including when wrapped in a command runner (`poetry run`, `env`, `timeout`, `nohup`, …). Raises the bar on the interpreter-bypass route — but string-obfuscated payloads can still evade a regex; the OS sandbox is the real containment. |
 | `network-guard` | PreToolUse → Bash, WebFetch | Denies file-body uploads via `curl -d @…` / `-d@…` / `--data=@…`, `-F @…`, `-T`, **and pipe-to-shell remote code execution** (piping curl/wget into a shell or interpreter, process substitution, or command substitution). Prompts on `scp`/`rsync`/`sftp` to a remote host and on local HTTP servers. |
 | `secret-scanner` | PreToolUse → Write/Edit/MultiEdit/NotebookEdit | Scans the payload before it hits disk; denies AWS keys, JWTs, PEM blocks, GitHub/Slack(token+webhook)/Stripe/Google/Anthropic/OpenAI(incl. `sk-proj-`) tokens and GCP service-account keys |
@@ -81,8 +81,58 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 | `skipAutoPermissionPrompt` | `true` | Pre-accepts the auto-mode opt-in dialog, so auto mode is live on first launch rather than waiting behind a dialog |
 | `sandbox` | off by default | OS sandbox (Seatbelt/bubblewrap) drafted with a read-only network allowlist (npm/pypi/crates/go/github/anthropic). Flip `sandbox.enabled` to `true` to confine commands. See Customization. |
 | `includeCoAuthoredBy` | `true` | Adds `Co-authored-by: Claude` to commits |
-| `permissions.allow` | Scoped allowlist (≈83 entries) | Covers common safe ops: `npm test/run lint/build`, `pytest`, `python3`, `poetry run/install/lock`, `gh run/search`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. Interpreter wildcards (`python3`, `poetry run`) are allowed because a permission `allow` only skips the *prompt* — the PreToolUse guards still run, and `interpreter-guard` inspects inline `-c`/`-e`/heredoc code even when wrapped in a runner (`poetry run python -c …`). `gh api` and `kubectl` are both allowlisted, but they are not equally safe. `kubectl` is covered by `kubectl-guard`, which denies every mutating verb wherever it sits in the command. `gh api` has **no** equivalent coverage — it can POST/DELETE through the GitHub API and `network-guard` never inspects it, so that entry is a deliberate convenience trade rather than a guarded one. With the OS sandbox off, an auto-approved `python3 script.py` runs the script's contents unscanned — enable the sandbox for containment. |
-| `permissions.deny` | `git push --force`, `sudo`, `rm -rf`, `gh auth token`, … | Deny always wins over allow |
+| `permissions.allow` | Scoped allowlist | Covers common safe ops: `npm test/run lint/build`, `pytest`, `python3`, `poetry run/install/lock`, `gh run/search`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. Read-only verbs added from the audit-log census: `git grep/rev-parse/ls-tree/ls-files/show-ref/cat-file/blame/describe/merge-base/shortlog`, `git remote -v`, `git worktree list`, `tsh status/login/clusters/kube ls`, and read-only `docker` subcommands (`run`/`exec`/`rm`/`cp` deliberately excluded). Interpreter wildcards (`python3`, `poetry run`) are allowed because a permission `allow` only skips the *prompt* — the PreToolUse guards still run, and `interpreter-guard` inspects inline `-c`/`-e`/heredoc code even when wrapped in a runner (`poetry run python -c …`). `gh api` and `kubectl` are both allowlisted, but they are not equally safe. `kubectl` is covered by `kubectl-guard`, which denies every mutating verb wherever it sits in the command. `gh api` has **no** equivalent coverage — it can POST/DELETE through the GitHub API and `network-guard` never inspects it, so that entry is a deliberate convenience trade rather than a guarded one. With the OS sandbox off, an auto-approved `python3 script.py` runs the script's contents unscanned — enable the sandbox for containment. |
+| `permissions.deny` | `git push --force`, `git * reset --hard`, `sudo`, `rm -rf`, `gh auth token`, … | Deny always wins over allow |
+
+### How Bash rules actually match
+
+Verified against CLI 2.1.266 on 2026-09-09, after a friction census over 40,346
+logged Bash calls found 31% of them landing on the classifier rather than a
+rule. Getting these wrong produces two opposite failures: a rule that looks
+permissive and still prompts, and a deny rule that reads as protection and
+never fires. Both were present here.
+
+- **Compound commands are split and matched per segment.** Separators are
+  `&&`, `||`, `;`, `|`, `|&`, `&`, and newlines; every subcommand must match
+  independently. Deny and ask rules additionally apply to commands nested in a
+  subshell, a command substitution, or a control-flow body.
+- **A fixed wrapper set is stripped before matching**: `timeout`, `time`,
+  `nice`, `nohup`, `stdbuf`, plus the builtins `command` and `builtin`, and
+  zsh's `noglob`. So `Bash(npm test *)` already covers `timeout 30 npm test`,
+  and a `timeout`-prefixed command was never the friction it looked like.
+  Not stripped: `env`, `xargs` with flags, `watch`, `setsid`, `flock`,
+  `direnv exec`, `devbox run`, `mise exec`, `npx`, `docker exec`.
+- **Leading env assignments are asymmetric.** A deny or ask rule matches past
+  them (`Bash(rm *)` in deny catches `FOO=bar rm -rf tmp/`), but an allow rule
+  does **not** — so `VAR=x cmd` fails closed and falls to the classifier. This
+  is the single largest source of friction here (7,171 of 40,346 commands) and
+  **no rule can fix it**: the first token contains a machine-specific value.
+  Put the binary first instead.
+- **`git -C <path>` is not a wrapper and is not stripped.** A rule written
+  `Bash(git reset --hard:*)` therefore never matched `git -C /tmp/x reset
+  --hard`, which is why the deny list here uses `Bash(git * reset --hard:*)`.
+- **A `*` may appear anywhere in a rule**, not only at the end, and `:*` is
+  just a compact spelling of a trailing ` *`. Mid-pattern wildcards are what
+  make the `git *` and `kubectl * delete` deny rules load-bearing.
+- **Whether `~` is expanded is undocumented.** Rather than guess,
+  `merge-settings.jq` emits a `$HOME`-expanded twin for every rule containing
+  `~/`, so both spellings are present whichever way the CLI compares them.
+- **The installer can only widen.** `merge-settings.jq` unions the allow and
+  deny lists, so dropping a rule from `config/settings.json` does not remove
+  it from a machine that already has it. Narrowing a rule — say `Bash(kubectl:*)`
+  down to `Bash(kubectl get:*)` — means editing `~/.claude/settings.json` by
+  hand.
+
+- **Allowlisting a wrapper script bypasses every guard.** A PreToolUse hook
+  sees only the top-level Bash command, never the `kubectl` or `git` calls a
+  script makes internally. The `~/.claude/skills/*` entries shipped here are
+  read-only probes for exactly that reason, and a probe that creates and
+  deletes cluster resources is deliberately left off the list — allowlisting it
+  would launder `kubectl-guard`, which would never see inside it.
+
+The practical consequence: **a hook sees the whole command string, a permission
+rule sees only a prefix.** Enforcement that must not be evadable belongs in a
+guard, with the deny list as a backstop — not the other way round.
 
 ## Auto mode
 

@@ -16,7 +16,7 @@ fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 merge(){
   printf '%s' "$1" > "$TMP/old.json"
   printf '%s' "$2" > "$TMP/new.json"
-  jq -s -f "$FILTER" "$TMP/old.json" "$TMP/new.json"
+  jq -s --arg home "${MERGE_HOME:-$HOME}" -f "$FILTER" "$TMP/old.json" "$TMP/new.json"
 }
 
 HARNESS='{
@@ -83,16 +83,50 @@ echo "=== The shipped settings.json is valid and sets auto mode ==="
   && pass "shipped settings.json uses auto" || fail "shipped settings.json uses auto" "$(jq -r '.permissions.defaultMode' config/settings.json)"
 
 echo ""
-echo "=== The shipped settings.json merges cleanly onto itself (idempotent) ==="
-# `unique` sorts the allow/deny lists, so compare content as sets rather than
-# byte-for-byte: re-running install.sh must not add, drop, or alter anything.
+echo "=== A ~/ rule gains a \$HOME-expanded twin, in allow AND deny ==="
+# Whether the CLI expands `~` when matching a Bash rule is undocumented, so
+# both spellings must ship. Pin HOME so the assertion is deterministic.
+TILDE='{
+  "permissions": {
+    "defaultMode":"auto",
+    "allow":["Bash(~/.claude/skills/vm-query/vm-query.sh:*)"],
+    "deny":["Bash(~/bin/danger.sh:*)"]
+  }
+}'
+OUT=$(MERGE_HOME=/home/testuser merge '{}' "$TILDE")
+[[ "$(printf '%s' "$OUT" | jq -r '.permissions.allow | join(",")')" \
+   == "Bash(/home/testuser/.claude/skills/vm-query/vm-query.sh:*),Bash(~/.claude/skills/vm-query/vm-query.sh:*)" ]] \
+  && pass "allow keeps both spellings" || fail "allow keeps both spellings" "$OUT"
+[[ "$(printf '%s' "$OUT" | jq -r '.permissions.deny | join(",")')" \
+   == "Bash(/home/testuser/bin/danger.sh:*),Bash(~/bin/danger.sh:*)" ]] \
+  && pass "deny keeps both spellings" || fail "deny keeps both spellings" "$OUT"
+
+echo ""
+echo "=== A rule with no ~/ is not duplicated or rewritten ==="
+OUT=$(MERGE_HOME=/home/testuser merge '{}' '{"permissions":{"allow":["Bash(ls:*)"],"deny":[]}}')
+[[ "$(printf '%s' "$OUT" | jq -r '.permissions.allow | join(",")')" == "Bash(ls:*)" ]] \
+  && pass "plain rule untouched" || fail "plain rule untouched" "$OUT"
+
+echo ""
+echo "=== Re-running install.sh is stable (merge is idempotent after the first pass) ==="
+# The first merge deliberately grows the lists (tilde expansion), so the
+# invariant install.sh needs is that a SECOND run changes nothing further.
 norm(){ jq -S '.permissions.allow |= sort | .permissions.deny |= sort' "$1"; }
-printf '%s' "$(merge "$(cat config/settings.json)" "$(cat config/settings.json)")" > "$TMP/self.json"
-if [[ "$(norm "$TMP/self.json")" == "$(norm config/settings.json)" ]]; then
-  pass "self-merge is a no-op"
+printf '%s' "$(merge '{}' "$(cat config/settings.json)")" > "$TMP/pass1.json"
+printf '%s' "$(merge "$(cat "$TMP/pass1.json")" "$(cat config/settings.json)")" > "$TMP/pass2.json"
+if [[ "$(norm "$TMP/pass2.json")" == "$(norm "$TMP/pass1.json")" ]]; then
+  pass "second install run is a no-op"
 else
-  fail "self-merge is a no-op" "$(diff <(norm "$TMP/self.json") <(norm config/settings.json) | head -20)"
+  fail "second install run is a no-op" "$(diff <(norm "$TMP/pass1.json") <(norm "$TMP/pass2.json") | head -20)"
 fi
+
+echo ""
+echo "=== Every shipped ~/ rule reaches the merged output in expanded form ==="
+SHIPPED_TILDE=$(jq -r '[.permissions.allow[], .permissions.deny[]] | map(select(contains("~/"))) | length' config/settings.json)
+GOT_EXPANDED=$(jq -r --arg h "$HOME" '[.permissions.allow[], .permissions.deny[]] | map(select(startswith("Bash(" + $h))) | length' "$TMP/pass1.json")
+[[ "$SHIPPED_TILDE" -gt 0 && "$GOT_EXPANDED" == "$SHIPPED_TILDE" ]] \
+  && pass "all $SHIPPED_TILDE tilde rules expanded" \
+  || fail "all tilde rules expanded" "shipped=$SHIPPED_TILDE expanded=$GOT_EXPANDED"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
