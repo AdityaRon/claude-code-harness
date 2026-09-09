@@ -33,7 +33,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+        # Same runner-image problem as ci.yml: apt-get update exits 100 when any
+        # configured source fails, and the preinstalled google-chrome list served
+        # a Packages.gz whose hash did not match its Release file. Nothing here
+        # needs Chrome. Not `|| true` on the update itself — that would hide a
+        # real failure to reach the Ubuntu archives.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list || true
+          sudo apt-get update
+          sudo apt-get install -y jq
 
       # npm rather than `curl … | bash`: piping a remote script into a shell is
       # precisely what this harness's own network-guard denies, so it has no

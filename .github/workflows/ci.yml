@@ -19,7 +19,20 @@ jobs:
 
       - name: Install jq (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y jq
+        # Drop the runner image's preinstalled third-party apt sources first.
+        # `apt-get update` exits 100 if ANY configured source fails, and the
+        # google-chrome list on ubuntu-latest served a Packages.gz whose hash
+        # did not match its Release file — failing every Linux job here in the
+        # dependency step, before a line of harness code ran, while macOS
+        # passed the same suite on the same commit. Nothing in this repo needs
+        # Chrome, so removing the source is a fix and not a workaround; the
+        # `|| true` covers the file simply not existing on a future image.
+        # Deliberately NOT `apt-get update || true`: that would also swallow a
+        # genuine failure to reach the Ubuntu archives.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list || true
+          sudo apt-get update
+          sudo apt-get install -y jq
 
       - name: Install jq (macOS)
         if: runner.os == 'macOS'
@@ -34,7 +47,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+        # See the note on "Install jq (Linux)" above: a broken third-party apt
+        # source on the runner image fails apt-get update for the whole job.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list || true
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
       - name: Lint hooks and scripts
         # Glob the directories rather than naming each script, so a new tool is
         # linted the day it lands instead of the day someone remembers.
