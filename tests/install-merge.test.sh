@@ -129,5 +129,33 @@ GOT_EXPANDED=$(jq -r --arg h "$HOME" '[.permissions.allow[], .permissions.deny[]
   || fail "all tilde rules expanded" "shipped=$SHIPPED_TILDE expanded=$GOT_EXPANDED"
 
 echo ""
+echo "=== Every hook settings.json registers actually exists in hooks/ ==="
+# install.sh used to copy an explicit list of filenames. It named 15 and hooks/
+# holds 15 real hooks plus lib.sh — but they were different sets: the list
+# carried lib.sh and omitted memory-lint.sh, which settings.json registers on
+# Write|Edit|MultiEdit. The result was a wired-up hook that install.sh never
+# copied, running two weeks stale in ~/.claude with re-installs changing
+# nothing. Counting would not have caught it; comparing the sets does.
+MISSING=""
+for ref in $(grep -oE '~/\.claude/hooks/[a-z0-9-]+\.sh' config/settings.json | sed 's|.*/||' | sort -u); do
+  [ -f "hooks/$ref" ] || MISSING="$MISSING $ref"
+done
+[ -z "$MISSING" ] \
+  && pass "every registered hook has a file in hooks/" \
+  || fail "every registered hook has a file in hooks/" "missing:$MISSING"
+
+# The converse is not an error — lib.sh is a sourced library, not a hook — but a
+# hook file nobody registers is dead weight worth noticing.
+UNREGISTERED=""
+for f in hooks/*.sh; do
+  b=$(basename "$f")
+  [ "$b" = "lib.sh" ] && continue
+  grep -qF "hooks/$b" config/settings.json || UNREGISTERED="$UNREGISTERED $b"
+done
+[ -z "$UNREGISTERED" ] \
+  && pass "no hook file is left unregistered" \
+  || fail "no hook file is left unregistered" "unregistered:$UNREGISTERED"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

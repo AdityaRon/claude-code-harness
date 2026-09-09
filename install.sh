@@ -15,27 +15,23 @@ mkdir -p ~/.claude/hooks ~/.claude/logs ~/.claude/transcripts ~/.claude/state/se
 echo "  ✓ directories"
 
 # ---- Hooks + lib ------------------------------------------------------
-HOOKS=(
-  lib.sh
-  env-guard.sh
-  sensitive-file-guard.sh
-  git-guard.sh
-  interpreter-guard.sh
-  kubectl-guard.sh
-  network-guard.sh
-  secret-scanner.sh
-  audit.sh
-  notify.sh
-  session-start.sh
-  session-snapshot.sh
-  pre-compact.sh
-  plan-to-html.sh
-  workflow-record.sh
-)
-for f in "${HOOKS[@]}"; do
-  cp "$REPO/hooks/$f" ~/.claude/hooks/"$f"
-  chmod +x ~/.claude/hooks/"$f"
-  echo "  ✓ hooks/$f"
+# Glob the directory rather than listing names. The list held 15 entries and so
+# does hooks/ once lib.sh is counted — but they were different fifteens: the
+# array carried lib.sh, which settings.json never references, and omitted
+# memory-lint.sh, which settings.json registers as a PostToolUse hook. So a hook
+# this repo ships and wires up was never installed, the copy in ~/.claude sat two
+# weeks stale, and re-running install.sh fixed nothing. The matching counts are
+# why it survived review: a count check passes on two lists that disagree.
+#
+# The same failure had already happened once here with the memory tools — see the
+# note below. Naming files by hand is the shape of the bug, so the shape is gone.
+# tests/install-merge.test.sh now asserts the invariant that actually matters:
+# every hook settings.json names exists in hooks/, and so gets installed.
+for f in "$REPO"/hooks/*.sh; do
+  b=$(basename "$f")
+  cp "$f" ~/.claude/hooks/"$b"
+  chmod +x ~/.claude/hooks/"$b"
+  echo "  ✓ hooks/$b"
 done
 
 # ---- Statusline -------------------------------------------------------
