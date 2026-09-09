@@ -224,6 +224,12 @@
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
       }
     ],
+    "PostModelSwitch": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
+      }
+    ],
     "ConfigChange": [
       {
         "matcher": "",

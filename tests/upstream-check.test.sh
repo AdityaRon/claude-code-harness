@@ -20,8 +20,16 @@ fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 check_contains(){ case "$3" in *"$2"*) pass "$1" ;; *) fail "$1" "expected: $2" ;; esac; }
 check_absent(){   case "$3" in *"$2"*) fail "$1" "unexpected: $2" ;; *) pass "$1" ;; esac; }
 
-# The real list as of 2.1.228.
-ALL_EVENTS="PreToolUse, PostToolUse, PostToolUseFailure, PostToolBatch, Notification, UserPromptSubmit, UserPromptExpansion, SessionStart, SessionEnd, Stop, StopFailure, SubagentStart, SubagentStop, PreCompact, PostCompact, PermissionRequest, PermissionDenied, Setup, TeammateIdle, TaskCreated, TaskCompleted, Elicitation, ElicitationResult, ConfigChange, WorktreeCreate, WorktreeRemove, InstructionsLoaded, CwdChanged, FileChanged, DirectoryAdded, MessageDisplay"
+# The real list as of 2.1.266 (PreModelSwitch/PostModelSwitch arrived in 2.1.251).
+#
+# This models what UPSTREAM offers, so it is deliberately hardcoded rather than
+# read from upstream-contract.json: the contract is what this harness has
+# acknowledged, and a check cannot supply its own expected input. The cost is
+# that the two lists drift by hand — when the harness starts hooking an event
+# this stub has never heard of, section 2 reports it as vanished upstream and
+# every exit-code assertion below fails at once. That is what happened when
+# PostModelSwitch was adopted.
+ALL_EVENTS="PreToolUse, PostToolUse, PostToolUseFailure, PostToolBatch, Notification, UserPromptSubmit, UserPromptExpansion, SessionStart, SessionEnd, Stop, StopFailure, SubagentStart, SubagentStop, PreCompact, PostCompact, PreModelSwitch, PostModelSwitch, PermissionRequest, PermissionDenied, Setup, TeammateIdle, TaskCreated, TaskCompleted, Elicitation, ElicitationResult, ConfigChange, WorktreeCreate, WorktreeRemove, InstructionsLoaded, CwdChanged, FileChanged, DirectoryAdded, MessageDisplay"
 ALL_MODES='Expected one of: "acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"'
 
 # Stub doctor. Runs with cwd = the probe directory, like the real one, and answers

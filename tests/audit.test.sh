@@ -87,5 +87,22 @@ else
 fi
 
 echo ""
+echo "=== PostModelSwitch records which model produced what follows ==="
+run '{"hook_event_name":"PostModelSwitch","from_model":"claude-opus-5","to_model":"claude-sonnet-5"}'
+grep -qF "| model_switch | claude-opus-5 -> claude-sonnet-5 |" "$CLAUDE_AUDIT_LOG" \
+  && pass "model switch logged" || fail "model switch logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+
+# camelCase fallback: the payload is documented snake_case, so this only proves
+# the defensive read works — it must not regress into logging "unknown".
+run '{"hook_event_name":"PostModelSwitch","fromModel":"claude-opus-5","toModel":"claude-haiku-4-5"}'
+grep -qF "| model_switch | claude-opus-5 -> claude-haiku-4-5 |" "$CLAUDE_AUDIT_LOG" \
+  && pass "camelCase payload still logged" || fail "camelCase payload still logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+
+# A switch with no usable fields must still leave a record rather than vanish.
+run '{"hook_event_name":"PostModelSwitch"}'
+grep -qF "| model_switch | unknown -> unknown |" "$CLAUDE_AUDIT_LOG" \
+  && pass "fieldless switch still recorded" || fail "fieldless switch still recorded" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

@@ -3,6 +3,7 @@
 #   PostToolUse      — file edits/writes (async)
 #   PostToolUseFailure — failed tool calls (async)
 #   PermissionDenied — a tool call auto mode refused (async)
+#   PostModelSwitch  — the session changed model (async)
 #   ConfigChange     — settings file modified mid-session (async)
 #   SessionEnd       — session summary, once per session (blocking)
 #   Stop             — same summary shape; accepted so the hook still works if
@@ -66,6 +67,23 @@ case "$EVENT" in
       [[ -z "$TARGET" ]] && TARGET=$(sanitize "$(jq_get '.tool_input.path')")
     fi
     log_audit "$TS | DENIED | ${TOOL:-unknown} | ${TARGET:-unknown} | ${WHY:-no reason given} | $DIR"
+    ;;
+  PostModelSwitch)
+    # Which model produced a given conclusion is otherwise unrecoverable: every
+    # other line here is `<ts> | <tool> | <target> | <dir>` with no model field,
+    # so a mid-session switch — deliberate or an automatic fallback — leaves no
+    # trace at all. For a long background session doing analysis, that is the
+    # difference between "this finding came from the model I chose" and a guess.
+    #
+    # Post, not Pre: PreModelSwitch can block, and gating the model picker is
+    # friction with no security gain. This arm only observes.
+    #
+    # Field names are read defensively. The payload is documented as snake_case
+    # (from_model/to_model); the camelCase fallback costs one jq call and avoids
+    # logging "unknown -> unknown" if that ever differs in practice.
+    FROM=$(jq_get '.from_model'); [[ -z "$FROM" ]] && FROM=$(jq_get '.fromModel')
+    TO=$(jq_get '.to_model');     [[ -z "$TO" ]]   && TO=$(jq_get '.toModel')
+    log_audit "$TS | model_switch | $(sanitize "${FROM:-unknown}") -> $(sanitize "${TO:-unknown}") | $DIR"
     ;;
   ConfigChange)
     FILE=$(sanitize "$(jq_get '.file_path')")
