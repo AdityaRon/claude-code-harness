@@ -216,9 +216,18 @@ skills/                  ← agent skills, one directory each
   memory-audit/          ← check memories against external truth
   memory-archive/        ← relieve an over-limit index; proposes, never writes
 tests/                   ← one <name>.test.sh per hook or script
-docs/                    ← research notes
+docs/                    ← research notes and working documents
   session-routing.md     ← routing a PR to the session that owns it; read the
                            precondition — it only holds in single-author repos
+  memory-hygiene-brief.md
+                         ← the original audit: what is wrong with file-based
+                           memory, and why nothing collects it
+  memory-hygiene-research.md
+                         ← what Claude Code already ships; read the Errata
+                           first — two claims in the body did not hold
+  memory-hygiene-problems.md
+                         ← measured problems and the rules learned; the
+                           memory skills cite this one
 ```
 
 Paths inside `~/.claude` after install are flat — the grouping above is for
@@ -272,7 +281,7 @@ reading the repo, not for the installed tree.
 bash doctor.sh
 ```
 
-Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 530+ cases across all hooks, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap), and the settings merge (`config/merge-settings.jq` — that a stale `defaultMode` is replaced, allow/deny lists are unioned, user keys survive, and re-running the installer is a no-op).
+Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 880+ cases across 22 suites, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap), and the settings merge (`config/merge-settings.jq` — that a stale `defaultMode` is replaced, allow/deny lists are unioned, user keys survive, and re-running the installer is a no-op).
 
 CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS and lints every hook with `shellcheck` on each push and PR.
 

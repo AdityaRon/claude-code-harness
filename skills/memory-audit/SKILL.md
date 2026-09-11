@@ -204,7 +204,7 @@ entries. **This is not the withdrawn "retire settled memories" heuristic** —
 it judges nothing about worth, it just writes down what truncation was going
 to take anyway. Measured: a store growing ~14 memories a day cannot hold any
 fixed headroom, so the index is permanently at its cap and the only question
-is whether the loss is recorded. See `MEMORY-HYGIENE-PROBLEMS.md`.
+is whether the loss is recorded. See `docs/memory-hygiene-problems.md`.
 
 It will not peel an entry whose memory was modified in the last 2 days
 (`--min-age-days N`, 0 disables). Tier cheapness is an INDIRECT proxy for

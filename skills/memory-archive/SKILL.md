@@ -15,7 +15,7 @@ re-deriving them wastes a session:
 
 1. **The size problem is not solvable and you should not try.** Bounded
    context, unbounded corpus. Archiving and merging are constant-factor moves
-   against linear growth — they buy months, not a solution. `MEMORY-HYGIENE-PROBLEMS.md`
+   against linear growth — they buy months, not a solution. `docs/memory-hygiene-problems.md`
    records that compaction cannot reclaim index lines at all.
 2. **The harm was never the limit; it was the ORDERING.** Truncation is
    tail-first, so an append-ordered index drops the *newest* entries — measured
@@ -33,7 +33,7 @@ re-deriving them wastes a session:
 
 ## Before you begin
 
-Read `MEMORY-HYGIENE-PROBLEMS.md` in the harness repo, in particular the section
+Read `docs/memory-hygiene-problems.md` in the harness repo, in particular the section
 headed **"Heuristics built and WITHDRAWN — do not re-propose without addressing
 why."** The most attractive heuristic here — *retire settled memories with no
 lesson-shaped wording* — was built, tried, and withdrawn: it flagged a memory
@@ -185,7 +185,7 @@ Before handing it over:
 
 - Did you propose archiving any `feedback_` memory? Withdraw it.
 - Did you propose deleting anything? Convert it to a merge or an archive.
-- Did you re-propose a withdrawn heuristic? Read `MEMORY-HYGIENE-PROBLEMS.md`.
+- Did you re-propose a withdrawn heuristic? Read `docs/memory-hygiene-problems.md`.
 - Did you state a denominator — lines now, lines after, limit? A proposal
   without one cannot be judged, and "several" is not a number.
 - Would every archived memory still be reachable? If not, it is a deletion

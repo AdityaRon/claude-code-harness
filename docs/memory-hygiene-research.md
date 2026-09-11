@@ -1,10 +1,10 @@
 # Research addendum: what Claude Code already does about memory hygiene
 
-Written 2026-08-11 against Claude Code **2.1.227**. It began as an addendum to a local working
-document (a hand audit of the live memory stores, not included here because it quotes internal
-work), whose premise was that file-based memory is "garbage-collected by nobody". That premise is
-**not accurate**: Claude Code ships a memory-hygiene mechanism today, and the question is whether it
-is enabled for you. Re-scope before building anything.
+Written 2026-08-11 against Claude Code **2.1.227**. Read it after
+[the brief](memory-hygiene-brief.md), whose premise — that file-based memory is
+"garbage-collected by nobody" — is **not accurate**: Claude Code ships a memory-hygiene
+mechanism today, and the question is whether it is enabled for you. Re-scope before
+building anything.
 
 Claims below were checked against the shipped binary, live settings, and live store contents, or
 read from the cited source. Where something is inferred rather than observed, it says so.
