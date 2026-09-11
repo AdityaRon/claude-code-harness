@@ -289,6 +289,7 @@
   },
   "env": {
     "CLAUDE_AUDIT_LOG": "~/.claude/logs/audit.log",
-    "CLAUDE_TRANSCRIPT_DIR": "~/.claude/transcripts"
+    "CLAUDE_TRANSCRIPT_DIR": "~/.claude/transcripts",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "600000"
   }
 }
