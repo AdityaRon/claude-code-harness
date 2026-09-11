@@ -14,7 +14,7 @@ estimated. Main store is `~/.claude/projects/<slug>/memory`
    (Both limits verified against the CLI 2026-08-27: upstream compares
    `lineCount > 200` and `byteCount > 25000`. The size one is bytes, not
    characters — em-dashes are three, so a compliant character count can still
-   be over. See docs/memory-hygiene-research.md and upstream-check 4d.)
+   be over. See memory-hygiene-research.md and upstream-check 4d.)
 
 2. **6% of wiki-links are broken** — 35 of 588 do not resolve to a file.
 
