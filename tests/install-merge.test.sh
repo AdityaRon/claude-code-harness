@@ -83,6 +83,39 @@ echo "=== The shipped settings.json is valid and sets auto mode ==="
   && pass "shipped settings.json uses auto" || fail "shipped settings.json uses auto" "$(jq -r '.permissions.defaultMode' config/settings.json)"
 
 echo ""
+echo "=== CLAUDE_CODE_AUTO_COMPACT_WINDOW is a plain integer in the CLI's accepted range ==="
+# Auto-compact fires at (assumed_window - min(max_output,20000) - 13000). Shrinking
+# the assumed window is how that fire point is pulled in: at 600000 a 1M session
+# compacts at 567k instead of 967k, while a session on a <=600k model is untouched
+# because the CLI takes min(real_window, configured).
+#
+# The value is parsed with a suffix-aware attempt falling back to parseInt, and an
+# unparseable result falls back to the 100000 FLOOR rather than erroring. So "600k"
+# reads as 600, floors to 100000, and would silently compact a 1M session at 67k.
+# Only a bare decimal integer is safe, and only inside [100000, 1000000] - under the
+# floor is raised and over the cap is capped, both without any failure.
+ACW=$(jq -r '.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW // empty' config/settings.json)
+[[ -n "$ACW" ]] \
+  && pass "auto-compact window is set" || fail "auto-compact window is set" "(key absent)"
+[[ "$ACW" =~ ^[0-9]+$ ]] \
+  && pass "value is a bare decimal integer" \
+  || fail "value is a bare decimal integer" "got '$ACW' - a k/m suffix parses to the 100000 floor"
+if [[ "$ACW" =~ ^[0-9]+$ ]] && (( ACW >= 100000 && ACW <= 1000000 )); then
+  pass "value is within [100000, 1000000]"
+else
+  fail "value is within [100000, 1000000]" "got '$ACW'"
+fi
+
+echo ""
+echo "=== The merge delivers the auto-compact window to the installed file ==="
+# A setting the repo declares but the merge drops would leave the fire point
+# unchanged with nothing to show for it.
+OUT=$(merge '{"env":{"CLAUDE_AUDIT_LOG":"~/mine.log"}}' "$(cat config/settings.json)")
+[[ "$(printf '%s' "$OUT" | jq -r '.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW')" == "$ACW" ]] \
+  && pass "auto-compact window survives the merge" \
+  || fail "auto-compact window survives the merge" "$(printf '%s' "$OUT" | jq -c '.env')"
+
+echo ""
 echo "=== A ~/ rule gains a \$HOME-expanded twin, in allow AND deny ==="
 # Whether the CLI expands `~` when matching a Bash rule is undocumented, so
 # both spellings must ship. Pin HOME so the assertion is deterministic.

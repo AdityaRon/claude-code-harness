@@ -349,6 +349,31 @@ this harness's own `network-guard` denies.
 { "env": { "CLAUDE_EDITOR_URI": "cursor://file" } }
 ```
 
+**Pull auto-compact in, so long sessions stop running at near-full context.**
+Auto-compact does not fire at a percentage. It fires at
+`assumed_window − min(max_output_tokens, 20000) − 13000`, so on a 1M-token model
+the default trigger is **967k** — you spend the back half of every session paying
+for a near-full context on every turn. Shrinking the *assumed* window pulls the
+trigger in:
+```json
+{ "env": { "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "600000" } }
+```
+600000 → effective 580k → **compacts at 567k**, with the summary precomputed at
+≈464k (at the default 0.2 buffer) so the swap is still instant. The CLI takes `min(real_window, configured)`,
+so this is a **no-op on any model with a ≤600k window** and only bites on 1M
+sessions. Blocking ("context limit reached") still uses the real window.
+
+Use a **bare decimal integer**. The value is parsed with `parseInt` as a
+fallback, and anything unparseable silently falls back to the 100000 *floor* —
+so `"600k"` reads as `600`, floors to `100000`, and would compact a 1M session at
+67k. Accepted range is 100000–1000000; outside it the value is floored or capped
+without any error. `tests/install-merge.test.sh` asserts all of this.
+
+For true percentage semantics instead, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` takes
+1–100 as a percent of the effective window and is clamped so it can only ever
+*lower* the trigger. It collapses the precompute head start onto the trigger
+itself, so compaction stalls while it summarises rather than swapping in.
+
 **Enable the OS sandbox** (drafted off-by-default with a read-only allowlist). Flip it on globally in `~/.claude/settings.json`, or per-project in `.claude/settings.json`:
 ```json
 { "sandbox": { "enabled": true } }
