@@ -281,8 +281,33 @@ else
     BV=$(printf '%s' "$FRAG" | sed -n 's/.*byteCount:\([A-Za-z_$][A-Za-z0-9_$]*\)}.*/\1/p')
     LLIM=$(printf '%s' "$FRAG" | sed -n "s/.*=${LV}>\([A-Za-z_\$][A-Za-z0-9_\$]*\).*/\1/p")
     BLIM=$(printf '%s' "$FRAG" | sed -n "s/.*=${BV}>\([A-Za-z_\$][A-Za-z0-9_\$]*\).*/\1/p")
-    GOT_LINES=$(grep -aoE "(^|[^A-Za-z0-9_\$])${LLIM}=[0-9]+" "$CLI_BIN" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
-    GOT_BYTES=$(grep -aoE "(^|[^A-Za-z0-9_\$])${BLIM}=[0-9]+" "$CLI_BIN" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
+    # Resolve a minified constant to its value. Two hazards, and on 2.1.272 they
+    # combined to produce a WRONG answer rather than no answer:
+    #
+    #   1. the leading character class can match a NUL byte, so stage 1 emits
+    #      ",t6=25000\n\0t6=3\n". Every stage of the pipe therefore needs -a;
+    #      without it stage 2 calls its own stdin binary and prints the literal
+    #      "Binary file (standard input) matches" INSTEAD of the number.
+    #   2. that string is NON-EMPTY, so the -z guard below waved it through to
+    #      the value comparison, which then warned that memory-lint was gating
+    #      on the wrong byte limit -- crying wolf about the number it was in
+    #      fact confirming. An emptiness guard cannot catch a failure that
+    #      returns a value.
+    #
+    # So validate the SHAPE here rather than trusting the pipe: anything that is
+    # not all digits comes back empty, and the caller reports UNVERIFIED. Every
+    # extraction added here must keep that property -- report nothing, never a
+    # value you did not prove is a value.
+    const_value() {
+      _v=$(grep -aoE "(^|[^A-Za-z0-9_\$])$1=[0-9]+" "$CLI_BIN" 2>/dev/null \
+           | grep -aoE '[0-9]+$' | head -1)
+      case "$_v" in
+        ''|*[!0-9]*) printf '' ;;
+        *)           printf '%s' "$_v" ;;
+      esac
+    }
+    GOT_LINES=$(const_value "$LLIM")
+    GOT_BYTES=$(const_value "$BLIM")
     if [ -z "$GOT_LINES" ] || [ -z "$GOT_BYTES" ]; then
       warn "found the truncation expression but not both constants (lines='${GOT_LINES:-?}' bytes='${GOT_BYTES:-?}')"
       warn "the thresholds went UNVERIFIED on this run."
