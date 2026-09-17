@@ -71,6 +71,20 @@ done
   || fail "every docs/ file appears in the layout block" "missing:$MISSING"
 
 echo ""
+echo "=== The README layout block names every file in rules/ ==="
+# Same reason as docs/: a rule that ships to every session on the machine but is
+# invisible in the map is one nobody reviews before it starts shaping behaviour.
+MISSING_RULES=""
+for r in rules/*.md; do
+  [ -e "$r" ] || continue
+  b=$(basename "$r")
+  printf '%s' "$BLOCK" | grep -qF "$b" || MISSING_RULES="$MISSING_RULES $b"
+done
+[ -z "$MISSING_RULES" ] \
+  && pass "every rules/ file appears in the layout block" \
+  || fail "every rules/ file appears in the layout block" "missing:$MISSING_RULES"
+
+echo ""
 echo "=== Every repo-relative path referenced in prose actually exists ==="
 # The class of bug this whole file is about: a reference that still reads fine
 # and points at nothing. Installed paths (~/.claude/...) are stripped first —
@@ -84,7 +98,7 @@ for src in README.md docs/*.md skills/*/SKILL.md config/upstream-contract.json; 
     CHECKED=$((CHECKED+1))
     [ -e "$ref" ] || BROKEN="$BROKEN $src->$ref"
   done < <(sed 's|~/\.claude/[A-Za-z0-9._/-]*||g' "$src" \
-           | grep -oE '(^|[^A-Za-z0-9._/-])(docs|bin|hooks|tests|config|skills)/[A-Za-z0-9._/-]+' \
+           | grep -oE '(^|[^A-Za-z0-9._/-])(docs|bin|hooks|tests|config|skills|rules)/[A-Za-z0-9._/-]+' \
            | sed -E 's|^[^A-Za-z0-9._/-]||; s|[.,;:)]+$||' | sort -u)
 done
 [ "$CHECKED" -ge 15 ] \

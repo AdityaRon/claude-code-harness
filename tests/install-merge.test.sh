@@ -190,5 +190,32 @@ done
   || fail "no hook file is left unregistered" "unregistered:$UNREGISTERED"
 
 echo ""
+echo "=== rules/ ships by glob, and installing never deletes a local rule ==="
+# Same failure mode as the hooks list above: an explicit list drifts out of sync
+# with the directory and a file silently stops shipping.
+grep -qE 'for rule in "\$REPO"/rules/\*\.md' install.sh \
+  && pass "install.sh copies rules/ by glob" \
+  || fail "install.sh copies rules/ by glob" "no glob loop over rules/*.md"
+
+# The install must be additive. ~/.claude/rules is also where machine-local
+# rules live — the ones naming people, clusters or customers that must never
+# enter this repo — and an install that cleared the directory would delete them.
+grep -qE 'rm -rf? .*\.claude/rules|rm .*\.claude/rules/\*' install.sh \
+  && fail "install.sh never clears ~/.claude/rules" "found a delete" \
+  || pass "install.sh never clears ~/.claude/rules"
+
+# A rule carrying an identifier would be published the moment this repo is
+# pushed. Keep the shipped set free of people, channels, tickets and customers.
+LEAKS=""
+for f in rules/*.md; do
+  [ -f "$f" ] || continue
+  grep -nEi '[A-Z]+_CDB_[A-Z0-9_]+|\b[UDC]0[A-Z0-9]{7,}\b|@[a-z0-9.-]+\.(com|net|io)|\b(INS|ANEP|RAIN|LINK|PSP)-[0-9]+' "$f" >/dev/null \
+    && LEAKS="$LEAKS $(basename "$f")"
+done
+[ -z "$LEAKS" ] \
+  && pass "no shipped rule carries an identifier" \
+  || fail "no shipped rule carries an identifier" "$LEAKS"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

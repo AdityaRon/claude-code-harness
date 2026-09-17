@@ -212,6 +212,14 @@ config/
   merge-settings.jq      ← how that merge is performed
   upstream-contract.json ← the upstream facts the harness relies on
 hooks/                   ← one file per hook, plus shared lib.sh
+rules/                   ← personal rules, installed to ~/.claude/rules/ and
+                           loaded in every session in every project. Portable
+                           only: nothing naming a person, ticket, cluster or
+                           customer, because this repo is pushed
+  prose-and-comments.md  ← length, voice, and where justification belongs
+  collaboration.md       ← reviews, PRs, and handing work back
+  working-agreement.md   ← keep going, evidence, cost, finishing the loop
+  environment.md         ← git, Claude Code, and reading tool output here
 skills/                  ← agent skills, one directory each
   memory-audit/          ← check memories against external truth
   memory-archive/        ← relieve an over-limit index; proposes, never writes

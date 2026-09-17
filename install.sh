@@ -69,6 +69,25 @@ for skill in "$REPO"/skills/*/; do
   echo "  ✓ skills/$name"
 done
 
+# ---- Personal rules --------------------------------------------------
+# ~/.claude/rules/ is user scope: every file here loads in every session, in
+# every project on this machine, and needs no per-project approval the way an
+# external import into a project CLAUDE.md does.
+#
+# Copied by GLOB, never from an explicit list. The hooks block used to name its
+# files and the list drifted out of sync with the directory, so a wired-up hook
+# silently stopped shipping; there is no reason to repeat that here.
+#
+# ADDITIVE on purpose. A file already in ~/.claude/rules that this repo does not
+# carry is left alone, because that is where machine-local rules live — the ones
+# naming people, clusters or customers, which must never enter a git repo.
+mkdir -p ~/.claude/rules
+for rule in "$REPO"/rules/*.md; do
+  [[ -f "$rule" ]] || continue
+  cp "$rule" ~/.claude/rules/"$(basename "$rule")"
+  echo "  ✓ rules/$(basename "$rule")"
+done
+
 # ---- Settings (merge-safe) -------------------------------------------
 TARGET=~/.claude/settings.json
 SOURCE="$REPO/config/settings.json"
