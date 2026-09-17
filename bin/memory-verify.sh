@@ -95,6 +95,7 @@ N_SETTLED=0
 N_VERIFIED=0
 N_OVERSIZE=0
 N_CANDIDATE=0
+N_HOOK=0
 HEADER_SHOWN=""
 
 # Emit one finding. Fields are positional to stay bash-3.2 friendly.
@@ -109,6 +110,7 @@ emit() {
     VERIFIED) N_VERIFIED=$((N_VERIFIED+1)); [ "$SHOW_ALL" -eq 1 ] || return 0 ;;
     OVERSIZE) N_OVERSIZE=$((N_OVERSIZE+1)) ;;
     CANDIDATE) N_CANDIDATE=$((N_CANDIDATE+1)) ;;
+    HOOK)     N_HOOK=$((N_HOOK+1)) ;;
   esac
   if [ "$AS_JSON" -eq 1 ]; then
     jq -nc --arg s "$status" --arg st "$store" --arg f "$file" --arg d "$detail" \
@@ -284,6 +286,46 @@ scan_index_size() {
   [ -n "$over" ] || return 0
   emit OVERSIZE "$slug" "MEMORY.md" \
     "index over the load limit ($over; $entries entries) — the tail is dropped at session start. One line per memory, so shortening hooks cannot fix the LINE limit; order by type so the tail is cheap, then retire settled entries."
+}
+
+# A hook is the only part of a memory that loads every session; the body arrives
+# only once something recalls it. A hook that trails off ("3 of 48 tenants
+# carry…") spends its index line and delivers none of the payload.
+#
+# The ellipsis is AUTHORED, not a tool truncating: measured across four backups
+# of one store the damaged hooks were byte-identical for six days and ran 77-140
+# chars, so no fixed-width cut produced them. Nothing else checks hook quality,
+# which is how one store reached 25 trailed-off hooks in 82 entries.
+#
+# Only flagged when the memory's own `description:` still carries the payload,
+# so every finding is a one-line edit with nothing to re-derive. A terse hook on
+# a terse description is not a defect. Advisory: it does not change the exit
+# code, because a thin hook still loads and an oversize index does not.
+HOOK_MIN_DESC_RATIO="${MEMORY_HOOK_MIN_DESC_RATIO:-150}"
+
+scan_index_hooks() {
+  local dir="$1" slug="$2" line target hook desc
+  local idx="$dir/MEMORY.md"
+  local n=0
+  [ -f "$idx" ] || return 0
+  while IFS= read -r line; do
+    n=$((n + 1))
+    case "$line" in '- ['*) ;; *) continue ;; esac
+    # Split on the separator the index format uses; no separator, no hook.
+    hook=${line#*") — "}
+    [ "$hook" = "$line" ] && continue
+    # Trails off: an ellipsis, or a connective the writer meant to continue past.
+    printf '%s' "$hook" \
+      | grep -qE '(…|\.\.\.|,|;)$|(^|[[:space:]])(and|or|not|the|but|with|is|of|to|for|an?)$' \
+      || continue
+    target=$(printf '%s' "$line" | sed -n 's/.*](\([^)]*\.md\)).*/\1/p' | head -1)
+    [ -n "$target" ] && [ -f "$dir/$target" ] || continue
+    desc=$(sed -n 's/^description: *//p' "$dir/$target" | head -1 | sed 's/^"//; s/"$//')
+    [ -n "$desc" ] || continue
+    [ $(( ${#desc} * 100 )) -ge $(( ${#hook} * HOOK_MIN_DESC_RATIO )) ] || continue
+    emit HOOK "$slug" "MEMORY.md:$n" \
+      "hook trails off (\"$hook\") but ${target} still has the payload: $(printf '%.120s' "$desc")"
+  done < "$idx"
 }
 
 # Advisory overlap pass. Answers one question a size problem actually turns
@@ -474,6 +516,7 @@ for store in "$PROJECTS"/*; do
   scan_store "$store/memory" "$slug"
   scan_index "$store/memory" "$slug"
   scan_index_size "$store/memory" "$slug"
+  scan_index_hooks "$store/memory" "$slug"
   if [ "$CURATE" -eq 1 ]; then scan_curation "$store/memory" "$slug"; fi
 done
 
@@ -490,7 +533,7 @@ fi
 
 if [ "$AS_JSON" -eq 0 ]; then
   echo ""
-  echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_NEEDS_MCP need-mcp, $N_SKIP skipped, $N_VERIFIED verified, $N_OVERSIZE oversize, $N_SETTLED settled, $N_CANDIDATE candidates"
+  echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_NEEDS_MCP need-mcp, $N_SKIP skipped, $N_VERIFIED verified, $N_OVERSIZE oversize, $N_SETTLED settled, $N_CANDIDATE candidates, $N_HOOK thin-hooks"
   [ "$N_TRIAGE" -gt 0 ] && echo "Run /memory-audit to resolve the TRIAGE entries and give them verify: blocks."
   if [ "$N_OVERSIZE" -gt 0 ] && [ "$CURATE" -eq 0 ]; then
     echo "The index is over its load limit, so its tail is dropped at session start."

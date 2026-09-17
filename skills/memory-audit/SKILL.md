@@ -60,6 +60,14 @@ Each finding means exactly one thing — a queue with mixed meanings gets ignore
 - `SKIP` — malformed or unrecognised claim. The memory itself needs fixing.
 - `VERIFIED` — nothing to do.
 - `OVERSIZE` — the store's index is past a load limit; see step 6.
+- `HOOK` — advisory: an index hook trails off mid-claim ("3 of 48 tenants
+  carry…") while the memory's own `description:` still carries the payload. The
+  hook is the only part that loads every session, so a trailed-off one spends
+  its index line and delivers nothing. The ellipsis is authored, not a tool
+  truncating: measured across four backups of one store the damaged hooks were
+  byte-identical for six days and ran 77-140 chars. The fix is a one-line edit
+  to `MEMORY.md`, rewriting the hook from the description; no memory body
+  changes and nothing is archived.
 - `SETTLED` — advisory, `--curate` only: a **project** memory whose every claim
   is terminal and whose body asserts nothing in flight. Its work is finished, so
   its index line can move to an archive section. This is a claim about the INDEX
