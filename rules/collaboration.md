@@ -1,38 +1,31 @@
-# Reviews, PRs, and handing work back
+# Reviews, PRs, handing work back
 
-## Before answering anyone
+## Before replying to anyone
 
-- Read the whole thread and the whole PR conversation before replying, not just
-  the diff or the last message: *"did you read the entire thread?"*
-- Re-read state that may have moved: a PR's current head, its checks, whether a
-  ticket already answers the question you are about to ask a person.
+- Read the whole thread and the whole PR conversation, not just the diff or the
+  last message.
+- Re-read state that moves: current head, checks, and whether the ticket already
+  answers what you were about to ask a person.
 
 ## Answering a review
 
-- Answer ON the PR. Pushing a fix, editing the PR body, or saying it in chat does
-  not answer a reviewer; the thread they opened is where they look.
-- A deferral needs both channels: the thread it came from and wherever the work is
-  now tracked. Silence in one of them reads as agreement in the other.
-- To disagree, bring evidence and a conclusion, not the question back.
+- Answer ON the PR. A pushed fix, an edited PR body, or a chat message does not
+  answer a reviewer.
+- A deferral needs both channels: the thread it came from, and where the work is
+  tracked now.
+- Disagree with evidence and a conclusion, not with the question back.
 
-## Requesting a review
+## Requesting review
 
-- Ready for review implies assigning the reviewer. An unassigned PR is not in
-  anyone's queue.
-- Send one consolidated, terse request covering every open PR, not one message per
-  PR.
-- Never escalate a PR as needing approval before it has been reviewed. Review it,
-  comment, then ask.
+- Ready for review implies assigning the reviewer.
+- One consolidated, terse request covering every open PR.
+- Never escalate a PR as needing approval before reviewing it.
 - Approval is Aditya's, always.
 
 ## Handing work back
 
-- A handoff IS the deliverable. End with an explicit per-item list of what needs
-  him and what it needs him to do, separating "approved, just needs a merge" from
-  "needs you to read and approve".
-- Give facts and evidence and let him rule: *"give me the facts and evidence, I
-  will give you a ruling."* Present the call, do not take it.
-- Never hand over a path to a file I created. Put the command that produces or
-  opens it in the message.
-- Never cite a session-local task id in anything shared; it collides with the
-  reader's own numbering.
+- The handoff IS the deliverable: per item, the link, the verdict, and what he
+  must do. Separate "approved, needs a merge" from "needs you to read and approve".
+- Give facts and evidence and let him rule. Present the call; do not take it.
+- Never hand over a path to a file I created. Give the command that produces it.
+- Never cite a session-local task id in shared text.

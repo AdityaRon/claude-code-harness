@@ -108,12 +108,14 @@ else
   BACKUP="$TARGET.bak.$(date +%Y%m%d%H%M%S)"
   cp "$TARGET" "$BACKUP"
 
-  # The harness fully owns the hooks block (below). Warn loudly if the user had
-  # their own hooks so they aren't silently dropped — they're preserved in the
-  # timestamped backup and can be merged back by hand.
-  if jq -e '(.hooks // {}) | length > 0' "$TARGET" >/dev/null 2>&1; then
-    echo "  ⚠ existing 'hooks' block found — the harness replaces it. Your previous"
-    echo "     hooks are preserved in: $BACKUP  (merge any custom ones back manually)."
+  # The harness owns the hook entries IT installed. Anything else in the block —
+  # an iTerm2 status hook, say — is carried across by merge-settings.jq. Say how
+  # many, so a machine that loses one has a number to notice it by.
+  FOREIGN=$(jq '[(.hooks // {})[] | .[]? | (.hooks // [])[]?
+                 | select((.command // "") | startswith("~/.claude/hooks/") | not)] | length' \
+            "$TARGET" 2>/dev/null || echo 0)
+  if [[ "${FOREIGN:-0}" -gt 0 ]]; then
+    echo "  ℹ $FOREIGN hook entr$([[ "$FOREIGN" == 1 ]] && echo y || echo ies) not installed by the harness — preserved."
   fi
 
   # permissions.defaultMode is harness-owned (see below), so an existing value
@@ -156,7 +158,11 @@ else
 fi
 
 # ---- Self-test --------------------------------------------------------
-if [[ -x "$REPO/doctor.sh" ]]; then
+# CCH_SKIP_SELFTEST exists so a test can run this installer. doctor.sh runs every
+# suite in tests/, and one of those suites installs into a temp HOME to prove the
+# install preserves local-*.md — without the guard that suite would re-enter the
+# installer through doctor and recurse until something gave way.
+if [[ -z "${CCH_SKIP_SELFTEST:-}" && -x "$REPO/doctor.sh" ]]; then
   echo ""
   echo "Running doctor.sh to verify hooks..."
   if bash "$REPO/doctor.sh" > /tmp/cch-doctor.log 2>&1; then

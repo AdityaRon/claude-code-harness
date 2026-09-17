@@ -7,7 +7,8 @@
 # Ownership rules:
 #   - user wins for overlapping top-level keys they set themselves (env, tui, …)
 #   - allow / deny lists are unioned so users and projects can extend them
-#   - hooks, statusLine and permissions.defaultMode are harness-owned
+#   - statusLine and permissions.defaultMode are harness-owned
+#   - the harness owns the hook entries it installed; yours are preserved
 #
 # Note on the union: it can only ever ADD rules. An update that drops a rule
 # from config/settings.json will not remove it from a machine that already has
@@ -25,7 +26,23 @@ def expand_home($h):
   | $rules + ($rules | map(select(contains("~/")) | gsub("~/"; $h + "/")))
   | unique;
 
+# A hook entry this harness installed: its command runs a file in ~/.claude/hooks.
+# Both spellings, because settings.json carries the tilde form and an expanded
+# one is equally valid on disk.
+def is_harness_hook($h):
+  (.command // "") as $c
+  | ($c | startswith("~/.claude/hooks/")) or ($c | startswith($h + "/.claude/hooks/"));
+
+# Strip the harness's own entries from a matcher list, and drop matchers left
+# empty, so only hooks the harness did not install survive.
+def keep_foreign($h):
+  (. // [])
+  | map(.hooks = ((.hooks // []) | map(select(is_harness_hook($h) | not))))
+  | map(select((.hooks | length) > 0));
+
 .[0] as $old | .[1] as $new
+| (($old.hooks // {}) | with_entries(.value |= keep_foreign($home))
+                      | with_entries(select(.value | length > 0))) as $foreign
 | $new
   * $old                                                     # user wins for overlapping top-level keys
 | .permissions.allow = (($old.permissions.allow // []) + ($new.permissions.allow // []) | expand_home($home))
@@ -35,5 +52,11 @@ def expand_home($h):
 | (if $new.permissions.defaultMode
    then .permissions.defaultMode = $new.permissions.defaultMode
    else . end)
-| .hooks      = $new.hooks                                   # harness fully owns hooks
+# The harness owns ITS hooks, not yours. Replacing the whole block cost a real
+# machine its 10 iTerm2 status-line entries on every install: they live under
+# ~/.config, nothing here ships them, and re-running the installer silently took
+# them to zero. Anything whose command is not a harness hook is preserved, per
+# event, after the harness entries.
+| .hooks      = (($new.hooks // {}) | with_entries(.value = (.value + ($foreign[.key] // []))))
+                + ($foreign | with_entries(. as $e | select((($new.hooks // {}) | has($e.key)) | not)))
 | .statusLine = $new.statusLine                              # harness owns statusline

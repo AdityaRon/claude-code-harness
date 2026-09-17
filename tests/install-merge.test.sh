@@ -60,10 +60,15 @@ DENY=$(printf '%s' "$OUT" | jq -r '.permissions.deny | sort | join(",")')
   && pass "deny unioned" || fail "deny unioned" "$DENY"
 
 echo ""
-echo "=== Harness owns hooks and statusLine ==="
+echo "=== Harness owns ITS hooks, and the statusLine ==="
+# This assertion used to require the user's whole hooks block to disappear. That
+# contract is gone on purpose: it took a real machine's iTerm2 status hooks to
+# zero on every install. The harness now removes only the entries it installed.
 OUT=$(merge '{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"mine.sh"}]}]},"statusLine":{"type":"command","command":"mine.sh"}}' "$HARNESS")
-[[ "$(printf '%s' "$OUT" | jq -r '.hooks | keys | join(",")')" == "SessionEnd" ]] \
-  && pass "hooks replaced by harness" || fail "hooks replaced by harness" "$OUT"
+[[ "$(printf '%s' "$OUT" | jq -r '.hooks | keys | sort | join(",")')" == "SessionEnd,Stop" ]] \
+  && pass "harness hooks added, the user's kept" || fail "harness hooks added, the user's kept" "$OUT"
+[[ "$(printf '%s' "$OUT" | jq -r '.hooks.Stop[0].hooks[0].command')" == "mine.sh" ]] \
+  && pass "the user's own hook is untouched" || fail "the user's own hook is untouched" "$OUT"
 [[ "$(printf '%s' "$OUT" | jq -r '.statusLine.command')" == "~/.claude/statusline.sh" ]] \
   && pass "statusline replaced by harness" || fail "statusline replaced by harness" "$OUT"
 
@@ -190,6 +195,31 @@ done
   || fail "no hook file is left unregistered" "unregistered:$UNREGISTERED"
 
 echo ""
+echo "=== a hook the harness did not install survives the merge ==="
+# Replacing the whole hooks block cost a real machine its 10 iTerm2 status-line
+# entries on EVERY install: nothing here ships them, so each run took them to
+# zero and re-adding them by hand was the only recovery.
+FOREIGN='{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"~/.config/iterm2/cc-status"}]}],
+                   "Custom":[{"matcher":"","hooks":[{"type":"command","command":"/opt/mine.sh"}]}]}}'
+OUT=$(merge "$FOREIGN" "$HARNESS")
+[[ "$(printf '%s' "$OUT" | jq -r '[.hooks.Stop[].hooks[].command] | index("~/.config/iterm2/cc-status") != null')" == "true" ]] \
+  && pass "foreign hook kept on an event the harness also uses" \
+  || fail "foreign hook kept on an event the harness also uses" "$(printf '%s' "$OUT" | jq -c .hooks)"
+[[ "$(printf '%s' "$OUT" | jq -r '.hooks.Custom[0].hooks[0].command')" == "/opt/mine.sh" ]] \
+  && pass "foreign hook kept on an event the harness does not use" \
+  || fail "foreign hook kept on an event the harness does not use" "$(printf '%s' "$OUT" | jq -c .hooks)"
+[[ "$(printf '%s' "$OUT" | jq -r '[.hooks.SessionEnd[].hooks[].command] | index("~/.claude/hooks/audit.sh") != null')" == "true" ]] \
+  && pass "harness hooks still installed" || fail "harness hooks still installed" "$(printf '%s' "$OUT" | jq -c .hooks)"
+
+# A stale copy of a harness hook must not survive, or every install would
+# accumulate another duplicate of it.
+STALE='{"hooks":{"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"~/.claude/hooks/audit.sh"}]}]}}'
+OUT=$(merge "$STALE" "$HARNESS")
+[[ "$(printf '%s' "$OUT" | jq -r '[.hooks.SessionEnd[].hooks[].command] | length')" == "1" ]] \
+  && pass "a harness hook is not duplicated" \
+  || fail "a harness hook is not duplicated" "$(printf '%s' "$OUT" | jq -c .hooks.SessionEnd)"
+
+echo ""
 echo "=== rules/ ships by glob, and installing never deletes a local rule ==="
 # Same failure mode as the hooks list above: an explicit list drifts out of sync
 # with the directory and a file silently stops shipping.
@@ -232,7 +262,7 @@ for f in rules/local-*.md; do [ -e "$f" ] && RESERVED="$RESERVED $(basename "$f"
 # nothing else measures it: the index has a cap the tooling enforces, rules had
 # none. A rule that only matters for some files carries `paths:` frontmatter and
 # does not count here, because it loads only when Claude opens a matching file.
-BUDGET="${RULES_BYTE_BUDGET:-8000}"
+BUDGET="${RULES_BYTE_BUDGET:-5000}"
 LOADED=0
 for f in rules/*.md; do
   [ -f "$f" ] || continue
