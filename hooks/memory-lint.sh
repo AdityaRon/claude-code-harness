@@ -210,6 +210,15 @@ if [ -f "$DIR/MEMORY.md" ]; then
     # pattern stays silent, and only on creation — an edit to an established
     # memory is not a budget decision and nagging there would train the reader
     # to skip the whole hook.
+    # Already carried by a hub? Then having no index line is the INTENDED state,
+    # not a defect, and saying otherwise taxes every future edit to all 76 of
+    # them. Caught by running this hook against a real store rather than a
+    # fixture: it fired on a memory that was correctly hubbed.
+    IN_HUB=""
+    for h in "$DIR"/feedback_hub_*.md; do
+      [ -f "$h" ] || break
+      grep -qF "[[$STEM]]" "$h" 2>/dev/null && { IN_HUB=$(basename "$h" .md); break; }
+    done
     HUBS=""
     case "$TYPE:$STEM" in
       feedback:feedback_hub_*) ;;   # a hub carries the others; it keeps its own line
@@ -221,7 +230,14 @@ if [ -f "$DIR/MEMORY.md" ]; then
         done
         ;;
     esac
-    if [ -n "$HUBS" ]; then
+    if [ -n "$IN_HUB" ]; then
+      # The archive line is the whole restore path: move it back and the lesson
+      # has its own index line again. A hub bullet with no archived line leaves
+      # nothing to move.
+      if [ -f "$DIR/MEMORY_ARCHIVE.md" ] && ! grep -qF "($BASE)" "$DIR/MEMORY_ARCHIVE.md"; then
+        add "[[$IN_HUB]] carries this memory, but no line for $BASE is in MEMORY_ARCHIVE.md. That line is the restore path — without it there is nothing to move back if the lesson needs its own index line again."
+      fi
+    elif [ -n "$HUBS" ]; then
       add "no MEMORY.md line points at $BASE yet — and this store groups method lessons under principle hubs. If this lesson is an instance of one, do NOT add a MEMORY.md line: add a bullet to that hub and put this memory's index line in MEMORY_ARCHIVE.md under the hub's heading. Give it its own index line only if it is a user preference, a fact about a specific tool, or fits no hub. Hubs:$HUBS"
     else
       add "no line in MEMORY.md points at $BASE, so it will never be recalled. Add one, in the section for its type."

@@ -331,6 +331,27 @@ OUT=$(lint "$STORE/feedback_new_lesson.md")
 check_absent   "indexed memory is silent"        "principle hubs"                  "$OUT"
 
 echo ""
+echo "=== a memory a hub already carries is left alone ==="
+# Its missing index line is the intended state. Firing here would tax every
+# future edit to every hubbed lesson — the failure this hook exists to avoid.
+mkmem feedback_hub_result_describes_lookup feedback
+mkmem feedback_hub_test_cannot_fail        feedback
+mkmem feedback_carried                     feedback
+echo "- [[feedback_carried]] — what it was" >> "$STORE/feedback_hub_test_cannot_fail.md"
+echo "- [T](feedback_carried.md) — hook" > "$STORE/MEMORY_ARCHIVE.md"
+: > "$STORE/MEMORY.md"
+OUT=$(lint "$STORE/feedback_carried.md")
+check_absent "hubbed memory gets no hub advice"  "principle hubs"          "$OUT"
+check_absent "hubbed memory not told to index"   "Add one, in the section" "$OUT"
+check_eq     "silent"  ""  "$OUT"
+
+# The archived line is the restore path; a hub bullet without one strands it.
+: > "$STORE/MEMORY_ARCHIVE.md"
+OUT=$(lint "$STORE/feedback_carried.md")
+check_contains "missing archive line flagged" "restore path"                        "$OUT"
+check_contains "names the hub that carries it" "[[feedback_hub_test_cannot_fail]]"  "$OUT"
+
+echo ""
 echo "=== a store with no hubs never mentions them ==="
 rm -f "$STORE"/feedback_hub_*.md
 : > "$STORE/MEMORY.md"
