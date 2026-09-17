@@ -216,6 +216,17 @@ done
   && pass "no shipped rule carries an identifier" \
   || fail "no shipped rule carries an identifier" "$LEAKS"
 
+# `local-*.md` is reserved for rules written straight into ~/.claude/rules on one
+# machine — the ones naming people, clusters or customers, which cannot live in a
+# PUBLIC repo. The install is already additive, but an upgrade that shipped a rule
+# with the same name would silently overwrite one. Reserving the prefix makes that
+# impossible rather than unlikely.
+RESERVED=""
+for f in rules/local-*.md; do [ -e "$f" ] && RESERVED="$RESERVED $(basename "$f")"; done
+[ -z "$RESERVED" ] \
+  && pass "no shipped rule claims the reserved local-* name" \
+  || fail "no shipped rule claims the reserved local-* name" "$RESERVED"
+
 # Every always-loaded rule costs window in EVERY session, in every project, for
 # the whole life of the session. That is the budget this directory spends, and
 # nothing else measures it: the index has a cap the tooling enforces, rules had

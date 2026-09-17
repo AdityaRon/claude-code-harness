@@ -80,7 +80,9 @@ done
 #
 # ADDITIVE on purpose. A file already in ~/.claude/rules that this repo does not
 # carry is left alone, because that is where machine-local rules live — the ones
-# naming people, clusters or customers, which must never enter a git repo.
+# naming people, clusters or customers, which must never enter this repo, since
+# it is PUBLIC. Those are named `local-*.md`, a prefix nothing here may ship (a
+# test enforces it), so no upgrade can overwrite one.
 mkdir -p ~/.claude/rules
 for rule in "$REPO"/rules/*.md; do
   [[ -f "$rule" ]] || continue

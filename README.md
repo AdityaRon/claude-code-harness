@@ -215,7 +215,10 @@ hooks/                   ← one file per hook, plus shared lib.sh
 rules/                   ← personal rules, installed to ~/.claude/rules/ and
                            loaded in every session in every project. Portable
                            only: nothing naming a person, ticket, cluster or
-                           customer, because this repo is pushed
+                           customer, because this repo is PUBLIC. Machine-local
+                           rules go straight into ~/.claude/rules as local-*.md,
+                           a name nothing here may ship, and the install never
+                           deletes what it did not put there
   prose-and-comments.md  ← length, voice, and where justification belongs
   collaboration.md       ← reviews, PRs, and handing work back
   working-agreement.md   ← keep going, evidence, cost, finishing the loop
