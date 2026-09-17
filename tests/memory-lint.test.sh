@@ -292,5 +292,74 @@ echo "- [T](x.md) — hook" > "$STORE/MEMORY_ARCHIVE.md"
 check_eq "MEMORY_ARCHIVE.md is ignored" "0" "$(lint_rc "$STORE/MEMORY_ARCHIVE.md")"
 
 echo ""
+echo "=== a new feedback memory is pointed at the store's principle hubs ==="
+# Only fires where hubs already exist and only on a memory that has no index
+# line yet: that is the moment a line gets spent, and the only moment the
+# question is live. Half the value here is the SILENCE cases below.
+: > "$STORE/MEMORY.md"
+mkmem() {  # mkmem <stem> <type>
+  { echo "---"; echo "name: $1"; echo "description: what this is about"
+    echo "metadata:"; echo "  type: $2"; echo "  modified: 2026-01-01"
+    echo "  originSessionId: 11111111-2222-3333-4444-555555555555"
+    echo "---"; echo ""; echo "body"; } > "$STORE/$1.md"
+}
+mkmem feedback_hub_result_describes_lookup feedback
+mkmem feedback_hub_test_cannot_fail        feedback
+mkmem feedback_new_lesson                  feedback
+OUT=$(lint "$STORE/feedback_new_lesson.md")
+check_contains "hub advice given"      "principle hubs"                          "$OUT"
+check_contains "names a real hub"      "[[feedback_hub_result_describes_lookup]]" "$OUT"
+check_contains "names the other hub"   "[[feedback_hub_test_cannot_fail]]"        "$OUT"
+check_contains "says where the line goes" "MEMORY_ARCHIVE.md"                     "$OUT"
+check_absent   "not the generic advice" "Add one, in the section for its type"    "$OUT"
+
+echo ""
+echo "=== the hub itself, other types, and indexed memories are left alone ==="
+OUT=$(lint "$STORE/feedback_hub_test_cannot_fail.md")
+check_absent   "a hub is not told to join a hub" "principle hubs"                  "$OUT"
+check_contains "a hub still needs its own line"  "Add one, in the section"         "$OUT"
+
+mkmem reference_fact reference
+OUT=$(lint "$STORE/reference_fact.md")
+check_absent   "reference gets no hub advice"    "principle hubs"                  "$OUT"
+check_contains "reference gets generic advice"   "Add one, in the section"         "$OUT"
+
+# An already-indexed feedback memory is not a budget decision — editing one must
+# not re-open the question, or the hook becomes noise on every edit.
+echo "- [T](feedback_new_lesson.md) — hook" > "$STORE/MEMORY.md"
+OUT=$(lint "$STORE/feedback_new_lesson.md")
+check_absent   "indexed memory is silent"        "principle hubs"                  "$OUT"
+
+echo ""
+echo "=== a memory a hub already carries is left alone ==="
+# Its missing index line is the intended state. Firing here would tax every
+# future edit to every hubbed lesson — the failure this hook exists to avoid.
+mkmem feedback_hub_result_describes_lookup feedback
+mkmem feedback_hub_test_cannot_fail        feedback
+mkmem feedback_carried                     feedback
+echo "- [[feedback_carried]] — what it was" >> "$STORE/feedback_hub_test_cannot_fail.md"
+echo "- [T](feedback_carried.md) — hook" > "$STORE/MEMORY_ARCHIVE.md"
+: > "$STORE/MEMORY.md"
+OUT=$(lint "$STORE/feedback_carried.md")
+check_absent "hubbed memory gets no hub advice"  "principle hubs"          "$OUT"
+check_absent "hubbed memory not told to index"   "Add one, in the section" "$OUT"
+check_eq     "silent"  ""  "$OUT"
+
+# The archived line is the restore path; a hub bullet without one strands it.
+: > "$STORE/MEMORY_ARCHIVE.md"
+OUT=$(lint "$STORE/feedback_carried.md")
+check_contains "missing archive line flagged" "restore path"                        "$OUT"
+check_contains "names the hub that carries it" "[[feedback_hub_test_cannot_fail]]"  "$OUT"
+
+echo ""
+echo "=== a store with no hubs never mentions them ==="
+rm -f "$STORE"/feedback_hub_*.md
+: > "$STORE/MEMORY.md"
+mkmem feedback_another feedback
+OUT=$(lint "$STORE/feedback_another.md")
+check_absent   "no hubs, no hub advice"          "principle hubs"                  "$OUT"
+check_contains "falls back to generic advice"    "Add one, in the section"         "$OUT"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

@@ -69,6 +69,27 @@ for skill in "$REPO"/skills/*/; do
   echo "  ✓ skills/$name"
 done
 
+# ---- Personal rules --------------------------------------------------
+# ~/.claude/rules/ is user scope: every file here loads in every session, in
+# every project on this machine, and needs no per-project approval the way an
+# external import into a project CLAUDE.md does.
+#
+# Copied by GLOB, never from an explicit list. The hooks block used to name its
+# files and the list drifted out of sync with the directory, so a wired-up hook
+# silently stopped shipping; there is no reason to repeat that here.
+#
+# ADDITIVE on purpose. A file already in ~/.claude/rules that this repo does not
+# carry is left alone, because that is where machine-local rules live — the ones
+# naming people, clusters or customers, which must never enter this repo, since
+# it is PUBLIC. Those are named `local-*.md`, a prefix nothing here may ship (a
+# test enforces it), so no upgrade can overwrite one.
+mkdir -p ~/.claude/rules
+for rule in "$REPO"/rules/*.md; do
+  [[ -f "$rule" ]] || continue
+  cp "$rule" ~/.claude/rules/"$(basename "$rule")"
+  echo "  ✓ rules/$(basename "$rule")"
+done
+
 # ---- Settings (merge-safe) -------------------------------------------
 TARGET=~/.claude/settings.json
 SOURCE="$REPO/config/settings.json"
@@ -87,12 +108,14 @@ else
   BACKUP="$TARGET.bak.$(date +%Y%m%d%H%M%S)"
   cp "$TARGET" "$BACKUP"
 
-  # The harness fully owns the hooks block (below). Warn loudly if the user had
-  # their own hooks so they aren't silently dropped — they're preserved in the
-  # timestamped backup and can be merged back by hand.
-  if jq -e '(.hooks // {}) | length > 0' "$TARGET" >/dev/null 2>&1; then
-    echo "  ⚠ existing 'hooks' block found — the harness replaces it. Your previous"
-    echo "     hooks are preserved in: $BACKUP  (merge any custom ones back manually)."
+  # The harness owns the hook entries IT installed. Anything else in the block —
+  # an iTerm2 status hook, say — is carried across by merge-settings.jq. Say how
+  # many, so a machine that loses one has a number to notice it by.
+  FOREIGN=$(jq '[(.hooks // {})[] | .[]? | (.hooks // [])[]?
+                 | select((.command // "") | startswith("~/.claude/hooks/") | not)] | length' \
+            "$TARGET" 2>/dev/null || echo 0)
+  if [[ "${FOREIGN:-0}" -gt 0 ]]; then
+    echo "  ℹ $FOREIGN hook entr$([[ "$FOREIGN" == 1 ]] && echo y || echo ies) not installed by the harness — preserved."
   fi
 
   # permissions.defaultMode is harness-owned (see below), so an existing value
@@ -135,7 +158,11 @@ else
 fi
 
 # ---- Self-test --------------------------------------------------------
-if [[ -x "$REPO/doctor.sh" ]]; then
+# CCH_SKIP_SELFTEST exists so a test can run this installer. doctor.sh runs every
+# suite in tests/, and one of those suites installs into a temp HOME to prove the
+# install preserves local-*.md — without the guard that suite would re-enter the
+# installer through doctor and recurse until something gave way.
+if [[ -z "${CCH_SKIP_SELFTEST:-}" && -x "$REPO/doctor.sh" ]]; then
   echo ""
   echo "Running doctor.sh to verify hooks..."
   if bash "$REPO/doctor.sh" > /tmp/cch-doctor.log 2>&1; then

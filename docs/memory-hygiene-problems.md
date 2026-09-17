@@ -53,7 +53,56 @@ estimated. Main store is `~/.claude/projects/<slug>/memory`
 **Content duplication is ~zero.** Of 1,328 distinct bolded claims across the
 corpus, only 6 appeared in more than one memory, and 5 of those were a single
 pair (since deduplicated, −1,126 bytes). The corpus is genuinely non-redundant,
-so **compaction cannot reclaim index lines**.
+so **merging duplicates cannot reclaim index lines**.
+
+That sentence is narrower than it reads, and reading it broadly cost real time:
+sessions concluded from it that consolidation was a dead end. Duplication is one
+kind of overlap. There is another, and it does reclaim lines — see below.
+
+## Measured TO work: many memories, one principle
+
+**76 `feedback_` index lines became 12, with nothing deleted and nothing
+deduplicated.** Measured on the same store, 2026-09-16.
+
+The store held 138 `feedback_` memories against a 200-line cap — **75% of the
+index while being 30% of the files**, because `feedback_` is the one type the
+archiving tool never peels, so every incident that minted a named lesson kept its
+line forever. Reading all 138 showed the overlap was not duplication: no two said
+the same thing, and `--curate` was right about that. They were **instances of a
+much smaller set of principles**. Seven separate memories, for example, each
+recorded a different way a tool's output describes the lookup that produced it
+rather than the world — an empty `gh run list` for a workflow that existed, a
+port-forward collision answering from another region, `${v:-0}` rendering
+no-series as zero, a printed label naming a different field.
+
+So each principle got a hub memory: one file stating the rule, and one bullet per
+instance naming that incident's trigger and tell. The instance FILES were not
+touched and not deleted. Only their index lines moved, into
+`MEMORY_ARCHIVE.md` under a per-hub heading, leaving the hub's own line to carry
+them. Result: **192 index lines → 129 (63 freed, 71 below the cap)**, zero
+deletions, and no `reference_` or `project_` entry archived to make room.
+
+Three things this is not:
+
+- **Not deduplication.** No two merged files, no text was dropped, every wikilink
+  still resolves.
+- **Not archiving a `feedback_` memory.** The lesson is still reachable from a
+  line that IS loaded every session — the hub's. An archived line with nothing
+  pointing at it would be the harm the tier ordering exists to prevent.
+- **Not free.** 76 specific retrieval hooks became 12 general ones. A situation
+  named directly in the index (“port-forward collision returns the wrong
+  region”) is now one hop away, inside its hub. That is the trade: recall
+  precision for lines, and it is worth making only where the instances really do
+  share a principle.
+
+**It regrows without a rule.** The freed lines refill at the rate that had 30
+free lines gone in 31 hours, so the store also carries one memory stating that a
+new general lesson joins its hub as a bullet, with its index line going straight
+to the archive, and only a lesson fitting no hub takes a new index line. A new
+hub is worth making when three unhubbed lessons share a principle. User
+preferences and facts about specific tools are not hub material and keep their
+own lines. `hooks/memory-lint.sh` names the existing hubs when a new `feedback_`
+memory is written into a store that has them.
 
 ## Heuristics built and WITHDRAWN — do not re-propose without addressing why
 
@@ -215,8 +264,11 @@ language in the body":
 
 So demotion sheds **3** index lines, against the ~27 needed. **The corpus is
 mostly live work**, which is the same shape as the duplication finding: neither
-compaction nor archival can bring this index under 200, because the memories are
-neither redundant nor finished.
+deduplication nor settled-work demotion can bring this index under 200, because
+the memories are neither redundant nor finished. Both conclusions stand, and
+both are about the levers measured here — the third lever, grouping instances
+under a principle, was measured later and did reclaim lines (see “Measured TO
+work” above).
 
 Two things follow. First, tier-ordering is not a stopgap before the real fix —
 it *is* the fix, because managed truncation of the cheapest tail is the only

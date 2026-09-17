@@ -60,10 +60,15 @@ DENY=$(printf '%s' "$OUT" | jq -r '.permissions.deny | sort | join(",")')
   && pass "deny unioned" || fail "deny unioned" "$DENY"
 
 echo ""
-echo "=== Harness owns hooks and statusLine ==="
+echo "=== Harness owns ITS hooks, and the statusLine ==="
+# This assertion used to require the user's whole hooks block to disappear. That
+# contract is gone on purpose: it took a real machine's iTerm2 status hooks to
+# zero on every install. The harness now removes only the entries it installed.
 OUT=$(merge '{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"mine.sh"}]}]},"statusLine":{"type":"command","command":"mine.sh"}}' "$HARNESS")
-[[ "$(printf '%s' "$OUT" | jq -r '.hooks | keys | join(",")')" == "SessionEnd" ]] \
-  && pass "hooks replaced by harness" || fail "hooks replaced by harness" "$OUT"
+[[ "$(printf '%s' "$OUT" | jq -r '.hooks | keys | sort | join(",")')" == "SessionEnd,Stop" ]] \
+  && pass "harness hooks added, the user's kept" || fail "harness hooks added, the user's kept" "$OUT"
+[[ "$(printf '%s' "$OUT" | jq -r '.hooks.Stop[0].hooks[0].command')" == "mine.sh" ]] \
+  && pass "the user's own hook is untouched" || fail "the user's own hook is untouched" "$OUT"
 [[ "$(printf '%s' "$OUT" | jq -r '.statusLine.command')" == "~/.claude/statusline.sh" ]] \
   && pass "statusline replaced by harness" || fail "statusline replaced by harness" "$OUT"
 
@@ -188,6 +193,85 @@ done
 [ -z "$UNREGISTERED" ] \
   && pass "no hook file is left unregistered" \
   || fail "no hook file is left unregistered" "unregistered:$UNREGISTERED"
+
+echo ""
+echo "=== a hook the harness did not install survives the merge ==="
+# Replacing the whole hooks block cost a real machine its 10 iTerm2 status-line
+# entries on EVERY install: nothing here ships them, so each run took them to
+# zero and re-adding them by hand was the only recovery.
+FOREIGN='{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"~/.config/iterm2/cc-status"}]}],
+                   "Custom":[{"matcher":"","hooks":[{"type":"command","command":"/opt/mine.sh"}]}]}}'
+OUT=$(merge "$FOREIGN" "$HARNESS")
+[[ "$(printf '%s' "$OUT" | jq -r '[.hooks.Stop[].hooks[].command] | index("~/.config/iterm2/cc-status") != null')" == "true" ]] \
+  && pass "foreign hook kept on an event the harness also uses" \
+  || fail "foreign hook kept on an event the harness also uses" "$(printf '%s' "$OUT" | jq -c .hooks)"
+[[ "$(printf '%s' "$OUT" | jq -r '.hooks.Custom[0].hooks[0].command')" == "/opt/mine.sh" ]] \
+  && pass "foreign hook kept on an event the harness does not use" \
+  || fail "foreign hook kept on an event the harness does not use" "$(printf '%s' "$OUT" | jq -c .hooks)"
+[[ "$(printf '%s' "$OUT" | jq -r '[.hooks.SessionEnd[].hooks[].command] | index("~/.claude/hooks/audit.sh") != null')" == "true" ]] \
+  && pass "harness hooks still installed" || fail "harness hooks still installed" "$(printf '%s' "$OUT" | jq -c .hooks)"
+
+# A stale copy of a harness hook must not survive, or every install would
+# accumulate another duplicate of it.
+STALE='{"hooks":{"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"~/.claude/hooks/audit.sh"}]}]}}'
+OUT=$(merge "$STALE" "$HARNESS")
+[[ "$(printf '%s' "$OUT" | jq -r '[.hooks.SessionEnd[].hooks[].command] | length')" == "1" ]] \
+  && pass "a harness hook is not duplicated" \
+  || fail "a harness hook is not duplicated" "$(printf '%s' "$OUT" | jq -c .hooks.SessionEnd)"
+
+echo ""
+echo "=== rules/ ships by glob, and installing never deletes a local rule ==="
+# Same failure mode as the hooks list above: an explicit list drifts out of sync
+# with the directory and a file silently stops shipping.
+grep -qE 'for rule in "\$REPO"/rules/\*\.md' install.sh \
+  && pass "install.sh copies rules/ by glob" \
+  || fail "install.sh copies rules/ by glob" "no glob loop over rules/*.md"
+
+# The install must be additive. ~/.claude/rules is also where machine-local
+# rules live — the ones naming people, clusters or customers that must never
+# enter this repo — and an install that cleared the directory would delete them.
+grep -qE 'rm -rf? .*\.claude/rules|rm .*\.claude/rules/\*' install.sh \
+  && fail "install.sh never clears ~/.claude/rules" "found a delete" \
+  || pass "install.sh never clears ~/.claude/rules"
+
+# A rule carrying an identifier would be published the moment this repo is
+# pushed. Keep the shipped set free of people, channels, tickets and customers.
+LEAKS=""
+for f in rules/*.md; do
+  [ -f "$f" ] || continue
+  grep -nEi '[A-Z]+_CDB_[A-Z0-9_]+|\b[UDC]0[A-Z0-9]{7,}\b|@[a-z0-9.-]+\.(com|net|io)|\b(INS|ANEP|RAIN|LINK|PSP)-[0-9]+' "$f" >/dev/null \
+    && LEAKS="$LEAKS $(basename "$f")"
+done
+[ -z "$LEAKS" ] \
+  && pass "no shipped rule carries an identifier" \
+  || fail "no shipped rule carries an identifier" "$LEAKS"
+
+# `local-*.md` is reserved for rules written straight into ~/.claude/rules on one
+# machine — the ones naming people, clusters or customers, which cannot live in a
+# PUBLIC repo. The install is already additive, but an upgrade that shipped a rule
+# with the same name would silently overwrite one. Reserving the prefix makes that
+# impossible rather than unlikely.
+RESERVED=""
+for f in rules/local-*.md; do [ -e "$f" ] && RESERVED="$RESERVED $(basename "$f")"; done
+[ -z "$RESERVED" ] \
+  && pass "no shipped rule claims the reserved local-* name" \
+  || fail "no shipped rule claims the reserved local-* name" "$RESERVED"
+
+# Every always-loaded rule costs window in EVERY session, in every project, for
+# the whole life of the session. That is the budget this directory spends, and
+# nothing else measures it: the index has a cap the tooling enforces, rules had
+# none. A rule that only matters for some files carries `paths:` frontmatter and
+# does not count here, because it loads only when Claude opens a matching file.
+BUDGET="${RULES_BYTE_BUDGET:-5000}"
+LOADED=0
+for f in rules/*.md; do
+  [ -f "$f" ] || continue
+  head -1 "$f" | grep -q '^---$' && continue    # path-scoped: not always loaded
+  LOADED=$((LOADED + $(wc -c < "$f" | tr -d ' ')))
+done
+[ "$LOADED" -le "$BUDGET" ] \
+  && pass "always-loaded rules fit the budget ($LOADED of $BUDGET bytes)" \
+  || fail "always-loaded rules fit the budget" "$LOADED bytes, over $BUDGET — trim, or give a rule \`paths:\` frontmatter so it loads on demand"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

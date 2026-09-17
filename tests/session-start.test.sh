@@ -10,6 +10,12 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_STATE_DIR="$TMP/state"
 mkdir -p "$CLAUDE_STATE_DIR"
+# The hook reorders the memory index for the store matching its launch
+# directory. Without this the suite would resolve the REAL store for whatever
+# directory it runs from and rewrite a live MEMORY.md — a test that edits the
+# user's memory is worse than no test.
+export CLAUDE_MEMORY_PROJECTS_DIR="$TMP/projects"
+mkdir -p "$CLAUDE_MEMORY_PROJECTS_DIR"
 
 pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
@@ -24,6 +30,7 @@ check_not_contains() {
   if ! printf '%s' "$haystack" | grep -qF -- "$needle"; then pass "$label"
   else fail "$label" "unexpected needle: $needle"; fi
 }
+check_eq() { if [ "$3" = "$2" ]; then pass "$1"; else fail "$1" "expect=$2 got=$3"; fi; }
 
 write_snap() {
   local sid="$1" path="$2" hash="$3" exists="$4"
@@ -101,6 +108,43 @@ if [[ -n "$REAL_HEAD" ]]; then
 else
   echo "  SKIP: HEAD-change test (not in a git repo)"
 fi
+
+echo ""
+echo "=== memory index: out of tier order → reordered and announced ==="
+# The store slug is the launch directory with separators turned to dashes.
+STORE="$CLAUDE_MEMORY_PROJECTS_DIR/$(printf '%s' "$PWD" | tr '/' '-')/memory"
+mkdir -p "$STORE"
+mkmem() {  # mkmem <stem> <type>
+  { echo "---"; echo "name: $1"; echo "description: d"
+    echo "metadata:"; echo "  type: $2"; echo "  modified: 2026-01-01"; echo "---"
+    echo ""; echo "body"; } > "$STORE/$1.md"
+}
+mkmem project_old  project
+mkmem feedback_one feedback
+# Tier order is feedback → reference → project, so this file is inverted.
+{ echo "- [P](project_old.md) — hook"
+  echo "- [F](feedback_one.md) — hook"; } > "$STORE/MEMORY.md"
+OUT=$(run_resume "sess-clean")
+check_contains "reorder announced"   "Memory index reordered" "$OUT"
+check_contains "names the store"     "reordered"              "$OUT"
+# The tool also writes tier markers, so assert the ORDER of the entries rather
+# than which line is first.
+check_eq "feedback sorts above project" "feedback_one" \
+  "$(grep -o 'feedback_one\|project_old' "$STORE/MEMORY.md" | head -1)"
+check_eq "entry count unchanged" "2" "$(grep -c '^- \[' "$STORE/MEMORY.md")"
+
+echo ""
+echo "=== memory index: already ordered → silent ==="
+OUT=$(run_resume "sess-clean")
+check_not_contains "no reorder banner" "Memory index reordered" "$OUT"
+
+echo ""
+echo "=== no store for this launch directory → silent, and nothing created ==="
+rm -rf "$CLAUDE_MEMORY_PROJECTS_DIR"
+mkdir -p "$CLAUDE_MEMORY_PROJECTS_DIR"
+OUT=$(run_resume "sess-clean")
+check_not_contains "silent without a store" "Memory index reordered" "$OUT"
+check_eq "created nothing" "0" "$(ls -1 "$CLAUDE_MEMORY_PROJECTS_DIR" | wc -l | tr -d ' ')"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

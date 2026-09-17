@@ -212,6 +212,18 @@ config/
   merge-settings.jq      ← how that merge is performed
   upstream-contract.json ← the upstream facts the harness relies on
 hooks/                   ← one file per hook, plus shared lib.sh
+rules/                   ← personal rules, installed to ~/.claude/rules/ and
+                           loaded in every session in every project. Portable
+                           only: nothing naming a person, ticket, cluster or
+                           customer, because this repo is PUBLIC. Machine-local
+                           rules go straight into ~/.claude/rules as local-*.md,
+                           a name nothing here may ship, and the install never
+                           deletes what it did not put there
+  prose-and-comments.md  ← length, voice, and where justification belongs
+  collaboration.md       ← reviews, PRs, and handing work back
+  working-agreement.md   ← keep going, evidence, cost, finishing the loop
+  environment.md         ← git and Claude Code facts that hold on this machine
+  python-tests.md        ← path-scoped: loads only when Claude opens Python
 skills/                  ← agent skills, one directory each
   memory-audit/          ← check memories against external truth
   memory-archive/        ← relieve an over-limit index; proposes, never writes
