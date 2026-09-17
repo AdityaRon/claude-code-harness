@@ -197,7 +197,35 @@ EOF
 if [ -f "$DIR/MEMORY.md" ]; then
   IDX=$(grep -m1 "($BASE)" "$DIR/MEMORY.md")
   if [ -z "$IDX" ]; then
-    add "no line in MEMORY.md points at $BASE, so it will never be recalled. Add one, in the section for its type."
+    # A NEW `feedback_` memory is the moment an index line gets spent, so it is
+    # the only moment worth asking whether it should be. The index is capped at
+    # one line per memory; `feedback_` is the one type the archiving tool never
+    # peels, so every incident that mints its own named lesson permanently costs
+    # a line. Measured on a live store: feedback held 138 of 185 entries (75%)
+    # while being 30% of the files, and reading all 138 showed 76 were instances
+    # of 12 principles. Grouping them under hub memories freed 63 lines with no
+    # deletion (see docs/memory-hygiene-problems.md).
+    #
+    # Fires only where hubs already exist, so a store that has not adopted the
+    # pattern stays silent, and only on creation — an edit to an established
+    # memory is not a budget decision and nagging there would train the reader
+    # to skip the whole hook.
+    HUBS=""
+    case "$TYPE:$STEM" in
+      feedback:feedback_hub_*) ;;   # a hub carries the others; it keeps its own line
+      feedback:*)
+        for h in "$DIR"/feedback_hub_*.md; do
+          [ -f "$h" ] || break
+          HUBS="$HUBS
+      [[$(basename "$h" .md)]]"
+        done
+        ;;
+    esac
+    if [ -n "$HUBS" ]; then
+      add "no MEMORY.md line points at $BASE yet — and this store groups method lessons under principle hubs. If this lesson is an instance of one, do NOT add a MEMORY.md line: add a bullet to that hub and put this memory's index line in MEMORY_ARCHIVE.md under the hub's heading. Give it its own index line only if it is a user preference, a fact about a specific tool, or fits no hub. Hubs:$HUBS"
+    else
+      add "no line in MEMORY.md points at $BASE, so it will never be recalled. Add one, in the section for its type."
+    fi
   else
     # Nothing clips an index line on the way in - a 109-char line arrives in
     # the session verbatim. The budget exists because the index as a WHOLE is

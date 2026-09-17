@@ -15,8 +15,13 @@ re-deriving them wastes a session:
 
 1. **The size problem is not solvable and you should not try.** Bounded
    context, unbounded corpus. Archiving and merging are constant-factor moves
-   against linear growth — they buy months, not a solution. `docs/memory-hygiene-problems.md`
-   records that compaction cannot reclaim index lines at all.
+   against linear growth — they buy months, not a solution.
+   `docs/memory-hygiene-problems.md` records that merging DUPLICATES reclaims
+   nothing, because real corpora are not redundant. Do not read that as "no
+   consolidation works": memories that say different things can still be
+   instances of one principle, and grouping those freed 63 lines on a live store
+   with nothing deleted. That is step 5b, and it is the only lever that reaches
+   `feedback_`.
 2. **The harm was never the limit; it was the ORDERING.** Truncation is
    tail-first, so an append-ordered index drops the *newest* entries — measured
    once as 19 entries past the cut, 5 of them `feedback_` memories, which shape
@@ -143,8 +148,12 @@ both were wrong in opposite directions. Where a claim's truth lives on GitHub or
 Jira, either check it or state plainly that you did not.
 
 Rules:
-- **`feedback_` is never archivable.** It shapes behaviour and only works when
-  loaded. Archiving one is the exact harm the tier ordering exists to prevent.
+- **`feedback_` is never archivable on its own.** It shapes behaviour and only
+  works when loaded. Archiving one so that nothing in the index points at it is
+  the exact harm the tier ordering exists to prevent. The single exception is
+  step 5b: its line may move under a hub whose own line IS loaded, because the
+  lesson stays reachable every session. If you cannot name the loaded line that
+  reaches it, it is an archive, not a hub.
 - **`reference_` is rarely archivable.** A durable fact does not become false
   because its project ended.
 - **Finished ≠ worthless.** A memory recording *why* something failed stays
@@ -158,6 +167,49 @@ Two memories covering one subject become one memory, and one index line. Merging
 preserves both bodies; deletion does not. When proposing a merge, say what would
 be lost if you are wrong — if the answer is "nothing, both texts are kept", the
 proposal is safe.
+
+**5b. Group instances of one principle under a hub — the only lever that reaches
+`feedback_`.**
+
+Do this when `feedback_` dominates the index. Measured on a live store: 138 of
+185 entries (75%) were `feedback_` while being 30% of the files, because it is
+the one type `--archive-overflow` never peels, so every incident's named lesson
+kept its line forever.
+
+`--curate` will not find these. It groups on shared verbatim claims and there are
+none — the memories genuinely say different things. What they share is a
+principle: seven separate files each recorded a different way a tool's output
+describes the LOOKUP rather than the world (an empty `gh run list` for a workflow
+that existed, a port-forward collision answering from another region, `${v:-0}`
+rendering no-series as zero). Finding them takes reading the bodies, which is why
+it is judgement and not a flag.
+
+The shape:
+
+- one hub memory per principle, `feedback_hub_<slug>`, stating the rule and
+  carrying one bullet per instance — a wikilink plus that incident's trigger and
+  tell, so the bullet is the retrieval hook the index line used to be;
+- every instance file **stays on disk, unedited**;
+- each instance's index line moves to `MEMORY_ARCHIVE.md` under a
+  `### feedback_hub_<slug>` heading;
+- the hub's own line goes in the index, so the lessons are still reachable from
+  something loaded every session.
+
+Measured result: 192 index lines → 129, zero deletions, no `reference_` or
+`project_` entry archived to make room.
+
+**What it costs, say it out loud:** 76 specific hooks became 12 general ones. A
+situation the index used to name directly is now one hop away, inside its hub.
+Propose this only where the instances really do share a principle — a hub of
+things that merely rhyme is worse than the lines it saves.
+
+**It regrows unless you also write the rule down.** Add one memory saying a new
+general lesson joins its hub as a bullet with its index line going straight to
+the archive; that only a lesson fitting no hub takes a new index line; that three
+unhubbed lessons sharing a principle earn a new hub; and that user preferences
+and tool facts are not hub material and keep their own lines. `hooks/memory-lint.sh`
+names the existing hubs when a new `feedback_` memory is written into a store
+that has them, so the next session meets the rule at the moment it matters.
 
 **6. Hand back a proposal, not a change.**
 
@@ -183,7 +235,11 @@ leaving it, and do not archive live work to make a number look right.
 
 Before handing it over:
 
-- Did you propose archiving any `feedback_` memory? Withdraw it.
+- Did you propose archiving any `feedback_` memory? Withdraw it, unless a hub
+  line reaches it (step 5b) and you can name that line.
+- Is `feedback_` most of the index? Then you looked for duplicates and found
+  none — look for shared PRINCIPLES instead, which is a different question and
+  needs the bodies, not the hooks.
 - Did you propose deleting anything? Convert it to a merge or an archive.
 - Did you re-propose a withdrawn heuristic? Read `docs/memory-hygiene-problems.md`.
 - Did you state a denominator — lines now, lines after, limit? A proposal

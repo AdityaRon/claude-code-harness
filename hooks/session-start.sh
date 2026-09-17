@@ -40,6 +40,45 @@ if git rev-parse --git-dir &>/dev/null 2>&1; then
   fi
 fi
 
+# --- keep the memory index in tier order ------------------------------------
+# MEMORY.md is truncated tail-first at its line cap, and the memory writer
+# appends every new entry at the END of the file regardless of type. So ordering
+# decays on ordinary use, and what decays off the bottom is whatever was written
+# most recently -- including `feedback_` entries, which do nothing unless they
+# are loaded. Measured on a live store: it fell out of tier order twice in
+# twenty hours, purely from other sessions appending.
+#
+# memory-lint.sh already REPORTS this, but only when a session happens to write
+# a memory, and only to the session that wrote it. Session start is the one
+# moment the ordering matters to everybody, and the fix is a pure permutation --
+# memory-index.sh refuses to write at all unless the set of entry lines is
+# unchanged -- so doing it rather than reporting it is safe here. No
+# --archive-overflow: dropping entries is a judgement call and stays manual.
+PROJECTS_DIR=$(expand_tilde "${CLAUDE_MEMORY_PROJECTS_DIR:-$HOME/.claude/projects}")
+LAUNCH_DIR=$(jq_get '.cwd')
+[[ -z "$LAUNCH_DIR" ]] && LAUNCH_DIR="$PWD"
+# Memory is siloed per launch directory, and the store slug is that path with
+# every separator turned into a dash. Reorder only THIS session's store: the
+# others are not being loaded here, and touching them would surprise whichever
+# session owns them.
+STORE_SLUG=$(printf '%s' "$LAUNCH_DIR" | tr '/' '-')
+INDEX_TOOL=""
+for cand in "$(dirname "$0")/../memory-index.sh" "$(dirname "$0")/../bin/memory-index.sh"; do
+  [[ -f "$cand" ]] && INDEX_TOOL="$cand" && break
+done
+if [[ -n "$INDEX_TOOL" && -f "$PROJECTS_DIR/$STORE_SLUG/memory/MEMORY.md" ]]; then
+  ORDER_OUT=$(CLAUDE_MEMORY_PROJECTS_DIR="$PROJECTS_DIR" \
+    bash "$INDEX_TOOL" --store "$STORE_SLUG" --write 2>/dev/null \
+    | grep ': reordered' || true)
+  # Silent when it was already ordered, which is the common case.
+  if [[ -n "$ORDER_OUT" ]]; then
+    echo ""
+    echo "## Memory index reordered"
+    echo "$ORDER_OUT"
+    echo "Entries had drifted out of tier order and were restored to ACTIVE → feedback → reference → project (newest first within reference and project). Nothing was added, removed or edited."
+  fi
+fi
+
 # Resume-drift detection. Only meaningful for source=resume, and only when
 # jq and a prior snapshot both exist.
 [[ "$SOURCE" != "resume" ]] && exit 0

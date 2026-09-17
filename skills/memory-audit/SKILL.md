@@ -234,8 +234,15 @@ per step 5. Confirm with the user first, as with any deletion.
 
 Expect `--curate` to find nothing on a healthy store. Measured across 1,328
 distinct claims in one corpus, six appeared in more than one memory and five of
-those were a single pair. **Real memory corpora are not redundant, so compaction
-does not reclaim index lines.**
+those were a single pair. **Real memory corpora are not redundant, so merging
+duplicates does not reclaim index lines.**
+
+That is a statement about DUPLICATES, not about consolidation. Memories that say
+different things can still be instances of one principle, and grouping those
+under a hub does reclaim lines — measured at 76 `feedback_` entries collapsing to
+12, with no file deleted. `--curate` cannot find them, because it groups on
+shared verbatim claims and these share none. See the `memory-archive` skill,
+step 5b.
 
 Nor, usually, does retirement. On the same store, live ticket status for all 125
 keys the project memories cite showed only **3 of 56** provably settled: 21
