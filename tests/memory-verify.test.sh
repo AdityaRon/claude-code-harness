@@ -560,5 +560,60 @@ check_absent "no finding names the archive"  "MEMORY_ARCHIVE.md" "$OUT"
 check_absent "and none names ARCHIVE.md"     " ARCHIVE.md"       "$OUT"
 rm -f "$STORE"/MEMORY_ARCHIVE.md
 
+echo ""
+echo "=== A hook that trails off is flagged when the payload is recoverable ==="
+# ---------------------------------------------------------------------------
+# The hook is the only part of a memory loaded every session. One trailing off
+# mid-claim spends the index line and delivers nothing. Flagged only when the
+# memory's own description still carries the claim, so the fix is one edit.
+mem_desc() {  # mem_desc <filename> <description> <body...>
+  local name="$1" d="$2"; shift 2
+  {
+    echo "---"; echo "name: ${name%.md}"; echo "description: $d"
+    echo "metadata:"; echo "  type: reference"; echo "  modified: $(days_ago 40)"
+    echo "---"; printf '%s
+' "$@"
+  } > "$STORE/$name"
+}
+
+rm -f "$STORE"/*.md
+mem_desc fleet.md "add_skip_edge cost tracks graph shape, not observation volume; 3 of 48 tenants carry 98.8% of it" "body"
+echo "- [add_skip_edge is SHAPE not volume](fleet.md) — 3 of 48 tenants carry…" > "$STORE/MEMORY.md"
+OUT=$(run)
+check_contains "trailed-off hook flagged"     "HOOK"          "$OUT"
+check_contains "names the index line"         "MEMORY.md:1"   "$OUT"
+check_contains "quotes the payload to use"    "98.8%"         "$OUT"
+check_eq       "advisory: does not fail the run" "0" "$(run_rc)"
+
+echo ""
+echo "=== A dangling connective counts as trailing off ==="
+# "— and" and "content fix→LSC," are the same defect without the ellipsis,
+# and were the two the eye skips over.
+echo "- [Spark EJC ceiling](fleet.md) — and" > "$STORE/MEMORY.md"
+check_contains "bare connective flagged" "HOOK" "$(run)"
+echo "- [Spark EJC ceiling](fleet.md) — content fix to LSC," > "$STORE/MEMORY.md"
+check_contains "trailing comma flagged"  "HOOK" "$(run)"
+
+echo ""
+echo "=== A complete hook is left alone ==="
+echo "- [add_skip_edge is SHAPE not volume](fleet.md) — 3 of 48 tenants = 98.8%" > "$STORE/MEMORY.md"
+check_absent "complete hook not flagged" "HOOK" "$(run)"
+
+echo ""
+echo "=== A terse hook on a terse description is not a defect ==="
+# Guards the ratio: without it every short hook is flagged and the check is
+# noise. There is no payload to recover here, so there is nothing to report.
+mem_desc terse.md "one spelling, one place" "body"
+echo "- [Terse](terse.md) — one spelling, one place," > "$STORE/MEMORY.md"
+check_absent "no finding when the description adds nothing" "HOOK" "$(run)"
+
+echo ""
+echo "=== A hook pointing at a missing or frontmatter-less file is not guessed at ==="
+# MEMORY_ARCHIVE.md has no description; reporting against it would be a finding
+# no edit can clear.
+echo "- [Gone](nosuchfile.md) — trails off…" > "$STORE/MEMORY.md"
+check_absent "missing target skipped" "HOOK" "$(run)"
+rm -f "$STORE"/MEMORY.md
+
 echo "--- Results: $PASS passed, $FAIL failed"
 exit "$FAIL"
