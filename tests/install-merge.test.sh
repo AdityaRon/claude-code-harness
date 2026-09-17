@@ -216,6 +216,22 @@ done
   && pass "no shipped rule carries an identifier" \
   || fail "no shipped rule carries an identifier" "$LEAKS"
 
+# Every always-loaded rule costs window in EVERY session, in every project, for
+# the whole life of the session. That is the budget this directory spends, and
+# nothing else measures it: the index has a cap the tooling enforces, rules had
+# none. A rule that only matters for some files carries `paths:` frontmatter and
+# does not count here, because it loads only when Claude opens a matching file.
+BUDGET="${RULES_BYTE_BUDGET:-8000}"
+LOADED=0
+for f in rules/*.md; do
+  [ -f "$f" ] || continue
+  head -1 "$f" | grep -q '^---$' && continue    # path-scoped: not always loaded
+  LOADED=$((LOADED + $(wc -c < "$f" | tr -d ' ')))
+done
+[ "$LOADED" -le "$BUDGET" ] \
+  && pass "always-loaded rules fit the budget ($LOADED of $BUDGET bytes)" \
+  || fail "always-loaded rules fit the budget" "$LOADED bytes, over $BUDGET — trim, or give a rule \`paths:\` frontmatter so it loads on demand"
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

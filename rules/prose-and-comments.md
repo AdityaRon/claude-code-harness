@@ -1,19 +1,17 @@
 # Writing: prose, comments, and messages
 
-Applies to everything I write for Aditya to send or read: Slack, PR reviews and
-bodies, ticket comments, code comments, reports.
+Applies to everything I write for Aditya to send or read: chat messages, PR
+reviews and bodies, ticket comments, code comments, reports.
 
 ## Length is the first draft problem, not the last
 
 - Write the terse version FIRST. Do not write a long version and trim it.
 - A code comment says what is not already in the code: the trap, the reason, the
-  non-obvious constraint. Around five lines is a lot. Repeated correction:
-  *"we should trim the comments in code in the PR"*, *"the comments in this PR
-  are tad too much especially in the templated sql files"*.
-- **Justification belongs in the PR body, not in the file.** *"Instead of writing
-  comments and justification in the file, can we trim the comments and update the
-  PR body instead"*. The file carries what a future reader needs; the PR carries
-  why this change is right.
+  non-obvious constraint. Around five lines is a lot.
+- **Justification belongs in the PR body, not in the file:** *"instead of writing
+  comments and justification in the file, trim the comments and update the PR body
+  instead"*. The file carries what a future reader needs; the PR carries why this
+  change is right.
 - One consolidated message beats several. Collect the whole answer, send it once.
 
 ## Voice
@@ -24,8 +22,7 @@ bodies, ticket comments, code comments, reports.
   than assert when the other person may know better.
 - Never characterise the reader, their state of mind, or their workload.
 - Never name a person as a blocker in a status or report. State the dependency as
-  a risk and leave the name out: *"Don't mention him, lets just call it as risk
-  and leave at that"*.
+  a risk and leave the name out.
 - Never record whether someone has left an organization.
 
 ## Fit the reader
@@ -35,4 +32,4 @@ bodies, ticket comments, code comments, reports.
 - State what is measured separately from what is inferred, and never let an
   inferred number inherit a measured one's confidence.
 - Numbers carry their source. Expect *"where did you measure this?"* about every
-  figure, and answer it inside the sentence that makes the claim.
+  figure, and answer it in the sentence that makes the claim.

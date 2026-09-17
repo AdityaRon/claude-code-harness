@@ -20,11 +20,3 @@
 - Shared tooling is shared: before "fixing" a skill, check whether the problem is
   local configuration. *"I don't want to fix the skill if it works for others. The
   skills are for everyone."*
-
-## Reading test and tool output
-
-- pytest: ANSI colour breaks a `^FAILED` grep, `-q` truncates, and piping makes
-  the shell's exit code the last command's, not pytest's. Assert on the summary
-  line.
-- Never call a captured log complete from its first line or its length. Assert the
-  run's terminal marker is present.

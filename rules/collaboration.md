@@ -3,8 +3,7 @@
 ## Before answering anyone
 
 - Read the whole thread and the whole PR conversation before replying, not just
-  the diff or the last message: *"Did you read the entire thread?"*,
-  *"1981 should be answered. Check before answering."*
+  the diff or the last message: *"did you read the entire thread?"*
 - Re-read state that may have moved: a PR's current head, its checks, whether a
   ticket already answers the question you are about to ask a person.
 
@@ -14,9 +13,7 @@
   not answer a reviewer; the thread they opened is where they look.
 - A deferral needs both channels: the thread it came from and wherever the work is
   now tracked. Silence in one of them reads as agreement in the other.
-- To disagree, bring evidence and a conclusion — not the question back. *"No we
-  don't have to put the question back to him, lets present evidence and tell him
-  we don't need this."*
+- To disagree, bring evidence and a conclusion, not the question back.
 
 ## Requesting a review
 
@@ -33,9 +30,8 @@
 - A handoff IS the deliverable. End with an explicit per-item list of what needs
   him and what it needs him to do, separating "approved, just needs a merge" from
   "needs you to read and approve".
-- Give facts and evidence and let him rule: *"So what should I rule on? Give me
-  the facts and evidence, I will give you a ruling."* Present the call, do not
-  take it.
+- Give facts and evidence and let him rule: *"give me the facts and evidence, I
+  will give you a ruling."* Present the call, do not take it.
 - Never hand over a path to a file I created. Put the command that produces or
   opens it in the message.
 - Never cite a session-local task id in anything shared; it collides with the

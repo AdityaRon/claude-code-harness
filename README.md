@@ -219,7 +219,8 @@ rules/                   ← personal rules, installed to ~/.claude/rules/ and
   prose-and-comments.md  ← length, voice, and where justification belongs
   collaboration.md       ← reviews, PRs, and handing work back
   working-agreement.md   ← keep going, evidence, cost, finishing the loop
-  environment.md         ← git, Claude Code, and reading tool output here
+  environment.md         ← git and Claude Code facts that hold on this machine
+  python-tests.md        ← path-scoped: loads only when Claude opens Python
 skills/                  ← agent skills, one directory each
   memory-audit/          ← check memories against external truth
   memory-archive/        ← relieve an over-limit index; proposes, never writes
