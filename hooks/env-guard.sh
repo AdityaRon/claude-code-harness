@@ -13,8 +13,14 @@ CMD=$(jq_get '.tool_input.command')
 
 # Committed template files (.env.example / .sample / .template / .dist / .tpl)
 # are safe to read, copy, and commit — neutralize them before matching so they
-# don't trip the .env patterns below.
-SCAN=$(printf '%s' "$CMD" | sed -E 's/\.env\.(example|sample|template|dist|tpl)/.envTEMPLATE/g')
+# don't trip the patterns below.
+#
+# The whole token goes, not just the .env prefix, because sensitive-file-guard
+# allows ANY path with these suffixes and the two must agree: secrets.yaml.example
+# is a template on both paths or on neither. Only the matched token is replaced,
+# so `cat .env.example && cat .env` still denies on the second half.
+SCAN=$(printf '%s' "$CMD" \
+  | sed -E 's#[^[:space:]]*\.(example|sample|template|dist|tpl)([[:space:]]|$)#TEMPLATEFILE\2#g')
 
 # Command boundary: start-of-line, pipe, logical chain, subshell, semicolon, &.
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
@@ -25,9 +31,18 @@ READERS='(cat|less|more|head|tail|xxd|od|strings|nl|awk|sed|grep|rg|base64|gpg|o
 COPIERS='(cp|mv|install|tee|ln)'
 # Bash dot-source shortcut: `. <file>`
 DOTSOURCE='\.'
-# Credential files. Kept in sync with sensitive-file-guard so the Read/Edit/Write
-# path and the Bash path block the same set (cat ~/.git-credentials etc.).
-DOTFILES='(\.env(\b|\.)|\.envrc\b|\.aws/credentials|\.netrc\b|id_rsa\b|id_ed25519\b|\.pem\b|\.key\b|\.git-credentials\b|\.npmrc\b|\.pgpass\b|\.kube/config|\.docker/config\.json)'
+# Credential files. Must block the same set as sensitive-file-guard, so that
+# `cat secrets.yaml` is not allowed while reading the same file with the Read
+# tool is denied. The claim of parity was false for 9 of them until 2026-09-18,
+# so the "parity with sensitive-file-guard" block in tests/env-guard.test.sh
+# now enforces it rather than a comment asserting it. Add to both lists or
+# neither. The extension list on `secrets.` is explicit to keep source files
+# (secrets.py, secrets.ts) readable.
+DOTFILES='(\.env(\b|\.)|\.envrc\b|\.aws/credentials|\.netrc\b|id_rsa\b|id_ed25519\b'
+DOTFILES="${DOTFILES}|\.pem\b|\.key\b|\.git-credentials\b|\.npmrc\b|\.pgpass\b"
+DOTFILES="${DOTFILES}|\.kube/config|\.docker/config\.json|\.pypirc\b|\.ssh/config\b"
+DOTFILES="${DOTFILES}|credentials\.json\b|service[_-]account[^|;&[:space:]]*\.json\b"
+DOTFILES="${DOTFILES}|secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)\b)"
 
 # Env dumpers (whole-command or chained).
 ENV_DUMP='(printenv|^env$|^env\b[^=]*$|^export\s*$|^set\s*$|declare\s+-(p|x)\b|compgen\s+-e)'

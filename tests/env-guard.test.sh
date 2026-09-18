@@ -150,5 +150,67 @@ check "echo plain var"     allow 'echo $HOME'
 check "mv build output"    allow "mv build/app /usr/local/bin/app"
 
 echo ""
+echo "=== Parity with sensitive-file-guard (Bash path == Read/Edit/Write path) ==="
+# env-guard's DOTFILES claimed parity with sensitive-file-guard's BLOCKED list
+# and was wrong for 9 entries: `cat secrets.yaml` was allowed while opening the
+# same file with Read was denied. Assert the two agree instead of trusting a
+# comment, so adding to one list and not the other fails here.
+parity() {
+  local label="$1" file="$2" want="$3" r b
+  r=$(printf '%s\n' "$(jq -nc --arg p "$file" '{tool_input:{file_path:$p}}')" \
+      | bash hooks/sensitive-file-guard.sh 2>/dev/null \
+      | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
+  [[ -z "$r" ]] && r="allow"
+  b=$(printf '%s\n' "$(jq -nc --arg c "cat $file" '{tool_input:{command:$c}}')" \
+      | bash hooks/env-guard.sh 2>/dev/null \
+      | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
+  [[ -z "$b" ]] && b="allow"
+  if [[ "$r" = "$want" && "$b" = "$want" ]]; then
+    echo "  OK ($want on both): $label"
+    PASS=$((PASS+1))
+  else
+    echo "  FAIL ($label): want=$want read=$r bash=$b  [$file]"
+    FAIL=$((FAIL+1))
+  fi
+}
+
+# The 9 that were out of sync.
+parity "secrets.yaml"        "secrets.yaml"              deny
+parity "secrets.yml"         "secrets.yml"               deny
+parity "secrets.json"        "secrets.json"              deny
+parity "secrets.properties"  "secrets.properties"        deny
+parity "pypirc"              ".pypirc"                   deny
+parity "ssh config"          ".ssh/config"               deny
+parity "credentials.json"    "credentials.json"          deny
+parity "service_account"     "service_account.json"      deny
+parity "service-account"     "service-account-prod.json" deny
+
+# Already in sync; keep them that way.
+parity "dotenv"              ".env"                      deny
+parity "aws credentials"     ".aws/credentials"          deny
+parity "kube config"         ".kube/config"              deny
+parity "pem"                 "server.pem"                deny
+
+# Parity is asserted on canonical names. On prefixed variants the Bash path is
+# deliberately broader: sensitive-file-guard anchors `credentials.json` and
+# `.ssh/config` to end-of-path, while DOTFILES matches them anywhere, so
+# my-credentials.json denies in Bash and is allowed by Read. That asymmetry
+# predates this block (`.kube/config`, `.pem`) and errs toward blocking.
+
+# A single token, not a span across two arguments.
+check "service_account spans args" allow "cat service_account_notes.txt data.json"
+
+# Source files and templates stay readable on BOTH paths.
+parity "secrets.py source"   "secrets.py"                allow
+parity "plain markdown"      "README.md"                 allow
+parity "dotenv template"     ".env.example"              allow
+parity "secrets template"    "secrets.yaml.example"      allow
+parity "config sample"       "credentials.json.sample"   allow
+
+echo ""
+echo "=== Template neutralization is per-token (expect: deny) ==="
+check "template then real"   deny "cat .env.example && cat .env"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
