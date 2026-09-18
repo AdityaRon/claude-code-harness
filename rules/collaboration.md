@@ -7,6 +7,16 @@
 - Re-read state that moves: current head, checks, and whether the ticket already
   answers what you were about to ask a person.
 
+## Writing a review
+
+- Shape: open on the sources actually read, not the diff. Bold lead-ins for what
+  you chased down, each citing `file`:line. Asks numbered, ranked, non-blocking;
+  "Nit:" for trivia; label what is inherited, not introduced. Close "Net: approving".
+- An ask the diff cannot be edited to satisfy is a rollout note for the ticket.
+- Never say tests or builds passed unless you ran them.
+- A review edits in place and keeps APPROVED (`gh api -X PUT .../reviews/<id>`),
+  so trim rather than re-post.
+
 ## Answering a review
 
 - Answer ON the PR. A pushed fix, an edited PR body, or a chat message does not
