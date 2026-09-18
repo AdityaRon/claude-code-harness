@@ -127,13 +127,37 @@ payload_is_pure_substitution() {
   return 1
 }
 
+# This hook runs before every Bash command, so a command with no perl or ruby
+# in it must not pay for the greps below. Measured on an idle machine, the
+# block costs about 250ms on the perl path; `ls` and `git commit` are unchanged
+# because they do not get past this case.
+case "$CMD" in *perl*|*ruby*) ;; *) STREAM_EDIT_CANDIDATE=no ;; esac
+
 # One inline flag only. Two means two payloads, and only the last is extracted.
-if printf '%s\n' "$CMD" | grep -qE "$STREAM_EDIT_RE" \
+if [ "${STREAM_EDIT_CANDIDATE:-yes}" = "yes" ] \
+   && printf '%s\n' "$CMD" | grep -qE "$STREAM_EDIT_RE" \
    && [ "$(printf '%s\n' "$CMD" | grep -oE "[[:space:]]-[A-Za-z0-9]*e[[:space:]]*'" | wc -l | tr -d ' ')" = "1" ]; then
   PAYLOAD=$(printf '%s\n' "$CMD" \
     | sed -n "s/.*[[:space:]]-[A-Za-z0-9]*e[[:space:]]*'\([^']*\)'.*/\1/p" | head -1)
   if [ -n "$PAYLOAD" ] && payload_is_pure_substitution "$PAYLOAD"; then
-    exit 0
+    # The verdict covers the WHOLE command, so clearing it on one safe segment
+    # would exempt anything chained onto the same line: measured, a long
+    # `python3 -c` that asks on its own went to allow behind a harmless
+    # `perl -pi -e 's/a/b/' f.md &&`. Blank out the substitution and require the
+    # remainder to hold no other inline interpreter.
+    #
+    # The flag must be its own token here. The shared INLINE matches `-[a-z]*e`
+    # mid-word, which is fine upstream where it only over-blocks, but here it
+    # would read the `-file` in `my-file.md` as an inline flag and kill the
+    # exemption for any target whose name happens to end a hyphenated segment
+    # in c or e.
+    REST=$(printf '%s\n' "$CMD" \
+      | sed "s/[[:space:]]-[A-Za-z0-9]*e[[:space:]]*'[^']*'/ /")
+    OTHER_INLINE="${IB}${INTERP}[^|;&]*[[:space:]](-[A-Za-z0-9]*[ce]|--eval|--exec|-r)([[:space:]]|$)"
+    if ! printf '%s\n' "$REST" | grep -qE "$OTHER_INLINE" \
+       && ! printf '%s\n' "$REST" | grep -qE "$INTERP_HEREDOC_RE"; then
+      exit 0
+    fi
   fi
 fi
 

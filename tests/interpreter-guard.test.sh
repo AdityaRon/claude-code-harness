@@ -123,6 +123,31 @@ check "backticks, \\/ and /s"   allow "perl -0pi -e 's/\`lib\/x\/y\`, 2,024 item
 # Every delimiter escaped is not a substitution at all; falling through to the
 # ask is the conservative answer, not a miss.
 check "no unescaped delimiter"  ask  "perl -0pi -e 's/$PAD\/x\/y/' drafts/review.md"
+# A target whose name ends a hyphenated segment in c or e must not be read as
+# an inline flag by the chained-interpreter check below.
+check "target named my-file.md"  allow "perl -pi -e 's/$PAD/x/' my-file.md"
+check "target named pr-note.md"  allow "perl -pi -e 's/$PAD/x/' pr-note.md"
+# A non-inline call chained on is fine; the second screenshot's shape.
+check "chained script call"      allow "perl -pi -e 's/$PAD/x/' b.md && python3 lint.py b.md"
+
+echo ""
+echo "=== A safe substitution does not exempt what is chained to it (expect: ask) ==="
+# The verdict covers the whole command. A long `python3 -c` that asks on its own
+# must keep asking when a harmless stream edit is prefixed to the same line.
+PYLONG="python3 -c \"print('$PAD')\""
+check "python -c alone"         ask  "$PYLONG"
+check "perl s/// && python -c"  ask  "perl -pi -e 's/a/b/' f.md && $PYLONG"
+check "perl s/// ; python -c"   ask  "perl -pi -e 's/a/b/' f.md ; $PYLONG"
+check "perl s/// && node -e"    ask  "perl -pi -e 's/a/b/' f.md && node -e \"console.log('$PAD')\""
+# A heredoc body lives on its own lines, so the length rule never saw it: it
+# needs 200+ chars with no ; | & after an inline flag on ONE line. Measured
+# against the pre-change hook, this was already allow. Pinned here so the
+# exemption does not get blamed for it later. The deny scan does still read
+# heredoc bodies, so a token in one is denied either way.
+check "chained heredoc unchanged" allow "perl -pi -e 's/a/b/' f.md && python3 <<EOF
+print('$PAD')
+EOF"
+check "chained -c reads env"    deny "perl -pi -e 's/a/b/' f.md && python3 -c \"import os; print(os.environ['X'])\""
 
 echo ""
 echo "=== Substitution that can reach code still asks (expect: ask) ==="
