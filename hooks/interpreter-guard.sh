@@ -102,6 +102,65 @@ for T in "${SENSITIVE_TOKENS[@]}"; do
   fi
 done
 
+# A perl/ruby one-liner in stream-edit mode whose payload is one substitution
+# is `sed -i`, which this harness does not guard at all, so the length test
+# below was asking about reach it had already allowed elsewhere. An ask is a
+# hard stop for a run with nobody in the loop.
+#
+# Exempt only a single-quoted payload holding one s///, tr/// or y///. The `e`
+# modifier compiles the replacement as code, and `@{...}` / `${\...}` reach
+# code from an ordinary replacement, so those still fall through to the ask.
+# The deny scan above has already exited, so a dotfile payload never gets here.
+STREAM_EDIT_RE="${IB}(perl|ruby)\s+(-[A-Za-z0-9]*[pni][A-Za-z0-9]*\s+)"
+
+payload_is_pure_substitution() {
+  local p="$1" re
+  case "$p" in *'@{'*|*'${\'*) return 1 ;; esac
+  for re in \
+    '^[[:space:]]*(s|tr|y)/([^/\]|\\.)*/([^/\]|\\.)*/[gimsxr]*[[:space:]]*;?[[:space:]]*$' \
+    '^[[:space:]]*(s|tr|y)\|([^|\]|\\.)*\|([^|\]|\\.)*\|[gimsxr]*[[:space:]]*;?[[:space:]]*$' \
+    '^[[:space:]]*(s|tr|y)#([^#\]|\\.)*#([^#\]|\\.)*#[gimsxr]*[[:space:]]*;?[[:space:]]*$' \
+    '^[[:space:]]*(s|tr|y),([^,\]|\\.)*,([^,\]|\\.)*,[gimsxr]*[[:space:]]*;?[[:space:]]*$'
+  do
+    printf '%s' "$p" | grep -qE "$re" && return 0
+  done
+  return 1
+}
+
+# This hook runs before every Bash command, so a command with no perl or ruby
+# in it must not pay for the greps below. Measured on an idle machine, the
+# block costs about 250ms on the perl path; `ls` and `git commit` are unchanged
+# because they do not get past this case.
+case "$CMD" in *perl*|*ruby*) ;; *) STREAM_EDIT_CANDIDATE=no ;; esac
+
+# One inline flag only. Two means two payloads, and only the last is extracted.
+if [ "${STREAM_EDIT_CANDIDATE:-yes}" = "yes" ] \
+   && printf '%s\n' "$CMD" | grep -qE "$STREAM_EDIT_RE" \
+   && [ "$(printf '%s\n' "$CMD" | grep -oE "[[:space:]]-[A-Za-z0-9]*e[[:space:]]*'" | wc -l | tr -d ' ')" = "1" ]; then
+  PAYLOAD=$(printf '%s\n' "$CMD" \
+    | sed -n "s/.*[[:space:]]-[A-Za-z0-9]*e[[:space:]]*'\([^']*\)'.*/\1/p" | head -1)
+  if [ -n "$PAYLOAD" ] && payload_is_pure_substitution "$PAYLOAD"; then
+    # The verdict covers the WHOLE command, so clearing it on one safe segment
+    # would exempt anything chained onto the same line: measured, a long
+    # `python3 -c` that asks on its own went to allow behind a harmless
+    # `perl -pi -e 's/a/b/' f.md &&`. Blank out the substitution and require the
+    # remainder to hold no other inline interpreter.
+    #
+    # The flag must be its own token here. The shared INLINE matches `-[a-z]*e`
+    # mid-word, which is fine upstream where it only over-blocks, but here it
+    # would read the `-file` in `my-file.md` as an inline flag and kill the
+    # exemption for any target whose name happens to end a hyphenated segment
+    # in c or e.
+    REST=$(printf '%s\n' "$CMD" \
+      | sed "s/[[:space:]]-[A-Za-z0-9]*e[[:space:]]*'[^']*'/ /")
+    OTHER_INLINE="${IB}${INTERP}[^|;&]*[[:space:]](-[A-Za-z0-9]*[ce]|--eval|--exec|-r)([[:space:]]|$)"
+    if ! printf '%s\n' "$REST" | grep -qE "$OTHER_INLINE" \
+       && ! printf '%s\n' "$REST" | grep -qE "$INTERP_HEREDOC_RE"; then
+      exit 0
+    fi
+  fi
+fi
+
 # Interpreter with inline code but no obvious sensitive token — ask.
 # This catches novel payloads without producing false positives on trivial
 # one-liners like `python -c "print(1)"`.

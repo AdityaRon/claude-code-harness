@@ -107,5 +107,67 @@ check "commit msg os.environ" allow "git commit -m 'refactor os.environ lookups'
 check "grep for process.env"  allow "grep -r process.env src/"
 
 echo ""
+echo "=== Stream-edit substitution is sed-equivalent (expect: allow) ==="
+# Long enough to trip the length rule on its own; the exemption is what clears it.
+PAD=$(printf 'a%.0s' {1..220})
+check "perl -0pi -e s///"      allow "perl -0pi -e 's/$PAD/replaced/' drafts/review.md"
+check "perl -pi -e s/// g"     allow "perl -pi -e 's/$PAD/replaced/g' notes.md"
+check "perl -pe s/// no -i"    allow "perl -pe 's/$PAD/replaced/' notes.md"
+check "perl pipe delimiter"    allow "perl -pi -e 's|$PAD|/opt/x|g' notes.md"
+check "perl tr///"             allow "perl -pi -e 'tr/$PAD/ABCDEFGHIJ/' notes.md"
+check "ruby -i -pe s///"       allow "ruby -i -pe 's/$PAD/replaced/' notes.md"
+check "perl s/// trailing ;"   allow "perl -pi -e 's/$PAD/replaced/;' notes.md"
+# The shape that prompted this: backticks, escaped delimiters, commas and an /s
+# modifier, all inside the pattern. None of them is a code context.
+check "backticks, \\/ and /s"   allow "perl -0pi -e 's/\`lib\/x\/y\`, 2,024 items declare \`evolutionPeriod\`\. \*\*Control:\*\* $PAD/replaced, measured repo-side/s' drafts/review.md"
+# Every delimiter escaped is not a substitution at all; falling through to the
+# ask is the conservative answer, not a miss.
+check "no unescaped delimiter"  ask  "perl -0pi -e 's/$PAD\/x\/y/' drafts/review.md"
+# A target whose name ends a hyphenated segment in c or e must not be read as
+# an inline flag by the chained-interpreter check below.
+check "target named my-file.md"  allow "perl -pi -e 's/$PAD/x/' my-file.md"
+check "target named pr-note.md"  allow "perl -pi -e 's/$PAD/x/' pr-note.md"
+# A non-inline call chained on is fine; the second screenshot's shape.
+check "chained script call"      allow "perl -pi -e 's/$PAD/x/' b.md && python3 lint.py b.md"
+
+echo ""
+echo "=== A safe substitution does not exempt what is chained to it (expect: ask) ==="
+# The verdict covers the whole command. A long `python3 -c` that asks on its own
+# must keep asking when a harmless stream edit is prefixed to the same line.
+PYLONG="python3 -c \"print('$PAD')\""
+check "python -c alone"         ask  "$PYLONG"
+check "perl s/// && python -c"  ask  "perl -pi -e 's/a/b/' f.md && $PYLONG"
+check "perl s/// ; python -c"   ask  "perl -pi -e 's/a/b/' f.md ; $PYLONG"
+check "perl s/// && node -e"    ask  "perl -pi -e 's/a/b/' f.md && node -e \"console.log('$PAD')\""
+# A heredoc body lives on its own lines, so the length rule never saw it: it
+# needs 200+ chars with no ; | & after an inline flag on ONE line. Measured
+# against the pre-change hook, this was already allow. Pinned here so the
+# exemption does not get blamed for it later. The deny scan does still read
+# heredoc bodies, so a token in one is denied either way.
+check "chained heredoc unchanged" allow "perl -pi -e 's/a/b/' f.md && python3 <<EOF
+print('$PAD')
+EOF"
+check "chained -c reads env"    deny "perl -pi -e 's/a/b/' f.md && python3 -c \"import os; print(os.environ['X'])\""
+
+echo ""
+echo "=== Substitution that can reach code still asks (expect: ask) ==="
+check "s///e compiles repl"    ask  "perl -pi -e 's/$PAD/x/e' notes.md"
+check "s///ee"                 ask  "perl -pi -e 's/$PAD/x/ee' notes.md"
+check "@{[...]} interpolation" ask  "perl -pi -e 's/$PAD/@{[x]}/' notes.md"
+check "\${\\...} interpolation" ask  "perl -pi -e 's/$PAD/\${\\ x}/' notes.md"
+check "second statement"       ask  "perl -pi -e 's/$PAD/x/; print 1' notes.md"
+check "not substitution-only"  ask  "perl -pi -e 'print \"$PAD\"' notes.md"
+check "no stream flag"         ask  "perl -e 's/$PAD/x/' notes.md"
+check "two -e payloads"        ask  "perl -pi -e 's/$PAD/x/' -e 's/y/z/' notes.md"
+check "double-quoted payload"  ask  "perl -pi -e \"s/$PAD/x/\" notes.md"
+
+echo ""
+echo "=== Exemption never outranks the deny scan (expect: deny) ==="
+check "stream edit on dotenv"  deny "perl -0pi -e 's/$PAD/x/' .env"
+check "stream edit netrc"      deny "perl -0pi -e 's/$PAD/x/' .netrc"
+check "repl names a socket"    deny "perl -pi -e 's/$PAD/socket.socket/' notes.md"
+check "repl reads env"         deny "perl -pi -e 's/$PAD/\$ENV{TOKEN}/' notes.md"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
