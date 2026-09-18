@@ -102,6 +102,41 @@ for T in "${SENSITIVE_TOKENS[@]}"; do
   fi
 done
 
+# A perl/ruby one-liner in stream-edit mode whose payload is one substitution
+# is `sed -i`, which this harness does not guard at all, so the length test
+# below was asking about reach it had already allowed elsewhere. An ask is a
+# hard stop for a run with nobody in the loop.
+#
+# Exempt only a single-quoted payload holding one s///, tr/// or y///. The `e`
+# modifier compiles the replacement as code, and `@{...}` / `${\...}` reach
+# code from an ordinary replacement, so those still fall through to the ask.
+# The deny scan above has already exited, so a dotfile payload never gets here.
+STREAM_EDIT_RE="${IB}(perl|ruby)\s+(-[A-Za-z0-9]*[pni][A-Za-z0-9]*\s+)"
+
+payload_is_pure_substitution() {
+  local p="$1" re
+  case "$p" in *'@{'*|*'${\'*) return 1 ;; esac
+  for re in \
+    '^[[:space:]]*(s|tr|y)/([^/\]|\\.)*/([^/\]|\\.)*/[gimsxr]*[[:space:]]*;?[[:space:]]*$' \
+    '^[[:space:]]*(s|tr|y)\|([^|\]|\\.)*\|([^|\]|\\.)*\|[gimsxr]*[[:space:]]*;?[[:space:]]*$' \
+    '^[[:space:]]*(s|tr|y)#([^#\]|\\.)*#([^#\]|\\.)*#[gimsxr]*[[:space:]]*;?[[:space:]]*$' \
+    '^[[:space:]]*(s|tr|y),([^,\]|\\.)*,([^,\]|\\.)*,[gimsxr]*[[:space:]]*;?[[:space:]]*$'
+  do
+    printf '%s' "$p" | grep -qE "$re" && return 0
+  done
+  return 1
+}
+
+# One inline flag only. Two means two payloads, and only the last is extracted.
+if printf '%s\n' "$CMD" | grep -qE "$STREAM_EDIT_RE" \
+   && [ "$(printf '%s\n' "$CMD" | grep -oE "[[:space:]]-[A-Za-z0-9]*e[[:space:]]*'" | wc -l | tr -d ' ')" = "1" ]; then
+  PAYLOAD=$(printf '%s\n' "$CMD" \
+    | sed -n "s/.*[[:space:]]-[A-Za-z0-9]*e[[:space:]]*'\([^']*\)'.*/\1/p" | head -1)
+  if [ -n "$PAYLOAD" ] && payload_is_pure_substitution "$PAYLOAD"; then
+    exit 0
+  fi
+fi
+
 # Interpreter with inline code but no obvious sensitive token — ask.
 # This catches novel payloads without producing false positives on trivial
 # one-liners like `python -c "print(1)"`.
