@@ -8,6 +8,7 @@ source "$(dirname "$0")/lib.sh"
 
 read_input
 require_jq_or_deny
+require_parsable_or_deny
 TOOL=$(jq_get '.tool_name')
 
 case "$TOOL" in
