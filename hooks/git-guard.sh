@@ -17,6 +17,7 @@ source "$(dirname "$0")/lib.sh"
 
 read_input
 require_jq_or_deny
+require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
 
