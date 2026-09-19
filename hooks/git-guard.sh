@@ -51,10 +51,24 @@ if printf '%s\n' "$CMD" | grep -qiE "${A}git\b[^|;&]*-c[= ]core\.hookspath"; the
 fi
 
 # --- Force-push guard ---------------------------------------------------
-# -f must be a standalone flag (space/boundary on both sides) so a branch name
-# ending in "-f" (e.g. `git push origin wip-f`) doesn't trip it.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]-f([[:space:]]|$)|--force\b|--force-with-lease\b)"; then
+# The short flag must be a whole option (hyphen, then letters, then a
+# boundary) so a branch name ending in "-f" (e.g. `git push origin wip-f`)
+# doesn't trip it. Short options bundle, so the f can sit anywhere in the
+# cluster: `-fu` and `-qf` force-push exactly as `-f` does and matched nothing
+# while the bare form was denied.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]-[A-Za-z]*f[A-Za-z]*([[:space:]]|$)|--force\b|--force-with-lease\b)"; then
   emit_deny "Blocked: force-push is not allowed. Use regular git push, or ask the user to run this manually."
+  exit 0
+fi
+
+# A leading + on a refspec IS the force flag — `git push origin +main` rewrites
+# the remote branch with no --force anywhere in the command. --mirror is worse:
+# it force-updates every ref and deletes the remote refs that are missing
+# locally. Neither spelling appears in permissions.deny, so both were a full
+# allow. Quoted forms count; a branch name containing + (feature-c++) does not,
+# because the + has to open the token.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]['\"]?\+[A-Za-z0-9_./*-]|--mirror\b)"; then
+  emit_deny "Blocked: this push rewrites remote history without saying --force. A + on a refspec forces that ref, and --mirror force-updates every ref and deletes the ones missing locally. Push the refs you mean by name, or ask the user to run this manually."
   exit 0
 fi
 
@@ -87,8 +101,13 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\s.*(--delete\b|\s:[A-Za-z0-9.
 fi
 
 # --- Indiscriminate staging --------------------------------------------
-# Catches: git add . | ./ | -A | --all | -- . (and with -C/-c prefixes).
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+(--\s+)?(-A|--all|\.\/?)([[:space:]]|;|&|\||$)"; then
+# Catches: git add . | ./ | :/ | -A | --all | -- . (and with -C/-c prefixes).
+# The broad token no longer has to sit immediately after `add`: any flag in
+# front of it (`git add -v .`, `git add -n -A`) hid it completely. `:/` is
+# pathspec magic for the repository root and stages the whole tree like `.`.
+# The trailing boundary still keeps a named path out of it, so `git add
+# ./src/index.ts` and `git add -v src/main.py` stay silent.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?(-A|--all|\.\/?|:/)([[:space:]]|;|&|\||$)"; then
   emit_deny "Blocked: broad git add (., ./, -A, --all) may stage sensitive files. Stage files by name instead."
   exit 0
 fi
@@ -144,7 +163,12 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}config\s+.*(user\.(name|email|sign
 fi
 
 # --- Writes into .git/hooks/* ------------------------------------------
-if printf '%s\n' "$CMD" | grep -qE "(\.git/hooks/|/\.git/hooks/)"; then
+# The directory counts, not just a path through it: `cd .git/hooks && cat >
+# pre-commit` installs the same payload and carries no trailing slash, so the
+# old pattern never saw it. This check is deliberately unanchored (it fires
+# wherever the path appears, a commit message included) — dropping the
+# required slash widens that, it does not change its shape.
+if printf '%s\n' "$CMD" | grep -qE "\.git/hooks(/|\b)"; then
   emit_deny "Blocked: writing into .git/hooks can install a persistent payload. Not permitted."
   exit 0
 fi
