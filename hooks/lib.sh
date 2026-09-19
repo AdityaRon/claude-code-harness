@@ -68,6 +68,26 @@ require_jq_or_deny() {
   exit 0
 }
 
+# Fail closed when the payload will not parse. require_jq_or_deny covers jq
+# being absent; this covers jq being present and failing on the input. jq_get
+# sends that failure to /dev/null and returns "", which every guard reads as
+# "no command in this payload" and exits 0 on — so a truncated or corrupted
+# payload was a full allow, not a smaller block, and the call went on to the
+# permissions list or the auto-mode classifier with no guard opinion at all.
+# Call immediately after require_jq_or_deny in every deny-capable guard.
+#
+# An absent or empty FIELD on parseable input is a different thing and stays
+# legitimate: every guard is registered on tools it does not inspect. So this
+# tests the document, not the field. No stdin is not a tool call either (hooks
+# get run by hand and by the tests), so it is left alone.
+require_parsable_or_deny() {
+  [[ -z "$INPUT" ]] && return 0
+  command -v jq &>/dev/null || return 0
+  printf '%s' "$INPUT" | jq empty 2>/dev/null && return 0
+  emit_deny "Blocked: the security harness could not parse this tool call as JSON, and it will not allow a command it cannot inspect. Retry the call; if it repeats, the hook input is malformed."
+  exit 0
+}
+
 # Extract a field from $INPUT using jq. Empty if jq is missing or field absent.
 jq_get() {
   local expr="$1"

@@ -4,6 +4,7 @@ source "$(dirname "$0")/lib.sh"
 
 read_input
 require_jq_or_deny
+require_parsable_or_deny
 FILE=$(jq_get '.tool_input.file_path')
 [[ -z "$FILE" ]] && FILE=$(jq_get '.tool_input.path')
 [[ -z "$FILE" ]] && FILE=$(jq_get '.tool_input.notebook_path')
