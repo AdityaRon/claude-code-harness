@@ -51,6 +51,7 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 | `audit` | PostToolUse → Bash | Logs every Bash command Claude runs (sanitized to one line) |
 | `audit` | PostToolUseFailure | Logs failed tool calls with error summary |
 | `audit` | ConfigChange | Logs any settings file modified mid-session |
+| `audit` | PostToolUse → `mcp__.*` | Logs every MCP tool call: the tool name and the *names* of the fields it was called with, never their values (a `send_message` payload carries the message body). No PreToolUse guard inspects MCP calls, so this line is the only record one happened. It is a census, not a control: read it with `grep ' | mcp__' ~/.claude/logs/audit.log` to see which connectors actually get used before deciding what to guard. |
 | `audit` | SessionEnd | Logs a session-end line **once per session** — turn count (derived from the transcript; cost isn't exposed to hooks), session id, and why the session ended (`clear` / `logout` / `exit`). Previously wired to `Stop`, which fires at *every* turn end and so wrote a mislabelled `session_end` line per turn. The hook still accepts `Stop` if you rewire it. |
 
 All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 backups retained).
@@ -407,7 +408,7 @@ These guards are defense-in-depth, not a security boundary. Be clear-eyed about 
 
 - **Regex guards have a ceiling.** Command-string matching can always be evaded by a determined agent (string-obfuscated interpreter payloads, novel tool invocations, multi-step stage-then-exfil across separate commands). The guards raise the bar and catch the obvious/accidental cases; the **OS sandbox** is the only real containment for the evasion class — see *Enable the OS sandbox*.
 - **Auto mode removes you from the loop on the `ask` tier.** With `defaultMode: auto` the classifier resolves the prompts a human used to see. That is the point of the mode, but it means the guards' *ask* rules are advice to a model rather than a stop sign — see [Auto mode](#auto-mode). Set `defaultMode` to `manual` if you want every one of them back in your hands.
-- **MCP connectors are not covered.** `network-guard` sees Bash `curl`/`wget` and the `WebFetch` tool, but MCP tools (Slack, Google Drive, Atlassian, …) can read files and send data outbound with no guard in the middle. Control that surface by only connecting MCP servers you trust.
+- **MCP connectors are logged, not guarded.** `network-guard` sees Bash `curl`/`wget` and the `WebFetch` tool, but MCP tools (Gmail, Google Drive, Slack, Atlassian, browser automation, …) can read files and send data outbound with no guard in the middle. Since the `mcp__.*` audit row above, every such call leaves a line naming the tool and its field names, which is a record after the fact rather than a stop before it. Control the surface by only connecting MCP servers you trust, and use the log to decide which of them deserve a real guard.
 - **Guards fail *closed* without jq**, so a missing-jq machine blocks all Bash/file tool calls rather than allowing them unchecked. Keep `jq` installed (the installer checks for it).
 
 ## Per-project additions (not in this harness)
