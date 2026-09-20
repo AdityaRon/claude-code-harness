@@ -138,5 +138,36 @@ check "context flag first"       allow 'kubectl --context teleport.prod-prodn1 g
 check "no kubectl, has a \$("     allow 'echo "$(date +%s)"'
 
 echo ""
+echo "=== secret spellings that went silent — #C (expect: ask) ==="
+# The check took the next bare token after `get` and compared it to the two
+# literals `secret` and `secrets`. Every spelling below dumps the same data
+# and matched neither, so it rode the Bash(kubectl:*) allow entry with no
+# guard opinion at all.
+check "resource/name form"       ask   'kubectl -n vm get secret/db-creds -o yaml'
+check "quoted resource/name"     ask   "kubectl -n vm get 'secret/db-creds' -o yaml"
+check "comma-joined kinds"       ask   'kubectl get pods,secrets -A -o yaml'
+check "comma list, secret first" ask   'kubectl get secrets,configmaps -A -o yaml'
+check "capitalised kind"         ask   'kubectl get Secret -n vm -o json'
+check "upper-case plural"        ask   'kubectl get SECRETS -A'
+check "group-qualified kind"     ask   'kubectl get secrets.v1. -o yaml'
+check "group-qualified + name"   ask   'kubectl get secret.v1.core/db-creds -o yaml'
+check "raw API path"             ask   'kubectl get --raw /api/v1/namespaces/vm/secrets'
+check "raw API path, one secret" ask   'kubectl get --raw /api/v1/namespaces/vm/secrets/db-creds'
+check "raw API path, =form"      ask   'kubectl get --raw=/api/v1/namespaces/vm/secrets'
+check "raw path in a chain"      ask   'kubectl get pods -n vm && kubectl get --raw /api/v1/secrets'
+
+echo ""
+echo "=== Kinds that merely start with 'secret' are still reads (expect: allow) ==="
+# The widened match splits on / . and , and lower-cases — it must not swallow
+# a CRD whose name happens to begin with the word.
+check "secretproviderclass"      allow 'kubectl get secretproviderclass -n vm'
+check "sealedsecrets CRD"        allow 'kubectl get sealedsecrets -n vm'
+check "externalsecrets CRD"      allow 'kubectl get externalsecrets.external-secrets.io -n vm'
+check "comma list, no secret"    allow 'kubectl get pods,svc,deploy -A'
+check "resource/name, not secret" allow 'kubectl get po/web-0 -o yaml'
+check "raw path, pods"           allow 'kubectl get --raw /api/v1/namespaces/vm/pods'
+check "raw path, CRD"            allow 'kubectl get --raw /apis/x/v1/secretproviderclasses'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
