@@ -91,7 +91,14 @@ case "$EVENT" in
     ;;
   *)
     TOOL=$(sanitize "$(jq_get '.tool_name')")
-    if [[ "$TOOL" == "Bash" ]]; then
+    if [[ "$TOOL" == mcp__* ]]; then
+      # MCP tools reach outside this machine (mail, drive, calendar, browser)
+      # and no PreToolUse guard sees them, so this line is the only record a
+      # call happened. Field NAMES only: a send_message payload carries the
+      # message body, and the audit log is not the place for it.
+      KEYS=$(sanitize "$(jq_get '[(.tool_input // {}) | keys_unsorted[]] | join(",")')")
+      log_audit "$TS | ${TOOL} | keys=${KEYS:-none} | $DIR"
+    elif [[ "$TOOL" == "Bash" ]]; then
       CMD=$(sanitize "$(jq_get '.tool_input.command')")
       log_audit "$TS | Bash | ${CMD:-unknown} | $DIR"
     else

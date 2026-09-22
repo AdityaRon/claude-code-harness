@@ -36,6 +36,7 @@ source "$(dirname "$0")/lib.sh"
 
 read_input
 require_jq_or_deny
+require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
 
@@ -125,6 +126,40 @@ next_bare_token() {
   done
 }
 
+# Does a `kubectl get` target name the secrets resource? The kind is what
+# decides, and kubectl accepts it in more spellings than the two literals this
+# used to compare against — each of the following dumps the same data:
+#
+#   secret/db-creds        resource/name
+#   pods,secrets           a comma-joined list of kinds
+#   Secret                 kinds are case-insensitive
+#   secrets.v1.            fully qualified kind.version.group
+#   /api/v1/…/secrets      the REST path behind --raw
+#
+# Only the KIND is compared, never a prefix of it, so a CRD that merely starts
+# with the word (secretproviderclass, sealedsecrets) stays a silent read.
+is_secret_target() {
+  local raw="$1" part kind
+  raw=$(printf '%s' "$raw" | tr -d "\"'" | tr '[:upper:]' '[:lower:]')
+  [[ -z "$raw" ]] && return 1
+
+  # A --raw value is an API path, not a kind: /api/v1/namespaces/vm/secrets,
+  # optionally with a name or query string after it.
+  if [[ "$raw" = /* ]]; then
+    printf '%s' "$raw" | grep -qE '(^|/)secrets?(/|\?|$)'
+    return
+  fi
+
+  local parts=()
+  IFS=',' read -ra parts <<<"$raw"
+  for part in "${parts[@]}"; do
+    kind="${part%%/*}"   # drop /name
+    kind="${kind%%.*}"   # drop .version.group
+    [[ "$kind" = "secret" || "$kind" = "secrets" ]] && return 0
+  done
+  return 1
+}
+
 # Tokenize on whitespace. Quoting is not honoured, deliberately: a quoted flag
 # value that splits into several tokens yields an unrecognised verb, which
 # escalates. Failing closed on ambiguity is the intended behaviour.
@@ -161,12 +196,25 @@ while (( i < n )); do
         # `kubectl get secret -o yaml` materialises live credentials into the
         # transcript and debug logs. Every other `get` is an ordinary read.
         sub=$(next_bare_token "$i")
-        case "$sub" in
-          secret|secrets)
-            emit_ask "kubectl get $sub reads live credentials into the transcript. Confirm this is intended and scoped to the secret you need."
-            exit 0
-            ;;
-        esac
+        if is_secret_target "$sub"; then
+          emit_ask "kubectl get $sub reads live credentials into the transcript. Confirm this is intended and scoped to the secret you need."
+          exit 0
+        fi
+        # --raw=<path> is self-contained, so next_bare_token skips it entirely
+        # and the API path behind it never got looked at. Scan this command's
+        # own tokens for it, stopping at the operator that ends the command.
+        k=$i
+        while (( k < n )) && ! is_operator "${TOKENS[$k]}"; do
+          case "${TOKENS[$k]}" in
+            --raw=*)
+              if is_secret_target "${TOKENS[$k]#--raw=}"; then
+                emit_ask "kubectl get --raw reads the secrets API directly, which returns the same credential data. Confirm this is intended and scoped to the secret you need."
+                exit 0
+              fi
+              ;;
+          esac
+          (( k++ ))
+        done
         continue
         ;;
       rollout|auth|config)
