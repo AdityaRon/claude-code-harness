@@ -175,5 +175,59 @@ check "--hard inside a message"  allow "git commit -m 'reset --hard is in the ru
 check "git add by name"          allow "git add src/main.py"
 
 echo ""
+echo "=== Force-push spellings that went silent — #B (expect: deny) ==="
+# Each of these rewrites or deletes remote history, and none of them contains
+# a whitespace-bounded -f / --force / --force-with-lease, which is all the
+# force check looked for. permissions.deny spells only --force and -f, so
+# nothing else stopped them either: the call was a full allow.
+check "push +refspec"            deny "git push origin +main"
+check "push +full refspec"       deny "git push origin +refs/heads/main:refs/heads/main"
+check "push quoted +refspec"     deny "git push origin '+main'"
+check "push --mirror"            deny "git push --mirror origin"
+check "push --mirror after url"  deny "git push origin --mirror"
+check "push -fu bundle"          deny "git push -fu origin main"
+check "push -uf bundle"          deny "git push -uf origin main"
+check "push -f with -C prefix"   deny "git -C /repo push -qf origin main"
+check "push +refspec, VAR="      deny "VAR=1 git push origin +main"
+
+echo ""
+echo "=== Broad staging behind a flag or pathspec magic — #B (expect: deny) ==="
+# The broad-add check required the path token to sit immediately after `add`,
+# so any flag in between hid it. `:/` is pathspec magic for the repo root and
+# stages the whole tree just like `.`.
+check "git add -v ."             deny "git add -v ."
+check "git add --verbose ."      deny "git add --verbose ."
+check "git add -n -A"            deny "git add -n -A"
+check "git add :/"               deny "git add :/"
+check "git add -v :/"            deny "git add -v :/"
+
+echo ""
+echo "=== .git/hooks reached by cd — #B (expect: deny) ==="
+# The check looked for the literal `.git/hooks/`, with the trailing slash, so
+# changing into the directory first and writing a bare filename missed it.
+check "cd into hooks, write"     deny "cd .git/hooks && cat > pre-commit"
+check "cd into hooks, semicolon" deny "cd .git/hooks; printf x > pre-commit"
+check "cd abs hooks dir"         deny "cd /repo/.git/hooks && chmod +x pre-push"
+
+echo ""
+echo "=== Near-misses of the widened patterns must stay silent (expect: allow) ==="
+# The widened force, staging and hooks patterns must not swallow ordinary work.
+check "push -u"                  allow "git push -u origin main"
+check "push --set-upstream"      allow "git push --set-upstream origin feature-x"
+check "push -q"                  allow "git push -q origin main"
+check "push branch with plus"    allow "git push origin feature-c++"
+check "push --follow-tags"       allow "git push --follow-tags origin main"
+check "add named files"          allow "git add src/a.py src/b.py"
+check "add a relative path"      allow "git add ./src/index.ts"
+check "add -v by name"           allow "git add -v src/main.py"
+check "mirror inside a message"  allow "git commit -m 'document push --mirror and +main'"
+check "hooks word in a message"  allow "git commit -m 'harden the git hooks directory'"
+# The .git/hooks check is deliberately unanchored — it fires wherever the path
+# appears, including inside a commit message. Dropping the trailing slash from
+# the pattern widens that, it does not change its shape, so a message naming
+# the path literally is denied here exactly as `.git/hooks/` already was.
+check "hooks path in a message"  deny  "git commit -m 'note the .git/hooks vector'"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

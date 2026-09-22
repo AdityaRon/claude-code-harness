@@ -104,5 +104,28 @@ grep -qF "| model_switch | unknown -> unknown |" "$CLAUDE_AUDIT_LOG" \
   && pass "fieldless switch still recorded" || fail "fieldless switch still recorded" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
 
 echo ""
+echo "=== An MCP call is recorded by name and shape, never by content ==="
+# MCP tools are the one outbound surface no PreToolUse guard inspects, so this
+# line is the whole record. It must name the tool and the fields it was given,
+# and must not copy what was in them.
+run '{"hook_event_name":"PostToolUse","tool_name":"mcp__claude_ai_Gmail__send_message","tool_input":{"to":"someone@example.com","subject":"q3 numbers","body":"SECRETBODY99"}}'
+LINE=$(tail -1 "$CLAUDE_AUDIT_LOG")
+[[ "$LINE" == *"| mcp__claude_ai_Gmail__send_message |"* ]] \
+  && pass "mcp tool name logged" || fail "mcp tool name logged" "$LINE"
+[[ "$LINE" == *"keys=to,subject,body"* ]] \
+  && pass "mcp input field names logged" || fail "mcp input field names logged" "$LINE"
+if grep -qF "SECRETBODY99" "$CLAUDE_AUDIT_LOG" || grep -qF "someone@example.com" "$CLAUDE_AUDIT_LOG"; then
+  fail "mcp field values stay out of the log" "$LINE"
+else
+  pass "mcp field values stay out of the log"
+fi
+
+# No tool_input at all must still leave a record rather than vanish.
+run '{"hook_event_name":"PostToolUse","tool_name":"mcp__claude_ai_Google_Drive__list_recent_files"}'
+grep -qF "| mcp__claude_ai_Google_Drive__list_recent_files | keys=none |" "$CLAUDE_AUDIT_LOG" \
+  && pass "inputless mcp call still recorded" \
+  || fail "inputless mcp call still recorded" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

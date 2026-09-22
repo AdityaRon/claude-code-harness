@@ -108,5 +108,70 @@ else
 fi
 
 echo ""
+echo "=== The Grep tool reaches the guard — #D ==="
+# settings.json registered this guard on Read|Edit|Write|MultiEdit|NotebookEdit.
+# Grep prints file CONTENT and was on none of those lists, and has no
+# PreToolUse hook of its own, so Grep(pattern=".", path=".env",
+# output_mode="content") printed the file this guard exists to protect. The
+# hook was never even invoked, so the registration is part of the fix.
+MATCHERS=$(jq -r '[.hooks.PreToolUse[]
+                   | select([.hooks[].command] | any(test("sensitive-file-guard")))
+                   | .matcher] | join(" ")' config/settings.json)
+if printf '%s' "$MATCHERS" | grep -qE '(^|\|)Grep(\||$| )'; then
+  echo "  OK: settings.json registers sensitive-file-guard on Grep"; PASS=$((PASS+1))
+else
+  echo "  FAIL: Grep is not in the sensitive-file-guard matcher [$MATCHERS]"; FAIL=$((FAIL+1))
+fi
+
+# Grep's input shape is its own: `path` (file or directory), `glob` (which
+# files to search) and `pattern` (what to look for inside them). Only the
+# first two choose a target.
+check_grep() {
+  local label="$1" expect="$2" payload="$3"
+  local result got
+  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null)
+  if [[ -z "$result" ]]; then
+    got="allow"
+  else
+    got=$(printf '%s\n' "$result" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
+  fi
+  if [[ "$got" = "$expect" ]]; then
+    echo "  OK ($expect): $label"; PASS=$((PASS+1))
+  else
+    echo "  FAIL (expected=$expect got=$got): $label  [payload: $payload]"; FAIL=$((FAIL+1))
+  fi
+}
+
+grep_payload() { jq -nc --arg p "$1" --arg g "$2" --arg pat "$3" \
+  '{tool_name:"Grep", tool_input:({pattern:$pat, output_mode:"content"}
+     + (if $p == "" then {} else {path:$p} end)
+     + (if $g == "" then {} else {glob:$g} end))}'; }
+
+echo ""
+echo "=== Grep targets that print a credential file (expect: deny) ==="
+check_grep "path is the .env"       deny "$(grep_payload ".env" "" ".")"
+check_grep "path is a subpath .env" deny "$(grep_payload "config/.env" "" "KEY")"
+check_grep "glob *.env"             deny "$(grep_payload "" "*.env" "KEY")"
+check_grep "glob .env*"             deny "$(grep_payload "" ".env*" "KEY")"
+check_grep "glob **/.env*"          deny "$(grep_payload "src" "**/.env*" "KEY")"
+check_grep "glob *.pem"             deny "$(grep_payload "" "*.pem" "PRIVATE")"
+check_grep "glob id_rsa*"           deny "$(grep_payload "" "id_rsa*" "PRIVATE")"
+check_grep "glob brace {env,ts}"    deny "$(grep_payload "" "*.{env,ts}" "KEY")"
+check_grep "path is the .ssh dir"   deny "$(grep_payload "$HOME/.ssh" "" "PRIVATE")"
+check_grep "path is the .aws dir"   deny "$(grep_payload "$HOME/.aws" "" "aws_secret")"
+
+echo ""
+echo "=== Ordinary Grep calls stay silent (expect: allow) ==="
+check_grep "source tree, no glob"   allow "$(grep_payload "src" "" "TODO")"
+check_grep "glob *.ts"              allow "$(grep_payload "" "*.ts" "TODO")"
+check_grep "glob **/*.tsx"          allow "$(grep_payload "src" "**/*.tsx" "useState")"
+check_grep "glob *.json"            allow "$(grep_payload "" "*.json" "version")"
+check_grep "glob on a template"     allow "$(grep_payload "" "*.env.example" "KEY")"
+# The pattern is the search string, not a target: looking FOR the text .env
+# across source is an ordinary read and must not be confused with reading one.
+check_grep "pattern mentions .env"  allow "$(grep_payload "src" "*.ts" "process.env.API_KEY")"
+check_grep "pattern is a path"      allow "$(grep_payload "" "" "config/.env")"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

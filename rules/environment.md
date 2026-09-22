@@ -10,4 +10,5 @@
   parallel jobs share.
 - A Bash permission rule matches a prefix and fails closed past a leading
   `VAR=value`, so one command can be allowed bare and denied with an env prefix.
+  Put the binary first. Inline the value, or set it in its own command.
 - Before "fixing" shared tooling, check whether the problem is local config.
