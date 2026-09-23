@@ -148,5 +148,20 @@ for s in DESCSECRET PROMPTSECRET SUMSECRET BODYSECRET; do
 done
 
 echo ""
+echo "=== Artifact tools: action, url and ids, never content ==="
+run '{"hook_event_name":"PostToolUse","tool_name":"Artifact","tool_input":{"file_path":"/w/report.html","description":"DESCSECRET2"}}'
+grep -qF "| Artifact | action=publish url=new file=/w/report.html |" "$CLAUDE_AUDIT_LOG" \
+  && pass "first publish logged" || fail "first publish logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+run '{"hook_event_name":"PostToolUse","tool_name":"ArtifactData","tool_input":{"action":"set","url":"https://claude.ai/artifact/abc","collection":"rows","doc_id":"r1","data":{"note":"DATASECRET"}}}'
+grep -qF "| ArtifactData | action=set url=https://claude.ai/artifact/abc collection=rows doc=r1 |" "$CLAUDE_AUDIT_LOG" \
+  && pass "data write logged" || fail "data write logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+run '{"hook_event_name":"PostToolUse","tool_name":"ArtifactComments","tool_input":{"action":"reply","url":"https://claude.ai/artifact/abc","thread_id":"t9","text":"REPLYSECRET"}}'
+grep -qF "| ArtifactComments | action=reply url=https://claude.ai/artifact/abc thread=t9 |" "$CLAUDE_AUDIT_LOG" \
+  && pass "comment reply logged" || fail "comment reply logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+for s in DESCSECRET2 DATASECRET REPLYSECRET; do
+  grep -qF "$s" "$CLAUDE_AUDIT_LOG" && fail "$s stays out of the log" "" || pass "$s stays out of the log"
+done
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
