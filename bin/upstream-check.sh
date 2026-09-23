@@ -23,7 +23,7 @@ set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SETTINGS="$REPO/config/settings.json"
-CONTRACT="$REPO/config/upstream-contract.json"
+CONTRACT=${CLAUDE_UPSTREAM_CONTRACT:-$REPO/config/upstream-contract.json}  # test seam
 DOCTOR_CMD=${CLAUDE_DOCTOR_CMD:-"claude doctor"}
 SENTINEL_EVENT="HarnessDriftSentinel"
 SENTINEL_MODE="harness-drift-sentinel"
@@ -357,14 +357,22 @@ if [ ! -f "$CHANGELOG" ]; then
 else
   # Not every release gets a heading. An unlisted CLI version starts at the newest
   # entry (over-report, never skip); an unlisted pin cannot bound the slice at all.
-  grep -qxF "## $CUR" "$CHANGELOG" || CUR=$(grep -m1 '^## [0-9]' "$CHANGELOG" | sed 's/^## //')
+  if ! grep -qxF "## $CUR" "$CHANGELOG"; then
+    NEWEST=$(grep -m1 '^## [0-9]' "$CHANGELOG" | sed 's/^## //')
+    # Without this, a release newer than its changelog entry reads as verified.
+    if [ "$CUR" != "$NEWEST" ] && { [ "$VERSION" != "(stubbed)" ] || [ -n "${CLAUDE_CLI_VERSION:-}" ]; }; then
+      warn "CLI $CUR has no changelog heading; listing from $NEWEST. Re-check once it is published."
+      UNLISTED=1
+    fi
+    CUR=$NEWEST
+  fi
   if ! grep -qxF "## $PIN" "$CHANGELOG"; then
     warn "last_verified_version $PIN has no changelog heading; set it to a listed release."
   else
   SLICE=$(awk -v cur="## $CUR" -v pin="## $PIN" '$0==pin{exit} $0==cur{p=1} p' "$CHANGELOG")
   RELEASES=$(printf '%s\n' "$SLICE" | grep -c '^## ' || true)
   if [ "$CUR" = "$PIN" ]; then
-    ok "contract verified at the installed version ($CUR)"
+    [ -z "${UNLISTED:-}" ] && ok "contract verified at the installed version ($CUR)"
   elif [ "$RELEASES" -eq 0 ]; then
     say "      CLI $CUR is not newer than the contract ($PIN) in this changelog; nothing to assess."
   else
