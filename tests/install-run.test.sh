@@ -64,6 +64,9 @@ done
   && pass "settings.json written" || fail "settings.json written" "missing"
 [ -x "$HOME/.claude/hooks/memory-lint.sh" ] \
   && pass "hooks installed executable" || fail "hooks installed executable" "missing or not +x"
+PIN=$(jq -r '.last_verified_version | split(" ")[0]' "$REPO/config/upstream-contract.json")
+[ "$(cat "$HOME/.claude/harness-contract.version" 2>/dev/null)" = "$PIN" ] \
+  && pass "contract pin installed" || fail "contract pin installed" "want $PIN"
 
 echo ""
 echo "=== a hook the harness did not install survives a real run ==="

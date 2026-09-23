@@ -16,6 +16,8 @@ mkdir -p "$CLAUDE_STATE_DIR"
 # user's memory is worse than no test.
 export CLAUDE_MEMORY_PROJECTS_DIR="$TMP/projects"
 mkdir -p "$CLAUDE_MEMORY_PROJECTS_DIR"
+# Keep the real pin and CLI out of every case but the ones below.
+export CLAUDE_CONTRACT_PIN="$TMP/no-pin"
 
 pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
@@ -145,6 +147,16 @@ mkdir -p "$CLAUDE_MEMORY_PROJECTS_DIR"
 OUT=$(run_resume "sess-clean")
 check_not_contains "silent without a store" "Memory index reordered" "$OUT"
 check_eq "created nothing" "0" "$(ls -1 "$CLAUDE_MEMORY_PROJECTS_DIR" | wc -l | tr -d ' ')"
+
+echo ""
+echo "=== CLI past the contract pin → one nudge; same version or no pin → silent ==="
+printf '2.1.280\n' > "$TMP/pin"
+OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
+check_contains "nudge names both versions" "Installed 2.1.281; the harness was verified at 2.1.280" "$OUT"
+OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.280 run_resume "sess-clean")
+check_not_contains "silent at the pinned version" "past the harness contract" "$OUT"
+OUT=$(CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
+check_not_contains "silent without a pin file" "past the harness contract" "$OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
