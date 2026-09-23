@@ -209,7 +209,7 @@
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
       },
       {
-        "matcher": "Agent|SendMessage",
+        "matcher": "Agent|SendMessage|Artifact|ArtifactData|ArtifactComments",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
       },
       {

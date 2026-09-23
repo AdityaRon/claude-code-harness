@@ -111,6 +111,18 @@ case "$EVENT" in
       LEN=$(jq_get '(.tool_input.message // "") | length')
       NOTIFY=$(jq_get '.tool_input.notify_when_idle')
       log_audit "$TS | SendMessage | to=${TO:-unknown} chars=${LEN:-0} notify_when_idle=${NOTIFY:-false} | $DIR"
+    elif [[ "$TOOL" == Artifact* ]]; then
+      # Publishes to claude.ai. WebFetch rules stopped covering these in 2.1.268
+      # and no guard sees them, so this is the only record. Never data or text.
+      ACT=$(sanitize "$(jq_get '.tool_input.action')")
+      URL=$(sanitize "$(jq_get '.tool_input.url')")
+      case "$TOOL" in
+        Artifact)         EXTRA="file=$(sanitize "$(jq_get '.tool_input.file_path')")" ;;
+        ArtifactData)     EXTRA="collection=$(sanitize "$(jq_get '.tool_input.collection')") doc=$(sanitize "$(jq_get '.tool_input.doc_id')")" ;;
+        ArtifactComments) EXTRA="thread=$(sanitize "$(jq_get '.tool_input.thread_id')")" ;;
+        *)                EXTRA="" ;;
+      esac
+      log_audit "$TS | $TOOL | action=${ACT:-publish} url=${URL:-new} ${EXTRA} | $DIR"
     elif [[ "$TOOL" == "Bash" ]]; then
       CMD=$(sanitize "$(jq_get '.tool_input.command')")
       log_audit "$TS | Bash | ${CMD:-unknown} | $DIR"
