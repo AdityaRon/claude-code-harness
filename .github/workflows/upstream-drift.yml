@@ -111,6 +111,9 @@ jobs:
 
       # Claude may only edit the contract and write the PR body. Changelog text is
       # upstream input, so it reaches Claude as a file, never through ${{ }}.
+      # Reads are scoped to the checkout and there is no jq or network tool: the
+      # OAuth token sits in this process's environment, and anything Claude can
+      # read it can write into a public PR body.
       - name: Claude reviews the new releases
         id: claude
         if: steps.plan.outputs.mode == 'draft'
@@ -121,7 +124,8 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: >-
             --max-turns 40
-            --allowedTools "Read,Grep,Glob,Edit(config/upstream-contract.json),Write(pr-body.md),Bash(bash bin/upstream-check.sh),Bash(jq:*)"
+            --allowedTools "Read(./**),Edit(config/upstream-contract.json),Write(pr-body.md),Bash(bash bin/upstream-check.sh)"
+            --disallowedTools "WebFetch,WebSearch"
           prompt: |
             Claude Code ${{ steps.plan.outputs.cur }} is newer than the release this
             harness was verified at. drift.log is the output of bin/upstream-check.sh;
@@ -163,7 +167,17 @@ jobs:
           BRANCH: ${{ steps.plan.outputs.branch }}
           CUR: ${{ steps.plan.outputs.cur }}
           CLAUDE_CHANGELOG_PATH: changelog.md
+          OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
+          # Last gate before anything Claude wrote goes public. GitHub masks
+          # secrets in logs, not in PR bodies or commits.
+          for f in pr-body.md config/upstream-contract.json; do
+            [ -f "$f" ] || continue
+            if { [ -n "$OAUTH" ] && grep -qF "$OAUTH" "$f"; } || grep -qE 'sk-ant-[A-Za-z0-9_-]{8,}' "$f"; then
+              echo "::error::$f contains a credential; nothing was published."
+              exit 1
+            fi
+          done
           CHANGED=$(git diff --name-only)
           if [ -z "$CHANGED" ]; then
             echo "::warning::Claude changed nothing; recording in the issue instead."
