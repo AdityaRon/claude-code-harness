@@ -371,9 +371,13 @@ else
     # Names the contract already has a decision for: a hit means that decision may be stale.
     NAMES=$(jq -r '[(.acknowledged_hook_events//[])[], ((.acknowledged_surface.tools//{})|keys[]),
                     ((.acknowledged_surface.settings_keys//{})|keys[])] | map(select(. != "_comment")) | join("|")' "$CONTRACT")
-    PAT="^- Added|hook|permission rule|deny|sandbox|autoMode|auto mode|settings\.json|setting \`|secret|subagent${NAMES:+|$NAMES}"
+    # Security terms match anywhere; feature terms only on Added/Changed lines,
+    # which cut 123 lines to 88 on 2.1.267-2.1.280 without losing an assessed item.
+    STRONG="hook|permission rule|deny|sandbox|secret|autoMode|settings\.json${NAMES:+|$NAMES}"
+    BROAD="tool|setting|\`CLAUDE_|subagent|auto mode|now the default|\`[a-z]+[A-Z][A-Za-z]+\`"
     HITS=$(printf '%s\n' "$SLICE" | grep -v -E '^- (\[[A-Za-z ]+\]|Self-hosted runner:|Windows:)' \
-           | grep -E "^## |$PAT" | awk '/^## /{h=$0; next} {if(h){print h; h=""} print}')
+           | awk -v s="$STRONG" -v b="$BROAD" '/^## /{h=$0; next}
+               $0 ~ s || ($0 ~ /^- (Added|Changed|Removed|Reverted)/ && $0 ~ b) {if(h){print h; h=""} print}')
     warn "$RELEASES release(s) since $PIN have not been assessed; harness-relevant entries:"
     printf '%s\n' "$HITS" | cut -c1-200 | sed 's/^/      /'
     say "      Assess each, record decisions in upstream-contract.json, then set"
