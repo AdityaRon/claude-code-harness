@@ -51,8 +51,15 @@ jobs:
           claude --version
           claude doctor >/dev/null
 
+      # Section 6 lists what shipped since last_verified_version. A fetch failure
+      # leaves no file, and the check then warns that the CLI moved unlisted.
+      - name: Fetch the changelog
+        run: curl -fsSL -o changelog.md.part https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md && mv changelog.md.part changelog.md || true
+
       - name: Check the upstream contract
         id: check
+        env:
+          CLAUDE_CHANGELOG_PATH: changelog.md
         run: |
           set +e
           bash bin/upstream-check.sh 2>&1 | tee drift.log
@@ -81,7 +88,7 @@ jobs:
               # compares against .acknowledged_hook_events; notes_on_unused_events
               # records WHY a decision was made and does not clear this job, so
               # pointing there sent people to a field with no effect on the result.
-              echo "::warning title=Claude Code grew::New capabilities exist that nobody has assessed. Adopt them, or add them to config/upstream-contract.json's acknowledged_hook_events (recording the reasoning in notes_on_unused_events, which does not by itself clear this check)."
+              echo "::warning title=Claude Code grew::New capabilities or unassessed releases exist. Adopt or record each in config/upstream-contract.json (acknowledged_hook_events, acknowledged_surface), then bump last_verified_version. See section 6 of the job summary."
               ;;
             *)
               echo "::error title=Drift check could not run::upstream-check.sh exited ${{ steps.check.outputs.status }}."

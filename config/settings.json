@@ -5,7 +5,8 @@
   "includeCoAuthoredBy": true,
   "statusLine": {
     "type": "command",
-    "command": "~/.claude/statusline.sh"
+    "command": "~/.claude/statusline.sh",
+    "refreshInterval": 300
   },
   "permissions": {
     "defaultMode": "auto",
@@ -205,6 +206,10 @@
       },
       {
         "matcher": "mcp__.*",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
+      },
+      {
+        "matcher": "Agent|SendMessage",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
       },
       {

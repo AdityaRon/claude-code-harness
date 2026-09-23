@@ -98,6 +98,19 @@ case "$EVENT" in
       # message body, and the audit log is not the place for it.
       KEYS=$(sanitize "$(jq_get '[(.tool_input // {}) | keys_unsorted[]] | join(",")')")
       log_audit "$TS | ${TOOL} | keys=${KEYS:-none} | $DIR"
+    elif [[ "$TOOL" == "Agent" ]]; then
+      # Evidence for subagent model and fan-out decisions. Never the prompt.
+      TYPE=$(sanitize "$(jq_get '.tool_input.subagent_type')")
+      MODEL=$(sanitize "$(jq_get '.tool_input.model')")
+      ISO=$(sanitize "$(jq_get '.tool_input.isolation')")
+      log_audit "$TS | Agent | type=${TYPE:-general-purpose} model=${MODEL:-inherit} isolation=${ISO:-none} | $DIR"
+    elif [[ "$TOOL" == "SendMessage" ]]; then
+      # Peer messages can ask another session to act; the recipient's own hooks
+      # still gate that, but this is the sender-side record. Never the body.
+      TO=$(sanitize "$(jq_get '.tool_input.to')")
+      LEN=$(jq_get '(.tool_input.message // "") | length')
+      NOTIFY=$(jq_get '.tool_input.notify_when_idle')
+      log_audit "$TS | SendMessage | to=${TO:-unknown} chars=${LEN:-0} notify_when_idle=${NOTIFY:-false} | $DIR"
     elif [[ "$TOOL" == "Bash" ]]; then
       CMD=$(sanitize "$(jq_get '.tool_input.command')")
       log_audit "$TS | Bash | ${CMD:-unknown} | $DIR"

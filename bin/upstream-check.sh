@@ -338,11 +338,50 @@ if [ -n "$LIVE" ]; then
   say ""
 fi
 
-if [ "$VERSION" != "$PINNED" ] && [ "$VERSION" != "(stubbed)" ]; then
-  say "NOTE: the CLI moved since last verification ($PINNED → $VERSION)."
-  say "      After reviewing, bump last_verified_version in upstream-contract.json."
-  say ""
+# ---- 6. releases nobody has assessed ------------------------------------
+# Sections 1-4 only see what doctor and the binary enumerate, so new tools and
+# settings keys arrive silently and the job stays green. The changelog is the one
+# source that names them. This was a NOTE until 2026-09; the contract then sat 13
+# releases behind while every scheduled run passed.
+# Seams: CLAUDE_CHANGELOG_PATH (CI downloads it; no network here), CLAUDE_CLI_VERSION.
+say "6. changelog entries since last verification"
+CHANGELOG=${CLAUDE_CHANGELOG_PATH:-$HOME/.claude/cache/changelog.md}
+CUR=${CLAUDE_CLI_VERSION:-${VERSION%% *}}
+PIN=${PINNED%% *}
+if [ ! -f "$CHANGELOG" ]; then
+  if [ "$VERSION" != "(stubbed)" ] && [ "$CUR" != "$PIN" ]; then
+    warn "CLI $CUR is ahead of the contract ($PIN); no changelog at $CHANGELOG to list what changed."
+  else
+    say "      (skipped: no changelog at $CHANGELOG)"
+  fi
+else
+  # Not every release gets a heading. An unlisted CLI version starts at the newest
+  # entry (over-report, never skip); an unlisted pin cannot bound the slice at all.
+  grep -qxF "## $CUR" "$CHANGELOG" || CUR=$(grep -m1 '^## [0-9]' "$CHANGELOG" | sed 's/^## //')
+  if ! grep -qxF "## $PIN" "$CHANGELOG"; then
+    warn "last_verified_version $PIN has no changelog heading; set it to a listed release."
+  else
+  SLICE=$(awk -v cur="## $CUR" -v pin="## $PIN" '$0==pin{exit} $0==cur{p=1} p' "$CHANGELOG")
+  RELEASES=$(printf '%s\n' "$SLICE" | grep -c '^## ' || true)
+  if [ "$CUR" = "$PIN" ]; then
+    ok "contract verified at the installed version ($CUR)"
+  elif [ "$RELEASES" -eq 0 ]; then
+    say "      CLI $CUR is not newer than the contract ($PIN) in this changelog; nothing to assess."
+  else
+    # Names the contract already has a decision for: a hit means that decision may be stale.
+    NAMES=$(jq -r '[(.acknowledged_hook_events//[])[], ((.acknowledged_surface.tools//{})|keys[]),
+                    ((.acknowledged_surface.settings_keys//{})|keys[])] | map(select(. != "_comment")) | join("|")' "$CONTRACT")
+    PAT="^- Added|hook|permission rule|deny|sandbox|autoMode|auto mode|settings\.json|setting \`|secret|subagent${NAMES:+|$NAMES}"
+    HITS=$(printf '%s\n' "$SLICE" | grep -v -E '^- (\[[A-Za-z ]+\]|Self-hosted runner:|Windows:)' \
+           | grep -E "^## |$PAT" | awk '/^## /{h=$0; next} {if(h){print h; h=""} print}')
+    warn "$RELEASES release(s) since $PIN have not been assessed; harness-relevant entries:"
+    printf '%s\n' "$HITS" | cut -c1-200 | sed 's/^/      /'
+    say "      Assess each, record decisions in upstream-contract.json, then set"
+    say "      last_verified_version to \"$CUR (Claude Code)\"."
+  fi
+  fi
 fi
+say ""
 
 if [ "$BREAKAGE" -eq 1 ]; then
   say "RESULT: BREAKAGE — the harness relies on something upstream changed."

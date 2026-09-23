@@ -57,8 +57,10 @@ _JQOUT=$(printf '%s' "$INPUT" | jq -r '
   (if ($r5 != null or $r7 != null) then " │ \($rc)5h:\(($r5 // 0)|floor)% 7d:\(($r7 // 0)|floor)%\($r)" else "" end) as $rl |
   "\($model) │ \($cy)\($repo)__BR__\($r) │ \($c)\($bar)\($r) \($pct)%\($warn) │ \($dim)in:\($in|fmt) out:\($out|fmt) cache:\($cache|fmt)\($r) │ \($costs)\($dur)\($lines)\($style)\($rl)"
   + "" + (.session_id // "") + "" + (.workspace.current_dir // .cwd // "")
+  + "" + (.transcript_path // "")
+  + "" + "\($in + $cache + (.context_window.current_usage.cache_creation_input_tokens // 0))"
 ')
-IFS=$'\x1f' read -r LINE SID CDIR <<< "$_JQOUT"
+IFS=$'\x1f' read -r LINE SID CDIR TRANSCRIPT CTX <<< "$_JQOUT"
 
 # jq missing or unparseable input -> fail visible-but-calm, never blank.
 [[ -n "$LINE" ]] || { printf 'Claude Code\n'; exit 0; }
@@ -119,4 +121,17 @@ if [[ -n "$SID" ]]; then
   fi
 fi
 
-printf '%s%s%s\n' "$LINE" "$PLAN_SEG" "$WF_SEG"
+# Cold cache: the main-session prompt cache lives 1h, so the first message after
+# a longer gap re-sends the whole context at write price (measured: 250k-530k
+# tokens on overnight resumes). Timestamp from the transcript, not its mtime,
+# which a resume may touch. Only worth saying when the context is large.
+COLD_SEG=""
+if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" && "${CTX:-0}" -ge 100000 ]]; then
+  LAST=$(tail -n 200 "$TRANSCRIPT" | jq -r 'select(.type=="assistant") | .timestamp // empty' | tail -1)
+  LAST_S=$(printf '%s' "$LAST" | jq -Rr 'sub("\\.[0-9]+Z$";"Z") | fromdate' 2>/dev/null)
+  if [[ -n "$LAST_S" ]] && (( $(date +%s) - LAST_S > ${CLAUDE_CACHE_TTL_S:-3600} )); then
+    COLD_SEG=$(printf ' │ \033[33mcold: next msg re-caches %sk, consider /clear + handoff\033[0m' "$((CTX / 1000))")
+  fi
+fi
+
+printf '%s%s%s%s\n' "$LINE" "$COLD_SEG" "$PLAN_SEG" "$WF_SEG"

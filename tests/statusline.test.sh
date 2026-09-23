@@ -122,5 +122,18 @@ OUT=$(strip "$(run "$PAY")")
 printf '%s' "$OUT" | grep -qF ':deadbee' && pass "detached HEAD -> short SHA" || fail "detached HEAD" "$OUT"
 
 echo ""
+echo "=== cold cache warning after an hour idle, large context only ==="
+T="$TMP/tr.jsonl"
+printf '{"type":"assistant","timestamp":"2026-01-01T02:00:00.123Z"}\n' > "$T"
+big(){ printf '{"model":{"display_name":"O"},"context_window":{"used_percentage":50,"current_usage":{"input_tokens":2,"cache_read_input_tokens":%s}},"transcript_path":"%s"}' "$1" "$T"; }
+OUT=$(strip "$(run "$(big 530000)")")
+[[ "$OUT" == *"cold: next msg re-caches 530k"* ]] && pass "idle large session warns" || fail "idle large session warns" "$OUT"
+OUT=$(strip "$(run "$(big 40000)")")
+[[ "$OUT" != *"cold:"* ]] && pass "small context stays quiet" || fail "small context stays quiet" "$OUT"
+printf '{"type":"assistant","timestamp":"%s"}\n{"type":"user","timestamp":"2026-01-01T00:00:00Z"}\n' "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" > "$T"
+OUT=$(strip "$(run "$(big 530000)")")
+[[ "$OUT" != *"cold:"* ]] && pass "recent assistant turn stays quiet" || fail "recent turn stays quiet" "$OUT"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

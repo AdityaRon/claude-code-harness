@@ -52,6 +52,7 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 | `audit` | PostToolUseFailure | Logs failed tool calls with error summary |
 | `audit` | ConfigChange | Logs any settings file modified mid-session |
 | `audit` | PostToolUse → `mcp__.*` | Logs every MCP tool call: the tool name and the *names* of the fields it was called with, never their values (a `send_message` payload carries the message body). No PreToolUse guard inspects MCP calls, so this line is the only record one happened. It is a census, not a control: read it with `grep ' | mcp__' ~/.claude/logs/audit.log` to see which connectors actually get used before deciding what to guard. |
+| `audit` | PostToolUse → Agent/SendMessage | Logs each subagent spawn (`type`, `model` or `inherit`, `isolation`) and each peer message (`to`, character count, `notify_when_idle`). Never the prompt, description, summary or message body. Evidence for subagent model choices and a sender-side trail for work handed between sessions: `grep -E ' \| (Agent|SendMessage) \| ' ~/.claude/logs/audit.log`. |
 | `audit` | SessionEnd | Logs a session-end line **once per session** — turn count (derived from the transcript; cost isn't exposed to hooks), session id, and why the session ended (`clear` / `logout` / `exit`). Previously wired to `Stop`, which fires at *every* turn end and so wrote a mislabelled `session_end` line per turn. The hook still accepts `Stop` if you rewire it. |
 
 All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 backups retained).
@@ -70,7 +71,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 | Hook | Event | Behaviour |
 |---|---|---|
 | `workflow-record` | PostToolUse → Workflow | Logs each workflow run's persisted `.js` script path to the audit log and records a per-session pointer the status line links to. Clicking the `wf` link opens the script in your editor (auto-detects VS Code / Cursor / Zed; override with `CLAUDE_EDITOR_URI`). Discoverability only — no rendering. |
-| `plan-to-html` | PreToolUse → ExitPlanMode | Renders the proposed plan as a styled HTML file and opens it in your browser, so long plans are comfortable to read before you approve/reject in the terminal. (The page loads `marked`/`highlight.js` from a CDN for rendering and gracefully falls back to readable raw markdown when offline — it is not fully self-contained.) Runs `async` — never blocks or delays the approval prompt. Markdown is base64-embedded (no escaping can break the page) and decoded as UTF-8 client-side via [marked](https://marked.js.org/) and rendered with a GitHub-dark theme plus [highlight.js](https://highlightjs.org/) syntax highlighting for fenced code; falls back to readable raw markdown when offline. Plans authored as a **full HTML document** are served verbatim (no double-wrap). Output lands in `~/.claude/plans-html/` (newest 50 kept), and the session's latest plan is linked from the **status line** as a clickable OSC-8 hyperlink. |
+| `plan-to-html` | PreToolUse → ExitPlanMode | Renders the proposed plan as a styled HTML file and opens it in your browser, so long plans are comfortable to read before you approve/reject in the terminal. (The page loads `marked`/`highlight.js` from a CDN for rendering and gracefully falls back to readable raw markdown when offline — it is not fully self-contained.) Runs `async` — never blocks or delays the approval prompt. Markdown is base64-embedded (no escaping can break the page) and decoded as UTF-8 client-side via [marked](https://marked.js.org/) and rendered with a GitHub-dark theme plus [highlight.js](https://highlightjs.org/) syntax highlighting for fenced code; falls back to readable raw markdown when offline. Plans authored as a **full HTML document** are served verbatim (no double-wrap). Output lands in `~/.claude/plans-html/` (newest 50 kept), and the session's latest plan is linked from the **status line** as a clickable OSC-8 hyperlink. The status line also warns `cold: next msg re-caches Nk` when the last reply is over an hour old and the context is at least 100k tokens: the main-session prompt cache lives one hour, so that first message re-sends everything at write price. It re-runs every 300 s (`refreshInterval`) so a terminal left open overnight shows it before you type. |
 
 ### Settings shipped
 
@@ -343,6 +344,24 @@ instead of quietly stale.**
 demand, and on any push touching the assumptions. It installs the CLI via npm
 rather than `curl … | bash` — piping a remote script into a shell is exactly what
 this harness's own `network-guard` denies.
+
+Sections 1 to 4 only see what `doctor` and the binary enumerate, so a new tool or
+settings key arrives silently. Section 6 closes that: it reads the changelog
+(`~/.claude/cache/changelog.md` locally; CI downloads it and passes
+`CLAUDE_CHANGELOG_PATH`), lists the harness-relevant entries for every release after
+`last_verified_version`, and exits 2 until someone assesses them and bumps that
+field. Entries naming something the contract already has a decision for are
+included, because that decision may now be stale. The weekly routine is: read
+section 6 of the job summary, record each decision in `upstream-contract.json`,
+bump `last_verified_version`, open a PR.
+
+**`/insights` is a local, monthly input, not a CI step.** It needs a login and a
+model, and it reads your session history, so its report can quote prompts, paths
+and anything a session printed. Keep the report on your machine. Turn what it
+suggests into settings by hand, in a PR, and prefer the harness's own evidence:
+`grep ' | mcp__' ~/.claude/logs/audit.log` for which connectors you use, and the
+`/fewer-permission-prompts` skill for allow rules. Use it only to add `allow` rules; never
+loosen `deny` or `ask` from it. `secret-scanner` still gates whatever lands in `settings.json`.
 
 ## Customization
 
