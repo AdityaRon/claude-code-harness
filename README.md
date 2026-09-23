@@ -341,7 +341,7 @@ an event the check fails with exit 2 until someone either hooks it or writes dow
 why not. **That deliberate nag is the mechanism that keeps this harness current
 instead of quietly stale.**
 
-`.github/workflows/upstream-drift.yml` runs it **weekly on a schedule** plus on
+`.github/workflows/upstream-drift.yml` runs it **daily on a schedule** plus on
 demand, and on any push touching the assumptions. It installs the CLI via npm
 rather than `curl … | bash` — piping a remote script into a shell is exactly what
 this harness's own `network-guard` denies.
@@ -352,9 +352,19 @@ settings key arrives silently. Section 6 closes that: it reads the changelog
 `CLAUDE_CHANGELOG_PATH`), lists the harness-relevant entries for every release after
 `last_verified_version`, and exits 2 until someone assesses them and bumps that
 field. Entries naming something the contract already has a decision for are
-included, because that decision may now be stale. The weekly routine is: read
-section 6 of the job summary, record each decision in `upstream-contract.json`,
-bump `last_verified_version`, open a PR.
+included, because that decision may now be stale.
+
+When the daily run finds a new release, Claude reviews it and opens a **draft PR**
+that edits only `upstream-contract.json`, once per release, assigned to the repo
+owner. New settings, and anything touching deny, ask or a guard, come back as
+questions in the PR body, never as changes. Your part: read and approve, merge,
+`bash install.sh`. Without a token the same run keeps one open issue with section 6
+instead. Locally, `session-start` says when the installed CLI is past the contract.
+
+Setup, once: run `/install-github-app` in Claude Code for this repo. It installs
+the Claude GitHub App, which lets the draft PR run CI, and stores
+`CLAUDE_CODE_OAUTH_TOKEN`; confirm with `gh secret list`. The reviews use your
+plan's usage.
 
 **`/insights` is a local, monthly input, not a CI step.** It needs a login and a
 model, and it reads your session history, so its report can quote prompts, paths

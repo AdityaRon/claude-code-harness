@@ -61,6 +61,13 @@ cp "$REPO/bin/session-route.sh" ~/.claude/session-route.sh
 chmod +x ~/.claude/session-route.sh
 echo "  ✓ session-route.sh"
 
+# ---- Contract pin -----------------------------------------------------
+# session-start.sh compares this with `claude --version`, so a session says when
+# the CLI has moved past the release the harness was checked against.
+sed -n 's/.*"last_verified_version": *"\([^ "]*\).*/\1/p' "$REPO/config/upstream-contract.json" \
+  > ~/.claude/harness-contract.version
+echo "  ✓ harness-contract.version"
+
 for skill in "$REPO"/skills/*/; do
   [[ -d "$skill" ]] || continue
   name=$(basename "$skill")

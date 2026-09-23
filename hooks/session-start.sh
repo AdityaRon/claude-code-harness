@@ -79,6 +79,20 @@ if [[ -n "$INDEX_TOOL" && -f "$PROJECTS_DIR/$STORE_SLUG/memory/MEMORY.md" ]]; th
   fi
 fi
 
+# --- CLI ahead of the harness contract --------------------------------------
+# install.sh records the release the contract was verified at. `claude --version`
+# measured 0.07s here, cheap enough to run on every start.
+PIN_FILE=$(expand_tilde "${CLAUDE_CONTRACT_PIN:-$HOME/.claude/harness-contract.version}")
+if [[ -f "$PIN_FILE" ]]; then
+  PIN=$(head -1 "$PIN_FILE")
+  CLI=${CLAUDE_CLI_VERSION:-$(claude --version 2>/dev/null | cut -d' ' -f1)}
+  if [[ -n "$PIN" && -n "$CLI" && "$CLI" != "$PIN" ]]; then
+    echo ""
+    echo "## Claude Code is past the harness contract"
+    echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift workflow drafts the review PR. After it merges, run bash install.sh."
+  fi
+fi
+
 # Resume-drift detection. Only meaningful for source=resume, and only when
 # jq and a prior snapshot both exist.
 [[ "$SOURCE" != "resume" ]] && exit 0
