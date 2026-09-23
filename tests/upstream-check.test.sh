@@ -20,7 +20,7 @@ fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 check_contains(){ case "$3" in *"$2"*) pass "$1" ;; *) fail "$1" "expected: $2" ;; esac; }
 check_absent(){   case "$3" in *"$2"*) fail "$1" "unexpected: $2" ;; *) pass "$1" ;; esac; }
 
-# The real list as of 2.1.266 (PreModelSwitch/PostModelSwitch arrived in 2.1.251).
+# The real list as of 2.1.280 (PreModelSwitch/PostModelSwitch arrived in 2.1.251).
 #
 # This models what UPSTREAM offers, so it is deliberately hardcoded rather than
 # read from upstream-contract.json: the contract is what this harness has
@@ -309,6 +309,15 @@ OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" run "$ALL_EVENTS" "$ALL_MODES");
 OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION=9.9.3 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
 [ "$ST" -eq 2 ] && pass "unlisted CLI version still reports" || fail "unlisted CLI version still reports" "exit=$ST"
 check_contains "from the newest listed release" "2 release(s) since" "$OUT"
+
+# The next release often ships before its changelog heading. With the pin at the
+# newest heading, that must still warn rather than read as verified.
+OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION=9.9.3 run "$ALL_EVENTS" "$ALL_MODES")
+check_contains "an unlisted newer CLI says so" "CLI 9.9.3 has no changelog heading" "$OUT"
+jq '.last_verified_version="9.9.2 (Claude Code)"' config/upstream-contract.json > "$TMP/c.json"
+OUT=$(CLAUDE_UPSTREAM_CONTRACT="$TMP/c.json" CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION=9.9.3 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 2 ] && pass "pin at newest heading, CLI ahead: exits 2" || fail "pin at newest, CLI ahead exits 2" "exit=$ST"
+check_absent "and does not claim verified" "contract verified" "$OUT"
 
 grep -v "^## $PIN\$" "$TMP/changelog.md" > "$TMP/nopin.md"
 OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/nopin.md" CLAUDE_CLI_VERSION=9.9.2 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
