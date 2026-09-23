@@ -32,3 +32,5 @@
   and push the fix upstream.
 - Before compacting or clearing, write state into a durable tracker: settled,
   open, next.
+- When compacting, keep the files modified, the commands that verify them, open
+  questions, and the next step.
