@@ -122,5 +122,18 @@ OUT=$(strip "$(run "$PAY")")
 printf '%s' "$OUT" | grep -qF ':deadbee' && pass "detached HEAD -> short SHA" || fail "detached HEAD" "$OUT"
 
 echo ""
+echo "=== cold cache warning from prompt_cache, large rewrites only ==="
+pc(){ printf '{"model":{"display_name":"O"},"context_window":{"used_percentage":50},"prompt_cache":{"warm":false,"expires_at":%s,"recache_tokens_if_cold":%s}}' "$1" "$2"; }
+PAST=$(( $(date +%s) - 60 )); FUTURE=$(( $(date +%s) + 600 ))
+OUT=$(strip "$(run "$(pc "$PAST" 530000)")")
+[[ "$OUT" == *"cold: next msg re-caches 530k"* ]] && pass "expired large cache warns" || fail "expired large cache warns" "$OUT"
+OUT=$(strip "$(run "$(pc "$PAST" 40000)")")
+[[ "$OUT" != *"cold:"* ]] && pass "small rewrite stays quiet" || fail "small rewrite stays quiet" "$OUT"
+OUT=$(strip "$(run "$(pc "$FUTURE" 530000)")")
+[[ "$OUT" != *"cold:"* ]] && pass "unexpired cache stays quiet" || fail "unexpired cache stays quiet" "$OUT"
+OUT=$(strip "$(run "$(pc null null)")")
+[[ "$OUT" != *"cold:"* ]] && pass "null fields stay quiet" || fail "null fields stay quiet" "$OUT"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

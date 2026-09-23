@@ -127,5 +127,26 @@ grep -qF "| mcp__claude_ai_Google_Drive__list_recent_files | keys=none |" "$CLAU
   || fail "inputless mcp call still recorded" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
 
 echo ""
+echo "=== Agent spawn: type and model, never the prompt ==="
+run '{"hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"description":"DESCSECRET","prompt":"PROMPTSECRET","subagent_type":"Explore","model":"haiku"}}'
+grep -qF "| Agent | type=Explore model=haiku isolation=none |" "$CLAUDE_AUDIT_LOG" \
+  && pass "agent spawn logged" || fail "agent spawn logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+run '{"hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"prompt":"x"}}'
+grep -qF "| Agent | type=general-purpose model=inherit isolation=none |" "$CLAUDE_AUDIT_LOG" \
+  && pass "defaults named when omitted" || fail "defaults named when omitted" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+
+echo ""
+echo "=== SendMessage: recipient and size, never the body ==="
+run '{"hook_event_name":"PostToolUse","tool_name":"SendMessage","tool_input":{"to":"reviewer [3fa9c1]","summary":"SUMSECRET","message":"BODYSECRET"}}'
+grep -qF "| SendMessage | to=reviewer [3fa9c1] chars=10 notify_when_idle=false |" "$CLAUDE_AUDIT_LOG" \
+  && pass "peer message logged" || fail "peer message logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+run '{"hook_event_name":"PostToolUse","tool_name":"SendMessage","tool_input":{"to":"worker","notify_when_idle":true}}'
+grep -qF "| SendMessage | to=worker chars=0 notify_when_idle=true |" "$CLAUDE_AUDIT_LOG" \
+  && pass "idle subscription logged" || fail "idle subscription logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+for s in DESCSECRET PROMPTSECRET SUMSECRET BODYSECRET; do
+  grep -qF "$s" "$CLAUDE_AUDIT_LOG" && fail "$s stays out of the log" "" || pass "$s stays out of the log"
+done
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

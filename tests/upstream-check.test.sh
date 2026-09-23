@@ -20,7 +20,7 @@ fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 check_contains(){ case "$3" in *"$2"*) pass "$1" ;; *) fail "$1" "expected: $2" ;; esac; }
 check_absent(){   case "$3" in *"$2"*) fail "$1" "unexpected: $2" ;; *) pass "$1" ;; esac; }
 
-# The real list as of 2.1.266 (PreModelSwitch/PostModelSwitch arrived in 2.1.251).
+# The real list as of 2.1.280 (PreModelSwitch/PostModelSwitch arrived in 2.1.251).
 #
 # This models what UPSTREAM offers, so it is deliberately hardcoded rather than
 # read from upstream-contract.json: the contract is what this harness has
@@ -54,6 +54,8 @@ echo "No installation issues found."
 STUB
 chmod +x "$TMP/stub.sh"
 export CLAUDE_DOCTOR_CMD="bash $TMP/stub.sh"
+# Section 6 would otherwise read this machine's cached changelog.
+export CLAUDE_CHANGELOG_PATH="$TMP/no-changelog.md"
 
 # A stand-in for the CLI file that check 4b greps. Without this the tests would
 # scan the real ~150MB binary once per settings key per invocation — slow, and it
@@ -265,6 +267,68 @@ printf '%s' "$OUT" | grep -qF "matches the contract" \
   && fail "and does not claim a match" "reported a match it never verified" \
   || pass "and does not claim a match"
 
+
+echo "=== 6. releases since last_verified_version (exit 2) ==="
+PIN=$(jq -r '.last_verified_version' config/upstream-contract.json); PIN=${PIN%% *}
+cat > "$TMP/changelog.md" <<EOF
+# Changelog
+
+## 9.9.2
+
+- Added a \`NewShinyTool\` tool for doing things
+- Fixed the mouse wheel in fullscreen mode
+- [VSCode] Added a hooks dialog
+- Changed SendMessage to accept attachments
+
+## 9.9.1
+
+- Fixed a typo in /help
+
+## $PIN
+
+- Added something already assessed
+EOF
+OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION=9.9.2 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 2 ] && pass "unassessed releases exit 2" || fail "unassessed releases exit 2" "exit=$ST"
+check_contains "counts both releases" "2 release(s) since $PIN" "$OUT"
+check_contains "surfaces an Added line" "NewShinyTool" "$OUT"
+check_contains "surfaces a line naming an acknowledged tool" "SendMessage to accept" "$OUT"
+check_absent "drops unrelated fixes" "mouse wheel" "$OUT"
+check_absent "drops editor-only lines" "[VSCode]" "$OUT"
+check_absent "drops a release with no hits" "## 9.9.1" "$OUT"
+check_absent "stops at the verified release" "already assessed" "$OUT"
+
+OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION="$PIN" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 0 ] && pass "verified at the installed version exits 0" || fail "verified at installed version exits 0" "exit=$ST"
+
+# Under test VERSION is "(stubbed)": fall back to the changelog's newest release.
+OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 2 ] && pass "unknown CLI version uses the newest release" || fail "unknown version falls back" "exit=$ST"
+
+# 2.1.279 shipped with no heading: an unlisted version must not read as "nothing new".
+OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION=9.9.3 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 2 ] && pass "unlisted CLI version still reports" || fail "unlisted CLI version still reports" "exit=$ST"
+check_contains "from the newest listed release" "2 release(s) since" "$OUT"
+
+# The next release often ships before its changelog heading. With the pin at the
+# newest heading, that must still warn rather than read as verified.
+OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION=9.9.3 run "$ALL_EVENTS" "$ALL_MODES")
+check_contains "an unlisted newer CLI says so" "CLI 9.9.3 has no changelog heading" "$OUT"
+jq '.last_verified_version="9.9.2 (Claude Code)"' config/upstream-contract.json > "$TMP/c.json"
+OUT=$(CLAUDE_UPSTREAM_CONTRACT="$TMP/c.json" CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION=9.9.3 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 2 ] && pass "pin at newest heading, CLI ahead: exits 2" || fail "pin at newest, CLI ahead exits 2" "exit=$ST"
+check_absent "and does not claim verified" "contract verified" "$OUT"
+
+grep -v "^## $PIN\$" "$TMP/changelog.md" > "$TMP/nopin.md"
+OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/nopin.md" CLAUDE_CLI_VERSION=9.9.2 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 2 ] && pass "unlisted pin exits 2" || fail "unlisted pin exits 2" "exit=$ST"
+check_contains "and names the problem" "has no changelog heading" "$OUT"
+check_absent "without dumping the whole changelog" "already assessed" "$OUT"
+check_absent "and does not claim verified" "contract verified" "$OUT"
+
+OUT=$(run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 0 ] && pass "absent changelog skips" || fail "absent changelog skips" "exit=$ST"
+check_contains "and says so" "skipped: no changelog" "$OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

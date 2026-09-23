@@ -57,8 +57,10 @@ _JQOUT=$(printf '%s' "$INPUT" | jq -r '
   (if ($r5 != null or $r7 != null) then " │ \($rc)5h:\(($r5 // 0)|floor)% 7d:\(($r7 // 0)|floor)%\($r)" else "" end) as $rl |
   "\($model) │ \($cy)\($repo)__BR__\($r) │ \($c)\($bar)\($r) \($pct)%\($warn) │ \($dim)in:\($in|fmt) out:\($out|fmt) cache:\($cache|fmt)\($r) │ \($costs)\($dur)\($lines)\($style)\($rl)"
   + "" + (.session_id // "") + "" + (.workspace.current_dir // .cwd // "")
+  + "" + "\(.prompt_cache.expires_at // "")"
+  + "" + "\(.prompt_cache.recache_tokens_if_cold // "")"
 ')
-IFS=$'\x1f' read -r LINE SID CDIR <<< "$_JQOUT"
+IFS=$'\x1f' read -r LINE SID CDIR EXPIRES RECACHE <<< "$_JQOUT"
 
 # jq missing or unparseable input -> fail visible-but-calm, never blank.
 [[ -n "$LINE" ]] || { printf 'Claude Code\n'; exit 0; }
@@ -119,4 +121,14 @@ if [[ -n "$SID" ]]; then
   fi
 fi
 
-printf '%s%s%s\n' "$LINE" "$PLAN_SEG" "$WF_SEG"
+# Cold cache: the first message after expires_at re-sends the whole context at
+# cache-write price (measured: 250k-530k tokens on overnight resumes). Both
+# fields come from upstream's prompt_cache object (2.1.251+), which follows the
+# real TTL. Only worth saying when the rewrite is large.
+COLD_SEG=""
+if [[ "$EXPIRES" =~ ^[0-9]+$ && "$RECACHE" =~ ^[0-9]+$ ]] \
+   && (( RECACHE >= 100000 && $(date +%s) > EXPIRES )); then
+  COLD_SEG=$(printf ' │ \033[33mcold: next msg re-caches %sk, consider /clear + handoff\033[0m' "$((RECACHE / 1000))")
+fi
+
+printf '%s%s%s%s\n' "$LINE" "$COLD_SEG" "$PLAN_SEG" "$WF_SEG"

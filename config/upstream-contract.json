@@ -22,8 +22,8 @@
     "capability no one has noticed will not appear here on its own — that is a",
     "standing limitation, and the check prints it rather than implying coverage."
   ],
-  "last_verified_version": "2.1.266 (Claude Code)",
-  "last_verified_date": "2026-09-09",
+  "last_verified_version": "2.1.280 (Claude Code)",
+  "last_verified_date": "2026-09-22",
   "acknowledged_surface": {
     "_comment": [
       "Capability -> the decision a human made about it. Verified by substring",
@@ -37,7 +37,12 @@
     "settings_keys": {
       "crossSessionInbound": "Acknowledged 2026-08-27, deliberately NOT set. With permissions.defaultMode 'auto' the receiving session counts as prompting, so inbound messages are delivered and a value would change nothing here. Left unset on purpose: an adopter running bypassPermissions gets holds instead, and that is the correct default for them. Revisit if this harness ever ships bypassPermissions.",
       "isolatePeerMachines": "Acknowledged 2026-08-27, deliberately NOT set. Requires approval before a message leaves the machine. Only meaningful with Remote Control connected, which this harness does not configure. Set it to true if this machine ever joins one.",
-      "dialogExpiry": "Acknowledged 2026-08-27, deliberately NOT set. Governs how long a held inbound message waits for approval (default five minutes). The default is right for interactive use; a long-running `claude -p` worker wanting unattended delivery should set crossSessionInbound rather than stretch this."
+      "dialogExpiry": "Acknowledged 2026-08-27, deliberately NOT set. Governs how long a held inbound message waits for approval (default five minutes). The default is right for interactive use; a long-running `claude -p` worker wanting unattended delivery should set crossSessionInbound rather than stretch this.",
+      "subagentPromptCacheTtl": "Acknowledged 2026-09-22, deliberately NOT set. Measured over 14 days of this machine's transcripts: main-session cache writes were all 1h (6,869), subagent writes all 5m (1,624). Only 4 of 1,614 subagent turns followed a gap over 5 minutes (303,618 tokens re-cached). Raising it would put every subagent write on the pricier 1h rate to save those 4. Revisit if the audit log's Agent lines show long-lived background subagents.",
+      "syncClaudeAiSkills": "Acknowledged 2026-09-22 (2.1.275), NOT set, so skills enabled on the claude.ai account sync into terminal sessions. Open question for the owner: synced skills can carry inline shell commands that run under this machine's allow rules. Set false (with syncClaudeAiPlugins) to keep terminal skills to what is installed locally.",
+      "syncClaudeAiPlugins": "Acknowledged 2026-09-22 (2.1.275), NOT set. Same decision and open question as syncClaudeAiSkills; change the two together.",
+      "maxEffortLevel": "Acknowledged 2026-09-22 (2.1.267), NOT set. Caps effort for every model and subagent. The harness ships effortLevel xhigh and has no measurement that a cap would save anything without costing quality; revisit with the audit log's Agent lines.",
+      "bashEditDiffEnabled": "Acknowledged 2026-09-22 (2.1.269), NOT set. Adds a diff of files a Bash command changed to its result. Useful but grows every such tool result; left to the user."
     }
   },
   "acknowledged_hook_events": [
@@ -106,7 +111,13 @@
     "autoMode.{allow,soft_deny,hard_deny,environment}": "Native rule layer. VERIFIED 2026-09-09, replacing an earlier guess that read 'appears to replace the shipped defaults': a category set WITHOUT the literal string \"$defaults\" in its array does replace the entire default list for that section -- for soft_deny that discards every built-in soft block including force push, curl-pipe-bash, production deploys and auto-mode bypass; for hard_deny it discards the built-in data-exfiltration rule. Including \"$defaults\" splices the defaults in at that position, so entries can go before or after them. The harness shipping none was therefore the right call, but the reason is now a fact with a documented escape hatch rather than an assumption, so adding entries is safe PROVIDED \"$defaults\" is always present. autoMode.environment is prose describing which repos, buckets and domains are trusted, and is the documented lever for reducing classifier denials -- preferred over widening permissions.allow, because the two are independent gates: permissions is consulted first, the classifier second.",
     "auto-dream memory consolidation": "Background memory hygiene with its own lock and rollback. See docs/memory-hygiene-research.md — do not rebuild it.",
     "shared/team memory sync": "Server-side concurrent-write rejection, mass-delete guard, and secret scanning on memory writes.",
-    "sandbox": "OS-level containment; the real boundary the regex guards only approximate."
+    "sandbox": "OS-level containment; the real boundary the regex guards only approximate.",
+    "symlink-aware native permission rules": "2.1.268 applies deny/ask rules to a path's real location and 2.1.280 judges writes by where they land. Overlaps sensitive-file-guard's symlink resolution. Keep the guard: it also covers Grep and reads that no shipped deny rule names.",
+    "per-command allowed_domains": "2.1.271, auto mode with sandboxing only. Overlaps network-guard's domain allowlist, but the harness ships sandbox.enabled false, so it does not apply here.",
+    "Read/Edit deny on unanalyzable Bash lines": "Added in 2.1.268, REVERTED in 2.1.273: eval / env -C lines prompt again instead of being denied. The hole interpreter-guard and env-guard cover is open upstream; both stay.",
+    "Artifact tool vs WebFetch rules": "2.1.268: WebFetch deny/ask rules no longer apply to Artifact reads and publishes, and network-guard is matched on WebFetch only. Publishing to claude.ai is therefore unguarded and unaudited here. Open question for the owner: add Artifact to the audit matcher.",
+    "auto mode and skill inline ! commands": "2.1.271: a skill's or slash command's inline ! commands follow permission rules, not the classifier. The shipped allow list includes broad entries (Bash(python3:*), Bash(node:*)), so such a command matching them runs without classifier review. Open question for the owner.",
+    "Claude in Chrome per-site check in auto mode": "2.1.275: classifier-approved browser calls skip the extension's per-site check. No harness guard covers browser tools; the MCP audit census records them."
   },
   "memory_index_limits": {
     "_comment": [
