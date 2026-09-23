@@ -22,8 +22,8 @@
     "capability no one has noticed will not appear here on its own — that is a",
     "standing limitation, and the check prints it rather than implying coverage."
   ],
-  "last_verified_version": "2.1.280 (Claude Code)",
-  "last_verified_date": "2026-09-22",
+  "last_verified_version": "2.1.281 (Claude Code)",
+  "last_verified_date": "2026-09-23",
   "acknowledged_surface": {
     "_comment": [
       "Capability -> the decision a human made about it. Verified by substring",
@@ -42,7 +42,8 @@
       "syncClaudeAiSkills": "Acknowledged 2026-09-22 (2.1.275), NOT set, so skills enabled on the claude.ai account sync into terminal sessions. Open question for the owner: synced skills can carry inline shell commands that run under this machine's allow rules. Set false (with syncClaudeAiPlugins) to keep terminal skills to what is installed locally.",
       "syncClaudeAiPlugins": "Acknowledged 2026-09-22 (2.1.275), NOT set. Same decision and open question as syncClaudeAiSkills; change the two together.",
       "maxEffortLevel": "Acknowledged 2026-09-22 (2.1.267), NOT set. Caps effort for every model and subagent. The harness ships effortLevel xhigh and has no measurement that a cap would save anything without costing quality; revisit with the audit log's Agent lines.",
-      "bashEditDiffEnabled": "Acknowledged 2026-09-22 (2.1.269), NOT set. Adds a diff of files a Bash command changed to its result. Useful but grows every such tool result; left to the user."
+      "bashEditDiffEnabled": "Acknowledged 2026-09-22 (2.1.269), NOT set. Adds a diff of files a Bash command changed to its result. Useful but grows every such tool result; left to the user.",
+      "attribution": "Acknowledged 2026-09-23 (2.1.281), NOT set. `false` hides all commit and PR attribution. The harness wants the co-author line (includeCoAuthoredBy true), and older CLIs skip a settings file holding the boolean form."
     }
   },
   "acknowledged_hook_events": [
@@ -115,9 +116,12 @@
     "symlink-aware native permission rules": "2.1.268 applies deny/ask rules to a path's real location and 2.1.280 judges writes by where they land. Overlaps sensitive-file-guard's symlink resolution. Keep the guard: it also covers Grep and reads that no shipped deny rule names.",
     "per-command allowed_domains": "2.1.271, auto mode with sandboxing only. Overlaps network-guard's domain allowlist, but the harness ships sandbox.enabled false, so it does not apply here.",
     "Read/Edit deny on unanalyzable Bash lines": "Added in 2.1.268, REVERTED in 2.1.273: eval / env -C lines prompt again instead of being denied. The hole interpreter-guard and env-guard cover is open upstream; both stay.",
-    "Artifact tool vs WebFetch rules": "2.1.268: WebFetch deny/ask rules no longer apply to Artifact reads and publishes, and network-guard is matched on WebFetch only. Audited, not guarded: audit.sh logs Artifact, ArtifactData and ArtifactComments calls (action, url, ids, never content). Decide on a guard from that census.",
+    "Artifact tool vs WebFetch rules": "2.1.268: WebFetch deny/ask rules no longer apply to Artifact reads and publishes, and network-guard is matched on WebFetch only. Audited, not guarded: audit.sh logs Artifact, ArtifactData and ArtifactComments calls (action, url, ids, never content). Decide on a guard from that census. 2.1.281: artifact pages may also load scripts from unpkg.com; same census.",
     "auto mode and skill inline ! commands": "2.1.271: a skill's or slash command's inline ! commands follow permission rules, not the classifier. The shipped allow list includes broad entries (Bash(python3:*), Bash(node:*)), so such a command matching them runs without classifier review. Open question for the owner.",
-    "Claude in Chrome per-site check in auto mode": "2.1.275: classifier-approved browser calls skip the extension's per-site check. No harness guard covers browser tools; the MCP audit census records them."
+    "Claude in Chrome per-site check in auto mode": "2.1.275: classifier-approved browser calls skip the extension's per-site check. No harness guard covers browser tools; the MCP audit census records them.",
+    "recursive rm prompts in auto mode": "2.1.281: rm whose target is only command-substitution output (rm -rf \"$(pwd)\") now asks even with a Bash allow rule, and in auto mode the dangerous-rm prompt denies after 2 minutes with a rewrite hint. The shipped deny Bash(rm -rf:*) already refuses the literal form. Both opt-outs (CLAUDE_CODE_DISABLE_SUBSTITUTION_RM_PROMPT, CLAUDE_CODE_DISABLE_DANGEROUS_RM_TIMEOUT) stay unset.",
+    "server-side auto mode classifier": "2.1.281: where the classifier runs server-side, read-only and sandboxed shell commands also wait for it, and CLAUDE_CODE_AUTO_MODE_SERVER now applies on a direct API connection. The PreToolUse guards run first either way. Not set.",
+    "permission rules with a NUL byte": "2.1.281: such a rule now matches nothing instead of acting as a wildcard. No shipped rule has one."
   },
   "memory_index_limits": {
     "_comment": [
