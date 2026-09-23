@@ -113,7 +113,10 @@ jobs:
       # upstream input, so it reaches Claude as a file, never through ${{ }}.
       # Reads are scoped to the checkout and there is no jq or network tool: the
       # OAuth token sits in this process's environment, and anything Claude can
-      # read it can write into a public PR body.
+      # read it can write into a public PR body. The GitHub MCP servers are not
+      # wired in agent mode with these tools (install-mcp-server.ts at the pin);
+      # denying them keeps that true if the pin moves. project-only settings stop
+      # a ~/.claude/settings.json written during `npm install -g` from loading.
       - name: Claude reviews the new releases
         id: claude
         if: steps.plan.outputs.mode == 'draft'
@@ -125,7 +128,8 @@ jobs:
           claude_args: >-
             --max-turns 40
             --allowedTools "Read(./**),Edit(config/upstream-contract.json),Write(pr-body.md),Bash(bash bin/upstream-check.sh)"
-            --disallowedTools "WebFetch,WebSearch"
+            --disallowedTools "WebFetch,WebSearch,mcp__github,mcp__github_comment,mcp__github_file_ops,mcp__github_inline_comment,mcp__github_ci"
+            --setting-sources project
           prompt: |
             Claude Code ${{ steps.plan.outputs.cur }} is newer than the release this
             harness was verified at. drift.log is the output of bin/upstream-check.sh;
