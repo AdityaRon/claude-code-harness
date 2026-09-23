@@ -121,7 +121,8 @@
     "Claude in Chrome per-site check in auto mode": "2.1.275: classifier-approved browser calls skip the extension's per-site check. No harness guard covers browser tools; the MCP audit census records them.",
     "recursive rm prompts in auto mode": "2.1.281: rm whose target is only command-substitution output (rm -rf \"$(pwd)\") now asks even with a Bash allow rule, and in auto mode the dangerous-rm prompt denies after 2 minutes with a rewrite hint. The shipped deny Bash(rm -rf:*) already refuses the literal form. Both opt-outs (CLAUDE_CODE_DISABLE_SUBSTITUTION_RM_PROMPT, CLAUDE_CODE_DISABLE_DANGEROUS_RM_TIMEOUT) stay unset.",
     "server-side auto mode classifier": "2.1.281: where the classifier runs server-side, read-only and sandboxed shell commands also wait for it, and CLAUDE_CODE_AUTO_MODE_SERVER now applies on a direct API connection. The PreToolUse guards run first either way. Not set.",
-    "permission rules with a NUL byte": "2.1.281: such a rule now matches nothing instead of acting as a wildcard. No shipped rule has one."
+    "permission rules with a NUL byte": "2.1.281: such a rule now matches nothing instead of acting as a wildcard. No shipped rule has one.",
+    "per-model effort on new models": "2.1.280: an effort level saved before /effort became per-model no longer applies to newly released models; they start at their default. Missed at the 2.1.280 review. Measured on this Mac 2026-09-23: Opus 5 messages ran xhigh, Opus 5.5 messages ran medium, despite effortLevel xhigh here. Fix per model with /effort; the status line now shows the live level."
   },
   "memory_index_limits": {
     "_comment": [

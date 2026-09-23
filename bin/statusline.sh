@@ -3,7 +3,7 @@
 # (resolved subprocess-free from .git/HEAD, worktree-aware) and the plan/wf
 # links (from session pointer files). No git subprocess, no external tools
 # beyond jq. Degrades gracefully when fields — or jq — are missing.
-# model │ repo:branch │ context bar+% │ tokens │ $cost·dur │ +/-lines │ [style] │ [rate] │ plan │ wf
+# model effort │ repo:branch │ context bar+% │ tokens │ $cost·dur │ +/-lines │ [style] │ [rate] │ plan │ wf
 export PATH="/opt/homebrew/bin:$PATH"
 # Silence stderr in normal use; set CLAUDE_STATUSLINE_DEBUG=1 to see errors.
 [[ -z "${CLAUDE_STATUSLINE_DEBUG:-}" ]] && exec 2>/dev/null
@@ -30,8 +30,17 @@ _JQOUT=$(printf '%s' "$INPUT" | jq -r '
   (.output_style.name) as $os |
   (.rate_limits.five_hour.used_percentage) as $r5 |
   (.rate_limits.seven_day.used_percentage) as $r7 |
+  (.effort.level // "") as $eff |
   "[0m" as $r | "[38;5;248m" as $dim | "[36m" as $cy |
   "[32m" as $grn | "[31m" as $red | "[33m" as $yel |
+  # Effort next to the model. 2.1.280 reset saved levels on new models (Opus
+  # 5.5 came up at medium, not the configured xhigh) with nothing on screen.
+  # Yellow below high; fast mode and thinking-off show only when they apply.
+  (if $eff == "" then ""
+   elif ($eff == "low" or $eff == "medium") then " \($yel)\($eff)\($r)"
+   else " \($dim)\($eff)\($r)" end) as $effs |
+  (if .fast_mode == true then " \($yel)fast\($r)" else "" end) as $fast |
+  (if .thinking.enabled == false then " \($yel)no-think\($r)" else "" end) as $think |
   (if $pct >= 70 then $red elif $pct >= 50 then $yel else $grn end) as $c |
   ([([$pct / 10 | floor, 0] | max), 10] | min) as $f |
   (10 - $f) as $e |
@@ -55,7 +64,7 @@ _JQOUT=$(printf '%s' "$INPUT" | jq -r '
   ([($r5 // 0), ($r7 // 0)] | max) as $rmax |
   (if $rmax >= 90 then $red elif $rmax >= 70 then $yel else $dim end) as $rc |
   (if ($r5 != null or $r7 != null) then " │ \($rc)5h:\(($r5 // 0)|floor)% 7d:\(($r7 // 0)|floor)%\($r)" else "" end) as $rl |
-  "\($model) │ \($cy)\($repo)__BR__\($r) │ \($c)\($bar)\($r) \($pct)%\($warn) │ \($dim)in:\($in|fmt) out:\($out|fmt) cache:\($cache|fmt)\($r) │ \($costs)\($dur)\($lines)\($style)\($rl)"
+  "\($model)\($effs)\($fast)\($think) │ \($cy)\($repo)__BR__\($r) │ \($c)\($bar)\($r) \($pct)%\($warn) │ \($dim)in:\($in|fmt) out:\($out|fmt) cache:\($cache|fmt)\($r) │ \($costs)\($dur)\($lines)\($style)\($rl)"
   + "" + (.session_id // "") + "" + (.workspace.current_dir // .cwd // "")
   + "" + "\(.prompt_cache.expires_at // "")"
   + "" + "\(.prompt_cache.recache_tokens_if_cold // "")"
