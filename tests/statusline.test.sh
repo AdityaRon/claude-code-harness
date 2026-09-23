@@ -135,5 +135,14 @@ OUT=$(strip "$(run "$(pc null null)")")
 [[ "$OUT" != *"cold:"* ]] && pass "null fields stay quiet" || fail "null fields stay quiet" "$OUT"
 
 echo ""
+echo "=== Effort beside the model; fast and thinking-off only when they apply ==="
+OUT=$(run '{"model":{"display_name":"Opus 5.5"},"context_window":{"used_percentage":1},"effort":{"level":"medium"}}')
+printf '%s' "$OUT" | grep -q $'Opus 5.5 \x1b\[33mmedium' && pass "medium is yellow" || fail "medium is yellow" "$(strip "$OUT")"
+OUT=$(strip "$(run '{"model":{"display_name":"Opus 5.5"},"context_window":{"used_percentage":1},"effort":{"level":"xhigh"},"fast_mode":true,"thinking":{"enabled":false}}')")
+[[ "$OUT" == "Opus 5.5 xhigh fast no-think │"* ]] && pass "xhigh, fast, no-think" || fail "xhigh, fast, no-think" "$OUT"
+OUT=$(strip "$(run '{"model":{"display_name":"Opus 5.5"},"context_window":{"used_percentage":1},"fast_mode":false,"thinking":{"enabled":true}}')")
+[[ "$OUT" == "Opus 5.5 │"* ]] && pass "quiet when absent or default" || fail "quiet when absent or default" "$OUT"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
