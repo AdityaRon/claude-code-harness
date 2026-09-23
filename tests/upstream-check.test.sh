@@ -276,6 +276,9 @@ cat > "$TMP/changelog.md" <<EOF
 ## 9.9.2
 
 - Added a \`NewShinyTool\` tool for doing things
+- Added mouse support to more lists in fullscreen mode
+- Added \`someNewKey\` to opt out of syncing
+- Fixed a subagent spinner flicker
 - Fixed the mouse wheel in fullscreen mode
 - [VSCode] Added a hooks dialog
 - Changed SendMessage to accept attachments
@@ -294,6 +297,9 @@ check_contains "counts both releases" "2 release(s) since $PIN" "$OUT"
 check_contains "surfaces an Added line" "NewShinyTool" "$OUT"
 check_contains "surfaces a line naming an acknowledged tool" "SendMessage to accept" "$OUT"
 check_absent "drops unrelated fixes" "mouse wheel" "$OUT"
+check_absent "drops an Added line with no feature term" "mouse support" "$OUT"
+check_contains "keeps an Added line naming a camelCase key" "someNewKey" "$OUT"
+check_absent "drops a Fixed line that only mentions subagents" "spinner flicker" "$OUT"
 check_absent "drops editor-only lines" "[VSCode]" "$OUT"
 check_absent "drops a release with no hits" "## 9.9.1" "$OUT"
 check_absent "stops at the verified release" "already assessed" "$OUT"
