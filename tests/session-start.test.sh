@@ -149,6 +149,18 @@ check_not_contains "silent without a store" "Memory index reordered" "$OUT"
 check_eq "created nothing" "0" "$(ls -1 "$CLAUDE_MEMORY_PROJECTS_DIR" | wc -l | tr -d ' ')"
 
 echo ""
+echo "=== git context: skipped on startup (the CLI's own gitStatus has it), kept on resume ==="
+if git rev-parse --git-dir &>/dev/null 2>&1; then
+  payload=$(jq -nc '{source:"startup", session_id:"sess-git", hook_event_name:"SessionStart"}')
+  OUT=$(printf '%s' "$payload" | bash "$HOOK" 2>/dev/null)
+  check_not_contains "startup prints no git block" "## Git context" "$OUT"
+  OUT=$(run_resume "sess-git")
+  check_contains     "resume still prints it"     "## Git context" "$OUT"
+else
+  echo "  SKIP: git-context test (not in a git repo)"
+fi
+
+echo ""
 echo "=== CLI past the contract pin → one nudge; same version or no pin → silent ==="
 printf '2.1.280\n' > "$TMP/pin"
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
@@ -157,6 +169,19 @@ OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.280 run_resume "sess
 check_not_contains "silent at the pinned version" "past the harness contract" "$OUT"
 OUT=$(CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
 check_not_contains "silent without a pin file" "past the harness contract" "$OUT"
+
+echo ""
+echo "=== the nudge is stamped: once per CLI version per day, not every session ==="
+# It fired in every session in every repo while the CLI was ahead of the pin,
+# and nothing the reader can do changes between two sessions on the same day.
+OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
+check_not_contains "second session the same day is silent" "past the harness contract" "$OUT"
+check_eq "stamp lives in the state dir" "2.1.281 $(date +%Y-%m-%d)" "$(head -1 "$CLAUDE_STATE_DIR/contract-nudge")"
+OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.282 run_resume "sess-clean")
+check_contains "a newer CLI nudges again" "Installed 2.1.282; the harness was verified at 2.1.280" "$OUT"
+printf '2.1.282 2000-01-01\n' > "$CLAUDE_STATE_DIR/contract-nudge"
+OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.282 run_resume "sess-clean")
+check_contains "and so does a stale stamp from another day" "Installed 2.1.282" "$OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

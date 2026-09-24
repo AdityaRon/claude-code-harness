@@ -13,8 +13,10 @@ read_input
 SOURCE=$(jq_get '.source')
 SESSION_ID=$(jq_get '.session_id')
 
-# Silently exit if not inside a git repo
-if git rev-parse --git-dir &>/dev/null 2>&1; then
+# Skipped on startup: the CLI's own system prompt already carries branch,
+# main branch, status and `git log --oneline -n 5` (its gitStatus block), so
+# this was a second copy. On resume/compact/clear that snapshot may be stale.
+if [[ "$SOURCE" != "startup" ]] && git rev-parse --git-dir &>/dev/null 2>&1; then
   BRANCH=$(git branch --show-current 2>/dev/null || echo "detached HEAD")
   DIRTY=$(git status --short 2>/dev/null | head -10)
   COMMITS=$(git log --oneline -5 2>/dev/null)
@@ -79,17 +81,26 @@ if [[ -n "$INDEX_TOOL" && -f "$PROJECTS_DIR/$STORE_SLUG/memory/MEMORY.md" ]]; th
   fi
 fi
 
+STATE_DIR=$(expand_tilde "${CLAUDE_STATE_DIR:-$HOME/.claude/state/sessions}")
+
 # --- CLI ahead of the harness contract --------------------------------------
 # install.sh records the release the contract was verified at. `claude --version`
-# measured 0.07s here, cheap enough to run on every start.
+# measured 0.07s here, cheap enough to run on every start. The nudge is shown
+# once per CLI version per day, stamped in STATE_DIR: nothing the reader can do
+# changes between sessions, and it fired in every session in every repo.
 PIN_FILE=$(expand_tilde "${CLAUDE_CONTRACT_PIN:-$HOME/.claude/harness-contract.version}")
 if [[ -f "$PIN_FILE" ]]; then
   PIN=$(head -1 "$PIN_FILE")
   CLI=${CLAUDE_CLI_VERSION:-$(claude --version 2>/dev/null | cut -d' ' -f1)}
   if [[ -n "$PIN" && -n "$CLI" && "$CLI" != "$PIN" ]]; then
-    echo ""
-    echo "## Claude Code is past the harness contract"
-    echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift workflow drafts the review PR. After it merges, run bash install.sh."
+    STAMP_FILE="$STATE_DIR/contract-nudge"
+    STAMP="$CLI $(date +%Y-%m-%d)"
+    if [[ ! -f "$STAMP_FILE" || "$(head -1 "$STAMP_FILE" 2>/dev/null)" != "$STAMP" ]]; then
+      echo ""
+      echo "## Claude Code is past the harness contract"
+      echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift workflow drafts the review PR. After it merges, run bash install.sh."
+      mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
+    fi
   fi
 fi
 
@@ -99,7 +110,6 @@ fi
 [[ -z "$SESSION_ID" ]] && exit 0
 command -v jq &>/dev/null || exit 0
 
-STATE_DIR=$(expand_tilde "${CLAUDE_STATE_DIR:-$HOME/.claude/state/sessions}")
 SNAP="$STATE_DIR/${SESSION_ID}.json"
 [[ ! -f "$SNAP" ]] && exit 0
 
