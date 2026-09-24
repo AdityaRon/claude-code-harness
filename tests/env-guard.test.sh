@@ -252,9 +252,15 @@ check "env runs a command"    allow "env FOO=1 make build"
 check "env -u runs a command" allow "env -u DEBUG make build"
 check "set -e"                allow "set -euo pipefail"
 check "export a var"          allow "export FOO=bar"
-# Accepted false positive, as with grep: a jq filter on the key .env reads as the
-# dotfile. `jq '.["env"]'` is the spelling that passes.
-check "jq .env key (accepted FP)" deny "jq '.env' package.json"
+# jq's first operand is a filter; a key named env there is not the dotfile.
+check "jq .env key"           allow "jq '.env' package.json"
+check "jq settings env block" allow "jq -r '.env.CLAUDE_AUDIT_LOG' ~/.claude/settings.json"
+check "jq unquoted env key"   allow "jq .env.FOO config/settings.json"
+check "jq . then .env file"   deny "jq . .env"
+check "jq . then quoted .env" deny "jq . '.env'"
+check "jq --arg then file"    deny "jq --arg k v . secrets.json"
+check "yq on secrets.yaml"    deny "yq '.db' secrets.yaml"
+check "jq after a chain"      deny "cd /x && jq -r .a secrets.json"
 check "jq bracket env key"    allow "jq '.[\"env\"]' package.json"
 check "jq on json"            allow "jq '.name' package.json"
 check "awk without ENVIRON"   allow 'awk "{print \$1}" data.txt'

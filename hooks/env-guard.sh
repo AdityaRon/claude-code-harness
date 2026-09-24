@@ -27,7 +27,7 @@ SCAN=$(printf '%s' "$CMD" \
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
 # Readers / dumpers targeting .env* or ~/.aws/credentials or ~/.netrc.
-READERS='(cat|less|more|head|tail|xxd|od|hexdump|strings|nl|awk|sed|grep|rg|base64|gpg|openssl\s+enc|source|tac|cut|paste|jq|yq|sort|uniq|diff|comm|bat|git\s+show)'
+READERS='(cat|less|more|head|tail|xxd|od|hexdump|strings|nl|awk|sed|grep|rg|base64|gpg|openssl\s+enc|source|tac|cut|paste|sort|uniq|diff|comm|bat|git\s+show)'
 # Copy/move/duplicate a dotfile elsewhere (stage-then-exfil in a later command).
 COPIERS='(cp|mv|install|tee|ln|tar|zip|rsync|scp)'
 # Bash dot-source shortcut: `. <file>`
@@ -100,11 +100,38 @@ BLOCKED=(
   "${A}${EVAL_ENV}"
 )
 
+DENY_MSG="Blocked: command may read or exfiltrate sensitive env values / dotfiles. Reference variables by name in code; do not print, dump, or transmit their values."
+
 for P in "${BLOCKED[@]}"; do
   if printf '%s\n' "$SCAN" | grep -qE "$P"; then
-    emit_deny "Blocked: command may read or exfiltrate sensitive env values / dotfiles. Reference variables by name in code; do not print, dump, or transmit their values."
+    emit_deny "$DENY_MSG"
     exit 0
   fi
 done
+
+# jq and yq read files like any reader, but their first operand is a filter,
+# and `.env.X` there is a key: `jq -r '.env.FOO' settings.json` is how this
+# harness's own env block gets read. Drop options and the filter, then test
+# only the file operands. Word splitting is naive about a filter with spaces;
+# a stray fragment of one can over-block, never under-block a file operand.
+case "$SCAN" in *jq*|*yq*)
+  while IFS= read -r seg; do
+    # Each segment opens with its boundary (| ; && $( or a backtick), then jq.
+    set -f; read -ra W <<<"$(printf '%s' "$seg" | sed -E 's/^[^a-z]*(jq|yq)[[:space:]]+//')"; set +f
+    i=0
+    while [[ $i -lt ${#W[@]} ]]; do
+      case "${W[$i]}" in
+        --arg|--argjson|--slurpfile|--rawfile) i=$((i+3)) ;;
+        --indent|-L) i=$((i+2)) ;;
+        -*) i=$((i+1)) ;;
+        *) break ;;
+      esac
+    done
+    if printf '%s\n' "${W[@]:$((i+1))}" | grep -qE "$DOTFILES"; then
+      emit_deny "$DENY_MSG"
+      exit 0
+    fi
+  done < <(printf '%s\n' "$SCAN" | grep -oE "${A}(jq|yq)\s[^|;&]*")
+esac
 
 exit 0
