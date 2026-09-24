@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Tests for kubectl-guard.sh
 set -u
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 HOOK="hooks/kubectl-guard.sh"
 PASS=0; FAIL=0
 
@@ -9,12 +11,14 @@ check() {
   local payload
   payload=$(jq -nc --arg c "$cmd" '{tool_name:"Bash", tool_input:{command:$c}}')
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null)
+  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
     got=$(printf '%s\n' "$result" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
   fi
+  # A hook that crashes prints nothing, which would otherwise read as allow.
+  [[ $rc -ne 0 ]] && got="exit $rc"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
     PASS=$((PASS+1))

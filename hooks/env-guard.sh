@@ -27,9 +27,9 @@ SCAN=$(printf '%s' "$CMD" \
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
 # Readers / dumpers targeting .env* or ~/.aws/credentials or ~/.netrc.
-READERS='(cat|less|more|head|tail|xxd|od|strings|nl|awk|sed|grep|rg|base64|gpg|openssl\s+enc|source|tac|cut|paste)'
+READERS='(cat|less|more|head|tail|xxd|od|hexdump|strings|nl|awk|sed|grep|rg|base64|gpg|openssl\s+enc|source|tac|cut|paste|jq|yq|sort|uniq|diff|comm|bat|git\s+show)'
 # Copy/move/duplicate a dotfile elsewhere (stage-then-exfil in a later command).
-COPIERS='(cp|mv|install|tee|ln)'
+COPIERS='(cp|mv|install|tee|ln|tar|zip|rsync|scp)'
 # Bash dot-source shortcut: `. <file>`
 DOTSOURCE='\.'
 # Credential files. Must block the same set as sensitive-file-guard, so that
@@ -43,10 +43,19 @@ DOTFILES='(\.env(\b|\.)|\.envrc\b|\.aws/credentials|\.netrc\b|id_rsa\b|id_ed2551
 DOTFILES="${DOTFILES}|\.pem\b|\.key\b|\.git-credentials\b|\.npmrc\b|\.pgpass\b"
 DOTFILES="${DOTFILES}|\.kube/config|\.docker/config\.json|\.pypirc\b|\.ssh/config\b"
 DOTFILES="${DOTFILES}|credentials\.json\b|service[_-]account[^|;&[:space:]]*\.json\b"
+DOTFILES="${DOTFILES}|terraform\.tfstate\b|\.tfvars\b|\.p12\b|\.pfx\b|gh/hosts\.yml\b"
 DOTFILES="${DOTFILES}|secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)\b)"
 
-# Env dumpers (whole-command or chained).
-ENV_DUMP='(printenv|^env$|^env\b[^=]*$|^export\s*$|^set\s*$|declare\s+-(p|x)\b|compgen\s+-e)'
+# Env dumpers. Used after the boundary A, so a bare `env`, `export -p` or `set`
+# counts anywhere in a chain. The old form anchored each to ^ inside the
+# alternation, so `cd /tmp && env` and `set | head` were allowed.
+ENV_END='\s*($|[|;&>)`])'
+ENV_DUMP="(printenv|env(\s+-[0-9A-Za-z]+)*${ENV_END}|export(\s+-p)?${ENV_END}|set${ENV_END}|declare\s+-(p|x)\b|compgen\s+-e)"
+
+# jq's env builtin and $ENV, and awk's ENVIRON, print variables with no dotfile
+# or $VAR in the command. A key (.env, .["env"]) is not the builtin.
+JQ_ENV='jq\b[^|;&]*(\$ENV|([^.$A-Za-z0-9_"]|[^[]")env\b)'
+AWK_ENV='[gm]?awk\b.*ENVIRON'
 
 # A $VAR whose NAME signals a secret: contains SECRET/PASSWORD anywhere, or ends
 # in KEY/TOKEN/CREDENTIAL(S) as a trailing segment (preceded by _ or var start).
@@ -65,7 +74,7 @@ DD_READ="\bdd\b[^|;&]*if=[^|;&]*${DOTFILES}"
 # curl/wget uploading a LOCAL FILE as the body (@file) or via -T/--upload-file.
 # Plain POSTs (-d name=foo) are left to network-guard's "ask"; only the exfil
 # shapes are hard-denied here. Secret-var exfil is caught by the VAR rules.
-NET_EXFIL_FILE='(curl|wget)\b[^|;&]*((-d|--data|--data-binary|--data-urlencode|--data-raw|--post-data)(=|\s)*@|(-F|--form|--post-file)\s+[^|;&@]*@|(-T|--upload-file)\b)'
+NET_EXFIL_FILE='(curl|wget)\b[^|;&]*((-d|--data|--data-binary|--data-urlencode|--data-raw|--json|--post-data)(=|\s)*@|(-F|--form)\s+[^|;&@]*@|(-T|--upload-file|--post-file|--body-file)\b)'
 
 # Sockets.
 SOCKETS='\b(nc|ncat|socat)\b'
@@ -78,6 +87,8 @@ BLOCKED=(
   "${A}${COPIERS}\s+[^|;&]*${DOTFILES}"
   "${A}${DOTSOURCE}\s+[^|;&]*${DOTFILES}"
   "${A}${ENV_DUMP}"
+  "${A}${JQ_ENV}"
+  "${A}${AWK_ENV}"
   "(echo|printf)\b[^|;&]*${SECRET_VAR_CONTAINS}"
   "(echo|printf)\b[^|;&]*${SECRET_VAR_SUFFIX}"
   "${REDIR_READ}"

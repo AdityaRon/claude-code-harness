@@ -7,6 +7,7 @@ PASS=0; FAIL=0
 # Set up fixture: real dotfile + symlink pointing to it
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
+export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 echo "SECRET=abc" > "$TMP/.env"
 ln -s "$TMP/.env" "$TMP/benign-looking-link"
 
@@ -15,12 +16,14 @@ check() {
   local payload
   payload=$(jq -nc --arg p "$path" '{tool_input:{file_path:$p}}')
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null)
+  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
     got=$(printf '%s\n' "$result" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
   fi
+  # A hook that crashes prints nothing, which would otherwise read as allow.
+  [[ $rc -ne 0 ]] && got="exit $rc"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
     PASS=$((PASS+1))
@@ -129,12 +132,14 @@ fi
 check_grep() {
   local label="$1" expect="$2" payload="$3"
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null)
+  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
     got=$(printf '%s\n' "$result" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
   fi
+  # A hook that crashes prints nothing, which would otherwise read as allow.
+  [[ $rc -ne 0 ]] && got="exit $rc"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"; PASS=$((PASS+1))
   else
@@ -171,6 +176,18 @@ check_grep "glob on a template"     allow "$(grep_payload "" "*.env.example" "KE
 # across source is an ordinary read and must not be confused with reading one.
 check_grep "pattern mentions .env"  allow "$(grep_payload "src" "*.ts" "process.env.API_KEY")"
 check_grep "pattern is a path"      allow "$(grep_payload "" "" "config/.env")"
+
+echo ""
+echo "=== Credential files added 2026-09-24 ==="
+check "claude oauth token"       deny "$HOME/.claude/.credentials.json"
+check "terraform state"          deny "infra/terraform.tfstate"
+check "terraform state backup"   deny "terraform.tfstate.backup"
+check "tfvars"                   deny "env/prod.tfvars"
+check "pfx"                      deny "certs/client.pfx"
+check "gh hosts"                 deny "$HOME/.config/gh/hosts.yml"
+check "tfvars template"          allow "env/prod.tfvars.example"
+check "terraform source"         allow "infra/main.tf"
+check "claude settings"          allow "$HOME/.claude/settings.json"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
