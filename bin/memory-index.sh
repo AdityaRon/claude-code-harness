@@ -178,32 +178,50 @@ for dir in "$PROJECTS"/*/memory; do
 
   awk -v s="$end" 'NR>s && /^- \[/' "$idx" > "$TMP/rest"
 
+  # One awk pass, not a bash loop: this runs at every session start, and each
+  # exec costs ~25ms on a Mac behind an endpoint agent (5 per entry before).
+  # `type:`/`modified:` are matched at any indentation on purpose: older
+  # memories carry them at the top level, and memory-lint reads them the same
+  # way. Link target is the LAST `](...)`, as the greedy sed it replaced did.
+  awk -v dir="$dir" '
+    {
+      seq++; line = $0; f = ""; t = ""; m = ""; s = line
+      while (match(s, /\]\([^)]*\)/)) {
+        f = substr(s, RSTART + 2, RLENGTH - 3); s = substr(s, RSTART + 2)
+      }
+      if (f != "") {
+        p = dir "/" f; rc = 0
+        while ((rc = (getline l < p)) > 0) {
+          if (t == "" && match(l, /^[[:space:]]*type:[[:space:]]*[a-z]*[[:space:]]*$/)) {
+            t = l; sub(/^[[:space:]]*type:[[:space:]]*/, "", t); sub(/[[:space:]]*$/, "", t)
+            if (t == "") t = "-"
+          }
+          if (m == "" && match(l, /^[[:space:]]*modified:/)) {
+            m = l; sub(/^[[:space:]]*modified:[[:space:]]*/, "", m); sub(/[^0-9-].*$/, "", m)
+            if (m == "") m = "-"
+          }
+        }
+        if (rc == 0) close(p)
+      }
+      if (t == "user") t = "feedback"
+      if (t != "feedback" && t != "reference" && t != "project") t = "unknown"
+      if ((t == "reference" || t == "project") && (m == "" || m == "-")) {
+        # Sort key falls back to file mtime; `date -r FILE` is BSD and GNU.
+        q = p; gsub(/\047/, "\047\\\047\047", q)
+        cmd = "date -r \047" q "\047 +%Y-%m-%d 2>/dev/null"
+        m = ""; cmd | getline m; close(cmd)
+        if (m == "") m = "0000-00-00"
+      }
+      printf "%s\t%s\t%d\t%s\n", t, m, seq, line
+    }' "$TMP/rest" > "$TMP/classified"
+
+  # feedback/unknown: the bare line, input order. reference/project keep
+  # <mdate>TAB<seq>TAB<line> for sort_newest_first. Unknown (no resolvable
+  # type) is kept above project so a malformed memory is not demoted to the tail.
   : > "$TMP/feedback"; : > "$TMP/reference"; : > "$TMP/project"; : > "$TMP/unknown"
-  seq=0
-  while IFS= read -r line; do
-    seq=$((seq+1))
-    f=$(printf '%s\n' "$line" | sed -n 's/.*](\([^)]*\)).*/\1/p')
-    t=""
-    # Permissive on indentation on purpose: older memories carry `type:` at the
-    # top level rather than nested under `metadata:`. A stricter pattern saw no
-    # type on 13 of them, filed them all under REFERENCE, and memory-lint - which
-    # reads the same field permissively - then reported every one as misfiled.
-    # Two tools must not disagree about what a memory IS.
-    [ -n "$f" ] && [ -f "$dir/$f" ] && t=$(sed -n 's/^[[:space:]]*type:[[:space:]]*\([a-z]*\)[[:space:]]*$/\1/p' "$dir/$f" | head -1)
-    case "$t" in
-      feedback|user) printf '%s\n' "$line" >> "$TMP/feedback" ;;
-      reference|project)
-        # Sort key is the memory's own timestamp, falling back to file mtime.
-        # `modified:` is read permissively for the same reason `type:` is above:
-        # older memories carry it at the top level rather than under `metadata:`.
-        m=$(sed -n 's/^[[:space:]]*modified:[[:space:]]*\([0-9-]*\).*/\1/p' "$dir/$f" | head -1)
-        [ -n "$m" ] || m=$(date -r "$dir/$f" +%Y-%m-%d 2>/dev/null || echo 0000-00-00)
-        printf '%s\t%s\t%s\n' "$m" "$seq" "$line" >> "$TMP/$t" ;;
-      # No resolvable type: keep it, and keep it above project so a memory that
-      # is merely malformed is not silently demoted to the truncated tail.
-      *)             printf '%s\n' "$line" >> "$TMP/unknown" ;;
-    esac
-  done < "$TMP/rest"
+  awk -F'\t' -v out="$TMP" '
+    $1 == "feedback" || $1 == "unknown" { print substr($0, length($1) + length($2) + length($3) + 4) > (out "/" $1); next }
+    { print substr($0, length($1) + 2) > (out "/" $1) }' "$TMP/classified"
 
   # Sort once, then emit from the sorted lists so overflow can be peeled off
   # their tails without re-deriving the order each time.
