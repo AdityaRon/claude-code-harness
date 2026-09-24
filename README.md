@@ -14,9 +14,17 @@ bash install.sh
 The installer:
 - Merges into any existing `~/.claude/settings.json` (user keys preserved, allow/deny lists unioned, hooks owned by harness).
 - Backs up the previous file as `settings.json.bak.<timestamp>`.
+- Folds in machine-local allow/deny rules from `~/.claude/local-settings/*.json` (see [Customization](#customization)).
 - Runs `doctor.sh` to verify every hook after install.
 
 Then open Claude Code and run `/hooks` to confirm everything is registered.
+
+**On a new machine**, put the machine-local files in place before
+`bash install.sh`: rules in `~/.claude/rules/local-*.md`, and allow rules for
+work tools in `~/.claude/local-settings/<name>.json`. This repo is public and
+ships neither, so they come from wherever you keep them, such as the repo that
+holds your work skills. A machine that already has its rules in
+`settings.json` keeps them, because the merge never removes an allow rule.
 
 ## What it does
 
@@ -215,8 +223,8 @@ bin/                     ← executables the harness installs or you invoke
 config/
   settings.json          ← the settings the installer merges in. Portable
                            only, like rules/: an allow for a work tool or an
-                           internal CLI goes in ~/.claude/settings.json, which
-                           the merge keeps
+                           internal CLI goes in ~/.claude/local-settings/,
+                           folded in on every install (see Customization)
   merge-settings.jq      ← how that merge is performed
   upstream-contract.json ← the upstream facts the harness relies on
 hooks/                   ← one file per hook, plus shared lib.sh
@@ -382,6 +390,19 @@ suggests into settings by hand, in a PR, and prefer the harness's own evidence:
 loosen `deny` or `ask` from it. `secret-scanner` still gates whatever lands in `settings.json`.
 
 ## Customization
+
+**Allow rules for tools this public repo cannot name** (work skills, internal
+CLIs): put them in `~/.claude/local-settings/<name>.json`. Every install folds
+each file's `permissions.allow` and `permissions.deny` into the merge and reads
+nothing else from it, so a fragment cannot change the mode, hooks or status line.
+A repo that ships your work skills can keep its fragment and symlink it in:
+```json
+{ "permissions": { "allow": ["Bash(~/.claude/skills/my-tool/run.sh:*)", "Bash(tsh status:*)"] } }
+```
+An allow rule only skips the prompt; the guards still run first. They read
+the command Claude runs, not what a script runs: a `kubectl create` Claude
+types is still escalated by `kubectl-guard`, one inside an allowed script is
+seen by no guard at all.
 
 **Extend the network allowlist per-project:**
 ```json
