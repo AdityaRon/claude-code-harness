@@ -14,9 +14,17 @@ bash install.sh
 The installer:
 - Merges into any existing `~/.claude/settings.json` (user keys preserved, allow/deny lists unioned, hooks owned by harness).
 - Backs up the previous file as `settings.json.bak.<timestamp>`.
+- Folds in machine-local allow/deny rules from `~/.claude/local-settings/*.json` (see [Customization](#customization)).
 - Runs `doctor.sh` to verify every hook after install.
 
 Then open Claude Code and run `/hooks` to confirm everything is registered.
+
+**On a new machine**, put the machine-local files in place before
+`bash install.sh`: rules in `~/.claude/rules/local-*.md`, and allow rules for
+work tools in `~/.claude/local-settings/<name>.json`. This repo is public and
+ships neither, so they come from wherever you keep them, such as the repo that
+holds your work skills. A machine that already has its rules in
+`settings.json` keeps them, because the merge never removes an allow rule.
 
 ## What it does
 
