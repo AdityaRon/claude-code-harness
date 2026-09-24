@@ -43,6 +43,10 @@ INTERP='(python3?|node|ruby|perl|php|bash|sh|zsh|deno|bun)'
 # (perl -ne, perl -pe, ruby -ne) that would evade a bare -c/-e. -r is php/ruby
 # inline. A trailing "-" means "read from stdin".
 INLINE='(-[A-Za-z]*[ce]\b|--eval\b|--exec\b|-r\b|\s-(\s|$))'
+# Inline flags that only one family has. node -p evaluates and prints, perl -E
+# is -e with features on. Kept out of INLINE because `python -m pytest -p x`
+# and `python -E` are not inline code, and INLINE also drives the long-script ask.
+INLINE_ONLY="${IB}((node|bun|deno)\s([^|;&]*\s)?(-p|--print)\b|perl\s([^|;&]*\s)?-[A-Za-z]*E\b)"
 
 # Sensitive tokens that should not appear inside inline code payloads.
 # (Matches both source-code references and network exfil APIs.)
@@ -52,8 +56,10 @@ SENSITIVE_TOKENS=(
   'os\.getenv'
   'process\.env'
   'ENV\['
+  '\bENV\.'
   'getenv\s*\('
   '\$ENV\{'
+  '%ENV\b'
   # dotfile / credential paths
   '\.env\b'
   '\.envrc\b'
@@ -91,6 +97,7 @@ SENSITIVE_TOKENS=(
 INTERP_INLINE_RE="${IB}${INTERP}\s+[^|;&]*${INLINE}"
 INTERP_HEREDOC_RE="${IB}${INTERP}\b[^|;&]*<<-?"
 if ! printf '%s\n' "$CMD" | grep -qE "$INTERP_INLINE_RE" \
+   && ! printf '%s\n' "$CMD" | grep -qE "$INLINE_ONLY" \
    && ! printf '%s\n' "$CMD" | grep -qE "$INTERP_HEREDOC_RE"; then
   exit 0
 fi

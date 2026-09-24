@@ -39,7 +39,10 @@ A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 # and `-c core.hooksPath=…` is itself a code-exec vector. GOPT matches one
 # such option (with its argument); GIT allows zero or more before the subcommand.
 GOPT='(-c[= ][^ ]+|-C[= ][^ ]+|--git-dir[= ][^ ]+|--work-tree[= ][^ ]+|--namespace[= ][^ ]+|--exec-path([= ][^ ]+)?|--no-pager|--bare|--literal-pathspecs|-p|-P)'
-GIT="git(\s+${GOPT})*\s+"
+# xargs runs git with stdin appended, so `echo main | xargs git push --force`
+# reaches git from behind a word that is not a command boundary.
+XARGS='(xargs(\s+-[A-Za-z0-9]+(\s+\{\})?)*\s+)?'
+GIT="${XARGS}git(\s+${GOPT})*\s+"
 
 # --- core.hooksPath via -c on ANY subcommand ----------------------------
 # `git -c core.hooksPath=/tmp/evil <anything>` points hooks at an attacker
@@ -94,6 +97,21 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}branch\s+[^|;&]*(-D\b|-d\b|--delet
   exit 0
 fi
 
+# Discarding the whole working tree is reset --hard for uncommitted work, and
+# `Bash(git checkout:*)` is on the allow list, so nothing else stops it.
+# `git restore --staged .` only unstages and stays allowed; `git checkout -`
+# (switch back) is not a pathspec.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?(\.{1,2}/?|:/)([[:space:]]|;|&|\||$)" \
+   && ! { printf '%s\n' "$CMD" | grep -qE "${A}${GIT}restore\s[^|;&]*(--staged|-S)\b" \
+          && ! printf '%s\n' "$CMD" | grep -qE "${A}${GIT}restore\s[^|;&]*(--worktree|-W)\b"; }; then
+  emit_deny "Blocked: this discards every uncommitted change in the tree with no recovery path. Restore the files you mean by name, or ask the user to run this manually."
+  exit 0
+fi
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}(stash\s+(drop|clear)\b|worktree\s+remove\s[^|;&]*(--force|-f)\b)"; then
+  emit_ask "This deletes a stash or a worktree with its uncommitted changes. Confirm nothing in it is needed."
+  exit 0
+fi
+
 # --- Remote branch deletion (push --delete OR push <remote> :branch) ----
 if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\s.*(--delete\b|\s:[A-Za-z0-9._/-]+)"; then
   emit_ask "Deleting a remote branch with git push. Confirm the branch name is correct before proceeding."
@@ -107,7 +125,11 @@ fi
 # pathspec magic for the repository root and stages the whole tree like `.`.
 # The trailing boundary still keeps a named path out of it, so `git add
 # ./src/index.ts` and `git add -v src/main.py` stay silent.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?(-A|--all|\.\/?|:/)([[:space:]]|;|&|\||$)"; then
+# Quoting does not narrow a pathspec, and `..` or `$(pwd)` name a tree at least
+# as wide as `.`; each of those was a silent allow. normalize_wrappers pads
+# `$(` to ` $( `, hence the spaces inside the $(pwd) form.
+BROAD="['\"]?(-A|--all|\.{1,2}/?|:/|\\$\(\s*pwd\s*\)|\\$\{?PWD\}?)['\"]?"
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||$)"; then
   emit_deny "Blocked: broad git add (., ./, -A, --all) may stage sensitive files. Stage files by name instead."
   exit 0
 fi

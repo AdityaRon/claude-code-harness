@@ -7,6 +7,8 @@
 # literal pattern in source — keeping GitHub push-protection, CI secret
 # scanners, and this repo's own secret-scanner from flagging the fixtures.
 set -u
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 HOOK="hooks/secret-scanner.sh"
 PASS=0; FAIL=0
 
@@ -19,12 +21,14 @@ check_write() {
   local payload
   payload=$(jq -nc --arg c "$content" '{tool_name:"Write", tool_input:{content:$c, file_path:"/tmp/x"}}')
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null)
+  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
     got=$(printf '%s\n' "$result" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
   fi
+  # A hook that crashes prints nothing, which would otherwise read as allow.
+  [[ $rc -ne 0 ]] && got="exit $rc"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
     PASS=$((PASS+1))
@@ -39,12 +43,14 @@ check_edit() {
   local payload
   payload=$(jq -nc --arg n "$new_string" '{tool_name:"Edit", tool_input:{new_string:$n, old_string:"placeholder", file_path:"/tmp/x"}}')
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null)
+  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
     got=$(printf '%s\n' "$result" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
   fi
+  # A hook that crashes prints nothing, which would otherwise read as allow.
+  [[ $rc -ne 0 ]] && got="exit $rc"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
     PASS=$((PASS+1))
@@ -85,6 +91,18 @@ nb_payload=$(jq -nc --arg n "KEY = \"AKIA${ZZ}IOSFODNN7EXAMPLE\"" '{tool_name:"N
 nb_out=$(printf '%s\n' "$nb_payload" | bash "$HOOK" 2>/dev/null)
 nb_got=$([ -z "$nb_out" ] && echo allow || printf '%s\n' "$nb_out" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
 if [[ "$nb_got" = "deny" ]]; then echo "  OK (deny): NotebookEdit cell scanned"; PASS=$((PASS+1)); else echo "  FAIL: NotebookEdit not scanned"; FAIL=$((FAIL+1)); fi
+
+echo ""
+echo "=== Write field aliases accepted since 2.1.280 (expect: deny) ==="
+for field in file_text file_content; do
+  al_out=$(jq -nc --arg f "$field" --arg c "KEY = \"AKIA${ZZ}IOSFODNN7EXAMPLE\"" \
+    '{tool_name:"Write", tool_input:{path:"/tmp/x", ($f):$c}}' | bash "$HOOK" 2>/dev/null)
+  if [[ "$(printf '%s' "$al_out" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)" = "deny" ]]; then
+    echo "  OK (deny): Write.$field scanned"; PASS=$((PASS+1))
+  else
+    echo "  FAIL: Write.$field not scanned"; FAIL=$((FAIL+1))
+  fi
+done
 
 echo ""
 echo "=== Legitimate content (expect: allow) ==="

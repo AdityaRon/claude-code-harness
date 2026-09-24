@@ -135,12 +135,25 @@ case "$TOOL" in
 
     # Extract URL from the command (first http/https token).
     URL=$(printf '%s\n' "$CMD" | grep -oE 'https?://[^[:space:]\"'\''`]+' | head -1)
-    [[ -z "$URL" ]] && exit 0
     HOST=$(extract_host "$URL")
 
-    # Any mutating method → ask regardless of host.
-    if printf '%s\n' "$CMD" | grep -qE '\bcurl\b[^|;&]*(-X\s*(POST|PUT|PATCH|DELETE)|--request\s*(POST|PUT|PATCH|DELETE))'; then
-      emit_ask "curl is performing a mutating request (POST/PUT/PATCH/DELETE) to $HOST. Confirm the target and payload."
+    # Any request that sends a body → ask regardless of host. A body flag is a
+    # POST even with no -X, so `curl -d "$(cat notes)" <allowlisted host>` was
+    # a silent allow. This runs before the URL test: a URL with no scheme was
+    # never parsed, and its POST went through unseen.
+    if printf '%s\n' "$CMD" | grep -qE '\bcurl\b[^|;&]*(-X\s*(POST|PUT|PATCH|DELETE)|--request\s*(POST|PUT|PATCH|DELETE)|\s(-d|--data[a-z-]*|--json|-F|--form[a-z-]*|-T|--upload-file)(\s|=|$))' \
+       || printf '%s\n' "$CMD" | grep -qE '\bwget\b[^|;&]*--(post-data|post-file|body-data|body-file|method)\b'; then
+      emit_ask "curl/wget is sending data (POST/PUT/PATCH/DELETE or a request body) to ${HOST:-a host without a scheme}. Confirm the target and payload."
+      exit 0
+    fi
+
+    if [[ -z "$URL" ]]; then
+      # No scheme to parse. A bare host argument (`curl example.com/x`) still
+      # makes a request, so ask; flags alone (`curl --version`) do not.
+      # Anchored to a command boundary so `grep curl notes.md` is not a request.
+      if printf '%s\n' "$CMD" | grep -qE '(^|[|&;`]|\$\()\s*(curl|wget)\s([^|;&]*\s)?[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+(:[0-9]+)?(/|\s|$)'; then
+        emit_ask "curl/wget target has no http(s):// scheme, so its host could not be checked against the allowlist. Confirm the endpoint."
+      fi
       exit 0
     fi
 

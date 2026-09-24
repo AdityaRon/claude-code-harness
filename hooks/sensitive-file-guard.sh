@@ -38,6 +38,11 @@ BLOCKED=(
   '(^|/)\.docker/config\.json$'
   '(^|/)credentials\.json$'
   'service[_-]account.*\.json$'
+  '(^|/)\.credentials\.json$'   # ~/.claude: the Claude Code OAuth token
+  'terraform\.tfstate(\.backup)?$'
+  '\.tfvars$'
+  '\.(p12|pfx)$'
+  '(^|/)gh/hosts\.yml$'
 )
 
 # Directories whose whole purpose is credentials. A Read of a directory is not

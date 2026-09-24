@@ -11,6 +11,7 @@ PASS=0; FAIL=0
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
+export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 mkdir -p "$TMP/hooks" "$TMP/bin"
 
 # Curated toolbox: everything the guards need before the jq check — but no jq.
