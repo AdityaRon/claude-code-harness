@@ -101,6 +101,29 @@ done
 TARGET=~/.claude/settings.json
 SOURCE="$REPO/config/settings.json"
 
+# Machine-local rules: ~/.claude/local-settings/*.json, the settings side of
+# rules/local-*.md, for work tools a public repo cannot name. Only
+# permissions.allow and .deny are read, so a fragment can add rules but never
+# change the mode, hooks or anything else; the guards still run first.
+LOCAL_SETTINGS=~/.claude/local-settings
+if compgen -G "$LOCAL_SETTINGS/*.json" >/dev/null && command -v jq &>/dev/null; then
+  COMBINED=$(mktemp)
+  cp "$SOURCE" "$COMBINED"
+  for frag in "$LOCAL_SETTINGS"/*.json; do
+    if jq -e '(.permissions.allow // []) + (.permissions.deny // []) | all(type == "string")' "$frag" >/dev/null 2>&1 \
+       && jq --slurpfile f "$frag" '.permissions.allow += ($f[0].permissions.allow // [])
+                                   | .permissions.deny  += ($f[0].permissions.deny  // [])' \
+            "$COMBINED" > "$COMBINED.next"; then
+      mv "$COMBINED.next" "$COMBINED"
+      echo "  ✓ local-settings/$(basename "$frag") ($(jq '(.permissions.allow // []) + (.permissions.deny // []) | length' "$frag") rules)"
+    else
+      rm -f "$COMBINED.next"
+      echo "  ⚠ local-settings/$(basename "$frag") skipped: not JSON, or allow/deny not lists of strings."
+    fi
+  done
+  SOURCE="$COMBINED"
+fi
+
 if [[ ! -f "$TARGET" ]]; then
   cp "$SOURCE" "$TARGET"
   echo "  ✓ settings.json (installed fresh)"
@@ -149,6 +172,7 @@ else
   mv "$TMP" "$TARGET"
   echo "  ✓ settings.json (merged; backup: $BACKUP)"
 fi
+[[ -n "${COMBINED:-}" ]] && rm -f "$COMBINED"
 
 # ---- Sanity checks ----------------------------------------------------
 echo ""
