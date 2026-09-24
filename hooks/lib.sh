@@ -96,9 +96,21 @@ jq_get() {
   fi
 }
 
+# One audit line per guard decision. The PostToolUse audit only sees calls that
+# ran, so without this a deny left no record at all. The target is the command,
+# path or URL, never file content: secret-scanner denies on content.
+log_decision() {
+  local target=""
+  command -v jq &>/dev/null && target=$(printf '%s' "$INPUT" \
+    | jq -j '.tool_input | .command // .file_path // .path // .notebook_path // .url // ""' 2>/dev/null \
+    | tr '\n\t' '  ' | cut -c1-200)
+  log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | GUARD | $1 | $(basename "$0" .sh) | ${target:-unknown} | $PWD"
+}
+
 # Emit a PreToolUse deny decision with a reason. Safe against quotes/backslashes.
 emit_deny() {
   local reason="$1"
+  log_decision deny
   if command -v jq &>/dev/null; then
     jq -nc --arg r "$reason" \
       '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
@@ -111,6 +123,7 @@ emit_deny() {
 # Emit a PreToolUse ask decision (prompt the user) with a reason.
 emit_ask() {
   local reason="$1"
+  log_decision ask
   if command -v jq &>/dev/null; then
     jq -nc --arg r "$reason" \
       '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:$r}}'

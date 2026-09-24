@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Tests for interpreter-guard.sh
 set -u
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 HOOK="hooks/interpreter-guard.sh"
 PASS=0; FAIL=0
 
@@ -9,12 +11,14 @@ check() {
   local payload
   payload=$(jq -nc --arg c "$cmd" '{tool_input:{command:$c}}')
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null)
+  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
     got=$(printf '%s\n' "$result" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
   fi
+  # A hook that crashes prints nothing, which would otherwise read as allow.
+  [[ $rc -ne 0 ]] && got="exit $rc"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
     PASS=$((PASS+1))
@@ -167,6 +171,17 @@ check "stream edit on dotenv"  deny "perl -0pi -e 's/$PAD/x/' .env"
 check "stream edit netrc"      deny "perl -0pi -e 's/$PAD/x/' .netrc"
 check "repl names a socket"    deny "perl -pi -e 's/$PAD/socket.socket/' notes.md"
 check "repl reads env"         deny "perl -pi -e 's/$PAD/\$ENV{TOKEN}/' notes.md"
+
+echo ""
+echo "=== Family-specific inline flags and env spellings ==="
+check "node -p env"            deny 'node -p "process.env.X"'
+check "node --print env"       deny 'node --print "process.env.X"'
+check "perl -E env"            deny 'perl -E "say $ENV{X}"'
+check "perl %ENV"              deny 'perl -e "print join q(,), keys %ENV"'
+check "ruby ENV.to_h"          deny 'ruby -e "puts ENV.to_h"'
+check "node -p arithmetic"     allow 'node -p "1+1"'
+check "pytest -p plugin"       allow 'python3 -m pytest tests/test_search.py -p no:warnings --no-header --color=no -q --maxfail=1 --durations=5 --tb=short -k "search and not slow"'
+check "python -E script"       allow 'python3 -E tools/build.py'
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

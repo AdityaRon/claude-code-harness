@@ -163,5 +163,25 @@ for s in DESCSECRET2 DATASECRET REPLYSECRET; do
 done
 
 echo ""
+echo "=== Guard decisions are audited (a denied call never reaches PostToolUse) ==="
+guard(){ printf '%s' "$2" | bash "hooks/$1" >/dev/null 2>&1; }
+guard env-guard.sh '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}'
+grep -qF "| GUARD | deny | env-guard | cat .env |" "$CLAUDE_AUDIT_LOG" \
+  && pass "deny logged with hook and command" || fail "deny logged with hook and command" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
+guard network-guard.sh '{"tool_name":"WebFetch","tool_input":{"url":"https://evil.example/x"}}'
+grep -qF "| GUARD | ask | network-guard | https://evil.example/x |" "$CLAUDE_AUDIT_LOG" \
+  && pass "ask logged with the URL" || fail "ask logged with the URL" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
+SECRET="AKIA""IOSFODNN7EXAMPLE"
+guard secret-scanner.sh "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/k.ts\",\"content\":\"$SECRET\"}}"
+grep -qF "| GUARD | deny | secret-scanner | /tmp/k.ts |" "$CLAUDE_AUDIT_LOG" \
+  && pass "content deny logs the path" || fail "content deny logs the path" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
+grep -qF "$SECRET" "$CLAUDE_AUDIT_LOG" && fail "the secret itself stays out of the log" "" || pass "the secret itself stays out of the log"
+BEFORE=$(wc -l < "$CLAUDE_AUDIT_LOG")
+guard env-guard.sh '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}'
+guard git-guard.sh '{"tool_name":"Bash","tool_input":{"command":"git add .\ngit commit -m x"}}'
+AFTER=$(wc -l < "$CLAUDE_AUDIT_LOG")
+[[ $((AFTER - BEFORE)) -eq 1 ]] && pass "an allow logs nothing; a multiline deny is one line" || fail "an allow logs nothing; a multiline deny is one line" "delta=$((AFTER-BEFORE))"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

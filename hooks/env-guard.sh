@@ -27,9 +27,9 @@ SCAN=$(printf '%s' "$CMD" \
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
 # Readers / dumpers targeting .env* or ~/.aws/credentials or ~/.netrc.
-READERS='(cat|less|more|head|tail|xxd|od|strings|nl|awk|sed|grep|rg|base64|gpg|openssl\s+enc|source|tac|cut|paste)'
+READERS='(cat|less|more|head|tail|xxd|od|hexdump|strings|nl|awk|sed|grep|rg|base64|gpg|openssl\s+enc|source|tac|cut|paste|sort|uniq|diff|comm|bat|git\s+show)'
 # Copy/move/duplicate a dotfile elsewhere (stage-then-exfil in a later command).
-COPIERS='(cp|mv|install|tee|ln)'
+COPIERS='(cp|mv|install|tee|ln|tar|zip|rsync|scp)'
 # Bash dot-source shortcut: `. <file>`
 DOTSOURCE='\.'
 # Credential files. Must block the same set as sensitive-file-guard, so that
@@ -43,10 +43,19 @@ DOTFILES='(\.env(\b|\.)|\.envrc\b|\.aws/credentials|\.netrc\b|id_rsa\b|id_ed2551
 DOTFILES="${DOTFILES}|\.pem\b|\.key\b|\.git-credentials\b|\.npmrc\b|\.pgpass\b"
 DOTFILES="${DOTFILES}|\.kube/config|\.docker/config\.json|\.pypirc\b|\.ssh/config\b"
 DOTFILES="${DOTFILES}|credentials\.json\b|service[_-]account[^|;&[:space:]]*\.json\b"
+DOTFILES="${DOTFILES}|terraform\.tfstate\b|\.tfvars\b|\.p12\b|\.pfx\b|gh/hosts\.yml\b"
 DOTFILES="${DOTFILES}|secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)\b)"
 
-# Env dumpers (whole-command or chained).
-ENV_DUMP='(printenv|^env$|^env\b[^=]*$|^export\s*$|^set\s*$|declare\s+-(p|x)\b|compgen\s+-e)'
+# Env dumpers. Used after the boundary A, so a bare `env`, `export -p` or `set`
+# counts anywhere in a chain. The old form anchored each to ^ inside the
+# alternation, so `cd /tmp && env` and `set | head` were allowed.
+ENV_END='\s*($|[|;&>)`])'
+ENV_DUMP="(printenv|env(\s+-[0-9A-Za-z]+)*${ENV_END}|export(\s+-p)?${ENV_END}|set${ENV_END}|declare\s+-(p|x)\b|compgen\s+-e)"
+
+# jq's env builtin and $ENV, and awk's ENVIRON, print variables with no dotfile
+# or $VAR in the command. A key (.env, .["env"]) is not the builtin.
+JQ_ENV='jq\b[^|;&]*(\$ENV|([^.$A-Za-z0-9_"]|[^[]")env\b)'
+AWK_ENV='[gm]?awk\b.*ENVIRON'
 
 # A $VAR whose NAME signals a secret: contains SECRET/PASSWORD anywhere, or ends
 # in KEY/TOKEN/CREDENTIAL(S) as a trailing segment (preceded by _ or var start).
@@ -65,7 +74,7 @@ DD_READ="\bdd\b[^|;&]*if=[^|;&]*${DOTFILES}"
 # curl/wget uploading a LOCAL FILE as the body (@file) or via -T/--upload-file.
 # Plain POSTs (-d name=foo) are left to network-guard's "ask"; only the exfil
 # shapes are hard-denied here. Secret-var exfil is caught by the VAR rules.
-NET_EXFIL_FILE='(curl|wget)\b[^|;&]*((-d|--data|--data-binary|--data-urlencode|--data-raw|--post-data)(=|\s)*@|(-F|--form|--post-file)\s+[^|;&@]*@|(-T|--upload-file)\b)'
+NET_EXFIL_FILE='(curl|wget)\b[^|;&]*((-d|--data|--data-binary|--data-urlencode|--data-raw|--json|--post-data)(=|\s)*@|(-F|--form)\s+[^|;&@]*@|(-T|--upload-file|--post-file|--body-file)\b)'
 
 # Sockets.
 SOCKETS='\b(nc|ncat|socat)\b'
@@ -78,6 +87,8 @@ BLOCKED=(
   "${A}${COPIERS}\s+[^|;&]*${DOTFILES}"
   "${A}${DOTSOURCE}\s+[^|;&]*${DOTFILES}"
   "${A}${ENV_DUMP}"
+  "${A}${JQ_ENV}"
+  "${A}${AWK_ENV}"
   "(echo|printf)\b[^|;&]*${SECRET_VAR_CONTAINS}"
   "(echo|printf)\b[^|;&]*${SECRET_VAR_SUFFIX}"
   "${REDIR_READ}"
@@ -89,11 +100,38 @@ BLOCKED=(
   "${A}${EVAL_ENV}"
 )
 
+DENY_MSG="Blocked: command may read or exfiltrate sensitive env values / dotfiles. Reference variables by name in code; do not print, dump, or transmit their values."
+
 for P in "${BLOCKED[@]}"; do
   if printf '%s\n' "$SCAN" | grep -qE "$P"; then
-    emit_deny "Blocked: command may read or exfiltrate sensitive env values / dotfiles. Reference variables by name in code; do not print, dump, or transmit their values."
+    emit_deny "$DENY_MSG"
     exit 0
   fi
 done
+
+# jq and yq read files like any reader, but their first operand is a filter,
+# and `.env.X` there is a key: `jq -r '.env.FOO' settings.json` is how this
+# harness's own env block gets read. Drop options and the filter, then test
+# only the file operands. Word splitting is naive about a filter with spaces;
+# a stray fragment of one can over-block, never under-block a file operand.
+case "$SCAN" in *jq*|*yq*)
+  while IFS= read -r seg; do
+    # Each segment opens with its boundary (| ; && $( or a backtick), then jq.
+    set -f; read -ra W <<<"$(printf '%s' "$seg" | sed -E 's/^[^a-z]*(jq|yq)[[:space:]]+//')"; set +f
+    i=0
+    while [[ $i -lt ${#W[@]} ]]; do
+      case "${W[$i]}" in
+        --arg|--argjson|--slurpfile|--rawfile) i=$((i+3)) ;;
+        --indent|-L) i=$((i+2)) ;;
+        -*) i=$((i+1)) ;;
+        *) break ;;
+      esac
+    done
+    if printf '%s\n' "${W[@]:$((i+1))}" | grep -qE "$DOTFILES"; then
+      emit_deny "$DENY_MSG"
+      exit 0
+    fi
+  done < <(printf '%s\n' "$SCAN" | grep -oE "${A}(jq|yq)\s[^|;&]*")
+esac
 
 exit 0

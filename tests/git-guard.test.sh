@@ -2,6 +2,8 @@
 # Tests for git-guard.sh — payloads built via jq so the outer command
 # doesn't contain trigger strings.
 set -u
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 HOOK="hooks/git-guard.sh"
 PASS=0; FAIL=0
 
@@ -10,12 +12,14 @@ check() {
   local payload
   payload=$(jq -nc --arg c "$cmd" '{tool_input:{command:$c}}')
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null)
+  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
     got=$(printf '%s\n' "$result" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
   fi
+  # A hook that crashes prints nothing, which would otherwise read as allow.
+  [[ $rc -ne 0 ]] && got="exit $rc"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
     PASS=$((PASS+1))
@@ -227,6 +231,32 @@ check "hooks word in a message"  allow "git commit -m 'harden the git hooks dire
 # the pattern widens that, it does not change its shape, so a message naming
 # the path literally is denied here exactly as `.git/hooks/` already was.
 check "hooks path in a message"  deny  "git commit -m 'note the .git/hooks vector'"
+
+echo ""
+echo "=== Quoted and parent-tree staging, xargs, whole-tree discards ==="
+check "add quoted dot"            deny 'git add "."'
+check "add single-quoted dot"     deny "git add '.'"
+check "add parent"                deny 'git add ..'
+check "add parent slash"          deny 'git add ../'
+check "add pwd"                   deny 'git add "$(pwd)"'
+check "add PWD var"               deny 'git add $PWD'
+check "xargs force push"          deny 'echo main | xargs git push --force origin'
+check "xargs -I force push"       deny 'echo main | xargs -I {} git push -f origin {}'
+check "checkout -- ."             deny 'git checkout -- .'
+check "checkout ."                deny 'git checkout .'
+check "restore ."                 deny 'git restore .'
+check "restore -S -W ."           deny 'git restore -S -W .'
+check "stash drop"                ask  'git stash drop'
+check "stash clear"               ask  'git stash clear'
+check "worktree remove --force"   ask  'git worktree remove --force ../wt'
+check "add parent file"           allow 'git add ../README.md'
+check "add dotfile by name"       allow 'git add .gitignore'
+check "xargs add by name"         allow 'echo a.txt | xargs git add'
+check "checkout - (switch back)"  allow 'git checkout -'
+check "checkout a file"           allow 'git checkout -- src/app.ts'
+check "restore --staged ."        allow 'git restore --staged .'
+check "stash push"                allow 'git stash push -m wip'
+check "worktree remove"           allow 'git worktree remove ../wt'
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

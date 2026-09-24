@@ -12,7 +12,8 @@ require_parsable_or_deny
 TOOL=$(jq_get '.tool_name')
 
 case "$TOOL" in
-  Write)         CONTENT=$(jq_get '.tool_input.content') ;;
+  # Claude Code 2.1.280 accepts file_text and file_content as aliases for content.
+  Write)         CONTENT=$(jq_get '.tool_input.content // .tool_input.file_text // .tool_input.file_content') ;;
   Edit)          CONTENT=$(jq_get '.tool_input.new_string') ;;
   MultiEdit)     CONTENT=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.edits[]?.new_string // ""' 2>/dev/null) ;;
   NotebookEdit)  CONTENT=$(jq_get '.tool_input.new_source') ;;
