@@ -3,6 +3,8 @@
   "effortLevel": "xhigh",
   "skipAutoPermissionPrompt": true,
   "includeCoAuthoredBy": true,
+  "syncClaudeAiSkills": false,
+  "syncClaudeAiPlugins": false,
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh",

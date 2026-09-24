@@ -84,6 +84,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 | `skipAutoPermissionPrompt` | `true` | Pre-accepts the auto-mode opt-in dialog, so auto mode is live on first launch rather than waiting behind a dialog |
 | `sandbox` | off by default | OS sandbox (Seatbelt/bubblewrap) drafted with a read-only network allowlist (npm/pypi/crates/go/github/anthropic). Flip `sandbox.enabled` to `true` to confine commands. See Customization. |
 | `includeCoAuthoredBy` | `true` | Adds `Co-authored-by: Claude` to commits |
+| `syncClaudeAiSkills` / `syncClaudeAiPlugins` | `false` | Keeps the skills and plugins enabled on your claude.ai account out of terminal sessions. Each synced skill adds its description to every session, and a synced plugin can run hooks or inline shell under this machine's allow rules. They still work on claude.ai. Set either to `true` in `~/.claude/settings.json` to opt back in; the install keeps your value. |
 | `permissions.allow` | Scoped allowlist | Covers common safe ops: `npm test/run lint/build`, `pytest`, `python3`, `poetry run/install/lock`, `gh run/search`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. Read-only verbs added from the audit-log census: `git grep/rev-parse/ls-tree/ls-files/show-ref/cat-file/blame/describe/merge-base/shortlog`, `git remote -v`, `git worktree list`, `tsh status/login/clusters/kube ls`, and read-only `docker` subcommands (`run`/`exec`/`rm`/`cp` deliberately excluded). Interpreter wildcards (`python3`, `poetry run`) are allowed because a permission `allow` only skips the *prompt* — the PreToolUse guards still run, and `interpreter-guard` inspects inline `-c`/`-e`/heredoc code even when wrapped in a runner (`poetry run python -c …`). `gh api` and `kubectl` are both allowlisted, but they are not equally safe. `kubectl` is covered by `kubectl-guard`, which denies every mutating verb wherever it sits in the command. `gh api` has **no** equivalent coverage — it can POST/DELETE through the GitHub API and `network-guard` never inspects it, so that entry is a deliberate convenience trade rather than a guarded one. With the OS sandbox off, an auto-approved `python3 script.py` runs the script's contents unscanned — enable the sandbox for containment. |
 | `permissions.deny` | `git push --force`, `git * reset --hard`, `sudo`, `rm -rf`, `gh auth token`, … | Deny always wins over allow |
 
@@ -223,13 +224,15 @@ rules/                   ← personal rules, installed to ~/.claude/rules/ and
                            a name nothing here may ship, and the install never
                            deletes what it did not put there
   prose-and-comments.md  ← length, voice, and where justification belongs
-  collaboration.md       ← reviews, PRs, and handing work back
+  collaboration.md       ← before replying, and handing work back
   working-agreement.md   ← keep going, evidence, cost, finishing the loop
   environment.md         ← git and Claude Code facts that hold on this machine
   python-tests.md        ← path-scoped: loads only when Claude opens Python
 skills/                  ← agent skills, one directory each
   memory-audit/          ← check memories against external truth
   memory-archive/        ← relieve an over-limit index; proposes, never writes
+  pr-review/             ← writing, answering and requesting a review; loads
+                           only when a review is in play
 tests/                   ← one <name>.test.sh per hook or script
 docs/                    ← research notes and working documents
   session-routing.md     ← routing a PR to the session that owns it; read the
