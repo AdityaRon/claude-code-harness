@@ -127,13 +127,13 @@ echo "=== A ~/ rule gains a \$HOME-expanded twin, in allow AND deny ==="
 TILDE='{
   "permissions": {
     "defaultMode":"auto",
-    "allow":["Bash(~/.claude/skills/vm-query/vm-query.sh:*)"],
+    "allow":["Bash(~/.claude/skills/example/run.sh:*)"],
     "deny":["Bash(~/bin/danger.sh:*)"]
   }
 }'
 OUT=$(MERGE_HOME=/home/testuser merge '{}' "$TILDE")
 [[ "$(printf '%s' "$OUT" | jq -r '.permissions.allow | join(",")')" \
-   == "Bash(/home/testuser/.claude/skills/vm-query/vm-query.sh:*),Bash(~/.claude/skills/vm-query/vm-query.sh:*)" ]] \
+   == "Bash(/home/testuser/.claude/skills/example/run.sh:*),Bash(~/.claude/skills/example/run.sh:*)" ]] \
   && pass "allow keeps both spellings" || fail "allow keeps both spellings" "$OUT"
 [[ "$(printf '%s' "$OUT" | jq -r '.permissions.deny | join(",")')" \
    == "Bash(/home/testuser/bin/danger.sh:*),Bash(~/bin/danger.sh:*)" ]] \
@@ -162,9 +162,15 @@ echo ""
 echo "=== Every shipped ~/ rule reaches the merged output in expanded form ==="
 SHIPPED_TILDE=$(jq -r '[.permissions.allow[], .permissions.deny[]] | map(select(contains("~/"))) | length' config/settings.json)
 GOT_EXPANDED=$(jq -r --arg h "$HOME" '[.permissions.allow[], .permissions.deny[]] | map(select(startswith("Bash(" + $h))) | length' "$TMP/pass1.json")
-[[ "$SHIPPED_TILDE" -gt 0 && "$GOT_EXPANDED" == "$SHIPPED_TILDE" ]] \
-  && pass "all $SHIPPED_TILDE tilde rules expanded" \
-  || fail "all tilde rules expanded" "shipped=$SHIPPED_TILDE expanded=$GOT_EXPANDED"
+# The config ships no ~/ rule since the work-tool skills left it; the fixture
+# above still exercises expansion, so zero here is not a silent pass of nothing.
+if [[ "$SHIPPED_TILDE" -eq 0 ]]; then
+  pass "no shipped ~/ rules (expansion covered by the fixture above)"
+else
+  [[ "$GOT_EXPANDED" == "$SHIPPED_TILDE" ]] \
+    && pass "all $SHIPPED_TILDE tilde rules expanded" \
+    || fail "all tilde rules expanded" "shipped=$SHIPPED_TILDE expanded=$GOT_EXPANDED"
+fi
 
 echo ""
 echo "=== Every hook settings.json registers actually exists in hooks/ ==="
@@ -272,6 +278,17 @@ done
 [ "$LOADED" -le "$BUDGET" ] \
   && pass "always-loaded rules fit the budget ($LOADED of $BUDGET bytes)" \
   || fail "always-loaded rules fit the budget" "$LOADED bytes, over $BUDGET — trim, or give a rule \`paths:\` frontmatter so it loads on demand"
+
+echo ""
+echo "=== The shipped config names only skills this repo ships ==="
+# The repo is public. Allow rules for machine-local skills named work tools and
+# could never be removed by a later install, because the merge unions allow.
+FOREIGN=""
+for s in $(grep -oE '/\.claude/skills/[^/"]+' config/settings.json | sed 's#.*/##' | sort -u); do
+  [[ -d "skills/$s" ]] || FOREIGN="$FOREIGN $s"
+done
+[[ -z "$FOREIGN" ]] && pass "no allow rule for a skill outside skills/" \
+  || fail "no allow rule for a skill outside skills/" "$FOREIGN"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
