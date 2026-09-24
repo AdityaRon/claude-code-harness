@@ -7,12 +7,17 @@ description: How to write a PR review, answer review comments, and request revie
 
 ## Writing a review
 
+- The repo's own review rules win. If the target repo records a review format
+  (for example `.claude/rules/pr-and-review.md`), read it from `origin/main` and
+  follow it; a session launched outside the repo never auto-loads it. The shape
+  below is the fallback for a repo with none.
 - Shape: open on the sources actually read, not the diff. Bold lead-ins for what
   you chased down, each citing `file`:line. Asks numbered, ranked, non-blocking;
   "Nit:" for trivia; label what is inherited, not introduced. Close "Net: approving".
 - An ask the diff cannot be edited to satisfy is a rollout note for the ticket.
 - Edit a review in place to keep APPROVED (`gh api -X PUT .../reviews/<id>`);
-  trim rather than re-post.
+  trim rather than re-post. A review submitted with an empty body cannot be
+  edited, so post the review before any bodiless approval.
 
 ## Answering a review
 
