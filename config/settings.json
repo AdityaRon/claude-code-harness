@@ -117,24 +117,13 @@
       "Bash(sleep:*)",
       "Bash(bash -n:*)",
 
-      "Bash(tsh status:*)",
-      "Bash(tsh login:*)",
-      "Bash(tsh clusters:*)",
-      "Bash(tsh kube ls:*)",
-      "Bash(tsh kube login:*)",
-
       "Bash(docker ps:*)",
       "Bash(docker info:*)",
       "Bash(docker images:*)",
       "Bash(docker inspect:*)",
       "Bash(docker logs:*)",
       "Bash(docker version:*)",
-      "Bash(docker stats:*)",
-
-      "Bash(~/.claude/skills/vm-query/vm-query.sh:*)",
-      "Bash(~/.claude/skills/es-logs/es-logs.sh:*)",
-      "Bash(~/.claude/skills/ld-flags/ld-flags.py:*)",
-      "Bash(~/.claude/skills/spark-pods/describe-pods.sh:*)"
+      "Bash(docker stats:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",
