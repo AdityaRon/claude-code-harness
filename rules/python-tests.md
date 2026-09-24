@@ -1,7 +1,7 @@
 ---
 paths:
   - "**/*.py"
-  - "**/tests/**"
+  - "**/pytest.ini"
 ---
 
 # Reading a test run

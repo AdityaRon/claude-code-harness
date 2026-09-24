@@ -280,6 +280,15 @@ done
   || fail "always-loaded rules fit the budget" "$LOADED bytes, over $BUDGET — trim, or give a rule \`paths:\` frontmatter so it loads on demand"
 
 echo ""
+echo "=== claude.ai sync is off by default, and a user's own choice wins ==="
+OUT=$(merge '{"env":{"A":"1"}}' "$(cat config/settings.json)")
+[[ "$(printf '%s' "$OUT" | jq -c '[.syncClaudeAiSkills, .syncClaudeAiPlugins]')" == "[false,false]" ]] \
+  && pass "both sync keys land false" || fail "both sync keys land false" "$(printf '%s' "$OUT" | jq -c '[.syncClaudeAiSkills, .syncClaudeAiPlugins]')"
+OUT=$(merge '{"syncClaudeAiSkills":true}' "$(cat config/settings.json)")
+[[ "$(printf '%s' "$OUT" | jq -r '.syncClaudeAiSkills')" == "true" ]] \
+  && pass "an explicit user true is kept" || fail "an explicit user true is kept" "$(printf '%s' "$OUT" | jq -r '.syncClaudeAiSkills')"
+
+echo ""
 echo "=== The shipped config names only skills this repo ships ==="
 # The repo is public. Allow rules for machine-local skills named work tools and
 # could never be removed by a later install, because the merge unions allow.
