@@ -60,10 +60,11 @@ PROJECTS_DIR=$(expand_tilde "${CLAUDE_MEMORY_PROJECTS_DIR:-$HOME/.claude/project
 LAUNCH_DIR=$(jq_get '.cwd')
 [[ -z "$LAUNCH_DIR" ]] && LAUNCH_DIR="$PWD"
 # Memory is siloed per launch directory, and the store slug is that path with
-# every separator turned into a dash. Reorder only THIS session's store: the
-# others are not being loaded here, and touching them would surprise whichever
-# session owns them.
-STORE_SLUG=$(printf '%s' "$LAUNCH_DIR" | tr '/' '-')
+# every non-alphanumeric turned into a dash, as the CLI does. A path over 200
+# characters also gets a hash suffix; that store is not found and is skipped.
+# Reorder only THIS session's store: the others are not being loaded here, and
+# touching them would surprise whichever session owns them.
+STORE_SLUG=$(printf '%s' "$LAUNCH_DIR" | sed 's/[^A-Za-z0-9]/-/g')
 INDEX_TOOL=""
 for cand in "$(dirname "$0")/../memory-index.sh" "$(dirname "$0")/../bin/memory-index.sh"; do
   [[ -f "$cand" ]] && INDEX_TOOL="$cand" && break
