@@ -22,7 +22,7 @@
     "capability no one has noticed will not appear here on its own — that is a",
     "standing limitation, and the check prints it rather than implying coverage."
   ],
-  "last_verified_version": "2.1.282 (Claude Code)",
+  "last_verified_version": "2.1.283 (Claude Code)",
   "last_verified_date": "2026-09-25",
   "acknowledged_surface": {
     "_comment": [
@@ -44,7 +44,9 @@
       "maxEffortLevel": "Acknowledged 2026-09-22 (2.1.267), NOT set. Caps effort for every model and subagent. The harness ships effortLevel xhigh and has no measurement that a cap would save anything without costing quality; revisit with the audit log's Agent lines.",
       "bashEditDiffEnabled": "Acknowledged 2026-09-22 (2.1.269), NOT set. Adds a diff of files a Bash command changed to its result. Useful but grows every such tool result; left to the user.",
       "attribution": "Acknowledged 2026-09-23 (2.1.281), NOT set. `false` hides all commit and PR attribution. The harness wants the co-author line (includeCoAuthoredBy true), and older CLIs skip a settings file holding the boolean form.",
-      "maxProseWidth": "Acknowledged 2026-09-25 (2.1.282), NOT set. Caps prose width in wide terminals; tables and code keep full width. A display preference, left to the user."
+      "maxProseWidth": "Acknowledged 2026-09-25 (2.1.282), NOT set. Caps prose width in wide terminals; tables and code keep full width. A display preference, left to the user.",
+      "availableModelsMatch": "Acknowledged 2026-09-25 (2.1.283), NOT set. Managed setting: with \"exact\", an availableModels entry allows only the model version it names, so a new release stays blocked until listed. The harness sets neither availableModels nor availableModelsMatch in config/settings.json; model allow/deny policy is the owner's call, not a harness guard.",
+      "deniedModels": "Acknowledged 2026-09-25 (2.1.283), NOT set. Managed setting to block specific models even when availableModels allows them. Same reasoning as availableModelsMatch: the harness ships no model allow/deny list, so this is left unset for the owner to decide."
     }
   },
   "acknowledged_hook_events": [
@@ -127,7 +129,12 @@
     "mid-pattern :* in Bash rules": "2.1.282: a rule with :* before the end of the pattern was skipped in settings files and now applies from every source. Checked 2026-09-25: no rule in config/settings.json or the installed ~/.claude/settings.json has one (grep -E ':\\*[^)]' on each, 0 hits), so no rule starts matching. The deny rules spell a bare *, as in `git * push --force:*`, which this entry does not touch.",
     "Skill(claude-ai:*) allow rules": "2.1.282: now cover only skills synced from claude.ai. The harness ships no Skill() rule and sets syncClaudeAiSkills false, so nothing changes here.",
     "telemetry variables in project settings": "2.1.282: project and local settings may no longer turn telemetry export on, and a startup notice lists the ignored ones. The harness sets no telemetry variable in config/settings.json, and it writes user settings, which this does not affect.",
-    "auto mode server-side classifier": "2.1.282: on a direct Anthropic API connection with telemetry off, auto mode now uses the server-side classifier (CLAUDE_CODE_AUTO_MODE_SERVER=0 opts out). This Mac signs in with a subscription and had DISABLE_TELEMETRY unset on 2026-09-25, so it is likely unaffected. Either way, a guard deny or ask applies before any classifier sees the call."
+    "auto mode server-side classifier": "2.1.282: on a direct Anthropic API connection with telemetry off, auto mode now uses the server-side classifier (CLAUDE_CODE_AUTO_MODE_SERVER=0 opts out). This Mac signs in with a subscription and had DISABLE_TELEMETRY unset on 2026-09-25, so it is likely unaffected. Either way, a guard deny or ask applies before any classifier sees the call.",
+    "auto mode when no permission mode is configured": "2.1.283: an interactive session on a third-party provider, or with telemetry off, now starts in auto mode when nothing sets a permission mode, though permissions.defaultMode still overrides it. config/settings.json always sets permissions.defaultMode to \"auto\" explicitly, so this change cannot alter this harness's behavior either way.",
+    "OTEL_LOG_TOOL_CONTENT tool output logging": "2.1.283: MCP tool, WebFetch and WebSearch outputs are added to the tool.output OpenTelemetry span event when OTEL_LOG_TOOL_CONTENT=1. Overlaps audit.sh, which already logs those same tool calls (action, target, dir) but deliberately never their content -- see the Artifact/WebFetch entry above for the same reasoning. config/settings.json sets no telemetry exporter and does not set OTEL_LOG_TOOL_CONTENT, so no tool content leaves this harness through OTel.",
+    "sandboxed git credential helper store fix": "2.1.283: sandboxed git no longer asks credential helpers to store the sandbox proxy's login (which printed \"failed to store\"). config/settings.json ships sandbox.enabled false, so this harness never ran into the bug and the fix changes nothing here.",
+    "managed sandbox settings fail closed on one bad nested value": "2.1.283: a managed sandbox block with one invalid nested value used to be ignored in its entirety; an invalid value now fails closed and the rest of the block still applies. Checked 2026-09-25: config/settings.json's sandbox block (enabled, failIfUnavailable, network.allowedDomains) has no invalid nested value, so nothing here newly fails closed -- but the change is a safety improvement for the day one does, since silent whole-block ignoring was the worse failure mode.",
+    "Skill() deny rule matching for Desktop plugins and aliases": "2.1.283: Skill(anthropic-skills:<name>) deny rules now also block that skill when Claude Desktop delivers it as a plugin, and Skill(skill:<name>) denies now match the skill's alias and display name too. config/settings.json and rules/ ship no Skill() allow or deny rule, so this changes nothing here; revisit if one is ever added."
   },
   "memory_index_limits": {
     "_comment": [
