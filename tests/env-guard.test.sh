@@ -268,5 +268,36 @@ check "sort a file"           allow "sort names.txt"
 check "word env in a message" allow "git commit -m 'update env docs'"
 
 echo ""
+echo "=== A wrapper in front of a reader is still the reader (expect: deny) ==="
+check "env cat"             deny 'env cat .env'
+check "env with an assign"  deny 'env FOO=1 cat .env'
+check "command cat"         deny 'command cat .env'
+check "nice -n cat"         deny 'nice -n 10 cat .env'
+check "time cat"            deny 'time cat .env'
+check "nohup cat"           deny 'nohup cat .env'
+check "exec cat"            deny 'exec cat .env'
+check "sudo cat"            deny 'sudo cat .env'
+check "timeout cat"         deny 'timeout 5 cat .env'
+check "stdbuf cat"          deny 'stdbuf -o0 cat .env'
+check "after a chain"       deny 'cd app && nice cat .env'
+check "find -exec, file in args" deny 'find . -maxdepth 0 -exec cat .env \;'
+check "find -name, -exec cat {}" deny 'find . -name .env -exec cat {} \;'
+check "find -execdir"       deny 'find . -name .env -execdir head {} +'
+check "echo to xargs cat"   deny 'echo .env | xargs cat'
+check "xargs -I"            deny 'echo .env | xargs -I{} cat {}'
+check "find to xargs -0"    deny 'find . -name .env -print0 | xargs -0 cat'
+
+echo ""
+echo "=== Wrappers and find/xargs without a secret file (expect: allow) ==="
+check "time a build"        allow 'time make test'
+check "nice npm test"       allow 'nice -n 10 npm test'
+check "env var then tool"   allow 'env NODE_ENV=test npm test'
+check "timeout cat README"  allow 'timeout 5 cat README.md'
+check "find -exec grep"     allow "find . -name '*.ts' -exec grep foo {} +"
+check "ls to xargs cat"     allow 'ls | xargs cat'
+check "template via xargs"  allow 'echo .env.example | xargs cat'
+check "find -name, no reader" allow 'find . -name .env'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

@@ -25,6 +25,9 @@ SCAN=$(printf '%s' "$CMD" \
 
 # Command boundary: start-of-line, pipe, logical chain, subshell, semicolon, &.
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
+# Commands that run their arguments as a command: `nice -n 10 cat .env` is cat.
+# Greedy up to the last space, so stacked wrappers and their options go too.
+WRAP='((env|command|builtin|exec|nice|ionice|time|nohup|sudo|doas|timeout|stdbuf|caffeinate|xargs)\b[^|;&]*\s)?'
 
 # Readers / dumpers targeting .env* or ~/.aws/credentials or ~/.netrc.
 READERS='(cat|less|more|head|tail|xxd|od|hexdump|strings|nl|awk|sed|grep|rg|base64|gpg|openssl\s+enc|source|tac|cut|paste|sort|uniq|diff|comm|bat|git\s+show)'
@@ -83,8 +86,13 @@ SOCKETS='\b(nc|ncat|socat)\b'
 EVAL_ENV='\beval\b[^|;&]*\$\(.*(printenv|env\b|cat\b)'
 
 BLOCKED=(
-  "${A}${READERS}\s+[^|;&]*${DOTFILES}"
-  "${A}${COPIERS}\s+[^|;&]*${DOTFILES}"
+  "${A}${WRAP}${READERS}\s+[^|;&]*${DOTFILES}"
+  "${A}${WRAP}${COPIERS}\s+[^|;&]*${DOTFILES}"
+  # find hands its matches to -exec, and a pipe hands them to xargs, so the
+  # file and the reader sit apart.
+  "${A}find\b[^|;&]*${DOTFILES}[^|;&]*-(exec|execdir|ok|okdir)\s+${READERS}\b"
+  "${A}find\b[^|;&]*-(exec|execdir|ok|okdir)\s+${READERS}\s+[^|;&]*${DOTFILES}"
+  "${DOTFILES}[^;&]*\|\s*xargs\b[^|;&]*\s${READERS}\b"
   "${A}${DOTSOURCE}\s+[^|;&]*${DOTFILES}"
   "${A}${ENV_DUMP}"
   "${A}${JQ_ENV}"
