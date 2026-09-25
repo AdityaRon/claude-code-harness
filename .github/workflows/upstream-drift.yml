@@ -27,7 +27,9 @@ on:
 
 # Write scopes are for the scheduled path: the draft PR, or the issue when no
 # token is set. id-token lets claude-code-action mint the Claude GitHub App token.
+# actions: write is for dispatching CI on the draft PR's branch.
 permissions:
+  actions: write
   contents: write
   pull-requests: write
   issues: write
@@ -161,13 +163,15 @@ jobs:
             No em dashes.
 
       # The commit and PR happen here rather than inside Claude, so the only path
-      # that reaches the repo is the one file this step checks. The App token makes
-      # the PR fire CI; one opened with github.token would show no checks.
+      # that reaches the repo is the one file this step checks. It uses
+      # github.token: the action revokes its App token in its own post step, which
+      # failed the 2.1.282 push. A PR opened with github.token fires no
+      # pull_request workflows, so CI is dispatched on the branch instead.
       - name: Open the draft PR
         id: open
         if: steps.plan.outputs.mode == 'draft' && steps.claude.outputs.conclusion == 'success'
         env:
-          GH_TOKEN: ${{ steps.claude.outputs.github_token }}
+          GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.plan.outputs.branch }}
           CUR: ${{ steps.plan.outputs.cur }}
           CLAUDE_CHANGELOG_PATH: changelog.md
@@ -207,6 +211,7 @@ jobs:
             --title "contract: review Claude Code releases up to $CUR" \
             --body-file body.md --assignee "${{ github.repository_owner }}"
           echo "drafted=true" >> "$GITHUB_OUTPUT"
+          gh workflow run ci.yml --ref "$BRANCH" || echo "::warning::could not dispatch CI on $BRANCH"
 
       # Without a token, or when no PR was drafted, keep one open issue current
       # so a red run is not the only signal: three scheduled runs were red, Aug 31
