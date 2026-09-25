@@ -267,6 +267,20 @@ printf '%s' "$OUT" | grep -qF "matches the contract" \
   && fail "and does not claim a match" "reported a match it never verified" \
   || pass "and does not claim a match"
 
+# Minified names are reused across scopes. The 2.1.282 native binary binds the
+# line-limit name to 3600000 earlier in the file, and the check reported that.
+{ echo "function f(){var qZ=3600000,x=1}"; cat "$TMP/fullcli"; } > "$TMP/reused"
+OUT=$(CLAUDE_CLI_BIN="$TMP/reused" run "$ALL_EVENTS" "$ALL_MODES")
+printf '%s' "$OUT" | grep -qF "index line limit 200 matches" \
+  && pass "a reused minified name resolves to the paired declaration" \
+  || fail "a reused minified name resolves to the paired declaration" "$OUT"
+{ echo "var qZ=3600000;"; echo "var qZ=150;"; cat "$TMP/nolimits"
+  echo "let{trimmed:aa,lineCount:bb,byteCount:cc}=T(e),dd=bb>qZ,ee=cc>zQ9;var zQ9=25000;"; } > "$TMP/ambiguous"
+OUT=$(CLAUDE_CLI_BIN="$TMP/ambiguous" run "$ALL_EVENTS" "$ALL_MODES")
+printf '%s' "$OUT" | grep -qF "UNVERIFIED on this run" \
+  && pass "an ambiguous name reads as UNVERIFIED, not a value" \
+  || fail "an ambiguous name reads as UNVERIFIED, not a value" "$OUT"
+
 
 echo "=== 6. releases since last_verified_version (exit 2) ==="
 PIN=$(jq -r '.last_verified_version' config/upstream-contract.json); PIN=${PIN%% *}

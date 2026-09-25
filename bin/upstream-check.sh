@@ -298,16 +298,27 @@ else
     # not all digits comes back empty, and the caller reports UNVERIFIED. Every
     # extraction added here must keep that property -- report nothing, never a
     # value you did not prove is a value.
+    #
+    # Minified names are also reused across scopes: the 2.1.282 native binary
+    # binds the line-limit name to 3600000 before its real `=200`. So prefer the
+    # declaration that binds both names together, and when a name alone has
+    # more than one value, report nothing.
     const_value() {
       _v=$(grep -aoE "(^|[^A-Za-z0-9_\$])$1=[0-9]+" "$CLI_BIN" 2>/dev/null \
-           | grep -aoE '[0-9]+$' | head -1)
+           | grep -aoE '[0-9]+$' | sort -u)
       case "$_v" in
         ''|*[!0-9]*) printf '' ;;
         *)           printf '%s' "$_v" ;;
       esac
     }
-    GOT_LINES=$(const_value "$LLIM")
-    GOT_BYTES=$(const_value "$BLIM")
+    PAIR=$(grep -aoE "(^|[^A-Za-z0-9_\$])$LLIM=[0-9]+,$BLIM=[0-9]+" "$CLI_BIN" 2>/dev/null \
+           | grep -aoE '[0-9]+,[^,]*=[0-9]+$' | sort -u)
+    case "$PAIR" in
+      *$'\n'*) GOT_LINES=""; GOT_BYTES="" ;;
+      [0-9]*,*=[0-9]*) GOT_LINES=${PAIR%%,*}; GOT_BYTES=${PAIR##*=}
+                       case "$GOT_LINES$GOT_BYTES" in *[!0-9]*) GOT_LINES=""; GOT_BYTES="" ;; esac ;;
+      *) GOT_LINES=$(const_value "$LLIM"); GOT_BYTES=$(const_value "$BLIM") ;;
+    esac
     if [ -z "$GOT_LINES" ] || [ -z "$GOT_BYTES" ]; then
       warn "found the truncation expression but not both constants (lines='${GOT_LINES:-?}' bytes='${GOT_BYTES:-?}')"
       warn "the thresholds went UNVERIFIED on this run."
