@@ -173,5 +173,20 @@ check "raw path, pods"           allow 'kubectl get --raw /api/v1/namespaces/vm/
 check "raw path, CRD"            allow 'kubectl get --raw /apis/x/v1/secretproviderclasses'
 
 echo ""
+echo "=== The kind after a flag is still the kind (expect: ask) ==="
+# Only the first bare token after `get` was compared, so a format value read
+# as the resource and the real kind behind it went unchecked.
+check "-o value before kind"     ask   'kubectl get -o yaml secret'
+check "-o value, kind and name"  ask   'kubectl get -o yaml secret db'
+check "--output value first"     ask   'kubectl get --output json secrets -n vm'
+check "-l value first"           ask   'kubectl get -l app=db secret'
+
+echo ""
+echo "=== Flag values that only look like a kind are not one (expect: allow) ==="
+check "-o before pods"           allow 'kubectl get -o yaml pods'
+check "label value secret"       allow 'kubectl get pods -l tier=secret'
+check "namespace named secrets"  allow 'kubectl get pods -n secrets'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

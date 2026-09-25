@@ -203,12 +203,24 @@ while (( i < n )); do
         # --raw=<path> is self-contained, so next_bare_token skips it entirely
         # and the API path behind it never got looked at. Scan this command's
         # own tokens for it, stopping at the operator that ends the command.
+        # The same scan checks every bare token as a kind: next_bare_token
+        # stops at the first, so `get -o yaml secret` compared only "yaml".
         k=$i
         while (( k < n )) && ! is_operator "${TOKENS[$k]}"; do
           case "${TOKENS[$k]}" in
             --raw=*)
               if is_secret_target "${TOKENS[$k]#--raw=}"; then
                 emit_ask "kubectl get --raw reads the secrets API directly, which returns the same credential data. Confirm this is intended and scoped to the secret you need."
+                exit 0
+              fi
+              ;;
+            -o|--output|-l|--selector|-L|--label-columns|--field-selector|--sort-by|--template)
+              (( k++ )) ;;
+            -*=*) ;;
+            -*) is_value_flag "${TOKENS[$k]}" && (( k++ )) ;;
+            *)
+              if is_secret_target "${TOKENS[$k]}"; then
+                emit_ask "kubectl get ${TOKENS[$k]} reads live credentials into the transcript. Confirm this is intended and scoped to the secret you need."
                 exit 0
               fi
               ;;
