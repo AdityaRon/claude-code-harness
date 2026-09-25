@@ -140,9 +140,13 @@ else
 
   # The harness owns the hook entries IT installed. Anything else in the block —
   # an iTerm2 status hook, say — is carried across by merge-settings.jq. Say how
-  # many, so a machine that loses one has a number to notice it by.
-  FOREIGN=$(jq '[(.hooks // {})[] | .[]? | (.hooks // [])[]?
-                 | select((.command // "") | startswith("~/.claude/hooks/") | not)] | length' \
+  # many, so a machine that loses one has a number to notice it by. Ownership is
+  # by file name, so a user's own script in ~/.claude/hooks is foreign too.
+  OWNED=$(cd "$REPO/hooks" && printf '%s\n' *.sh | jq -R . | jq -sc .)
+  FOREIGN=$(jq --arg home "$HOME" --argjson owned "$OWNED" '[(.hooks // {})[] | .[]? | (.hooks // [])[]?
+                 | (.command // "") as $c
+                 | select([("~/.claude/hooks/", $home + "/.claude/hooks/") as $p | select($c | startswith($p))
+                           | $c | ltrimstr($p) | split(" ")[0] | . as $n | any($owned[]; . == $n)] | any | not)] | length' \
             "$TARGET" 2>/dev/null || echo 0)
   if [[ "${FOREIGN:-0}" -gt 0 ]]; then
     echo "  ℹ $FOREIGN hook entr$([[ "$FOREIGN" == 1 ]] && echo y || echo ies) not installed by the harness — preserved."
@@ -164,7 +168,7 @@ else
   fi
 
   TMP=$(mktemp)
-  if ! jq -s --arg home "$HOME" -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
+  if ! jq -s --arg home "$HOME" --argjson owned "$OWNED" -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
     rm -f "$TMP"
     echo "  ✗ settings.json merge failed — left untouched (backup: $BACKUP)"
     exit 1

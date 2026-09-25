@@ -16,8 +16,10 @@ fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 merge(){
   printf '%s' "$1" > "$TMP/old.json"
   printf '%s' "$2" > "$TMP/new.json"
-  jq -s --arg home "${MERGE_HOME:-$HOME}" -f "$FILTER" "$TMP/old.json" "$TMP/new.json"
+  jq -s --arg home "${MERGE_HOME:-$HOME}" --argjson owned "$OWNED" -f "$FILTER" "$TMP/old.json" "$TMP/new.json"
 }
+# The hook file names the harness ships, passed the way install.sh passes them.
+OWNED=$(cd hooks && printf '%s\n' *.sh | jq -R . | jq -sc .)
 
 HARNESS='{
   "permissions": {"defaultMode":"auto","allow":["Bash(ls:*)"],"deny":["Bash(sudo:*)"]},
@@ -224,6 +226,26 @@ OUT=$(merge "$STALE" "$HARNESS")
 [[ "$(printf '%s' "$OUT" | jq -r '[.hooks.SessionEnd[].hooks[].command] | length')" == "1" ]] \
   && pass "a harness hook is not duplicated" \
   || fail "a harness hook is not duplicated" "$(printf '%s' "$OUT" | jq -c .hooks.SessionEnd)"
+
+# ~/.claude/hooks/ is also where a user puts their own script. Ownership is by
+# file name, so only the names the harness ships are replaced (issue #2, H).
+MINE='{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"~/.claude/hooks/my-own.sh"}]}],
+                "SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"'"$HOME"'/.claude/hooks/mine-too.sh --flag"}]}]}}'
+OUT=$(merge "$MINE" "$HARNESS")
+[[ "$(printf '%s' "$OUT" | jq -r '[.hooks.Stop[]?.hooks[].command] | index("~/.claude/hooks/my-own.sh") != null')" == "true" ]] \
+  && pass "a user's own script in ~/.claude/hooks survives" \
+  || fail "a user's own script in ~/.claude/hooks survives" "$(printf '%s' "$OUT" | jq -c .hooks)"
+[[ "$(printf '%s' "$OUT" | jq -r '[.hooks.SessionEnd[].hooks[].command] | length')" == "2" ]] \
+  && pass "and its expanded-path form beside a harness hook" \
+  || fail "and its expanded-path form beside a harness hook" "$(printf '%s' "$OUT" | jq -c .hooks.SessionEnd)"
+EXPANDED='{"hooks":{"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"'"$HOME"'/.claude/hooks/audit.sh"}]}]}}'
+OUT=$(merge "$EXPANDED" "$HARNESS")
+[[ "$(printf '%s' "$OUT" | jq -r '[.hooks.SessionEnd[].hooks[].command] | length')" == "1" ]] \
+  && pass "a shipped name in expanded form is still the harness's" \
+  || fail "a shipped name in expanded form is still the harness's" "$(printf '%s' "$OUT" | jq -c .hooks.SessionEnd)"
+grep -q -- '--argjson owned' install.sh \
+  && pass "install.sh passes the shipped hook names" \
+  || fail "install.sh passes the shipped hook names" "no --argjson owned"
 
 echo ""
 echo "=== rules/ ships by glob, and installing never deletes a local rule ==="
