@@ -1,6 +1,7 @@
 # Merges the harness settings.json into an existing ~/.claude/settings.json.
 #
-# Invoked by install.sh as:  jq -s --arg home "$HOME" -f merge-settings.jq OLD NEW
+# Invoked by install.sh as:
+#   jq -s --arg home "$HOME" --argjson owned '["audit.sh",…]' -f merge-settings.jq OLD NEW
 # Kept as a standalone program so tests/install-merge.test.sh exercises the
 # exact filter the installer runs (no second copy to drift out of sync).
 #
@@ -26,12 +27,18 @@ def expand_home($h):
   | $rules + ($rules | map(select(contains("~/")) | gsub("~/"; $h + "/")))
   | unique;
 
-# A hook entry this harness installed: its command runs a file in ~/.claude/hooks.
-# Both spellings, because settings.json carries the tilde form and an expanded
-# one is equally valid on disk.
+# A hook entry this harness installed: its command runs a file in ~/.claude/hooks
+# whose name the harness ships (--argjson owned, from hooks/*.sh). A user's own
+# script in that directory is theirs. Both spellings, because settings.json
+# carries the tilde form and an expanded one is equally valid on disk. Without
+# owned, every file there counts, as before. A hook dropped from hooks/ is no
+# longer owned, so its entry would survive: retire one by editing settings.json.
 def is_harness_hook($h):
   (.command // "") as $c
-  | ($c | startswith("~/.claude/hooks/")) or ($c | startswith($h + "/.claude/hooks/"));
+  | [("~/.claude/hooks/", $h + "/.claude/hooks/") as $p
+     | select($c | startswith($p)) | $c | ltrimstr($p) | split(" ")[0]] as $names
+  | ($names | length) > 0
+    and (($ARGS.named.owned // null) as $o | $o == null or any($o[]; . == $names[0]));
 
 # Strip the harness's own entries from a matcher list, and drop matchers left
 # empty, so only hooks the harness did not install survive.
