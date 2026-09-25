@@ -113,8 +113,8 @@ fi
 
 echo ""
 echo "=== memory index: out of tier order → reordered and announced ==="
-# The store slug is the launch directory with separators turned to dashes.
-STORE="$CLAUDE_MEMORY_PROJECTS_DIR/$(printf '%s' "$PWD" | tr '/' '-')/memory"
+# The store slug is the launch directory with every non-alphanumeric a dash.
+STORE="$CLAUDE_MEMORY_PROJECTS_DIR/$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')/memory"
 mkdir -p "$STORE"
 mkmem() {  # mkmem <stem> <type>
   { echo "---"; echo "name: $1"; echo "description: d"
@@ -139,6 +139,21 @@ echo ""
 echo "=== memory index: already ordered → silent ==="
 OUT=$(run_resume "sess-clean")
 check_not_contains "no reorder banner" "Memory index reordered" "$OUT"
+
+echo ""
+echo "=== a worktree path: every non-alphanumeric becomes a dash (issue #2, G) ==="
+# The CLI builds the store name with replace(/[^a-zA-Z0-9]/g,"-") (2.1.282), so
+# `.claude/worktrees/v0_build` lands in `--claude-worktrees-v0-build`.
+WT="/tmp/prep-lanes/.claude/worktrees/v0_build"
+STORE="$CLAUDE_MEMORY_PROJECTS_DIR/-tmp-prep-lanes--claude-worktrees-v0-build/memory"
+mkdir -p "$STORE"
+mkmem project_old  project
+mkmem feedback_one feedback
+{ echo "- [P](project_old.md) — hook"
+  echo "- [F](feedback_one.md) — hook"; } > "$STORE/MEMORY.md"
+OUT=$(jq -nc --arg d "$WT" '{source:"resume", session_id:"sess-wt", hook_event_name:"SessionStart", cwd:$d}' \
+  | bash "$HOOK" 2>/dev/null)
+check_contains "worktree store reordered" "Memory index reordered" "$OUT"
 
 echo ""
 echo "=== no store for this launch directory → silent, and nothing created ==="

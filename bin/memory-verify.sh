@@ -304,7 +304,7 @@ scan_index_size() {
 HOOK_MIN_DESC_RATIO="${MEMORY_HOOK_MIN_DESC_RATIO:-150}"
 
 scan_index_hooks() {
-  local dir="$1" slug="$2" line target hook desc
+  local dir="$1" slug="$2" line target hook desc dlen hlen
   local idx="$dir/MEMORY.md"
   local n=0
   [ -f "$idx" ] || return 0
@@ -322,7 +322,10 @@ scan_index_hooks() {
     [ -n "$target" ] && [ -f "$dir/$target" ] || continue
     desc=$(sed -n 's/^description: *//p' "$dir/$target" | head -1 | sed 's/^"//; s/"$//')
     [ -n "$desc" ] || continue
-    [ $(( ${#desc} * 100 )) -ge $(( ${#hook} * HOOK_MIN_DESC_RATIO )) ] || continue
+    # Characters, not bytes: ${#var} counts bytes under a POSIX locale.
+    dlen=$(printf '%s' "$desc" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
+    hlen=$(printf '%s' "$hook" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
+    [ $(( dlen * 100 )) -ge $(( hlen * HOOK_MIN_DESC_RATIO )) ] || continue
     emit HOOK "$slug" "MEMORY.md:$n" \
       "hook trails off (\"$hook\") but ${target} still has the payload: $(printf '%.120s' "$desc")"
   done < "$idx"

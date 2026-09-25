@@ -260,13 +260,14 @@ if [ -f "$DIR/MEMORY.md" ]; then
     # pressure.
     # Two units on purpose, matching upstream: the index TOTAL is a byte size
     # (wc -c; the truncation warning states it in KB), while the per-entry
-    # budget upstream states is in characters. ILEN stays ${#IDX} for that
-    # reason. Naming them apart is the fix -- calling the byte total "chars" is
-    # what let a 24,688-character index read as compliant at 25,150 bytes.
+    # budget upstream states is in characters. Naming them apart is the fix --
+    # calling the byte total "chars" is what let a 24,688-character index read
+    # as compliant at 25,150 bytes. ILEN drops UTF-8 continuation bytes rather
+    # than using ${#IDX}, which counts bytes under a POSIX locale.
     IDX_BYTES=$(wc -c < "$DIR/MEMORY.md" | tr -d ' ')
     IDX_LINES=$(wc -l < "$DIR/MEMORY.md" | tr -d ' ')
     if [ "$IDX_BYTES" -ge "$INDEX_PRESSURE_BYTES" ] || [ "$IDX_LINES" -ge "$INDEX_PRESSURE_LINES" ]; then
-      ILEN=${#IDX}
+      ILEN=$(printf '%s' "$IDX" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
       [ "$ILEN" -gt "$INDEX_LINE_MAX" ] \
         && add "its index line is $ILEN chars. This index is at $IDX_BYTES bytes of ~$INDEX_MAX_BYTES and $IDX_LINES lines, so per-line length is the only lever left on the total — compose the hook under $INDEX_LINE_MAX."
     fi

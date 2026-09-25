@@ -161,6 +161,8 @@ check_contains "and quantifies the pressure"            "of ~25000"             
 DASHES=$(printf '\xe2\x80\x94%.0s' $(seq 1 30))   # 30 em-dashes: 30 chars, 90 bytes
 echo "- [T](budget.md) — $DASHES" > "$STORE/MEMORY.md"
 check_absent "not flagged on byte count" "per-line length" "$(lint "$STORE/budget.md")"
+# ${#var} counts bytes under a POSIX locale, which is what a container shell has.
+check_absent "nor under a POSIX locale"  "per-line length" "$(LC_ALL=POSIX lint "$STORE/budget.md")"
 unset MEMORY_INDEX_PRESSURE_CHARS
 
 echo ""
