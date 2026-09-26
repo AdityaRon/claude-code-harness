@@ -22,8 +22,8 @@
     "capability no one has noticed will not appear here on its own — that is a",
     "standing limitation, and the check prints it rather than implying coverage."
   ],
-  "last_verified_version": "2.1.282 (Claude Code)",
-  "last_verified_date": "2026-09-25",
+  "last_verified_version": "2.1.283 (Claude Code)",
+  "last_verified_date": "2026-09-26",
   "acknowledged_surface": {
     "_comment": [
       "Capability -> the decision a human made about it. Verified by substring",
@@ -44,7 +44,9 @@
       "maxEffortLevel": "Acknowledged 2026-09-22 (2.1.267), NOT set. Caps effort for every model and subagent. The harness ships effortLevel xhigh and has no measurement that a cap would save anything without costing quality; revisit with the audit log's Agent lines.",
       "bashEditDiffEnabled": "Acknowledged 2026-09-22 (2.1.269), NOT set. Adds a diff of files a Bash command changed to its result. Useful but grows every such tool result; left to the user.",
       "attribution": "Acknowledged 2026-09-23 (2.1.281), NOT set. `false` hides all commit and PR attribution. The harness wants the co-author line (includeCoAuthoredBy true), and older CLIs skip a settings file holding the boolean form.",
-      "maxProseWidth": "Acknowledged 2026-09-25 (2.1.282), NOT set. Caps prose width in wide terminals; tables and code keep full width. A display preference, left to the user."
+      "maxProseWidth": "Acknowledged 2026-09-25 (2.1.282), NOT set. Caps prose width in wide terminals; tables and code keep full width. A display preference, left to the user.",
+      "availableModelsMatch": "Acknowledged 2026-09-26 (2.1.283), NOT set. Managed-settings lever: with \"exact\", an availableModels entry admits only the model version it names, so a new release stays blocked until explicitly listed. This harness ships no managed-settings file and sets no availableModels list, so there is nothing for this to refine. Relevant only if this harness is ever rolled out under an org managed policy that already restricts models by version.",
+      "deniedModels": "Acknowledged 2026-09-26 (2.1.283), NOT set. Managed-settings lever to block specific models even when availableModels would allow them. Same reasoning as availableModelsMatch: no managed-settings file ships with this harness, and no model is blocked by policy today."
     }
   },
   "acknowledged_hook_events": [
@@ -127,7 +129,11 @@
     "mid-pattern :* in Bash rules": "2.1.282: a rule with :* before the end of the pattern was skipped in settings files and now applies from every source. Checked 2026-09-25: no rule in config/settings.json or the installed ~/.claude/settings.json has one (grep -E ':\\*[^)]' on each, 0 hits), so no rule starts matching. The deny rules spell a bare *, as in `git * push --force:*`, which this entry does not touch.",
     "Skill(claude-ai:*) allow rules": "2.1.282: now cover only skills synced from claude.ai. The harness ships no Skill() rule and sets syncClaudeAiSkills false, so nothing changes here.",
     "telemetry variables in project settings": "2.1.282: project and local settings may no longer turn telemetry export on, and a startup notice lists the ignored ones. The harness sets no telemetry variable in config/settings.json, and it writes user settings, which this does not affect.",
-    "auto mode server-side classifier": "2.1.282: on a direct Anthropic API connection with telemetry off, auto mode now uses the server-side classifier (CLAUDE_CODE_AUTO_MODE_SERVER=0 opts out). This Mac signs in with a subscription and had DISABLE_TELEMETRY unset on 2026-09-25, so it is likely unaffected. Either way, a guard deny or ask applies before any classifier sees the call."
+    "auto mode server-side classifier": "2.1.282: on a direct Anthropic API connection with telemetry off, auto mode now uses the server-side classifier (CLAUDE_CODE_AUTO_MODE_SERVER=0 opts out). This Mac signs in with a subscription and had DISABLE_TELEMETRY unset on 2026-09-25, so it is likely unaffected. Either way, a guard deny or ask applies before any classifier sees the call.",
+    "gateway hint headers (x-claude-code-prompt-id)": "2.1.283, opt-in via CLAUDE_CODE_GATEWAY_HINT_HEADERS=1. Lets an LLM gateway group the requests that serve one user prompt. config/settings.json's env block sets no such variable and this harness does not front Claude Code with a gateway, so it is inert here. Revisit if this harness is ever deployed behind one.",
+    "OTEL_LOG_TOOL_CONTENT tool.output span content": "2.1.283, opt-in via OTEL_LOG_TOOL_CONTENT=1. Adds MCP tool, WebFetch and WebSearch output to the tool.output OpenTelemetry span event. config/settings.json's env block sets no OTEL_* variable and this harness exports no telemetry, so no such span is ever emitted for this to populate.",
+    "auto mode as the unconfigured interactive default": "2.1.283: an interactive session on a third-party provider, or with telemetry off, now starts in auto mode when nothing sets permissions.defaultMode; an explicit defaultMode still overrides. This harness always ships permissions.defaultMode \"auto\" in config/settings.json (see expected_default_mode below), so it was already explicit before this change and nothing here shifts its behavior.",
+    "Skill() deny rule coverage (anthropic-skills plugin delivery, alias/display-name match)": "2.1.283: a Skill(anthropic-skills:<name>) deny now also blocks that skill when Claude Desktop delivers it as a plugin, and Skill(skill:<name>) denies also match the skill's alias and display name. Same reasoning as the 2.1.282 Skill(claude-ai:*) entry above: the harness ships no Skill() permission rule at all, so a change to how such rules match has no effect here."
   },
   "memory_index_limits": {
     "_comment": [
@@ -149,6 +155,7 @@
     "lines": 200,
     "bytes": 25000,
     "verified_in": "2.1.250 (Claude Code)",
-    "verified_date": "2026-08-27"
+    "verified_date": "2026-08-27",
+    "last_check_unverified": "2.1.283 (Claude Code), 2026-09-26 — section 4d found the truncation expression but could not resolve both constants (lines/bytes came back '?'), so this run neither confirmed nor disproved 200/25000. Not a known-wrong value, just an unchecked one this cycle; re-run 4d before trusting a green result on it."
   }
 }
