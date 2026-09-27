@@ -280,6 +280,14 @@ OUT=$(CLAUDE_CLI_BIN="$TMP/ambiguous" run "$ALL_EVENTS" "$ALL_MODES")
 printf '%s' "$OUT" | grep -qF "UNVERIFIED on this run" \
   && pass "an ambiguous name reads as UNVERIFIED, not a value" \
   || fail "an ambiguous name reads as UNVERIFIED, not a value" "$OUT"
+# The Linux 2.1.283 binary names the line limit P$. Unescaped in a regex, the
+# $ is an end-of-line anchor and the name never matches.
+{ cat "$TMP/nolimits"
+  echo 'var P$=200,Z3=25000;let{trimmed:aa,lineCount:b$,byteCount:cc}=T(e),dd=b$>P$,ee=cc>Z3;'; } > "$TMP/dollar"
+OUT=$(CLAUDE_CLI_BIN="$TMP/dollar" run "$ALL_EVENTS" "$ALL_MODES")
+printf '%s' "$OUT" | grep -qF "index line limit 200 matches" \
+  && pass "a minified name holding \$ still resolves" \
+  || fail "a minified name holding \$ still resolves" "$OUT"
 
 
 echo "=== 6. releases since last_verified_version (exit 2) ==="

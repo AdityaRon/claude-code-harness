@@ -279,8 +279,11 @@ else
   else
     LV=$(printf '%s' "$FRAG" | sed -n 's/.*lineCount:\([A-Za-z_$][A-Za-z0-9_$]*\),.*/\1/p')
     BV=$(printf '%s' "$FRAG" | sed -n 's/.*byteCount:\([A-Za-z_$][A-Za-z0-9_$]*\)}.*/\1/p')
-    LLIM=$(printf '%s' "$FRAG" | sed -n "s/.*=${LV}>\([A-Za-z_\$][A-Za-z0-9_\$]*\).*/\1/p")
-    BLIM=$(printf '%s' "$FRAG" | sed -n "s/.*=${BV}>\([A-Za-z_\$][A-Za-z0-9_\$]*\).*/\1/p")
+    # A minified name can hold `$` (P$ in the Linux 2.1.283 build). Bare in a
+    # regex it is an end-of-line anchor and the name never matches.
+    re_name() { printf '%s' "$1" | sed 's/[$]/[$]/g'; }
+    LLIM=$(printf '%s' "$FRAG" | sed -n "s/.*=$(re_name "$LV")>\([A-Za-z_\$][A-Za-z0-9_\$]*\).*/\1/p")
+    BLIM=$(printf '%s' "$FRAG" | sed -n "s/.*=$(re_name "$BV")>\([A-Za-z_\$][A-Za-z0-9_\$]*\).*/\1/p")
     # Resolve a minified constant to its value. Two hazards, and on 2.1.272 they
     # combined to produce a WRONG answer rather than no answer:
     #
@@ -304,14 +307,14 @@ else
     # declaration that binds both names together, and when a name alone has
     # more than one value, report nothing.
     const_value() {
-      _v=$(grep -aoE "(^|[^A-Za-z0-9_\$])$1=[0-9]+" "$CLI_BIN" 2>/dev/null \
+      _v=$(grep -aoE "(^|[^A-Za-z0-9_\$])$(re_name "$1")=[0-9]+" "$CLI_BIN" 2>/dev/null \
            | grep -aoE '[0-9]+$' | sort -u)
       case "$_v" in
         ''|*[!0-9]*) printf '' ;;
         *)           printf '%s' "$_v" ;;
       esac
     }
-    PAIR=$(grep -aoE "(^|[^A-Za-z0-9_\$])$LLIM=[0-9]+,$BLIM=[0-9]+" "$CLI_BIN" 2>/dev/null \
+    PAIR=$(grep -aoE "(^|[^A-Za-z0-9_\$])$(re_name "$LLIM")=[0-9]+,$(re_name "$BLIM")=[0-9]+" "$CLI_BIN" 2>/dev/null \
            | grep -aoE '[0-9]+,[^,]*=[0-9]+$' | sort -u)
     case "$PAIR" in
       *$'\n'*) GOT_LINES=""; GOT_BYTES="" ;;
