@@ -24,8 +24,9 @@ CMD=$(jq_get '.tool_input.command')
 # Strip assignment/wrapper prefixes before anything below matches. The anchor A
 # admits only real command boundaries, so `VAR=1 git push -f`, `env FOO=bar git
 # push -f`, `nohup git push -f` and `timeout 60 git push -f` each defeated every
-# check in this file while the bare form was denied. See normalize_wrappers.
-CMD=$(normalize_wrappers "$CMD")
+# check in this file while the bare form was denied. `/usr/bin/git` and `GIT`
+# did the same. The second line is the fully normalized form; see lib.sh.
+CMD=$(printf '%s\n%s' "$(normalize_wrappers "$CMD")" "$(normalize_command "$CMD")")
 
 # Committed template files (.env.example / .sample / .template / .dist / .tpl)
 # are safe to stage; neutralize them so `git add .env.example` isn't blocked.

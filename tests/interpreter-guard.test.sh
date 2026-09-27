@@ -184,5 +184,12 @@ check "pytest -p plugin"       allow 'python3 -m pytest tests/test_search.py -p 
 check "python -E script"       allow 'python3 -E tools/build.py'
 
 echo ""
+echo "=== Other spellings of the binary (issue #2 E) ==="
+check "upper case"             deny 'PYTHON3 -c "import os; print(os.environ)"'
+check "absolute path"          deny '/usr/bin/python3 -c "import os; print(os.environ)"'
+check "quoted binary"          deny '"python3" -c "import os; print(os.environ)"'
+check "absolute path, script"  allow '/usr/bin/python3 tools/build.py'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

@@ -24,6 +24,9 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+# `/usr/bin/python3` and `PYTHON3` run python too. ICMD adds the normalized form
+# (lib.sh) as a second line; the stream-edit exemption below keeps to CMD.
+ICMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
 
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
@@ -96,15 +99,15 @@ SENSITIVE_TOKENS=(
 # too and let the token scan below inspect the heredoc body.
 INTERP_INLINE_RE="${IB}${INTERP}\s+[^|;&]*${INLINE}"
 INTERP_HEREDOC_RE="${IB}${INTERP}\b[^|;&]*<<-?"
-if ! printf '%s\n' "$CMD" | grep -qE "$INTERP_INLINE_RE" \
-   && ! printf '%s\n' "$CMD" | grep -qE "$INLINE_ONLY" \
-   && ! printf '%s\n' "$CMD" | grep -qE "$INTERP_HEREDOC_RE"; then
+if ! printf '%s\n' "$ICMD" | grep -qE "$INTERP_INLINE_RE" \
+   && ! printf '%s\n' "$ICMD" | grep -qE "$INLINE_ONLY" \
+   && ! printf '%s\n' "$ICMD" | grep -qE "$INTERP_HEREDOC_RE"; then
   exit 0
 fi
 
 # Yes — scan the payload for sensitive tokens.
 for T in "${SENSITIVE_TOKENS[@]}"; do
-  if printf '%s\n' "$CMD" | grep -qE "$T"; then
+  if printf '%s\n' "$ICMD" | grep -qE "$T"; then
     emit_deny "Blocked: interpreter invoked with inline code that references env vars, dotfiles, sockets, or subprocess-spawning APIs. Put the logic in a committed script so it can be reviewed."
     exit 0
   fi
@@ -172,7 +175,7 @@ fi
 # Interpreter with inline code but no obvious sensitive token — ask.
 # This catches novel payloads without producing false positives on trivial
 # one-liners like `python -c "print(1)"`.
-if printf '%s\n' "$CMD" | grep -qE "${IB}${INTERP}\s+.{120,}${INLINE}|${IB}${INTERP}\s+[^|;&]*${INLINE}[^|;&]{200,}"; then
+if printf '%s\n' "$ICMD" | grep -qE "${IB}${INTERP}\s+.{120,}${INLINE}|${IB}${INTERP}\s+[^|;&]*${INLINE}[^|;&]{200,}"; then
   emit_ask "Long inline script passed to an interpreter. Review the payload before running — inline code bypasses file-based review."
   exit 0
 fi

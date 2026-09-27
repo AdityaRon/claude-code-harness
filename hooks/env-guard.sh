@@ -20,8 +20,13 @@ CMD=$(jq_get '.tool_input.command')
 # allows ANY path with these suffixes and the two must agree: secrets.yaml.example
 # is a template on both paths or on neither. Only the matched token is replaced,
 # so `cat .env.example && cat .env` still denies on the second half.
-SCAN=$(printf '%s' "$CMD" \
+# The second line is the normalized form (lib.sh): `/bin/cat`, `CAT` and `\cat`
+# all run cat.
+SCAN=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")" \
   | sed -E 's#[^[:space:]]*\.(example|sample|template|dist|tpl)([[:space:]]|$)#TEMPLATEFILE\2#g')
+# `.ENV` is `.env` on the default macOS filesystem, so patterns naming a file
+# also run on a lower-cased copy, as sensitive-file-guard matches without case.
+SCAN_LC=$(printf '%s\n%s' "$SCAN" "$(printf '%s' "$SCAN" | tr 'A-Z' 'a-z')")
 
 # Command boundary: start-of-line, pipe, logical chain, subshell, semicolon, &.
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
@@ -111,7 +116,8 @@ BLOCKED=(
 DENY_MSG="Blocked: command may read or exfiltrate sensitive env values / dotfiles. Reference variables by name in code; do not print, dump, or transmit their values."
 
 for P in "${BLOCKED[@]}"; do
-  if printf '%s\n' "$SCAN" | grep -qE "$P"; then
+  T=$SCAN; [[ "$P" == *"$DOTFILES"* ]] && T=$SCAN_LC
+  if printf '%s\n' "$T" | grep -qE "$P"; then
     emit_deny "$DENY_MSG"
     exit 0
   fi

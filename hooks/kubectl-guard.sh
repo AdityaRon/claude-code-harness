@@ -44,7 +44,7 @@ CMD=$(jq_get '.tool_input.command')
 # whitespace or a slash in front of `kubectl`, and `$(` is neither — so
 # `echo "$(kubectl delete pod foo)"` exited here and was allowed silently, no
 # matter what the scan below did. See the tokenizer note further down.
-SCAN=$(normalize_wrappers "$CMD" | sed -E 's/\$\(/ /g; s/`/ /g')
+SCAN=$(normalize_command "$CMD" | sed -E 's/\$\(/ /g; s/`/ /g')
 
 # Cheap bail-out: no kubectl anywhere, nothing to do.
 # Both sides use "not a word character" rather than "whitespace": a quote can

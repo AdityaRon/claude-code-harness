@@ -190,5 +190,12 @@ check "terraform source"         allow "infra/main.tf"
 check "claude settings"          allow "$HOME/.claude/settings.json"
 
 echo ""
+echo "=== Case: the default macOS filesystem ignores it (issue #2 E) ==="
+check "upper case .ENV"          deny ".ENV"
+check "upper case .Env.production" deny "src/.Env.production"
+check "upper case .AWS/credentials" deny "$HOME/.AWS/credentials"
+check "lower case template still allowed" allow ".ENV.example"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

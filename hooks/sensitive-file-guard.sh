@@ -62,11 +62,13 @@ is_template() {
   printf '%s\n' "$1" | grep -qE '\.(example|sample|template|dist|tpl)$'
 }
 
+# Without case: `.ENV` opens `.env` on the default macOS filesystem. is_template
+# keeps its case, so `.env.EXAMPLE` stays blocked as it was.
 matches_any() {
   local target="$1"; shift
   local p
   for p in "$@"; do
-    printf '%s\n' "$target" | grep -qE "$p" && return 0
+    printf '%s\n' "$target" | grep -qiE "$p" && return 0
   done
   return 1
 }
