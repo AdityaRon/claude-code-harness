@@ -115,6 +115,16 @@ check "get svc is still a read"   allow 'kubectl -n vm get svc vmselect-vm'
 check "get pods is still a read"  allow 'kubectl --context X -n vm get pods'
 echo ""
 
+echo "=== describe secret prints key names and annotations (expect: ask) ==="
+check "describe secret name"      ask   'kubectl -n vm describe secret db-creds'
+check "describe secrets plural"   ask   'kubectl --context prodn1 describe secrets -n default'
+check "describe secret/name"      ask   'kubectl describe secret/db-creds'
+check "describe Secret, case"     ask   'kubectl describe Secret db-creds'
+check "describe flags first"      ask   'kubectl describe -n vm secret db-creds'
+check "describe pod is a read"    allow 'kubectl -n vm describe pod vmselect-vm-0'
+check "describe CRD is a read"    allow 'kubectl describe secretproviderclass vault'
+echo ""
+
 echo "=== unknown / absent verbs ==="
 check "unknown subcommand fails closed" ask    'kubectl frobnicate widgets'
 check "bare kubectl"                    allow 'kubectl'
