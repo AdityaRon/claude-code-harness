@@ -105,6 +105,9 @@ jobs:
           echo "cur=$CUR" >> "$GITHUB_OUTPUT"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
           if [ "$SEEN" != "0" ]; then echo "mode=seen" >> "$GITHUB_OUTPUT"
+          # A pushed branch with no PR already holds a review; do not pay for
+          # another one. The issue links it instead.
+          elif git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then echo "mode=issue" >> "$GITHUB_OUTPUT"
           # A release can ship before its changelog heading. Claude would have
           # nothing to review, so the issue carries it until the heading lands.
           elif ! grep -qxF "## $CUR" changelog.md 2>/dev/null; then echo "mode=issue" >> "$GITHUB_OUTPUT"
@@ -127,8 +130,9 @@ jobs:
           CLAUDE_CHANGELOG_PATH: changelog.md
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The 2.1.283 review finished in 43 turns and the action failed it at 40.
           claude_args: >-
-            --max-turns 40
+            --max-turns 60
             --allowedTools "Read(./**),Edit(config/upstream-contract.json),Write(pr-body.md),Bash(bash bin/upstream-check.sh)"
             --disallowedTools "WebFetch,WebSearch,mcp__github,mcp__github_comment,mcp__github_file_ops,mcp__github_inline_comment,mcp__github_ci"
             --setting-sources project
@@ -207,11 +211,17 @@ jobs:
             echo
             echo "upstream-check after this change exited $AFTER. Needs you to read and approve; merge, then run \`bash install.sh\`."
           } > body.md
-          gh pr create --draft --base main --head "$BRANCH" \
-            --title "contract: review Claude Code releases up to $CUR" \
-            --body-file body.md --assignee "${{ github.repository_owner }}"
-          echo "drafted=true" >> "$GITHUB_OUTPUT"
-          gh workflow run ci.yml --ref "$BRANCH" || echo "::warning::could not dispatch CI on $BRANCH"
+          # github.token cannot open a PR unless the repo allows Actions to create
+          # pull requests, which is off on this repo. The branch is pushed either
+          # way, and the issue step links it.
+          if gh pr create --draft --base main --head "$BRANCH" \
+               --title "contract: review Claude Code releases up to $CUR" \
+               --body-file body.md --assignee "${{ github.repository_owner }}"; then
+            echo "drafted=true" >> "$GITHUB_OUTPUT"
+            gh workflow run ci.yml --ref "$BRANCH" || echo "::warning::could not dispatch CI on $BRANCH"
+          else
+            echo "::warning::pushed $BRANCH but could not open a PR; the issue links it."
+          fi
 
       # Without a token, or when no PR was drafted, keep one open issue current
       # so a red run is not the only signal: three scheduled runs were red, Aug 31
@@ -224,6 +234,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           STATUS: ${{ steps.check.outputs.status }}
+          BRANCH: ${{ steps.plan.outputs.branch }}
         run: |
           TITLE="Upstream drift: the harness contract needs review"
           N=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number -q '.[0].number // empty')
@@ -237,6 +248,10 @@ jobs:
             echo '```'
             cat drift.log
             echo '```'
+            if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+              echo
+              echo "A review is on \`$BRANCH\` with no PR yet: ${{ github.server_url }}/${{ github.repository }}/compare/main...$BRANCH?expand=1"
+            fi
           } > issue.md
           if [ -n "$N" ]; then gh issue edit "$N" --body-file issue.md
           else gh issue create --title "$TITLE" --body-file issue.md --assignee "${{ github.repository_owner }}"; fi
