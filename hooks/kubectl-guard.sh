@@ -14,7 +14,7 @@
 # This hook sees the whole command string, so it finds the verb wherever it
 # sits. Policy:
 #   • read-only verb (get/describe/logs/…)   → silent allow
-#   • `get secret`                           → ask (credential materialisation)
+#   • `get secret`, `describe secret`        → ask (credential materialisation)
 #   • mutating verb (delete/apply/drain/…)   → ask
 #   • verb absent (bare `kubectl`, --help)   → silent allow (does nothing)
 #   • anything it cannot classify            → ask (fail closed)
@@ -192,12 +192,13 @@ while (( i < n )); do
     (( i++ ))
 
     case "$verb" in
-      get)
+      get|describe)
         # `kubectl get secret -o yaml` materialises live credentials into the
-        # transcript and debug logs. Every other `get` is an ordinary read.
+        # transcript and debug logs. `describe secret` prints key names and
+        # annotations, not values. Every other `get` or `describe` is a read.
         sub=$(next_bare_token "$i")
         if is_secret_target "$sub"; then
-          emit_ask "kubectl get $sub reads live credentials into the transcript. Confirm this is intended and scoped to the secret you need."
+          emit_ask "kubectl $verb $sub puts Secret data into the transcript (values for get; key names and annotations for describe). Confirm this is intended and scoped to the secret you need."
           exit 0
         fi
         # --raw=<path> is self-contained, so next_bare_token skips it entirely
@@ -220,7 +221,7 @@ while (( i < n )); do
             -*) is_value_flag "${TOKENS[$k]}" && (( k++ )) ;;
             *)
               if is_secret_target "${TOKENS[$k]}"; then
-                emit_ask "kubectl get ${TOKENS[$k]} reads live credentials into the transcript. Confirm this is intended and scoped to the secret you need."
+                emit_ask "kubectl $verb ${TOKENS[$k]} puts Secret data into the transcript (values for get; key names and annotations for describe). Confirm this is intended and scoped to the secret you need."
                 exit 0
               fi
               ;;
