@@ -42,6 +42,14 @@ check "wait"                       allow 'kubectl wait --for=condition=Ready pod
 check "label selector says delete" allow 'kubectl get pods -n vm -l app=delete'
 
 echo ""
+echo "=== Other spellings of the binary, more wrappers (issue #2 E) ==="
+check "upper case"               ask 'KUBECTL delete pod foo'
+check "backslash-escaped"        ask '\kubectl delete pod foo'
+check "nice -n 10"               ask 'nice -n 10 kubectl delete pod foo'
+check "sudo -u root"             ask 'sudo -u root kubectl delete pod foo'
+check "upper case read"          allow 'KUBECTL get pods'
+
+
 echo "=== the bypasses that permission rules cannot express (expect: ask) ==="
 check "plain delete"               ask  'kubectl delete pod foo -n vm'
 check "--namespace, not -n"        ask  'kubectl --namespace vm delete pod foo'

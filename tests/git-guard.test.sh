@@ -259,5 +259,27 @@ check "stash push"                allow 'git stash push -m wip'
 check "worktree remove"           allow 'git worktree remove ../wt'
 
 echo ""
+echo "=== Other spellings of the binary, more wrappers (issue #2 E) ==="
+# The shell runs each of these as git; every one was allowed silently.
+check "absolute path"             deny '/usr/bin/git push --force origin main'
+check "quoted binary"             deny '"git" push -f origin main'
+check "backslash-escaped binary"  deny '\git push -f origin main'
+check "upper case, case-insensitive fs" deny 'GIT push --force origin main'
+check "path after a chain"        deny 'cd x && /usr/bin/git reset --hard'
+check "nice -n 10"                deny 'nice -n 10 git push -f origin main'
+check "exec"                      deny 'exec git push -f origin main'
+check "sudo"                      deny 'sudo git push -f origin main'
+check "sudo -u root"              deny 'sudo -u root git push -f origin main'
+check "stdbuf -o0"                deny 'stdbuf -o0 git push -f origin main'
+check "env -i"                    deny 'env -i git push -f origin main'
+check "ionice -c 3"               deny 'ionice -c 3 git push -f origin main'
+check "caffeinate -i"             deny 'caffeinate -i git push -f origin main'
+check "doas -u root"              deny 'doas -u root git push -f origin main'
+check "near miss: mygit"          allow 'mygit push -f origin main'
+check "near miss: dir named git"  allow '/opt/git/bin/tool push -f origin main'
+check "near miss: echoed"         allow 'echo GIT push --force'
+check "near miss: cd into git"    allow 'cd /usr/bin/git'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

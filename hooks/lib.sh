@@ -41,10 +41,44 @@ normalize_wrappers() {
   for i in 1 2 3 4; do
     s=$(printf '%s' "$s" | sed -E \
       -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+/\1\2/g' \
-      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(env|command|builtin|noglob|nohup|time|nice|stdbuf)[[:space:]]+/\1\2/g' \
+      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(command|builtin|noglob|nohup|time)[[:space:]]+/\1\2/g' \
+      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(nice([[:space:]]+-n[[:space:]]*[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|stdbuf([[:space:]]+-[ioe][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|env([[:space:]]+-[uSCP][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|sudo([[:space:]]+-[ugCph][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|doas([[:space:]]+-[uC][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|ionice([[:space:]]+-[cnp][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|exec([[:space:]]+-a[[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|caffeinate([[:space:]]+-[tw][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|xargs([[:space:]]+-[IndPLsEa][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*)[[:space:]]+/\1\2/g' \
       -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)timeout[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[0-9]+[smhd]?[[:space:]]+/\1\2/g')
   done
   printf '%s' "$s"
+}
+
+# The shell runs `/usr/bin/git`, `"git"`, `\git` and, on the default
+# case-insensitive macOS filesystem, `GIT` as git. Rewrite the first word of
+# each command to its bare lower-case name; arguments are never touched, and
+# neither is an assignment (`X=/usr/bin/git` is not a command).
+normalize_binaries() {
+  printf '%s' "$1" | awk '
+    function fix(seg,   pre, tok, t, n) {
+      match(seg, /^[ \t]*/); pre = substr(seg, 1, RLENGTH); seg = substr(seg, RLENGTH + 1)
+      if (!match(seg, /^[^ \t]+/)) return pre seg
+      n = RLENGTH; tok = substr(seg, 1, n)
+      if (tok ~ /=/) return pre seg
+      t = tok; sub(/^\\/, "", t); gsub(/["\047]/, "", t); sub(/.*\//, "", t)
+      if (t == "") return pre seg
+      return pre tolower(t) substr(seg, n + 1)
+    }
+    { out = ""; s = $0   # fix() calls match(), so keep RSTART and RLENGTH first
+      while (match(s, /&&|[|][|]|[|&;`(]|[$][(]/)) {
+        a = RSTART; b = RLENGTH
+        out = out fix(substr(s, 1, a - 1)) substr(s, a, b)
+        s = substr(s, a + b)
+      }
+      print out fix(s) }'
+}
+
+# Binaries, then wrappers, then binaries again: `sudo /usr/bin/git` needs the
+# wrapper gone before its binary is at a boundary. Guards scan this alongside
+# the original, never instead of it, so a rewrite can only add a match.
+normalize_command() {
+  local s
+  s=$(normalize_binaries "$1"); s=$(normalize_wrappers "$s"); s=$(normalize_binaries "$s")
+  printf '%s' "${s:-$1}"
 }
 
 # Read full stdin once into $INPUT. Safe to call with no stdin.
