@@ -16,6 +16,8 @@
 - Reject a root cause on scope, timing and error identity together. One axis is a
   coincidence.
 - Retract where the claim was made, with the corrected number.
+- A test that cannot fail is worse than no test. Before trusting a green, mutate
+  the thing under test and watch it go red.
 
 ## Cost
 
