@@ -12,5 +12,3 @@ paths:
 - A red run gets ONE named cause from whoever triages it first. Group the
   failures by error type before naming it; "one cause" is usually true of the
   first three and false of the rest.
-- A test that cannot fail is worse than no test. Before trusting a green, mutate
-  the thing under test and watch it go red.

@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: How to write a PR review, answer review comments, and request review. Use when reviewing a pull request, replying to a reviewer or review thread, deferring a review ask, or asking someone to review.
+description: How to write a PR review, answer review comments, and request review. Use when reviewing a pull request, replying to a reviewer or review thread, deferring a review ask, marking a PR ready, or asking someone to review.
 ---
 
 # Reviews and review threads
@@ -28,6 +28,12 @@ description: How to write a PR review, answer review comments, and request revie
 
 ## Requesting review
 
+- Before marking ready, reread the diff for: a guarantee the change states
+  (prompt, docstring, comment, PR body) that some branch breaks, or a test
+  asserting that gap; a parse-and-reserialize path that can lose values
+  (integers above 2^53); prose and code that disagree. Mutate the tests the PR
+  adds. An adversarial `/code-review` is a full extra pass: offer it in the
+  handoff, run it only when asked.
 - Ready for review implies assigning the reviewer.
 - One terse request for every open PR.
 - Never escalate a PR as needing approval before reviewing it.
