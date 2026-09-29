@@ -395,7 +395,9 @@ else
                     ((.acknowledged_surface.settings_keys//{})|keys[])] | map(select(. != "_comment")) | join("|")' "$CONTRACT")
     # Security terms match anywhere; feature terms only on Added/Changed lines,
     # which cut 123 lines to 88 on 2.1.267-2.1.280 without losing an assessed item.
-    STRONG="hook|permission rule|allow rule|deny|dangerous.rm|sandbox|secret|autoMode|settings[.]json${NAMES:+|$NAMES}"
+    # Memory and rules files are what install.sh ships; 2.1.284 fixes for both
+    # were Fixed/Improved lines and only the reviewer's full read caught them.
+    STRONG="hook|permission rule|allow rule|deny|dangerous.rm|sandbox|secret|autoMode|settings[.]json|MEMORY[.]md|CLAUDE[.]md|[.]claude/rules${NAMES:+|$NAMES}"
     BROAD="tool|setting|effort|\`CLAUDE_|subagent|auto mode|now the default|\`[a-z]+[A-Z][A-Za-z]+\`"
     HITS=$(printf '%s\n' "$SLICE" | grep -v -E '^- (\[[A-Za-z ]+\]|Self-hosted runner:|Windows:)' \
            | awk -v s="$STRONG" -v b="$BROAD" '/^## /{h=$0; next}

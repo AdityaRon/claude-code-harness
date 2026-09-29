@@ -252,6 +252,14 @@ jobs:
               echo
               echo "A review is on \`$BRANCH\` with no PR yet: ${{ github.server_url }}/${{ github.repository }}/compare/main...$BRANCH?expand=1"
             fi
+            # The open step wrote this for the PR; without one, the verdicts and
+            # owner questions exist nowhere else once the runner is gone.
+            if [ -f body.md ]; then
+              echo
+              echo "Review summary, as written for the PR:"
+              echo
+              cat body.md
+            fi
           } > issue.md
           if [ -n "$N" ]; then gh issue edit "$N" --body-file issue.md
           else gh issue create --title "$TITLE" --body-file issue.md --assignee "${{ github.repository_owner }}"; fi
