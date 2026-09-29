@@ -304,6 +304,8 @@ cat > "$TMP/changelog.md" <<EOF
 - Fixed the mouse wheel in fullscreen mode
 - [VSCode] Added a hooks dialog
 - Changed SendMessage to accept attachments
+- Fixed rules symlinked into \`.claude/rules\` being skipped
+- Improved auto-memory loading: markup is neutralized in \`MEMORY.md\`
 
 ## 9.9.1
 
@@ -319,6 +321,8 @@ check_contains "counts both releases" "2 release(s) since $PIN" "$OUT"
 check_contains "surfaces an Added line" "NewShinyTool" "$OUT"
 check_contains "surfaces a line naming an acknowledged tool" "SendMessage to accept" "$OUT"
 check_absent "drops unrelated fixes" "mouse wheel" "$OUT"
+check_contains "keeps a Fixed line about installed rules" "symlinked into" "$OUT"
+check_contains "keeps an Improved line about MEMORY.md" "auto-memory loading" "$OUT"
 check_absent "drops an Added line with no feature term" "mouse support" "$OUT"
 check_contains "keeps an Added line naming a camelCase key" "someNewKey" "$OUT"
 check_absent "drops a Fixed line that only mentions subagents" "spinner flicker" "$OUT"
