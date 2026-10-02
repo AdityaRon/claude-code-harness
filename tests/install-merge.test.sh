@@ -311,6 +311,15 @@ OUT=$(merge '{"syncClaudeAiSkills":true}' "$(cat config/settings.json)")
   && pass "an explicit user true is kept" || fail "an explicit user true is kept" "$(printf '%s' "$OUT" | jq -r '.syncClaudeAiSkills')"
 
 echo ""
+echo "=== Remote Control is on by default, guarded across machines, and a user's false wins ==="
+OUT=$(merge '{"env":{"A":"1"}}' "$(cat config/settings.json)")
+[[ "$(printf '%s' "$OUT" | jq -c '[.remoteControlAtStartup, .isolatePeerMachines]')" == "[true,true]" ]] \
+  && pass "both keys land true" || fail "both keys land true" "$(printf '%s' "$OUT" | jq -c '[.remoteControlAtStartup, .isolatePeerMachines]')"
+OUT=$(merge '{"remoteControlAtStartup":false}' "$(cat config/settings.json)")
+[[ "$(printf '%s' "$OUT" | jq -r '.remoteControlAtStartup')" == "false" ]] \
+  && pass "an explicit user false is kept" || fail "an explicit user false is kept" "$(printf '%s' "$OUT" | jq -r '.remoteControlAtStartup')"
+
+echo ""
 echo "=== The shipped config names only skills this repo ships ==="
 # The repo is public. Allow rules for machine-local skills named work tools and
 # could never be removed by a later install, because the merge unions allow.
