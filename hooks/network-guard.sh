@@ -5,6 +5,8 @@
 #
 # Policy:
 #   • GET to an allowlisted domain   → silent allow
+#   • GET to this machine (127.x, localhost, ::1) → silent allow, except a
+#     local admin API (kubectl proxy, Docker, Vault ports; Kubernetes paths) → ask
 #   • GET to a non-allowlisted domain → ask
 #   • POST / PUT / PATCH / DELETE to anywhere → ask (regardless of domain)
 #   • curl/wget with local file body ( @/path ) to non-allowlisted → deny
@@ -45,9 +47,29 @@ DEFAULT_ALLOW=(
   'rubygems.org'
 )
 
+# This machine. A GET here never leaves it; a local dev server is most of what
+# this guard used to ask about (25 of 51 decisions in the audit log, 2026-10-02).
+is_loopback() {
+  [[ "$1" == "localhost" || "$1" == "::1" || "$1" == "0.0.0.0" ]] && return 0
+  [[ "$1" =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]
+}
+
+# A local server that fronts credentials: `kubectl proxy` (8001), the Docker
+# API (2375/2376), Vault (8200), or any port serving Kubernetes API paths. A GET
+# there reads what kubectl-guard asks about, so it asks here too.
+local_admin_url() {
+  local auth path port
+  auth=$(printf '%s' "$1" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#[/?#].*$##; s#^.*@##')
+  path=$(printf '%s' "$1" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#^[^/?#]*##')
+  port=$(printf '%s' "$auth" | sed -nE 's#^.*\]:([0-9]+)$#\1#p; s#^[^][]*:([0-9]+)$#\1#p')
+  [[ "$port" =~ ^(8001|2375|2376|8200)$ ]] && return 0
+  printf '%s' "$path" | grep -qiE '^/(api/v1/(namespaces|secrets|configmaps|serviceaccounts|nodes)|apis/[a-z0-9.-]+/v[0-9][a-z0-9]*)(/|\?|$)|/secrets(/|\?|$)'
+}
+
 host_allowed() {
   local host="$1"
   [[ -z "$host" ]] && return 1
+  is_loopback "$host" && return 0
   local h
   for h in "${DEFAULT_ALLOW[@]}"; do
     [[ "$host" = "$h" || "$host" = *".$h" ]] && return 0
@@ -62,8 +84,11 @@ host_allowed() {
 
 extract_host() {
   local url="$1"
-  # Strip scheme, then take everything up to the first / : ? #
-  printf '%s' "$url" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' | sed -E 's#[/:?#].*$##'
+  # Scheme, then path/query, then userinfo, then port, in that order: cutting at
+  # the first ':' read `https://github.com:x@evil.example/` as github.com, while
+  # curl connects to evil.example.
+  printf '%s' "$url" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#[/?#].*$##; s#^.*@##; s#^(\[[^]]*\]).*$#\1#; s#:[0-9]*$##; s#^\[(.*)\]$#\1#' \
+    | tr '[:upper:]' '[:lower:]'
 }
 
 case "$TOOL" in
@@ -136,8 +161,10 @@ case "$TOOL" in
       exit 0
     fi
 
-    # Extract URL from the command (first http/https token).
-    URL=$(printf '%s\n' "$CMD" | grep -oE 'https?://[^[:space:]\"'\''`]+' | head -1)
+    # Every http(s) URL in the command: curl fetches each one, so checking only
+    # the first let `curl <allowlisted> <anything>` through.
+    URLS=$(printf '%s\n' "$CMD" | grep -oE 'https?://[^[:space:]\"'\''`]+')
+    URL=$(printf '%s\n' "$URLS" | head -1)
     HOST=$(extract_host "$URL")
 
     # Any request that sends a body → ask regardless of host. A body flag is a
@@ -155,17 +182,29 @@ case "$TOOL" in
       # makes a request, so ask; flags alone (`curl --version`) do not.
       # Anchored to a command boundary so `grep curl notes.md` is not a request.
       if printf '%s\n' "$CMD" | grep -qE '(^|[|&;`]|\$\()\s*(curl|wget)\s([^|;&]*\s)?[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+(:[0-9]+)?(/|\s|$)'; then
+        # `curl 127.0.0.1:8090/x` is this machine too; every other bare host asks.
+        BARE=$(printf '%s\n' "$CMD" | grep -oE '(^|\s)[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+(:[0-9]+)?(/[^[:space:]]*)?' | sed -E 's/^[[:space:]]+//')
+        ALL_LOCAL=1
+        while IFS= read -r b; do
+          [[ -z "$b" ]] && continue
+          is_loopback "$(extract_host "$b")" && ! local_admin_url "$b" || { ALL_LOCAL=0; break; }
+        done <<<"$BARE"
+        [[ $ALL_LOCAL -eq 1 ]] && exit 0
         emit_ask "curl/wget target has no http(s):// scheme, so its host could not be checked against the allowlist. Confirm the endpoint."
       fi
       exit 0
     fi
 
-    # Read-only access to allowlisted host → allow silently.
-    if host_allowed "$HOST"; then
-      exit 0
-    fi
-
-    emit_ask "curl/wget request to $HOST is outside the default allowlist. Confirm this endpoint is safe."
+    # Read-only access to allowlisted hosts → allow silently; any other → ask.
+    while IFS= read -r u; do
+      [[ -z "$u" ]] && continue
+      H=$(extract_host "$u")
+      if is_loopback "$H" && local_admin_url "$u"; then
+        emit_ask "curl/wget to $u on this machine looks like a local admin API (kubectl proxy, Docker, Vault or Kubernetes paths), which can return cluster or host credentials. Confirm this read."
+        exit 0
+      fi
+      host_allowed "$H" || { emit_ask "curl/wget request to $H is outside the default allowlist. Confirm this endpoint is safe."; exit 0; }
+    done <<<"$URLS"
     exit 0
     ;;
   *)

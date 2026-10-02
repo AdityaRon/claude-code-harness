@@ -50,7 +50,7 @@ holds your work skills. A machine that already has its rules in
 | `git-guard` | `git push --delete`, `git push origin :branch`, `git remote set-url`, `git config user.email`, non-shell `git config alias.*`, glob staging (`git add '*.ts'`) |
 | `interpreter-guard` | Long inline scripts with no obvious sensitive token |
 | `kubectl-guard` | Every mutating `kubectl` verb (`delete`, `apply`, `patch`, `replace`, `edit`, `scale`, `drain`, `cordon`, `taint`, `exec`, `cp`, `run`, `debug`, `proxy`, `rollout undo/restart`, `auth reconcile`, `config use-context`, …) wherever the verb sits in the command, plus `get secret` in every spelling that returns the data — `secret/db-creds`, `pods,secrets`, `Secret`, `secrets.v1.`, and the `--raw /api/v1/…/secrets` path (credential materialisation) — and any subcommand on neither list (fails closed). Only the resource *kind* is compared, so a CRD that merely starts with the word (`secretproviderclass`, `sealedsecrets`) stays a silent read. Exists because `kubectl` takes its global flags **before** the verb, so a prefix-matched rule like `Bash(kubectl delete:*)` misses `kubectl --namespace vm delete pod foo` — no allow/deny pair in `settings.json` can express this. Escalates rather than blocks: auto mode ships ~10 kubectl-specific `soft_deny` rules that clear when you name the target, and a hook `deny` would preempt all of them. Read-only verbs (`get`, `describe`, `logs`, `top`, `port-forward`, `rollout status`, `auth can-i`, `config view`, …) pass silently; flag *values* are skipped so `--context delete-me get pods` is still a read. |
-| `network-guard` | `curl -X POST/PUT/PATCH/DELETE` (any host), `curl`/`wget`/`WebFetch` to non-allowlisted domain |
+| `network-guard` | `curl -X POST/PUT/PATCH/DELETE` (any host, this machine included), `curl`/`wget`/`WebFetch` to a non-allowlisted domain. A GET to this machine (`127.x`, `localhost`, `::1`) is allowed, except a local admin API (ports 8001 `kubectl proxy`, 2375/2376 Docker, 8200 Vault, or Kubernetes API paths on any port), which asks; every URL in the command is checked, by the host curl actually connects to |
 
 ### Audit (async, non-blocking)
 
@@ -181,12 +181,12 @@ actually flips an older install onto auto.
 - **The `deny` tier is unaffected.** PreToolUse hooks run before the permission
   system, so a guard that denies still blocks the call in any permission mode.
   A loaded mod is the exception; see [Known limitations](#known-limitations).
-- **The `ask` tier is no longer a question to you.** Everything the guards
-  escalate as *ask* — `git push --delete`, `curl -X POST`, `scp` to a remote
-  host, long inline interpreter scripts — is now adjudicated by the classifier
-  on your behalf. Treat the ask rows in the tables above as "someone else
-  decides", and promote anything you want stopped unconditionally into
-  `permissions.deny` or `autoMode.hard_deny`.
+- **The `ask` tier still asks you.** A prompt a guard forces stays a question
+  to you in auto mode: the permission-modes doc says auto mode "still shows you
+  those prompts". What the classifier decides is everything the guards *don't*
+  ask about, such as a `curl` to this machine or a command no guard
+  inspects. So a guard's ask is the way to be asked explicitly; anything you want
+  stopped unconditionally belongs in `permissions.deny` or `autoMode.hard_deny`.
 - **Some `permissions.allow` entries are disregarded.** Auto mode ignores allow
   entries it classes as classifier-bypassing, so a broad wildcard may not buy
   you the silence it used to. Run `/doctor` inside a session to list which of
@@ -471,7 +471,7 @@ Extend its allowlist under `sandbox.network.allowedDomains`.
 These guards are defense-in-depth, not a security boundary. Be clear-eyed about what they do **not** cover:
 
 - **Regex guards have a ceiling.** Command-string matching can always be evaded by a determined agent (string-obfuscated interpreter payloads, novel tool invocations, multi-step stage-then-exfil across separate commands). The guards raise the bar and catch the obvious/accidental cases; the **OS sandbox** is the only real containment for the evasion class — see *Enable the OS sandbox*.
-- **Auto mode removes you from the loop on the `ask` tier.** With `defaultMode: auto` the classifier resolves the prompts a human used to see. That is the point of the mode, but it means the guards' *ask* rules are advice to a model rather than a stop sign — see [Auto mode](#auto-mode). Set `defaultMode` to `manual` if you want every one of them back in your hands.
+- **Auto mode hands the unasked middle to a model.** Guard asks still come to you, but everything no guard or rule names is approved or blocked by the classifier, by judgment rather than by rule. See [Auto mode](#auto-mode). Set `defaultMode` to `manual` to see every one of those yourself.
 - **MCP connectors are logged, not guarded.** `network-guard` sees Bash `curl`/`wget` and the `WebFetch` tool, but MCP tools (Gmail, Google Drive, Slack, Atlassian, browser automation, …) can read files and send data outbound with no guard in the middle. Since the `mcp__.*` audit row above, every such call leaves a line naming the tool and its field names, which is a record after the fact rather than a stop before it. Control the surface by only connecting MCP servers you trust, and use the log to decide which of them deserve a real guard.
 - **A Claude Code mod can override the guards.** Mods (2.1.287+) are plugin code that runs inside Claude Code. Per the [permissions docs](https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks), a mod can approve a call a guard here blocked, or answer a call itself so the guards never run. Unless the machine has managed settings or a Team/Enterprise login, it can also approve a call a `deny` rule refuses. `syncClaudeAiPlugins: false` closes the synced route only. What the harness does instead:
   - **Claude can write you mods, reviewed.** `mod-gate` runs `claude plugin validate` (the static analysis Claude Code loads mods by) on each mod file Claude writes, as the mod will be after the write. It denies the hooks that replace permission decisions (`tool.check`, `classic.PreToolUse`, `classic.PermissionRequest`, `plugin.register`, `engine.create`) and shows you everything else the mod hooks and calls, flagging `tool.call` and calls that run outside the guards (`$.process`, `$.http`, `$.fs.write`, …). In auto mode the write itself goes to the classifier and the hot-reload prompt comes at the first save, so that notice is where you see what the mod does. On resume, `session-start` names any mod the session wrote, since one declined with "Not now" loads then.
