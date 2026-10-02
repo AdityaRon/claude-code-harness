@@ -9,7 +9,8 @@ export CLAUDE_TRANSCRIPT_DIR="$TMP/backups"
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
 fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 run(){ jq -nc --arg t "$1" --arg g "$2" '{hook_event_name:"PreCompact",transcript_path:$t,trigger:$g}' | bash "$HOOK"; }
-mode(){ stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+# GNU first: on Linux `stat -f` is filesystem status and succeeds with the wrong output.
+mode(){ stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 
 echo "=== pre-compact.sh ==="
 T="$TMP/session.jsonl"; printf '{"type":"user"}\n{"type":"assistant"}\n' > "$T"; chmod 600 "$T"
