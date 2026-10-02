@@ -22,8 +22,8 @@
     "capability no one has noticed will not appear here on its own — that is a",
     "standing limitation, and the check prints it rather than implying coverage."
   ],
-  "last_verified_version": "2.1.287 (Claude Code)",
-  "last_verified_date": "2026-10-01",
+  "last_verified_version": "2.1.288 (Claude Code)",
+  "last_verified_date": "2026-10-02",
   "acknowledged_surface": {
     "_comment": [
       "Capability -> the decision a human made about it. Verified by substring",
@@ -169,7 +169,15 @@
     "asyncRewake hook with a missing script reported once": "2.1.287: an asyncRewake hook whose script is missing no longer wakes Claude repeatedly. No hook in config/settings.json uses asyncRewake; nothing to change.",
     "folder CLAUDE.md no longer attached twice after resume or compaction": "2.1.287: a folder's CLAUDE.md was attached a second time after resume or compaction. The harness ships no CLAUDE.md (rules go to ~/.claude/rules); hooks/pre-compact.sh is unaffected. Upstream context fix, no harness change.",
     "hooks-ran count excludes internal callbacks": "2.1.287: the transcript's 'N hooks ran' summary and the debug log no longer count Claude Code's internal callbacks, so one configured hook shows as one. Display only; a guard's own count is in the audit log, unchanged.",
-    "SessionStart hooks from synced plugins run in new cloud sessions": "2.1.287: plugin SessionStart hooks now run in new cloud sessions. The harness registers hooks/session-start.sh in user settings, not through a plugin, and sets syncClaudeAiPlugins false; nothing to change."
+    "SessionStart hooks from synced plugins run in new cloud sessions": "2.1.287: plugin SessionStart hooks now run in new cloud sessions. The harness registers hooks/session-start.sh in user settings, not through a plugin, and sets syncClaudeAiPlugins false; nothing to change.",
+    "PreToolUse and PermissionRequest hooks blocked, not skipped, when matching fails": "2.1.288: a hook whose matching failed, or a tool input that could not be serialized to JSON, used to skip PreToolUse and PermissionRequest hooks and let the call run; it is now blocked. Every guard in hooks/ is a PreToolUse hook, so this closes a silent bypass of all of them. Same direction as require_parsable_or_deny in hooks/lib.sh; nothing to change.",
+    "idle_prompt notifications no longer fire while background agents run": "2.1.288: idle_prompt notification hooks fired while background agents were still running. hooks/notify.sh is registered on Notification with matcher \"\" (all types), so it sent those alerts too; the fix removes them upstream. Nothing to change.",
+    "path-scoped rules load on Write and Edit, not only Read": "2.1.288: a path-scoped .claude/rules file or nested CLAUDE.md now loads when Write or Edit touches a file in its scope. The harness ships one path-scoped rule, rules/python-tests.md (paths **/*.py, 479 bytes), so it now also loads when Claude writes Python. tests/install-merge.test.sh keeps path-scoped rules out of the always-loaded budget, which stays correct; nothing to change.",
+    "dangerous rm inside bash -c no longer runs without a prompt": "2.1.288: an rm on / or the home directory inside a bash -c or sh -c script ran without a prompt under bypassPermissions or a shell allow rule. The harness ships defaultMode auto and denies Bash(rm -rf:*) and Bash(rm -rf /:*), prefixes a bash -c wrapper does not start with; the upstream check now covers that wrapper. Nothing to change.",
+    "a plugin tool.call hook no longer breaks Bash in worktree subagents": "2.1.288: a mod's tool.call hook made Bash fail and file searches read the wrong folder in subagents running in a worktree. hooks/mod-gate.sh already names tool.call in its notice; an upstream fix to the same surface, nothing to change.",
+    "held cross-session messages reported as not delivered": "2.1.288: a message another session held was reported to Claude as delivered; the notice now says it was not and names the session. Relevant since remoteControlAtStartup and isolatePeerMachines are on: a cross-machine message waiting for approval now reads as undelivered. Upstream fix; nothing to change.",
+    "auto mode classifier ignores a Sonnet 5.5 or Opus 5.5 pin in ANTHROPIC_DEFAULT_SONNET_MODEL": "2.1.288: the client-side classifier now uses Claude Sonnet 5 when ANTHROPIC_DEFAULT_SONNET_MODEL names Sonnet 5.5 or Opus 5.5. config/settings.json sets no model variable in its environment block; nothing to change.",
+    "auto mode compacts instead of prompting when a conversation outgrows the classifier": "2.1.288: a conversation too long for the client-side classifier is now compacted rather than prompting for, or failing, every tool call. The harness ships defaultMode auto; an upstream fix to its long-session behavior, nothing to change."
   },
   "memory_index_limits": {
     "_comment": [
