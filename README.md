@@ -38,6 +38,7 @@ holds your work skills. A machine that already has its rules in
 | `interpreter-guard` | PreToolUse → Bash | Denies `python -c` / `node -e` / `ruby -e` / `perl -ne` / `php -r` / `bash -c` and heredocs when the payload references env vars, dotfiles, sockets, or subprocess APIs — including when wrapped in a command runner (`poetry run`, `env`, `timeout`, `nohup`, …). Raises the bar on the interpreter-bypass route — but string-obfuscated payloads can still evade a regex; the OS sandbox is the real containment. |
 | `network-guard` | PreToolUse → Bash, WebFetch | Denies file-body uploads via `curl -d @…` / `-d@…` / `--data=@…`, `-F @…`, `-T`, **and pipe-to-shell remote code execution** (piping curl/wget into a shell or interpreter, process substitution, or command substitution). Prompts on `scp`/`rsync`/`sftp` to a remote host and on local HTTP servers. |
 | `secret-scanner` | PreToolUse → Write/Edit/MultiEdit/NotebookEdit | Scans the payload before it hits disk; denies AWS keys, JWTs, PEM blocks, GitHub/Slack(token+webhook)/Stripe/Google/Anthropic/OpenAI(incl. `sk-proj-`) tokens and GCP service-account keys |
+| `mod-gate` | PreToolUse → Write/Edit/MultiEdit | On a Claude Code mod's files, runs `claude plugin validate` on the mod as it will be after the write. Denies hooks that replace permission decisions (`tool.check`, `classic.PreToolUse`, `classic.PermissionRequest`, `plugin.register`, `engine.create`); otherwise tells you what the mod hooks and calls. Any other file exits in ~5 ms. See [Known limitations](#known-limitations). |
 
 ### Security — prompt user (`ask`)
 
@@ -58,7 +59,7 @@ holds your work skills. A machine that already has its rules in
 | `audit` | PostToolUse → Edit/Write | Logs every file Claude touches |
 | `audit` | PostToolUse → Bash | Logs every Bash command Claude runs (sanitized to one line) |
 | `audit` | PostToolUseFailure | Logs failed tool calls with error summary |
-| guards | PreToolUse deny / ask | Every guard decision is one line, `GUARD \| deny\|ask \| <hook> \| <command, path or URL>`, never file content. A denied call never reaches PostToolUse, so without it the harness's own blocks left no record: `grep ' | GUARD | ' ~/.claude/logs/audit.log`. |
+| guards | PreToolUse deny / ask | Every guard decision is one line, `GUARD \| deny\|ask \| <hook> \| <command, path or URL>`, never file content. A denied call never reaches PostToolUse, so without it the harness's own blocks left no record: `grep ' | GUARD | ' ~/.claude/logs/audit.log`. A call a [mod](#known-limitations) answers itself reaches neither the guards nor PostToolUse, so it leaves no line at all. |
 | `audit` | ConfigChange | Logs any settings file modified mid-session |
 | `audit` | PostToolUse → `mcp__.*` | Logs every MCP tool call: the tool name and the *names* of the fields it was called with, never their values (a `send_message` payload carries the message body). No PreToolUse guard inspects MCP calls, so this line is the only record one happened. It is a census, not a control: read it with `grep ' | mcp__' ~/.claude/logs/audit.log` to see which connectors actually get used before deciding what to guard. |
 | `audit` | PostToolUse → Agent/SendMessage | Logs each subagent spawn (`type`, `model` or `inherit`, `isolation`) and each peer message (`to`, character count, `notify_when_idle`). Never the prompt, description, summary or message body. Evidence for subagent model choices and a sender-side trail for work handed between sessions: `grep -E ' \| (Agent|SendMessage) \| ' ~/.claude/logs/audit.log`. |
@@ -97,7 +98,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 | `remoteControlAtStartup` | `true` | Every interactive session connects to [Remote Control](https://code.claude.com/docs/en/remote-control), so you can pick it up from claude.ai or the Claude app. Needs a claude.ai login. Anyone signed in to your account can then steer the session; turn on **Require trusted devices** in your claude.ai account settings to tie that to known devices. Set `false` to opt out; the install keeps your value. |
 | `isolatePeerMachines` | `true` | With Remote Control on, a `SendMessage` to a session on another machine waits for your approval. Sessions on this machine are unaffected. |
 | `permissions.allow` | Scoped allowlist | Covers common safe ops: `npm test/run lint/build`, `pytest`, `python3`, `poetry run/install/lock`, `gh run/search`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. Read-only verbs added from the audit-log census: `git grep/rev-parse/ls-tree/ls-files/show-ref/cat-file/blame/describe/merge-base/shortlog`, `git remote -v`, `git worktree list`, and read-only `docker` subcommands (`run`/`exec`/`rm`/`cp` deliberately excluded). Interpreter wildcards (`python3`, `poetry run`) are allowed because a permission `allow` only skips the *prompt* — the PreToolUse guards still run, and `interpreter-guard` inspects inline `-c`/`-e`/heredoc code even when wrapped in a runner (`poetry run python -c …`). `gh api` and `kubectl` are both allowlisted, but they are not equally safe. `kubectl` is covered by `kubectl-guard`, which denies every mutating verb wherever it sits in the command. `gh api` has **no** equivalent coverage — it can POST/DELETE through the GitHub API and `network-guard` never inspects it, so that entry is a deliberate convenience trade rather than a guarded one. With the OS sandbox off, an auto-approved `python3 script.py` runs the script's contents unscanned — enable the sandbox for containment. |
-| `permissions.deny` | `git push --force`, `git * reset --hard`, `sudo`, `rm -rf`, `gh auth token`, … | Deny always wins over allow |
+| `permissions.deny` | `git push --force`, `git * reset --hard`, `sudo`, `rm -rf`, `gh auth token`, … | Deny always wins over allow. Over a loaded mod it wins only on a machine with managed settings or a Team/Enterprise login; see [Known limitations](#known-limitations). The deny list also covers writes into the installed-plugin cache `~/.claude/plugins`, `claude plugin install`/`enable`/`update`/`marketplace add`, and `--plugin-url` |
 
 ### How Bash rules actually match
 
@@ -147,7 +148,8 @@ never fires. Both were present here.
 
 The practical consequence: **a hook sees the whole command string, a permission
 rule sees only a prefix.** Enforcement that must not be evadable belongs in a
-guard, with the deny list as a backstop — not the other way round.
+guard, with the deny list as a backstop — not the other way round. A Claude Code
+mod (2.1.287+) runs above both; see [Known limitations](#known-limitations).
 
 ## Auto mode
 
@@ -177,7 +179,8 @@ actually flips an older install onto auto.
 **What this changes about the guards:**
 
 - **The `deny` tier is unaffected.** PreToolUse hooks run before the permission
-  system, so a guard that denies still blocks the call in any mode.
+  system, so a guard that denies still blocks the call in any permission mode.
+  A loaded mod is the exception; see [Known limitations](#known-limitations).
 - **The `ask` tier is no longer a question to you.** Everything the guards
   escalate as *ask* — `git push --delete`, `curl -X POST`, `scp` to a remote
   host, long inline interpreter scripts — is now adjudicated by the classifier
@@ -279,6 +282,7 @@ reading the repo, not for the installed tree.
     kubectl-guard.sh
     network-guard.sh
     secret-scanner.sh
+    mod-gate.sh
     audit.sh
     notify.sh
     session-start.sh
@@ -469,6 +473,10 @@ These guards are defense-in-depth, not a security boundary. Be clear-eyed about 
 - **Regex guards have a ceiling.** Command-string matching can always be evaded by a determined agent (string-obfuscated interpreter payloads, novel tool invocations, multi-step stage-then-exfil across separate commands). The guards raise the bar and catch the obvious/accidental cases; the **OS sandbox** is the only real containment for the evasion class — see *Enable the OS sandbox*.
 - **Auto mode removes you from the loop on the `ask` tier.** With `defaultMode: auto` the classifier resolves the prompts a human used to see. That is the point of the mode, but it means the guards' *ask* rules are advice to a model rather than a stop sign — see [Auto mode](#auto-mode). Set `defaultMode` to `manual` if you want every one of them back in your hands.
 - **MCP connectors are logged, not guarded.** `network-guard` sees Bash `curl`/`wget` and the `WebFetch` tool, but MCP tools (Gmail, Google Drive, Slack, Atlassian, browser automation, …) can read files and send data outbound with no guard in the middle. Since the `mcp__.*` audit row above, every such call leaves a line naming the tool and its field names, which is a record after the fact rather than a stop before it. Control the surface by only connecting MCP servers you trust, and use the log to decide which of them deserve a real guard.
+- **A Claude Code mod can override the guards.** Mods (2.1.287+) are plugin code that runs inside Claude Code. Per the [permissions docs](https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks), a mod can approve a call a guard here blocked, or answer a call itself so the guards never run. Unless the machine has managed settings or a Team/Enterprise login, it can also approve a call a `deny` rule refuses. `syncClaudeAiPlugins: false` closes the synced route only. What the harness does instead:
+  - **Claude can write you mods, reviewed.** `mod-gate` runs `claude plugin validate` (the static analysis Claude Code loads mods by) on each mod file Claude writes, as the mod will be after the write. It denies the hooks that replace permission decisions (`tool.check`, `classic.PreToolUse`, `classic.PermissionRequest`, `plugin.register`, `engine.create`) and shows you everything else the mod hooks and calls, flagging `tool.call` and calls that run outside the guards (`$.process`, `$.http`, `$.fs.write`, …). In auto mode the write itself goes to the classifier and the hot-reload prompt comes at the first save, so that notice is where you see what the mod does. On resume, `session-start` names any mod the session wrote, since one declined with "Not now" loads then.
+  - **Third-party plugins stay yours to install.** Deny rules stop Claude running `claude plugin install`/`enable`/`update`/`marketplace add` or `--plugin-url`, and writing into the installed-plugin cache `~/.claude/plugins`. `/plugin install` from your own prompt is unaffected.
+  - **Not covered:** a mod written by a shell redirect rather than the file tools, a `CLAUDE_CODE_PLUGIN_DIRS` prefix, and a `tool.call` hook that answers calls (shown, not blocked: static analysis can't tell it from a counter). The harness ships no managed settings on purpose: they would collide with a work machine's own, and the setting that blocks sideloading also blocks `--agents` and `--mcp-config`.
 - **Guards fail *closed* without jq**, so a missing-jq machine blocks all Bash/file tool calls rather than allowing them unchecked. Keep `jq` installed (the installer checks for it). They fail closed on input jq cannot parse too: a truncated or non-JSON payload is denied rather than read as an empty command. An absent or empty *field* on parseable input is a different case and still passes, since every guard is registered on tools it does not inspect.
 
 ## Per-project additions (not in this harness)

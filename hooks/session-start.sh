@@ -109,6 +109,14 @@ fi
 # jq and a prior snapshot both exist.
 [[ "$SOURCE" != "resume" ]] && exit 0
 [[ -z "$SESSION_ID" ]] && exit 0
+
+# A mod Claude wrote in this session loads when it resumes, even if hot reload
+# was declined with "Not now". Name each one rather than let it arrive unseen.
+DEV_MODS=$(expand_tilde "${CLAUDE_DEV_MODS_DIR:-$HOME/.claude/dev-mods}")/$SESSION_ID
+for m in "$DEV_MODS"/*/; do
+  [[ -f "$m.claude-plugin/plugin.json" ]] || continue
+  echo "Mod loading from this session: ${m%/} (review: claude plugin validate ${m%/})"
+done
 command -v jq &>/dev/null || exit 0
 
 SNAP="$STATE_DIR/${SESSION_ID}.json"
