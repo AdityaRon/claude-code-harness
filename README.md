@@ -74,7 +74,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 | `session-start` | SessionStart | Injects git branch, status, and last 5 commits into context automatically. On `source=resume`, also diffs each file the prior session edited against a content-hash snapshot and surfaces any drift (file reverted, missing, or HEAD moved) so Claude re-verifies before trusting the prior transcript's narrative. |
 | `session-snapshot` | Stop | Records the hashes of every file the session edited, plus `git HEAD`, to `~/.claude/state/sessions/<session_id>.json` (0600, keeps newest 50). Feeds the resume-drift check above. |
 | `pre-compact` | PreCompact | Backs up the full session transcript before compaction. Keeps last 20. |
-| `notify` | Notification | Desktop alert when Claude needs input (async) |
+| `notify` | Notification | Desktop alert when Claude needs input, titled with the session name (`/rename`, else the generated title, else the folder) and carrying Claude Code's own message (async) |
 
 ### Readability
 
