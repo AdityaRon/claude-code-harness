@@ -99,5 +99,19 @@ PERMS=$(stat -c %a "$CLAUDE_STATE_DIR/sess-basic.json" 2>/dev/null || stat -f %A
 check_eq "snapshot perms" "600" "$PERMS"
 
 echo ""
+echo "=== Async-safe: atomic write, wired async on Stop and sync on SessionEnd ==="
+T9="$TMP/t9.jsonl"; : > "$T9"
+run_hook "sess-atomic" "$T9" "$WORK"
+check_eq "no partial file left behind" "0" "$(find "$CLAUDE_STATE_DIR" -name '*.part.*' | wc -l | tr -d ' ')"
+printf 'not json' > "$CLAUDE_STATE_DIR/sess-atomic.json"
+run_hook "sess-atomic" "$T9" "$WORK"
+check_eq "a rerun replaces a damaged snapshot with valid JSON" "sess-atomic" "$(jq -r .session_id "$CLAUDE_STATE_DIR/sess-atomic.json" 2>/dev/null)"
+SETTINGS="config/settings.json"
+check_eq "Stop runs the snapshot async" "true" \
+  "$(jq -r '[.hooks.Stop[].hooks[] | select(.command | endswith("session-snapshot.sh")) | .async] | first // false' "$SETTINGS")"
+check_eq "SessionEnd runs the snapshot synchronously" "false" \
+  "$(jq -r '[.hooks.SessionEnd[].hooks[] | select(.command | endswith("session-snapshot.sh")) | (.async // false | tostring)] | first // "missing"' "$SETTINGS")"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

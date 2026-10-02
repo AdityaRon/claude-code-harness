@@ -64,13 +64,12 @@ is_template() {
 
 # Without case: `.ENV` opens `.env` on the default macOS filesystem. is_template
 # keeps its case, so `.env.EXAMPLE` stays blocked as it was.
+# One grep over the alternation, not one per pattern: each fork cost ~2.5 ms, and
+# this runs up to four times on every Read, Edit, Write and Grep.
 matches_any() {
   local target="$1"; shift
-  local p
-  for p in "$@"; do
-    printf '%s\n' "$target" | grep -qiE "$p" && return 0
-  done
-  return 1
+  local IFS='|'
+  printf '%s\n' "$target" | grep -qiE "($*)"
 }
 
 # --- The path (file_path / path / notebook_path) ------------------------
