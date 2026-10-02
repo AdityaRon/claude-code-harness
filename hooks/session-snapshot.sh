@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# On Stop, record which files this session edited and their final content
+# On Stop (async) and SessionEnd (sync), record which files this session edited and their final content
 # hashes. session-start.sh reads this back on resume to detect drift between
 # what the prior session landed on disk and what's actually there now —
 # catches the "edits were reverted / never persisted" failure mode.
@@ -73,6 +73,9 @@ if (cd "$CWD" && git rev-parse --git-dir &>/dev/null); then
 fi
 
 OUT="$STATE_DIR/${SESSION_ID}.json"
+# Write beside it, then rename: Stop runs async, so two runs can overlap, and a
+# run cut off at exit must leave the previous snapshot whole rather than truncated.
+PART="$OUT.part.$$"
 jq -n \
   --arg sid "$SESSION_ID" \
   --arg ts "$TS" \
@@ -81,8 +84,9 @@ jq -n \
   --argjson dirty "$GIT_DIRTY_JSON" \
   --argjson edited "$EDITED_FILES_JSON" \
   '{session_id:$sid, ended_at:$ts, cwd:$cwd, git_head:$head, git_dirty:$dirty, edited_files:$edited}' \
-  > "$OUT" 2>/dev/null || exit 0
-chmod 600 "$OUT" 2>/dev/null || true
+  > "$PART" 2>/dev/null || { rm -f "$PART"; exit 0; }
+chmod 600 "$PART" 2>/dev/null || true
+mv -f "$PART" "$OUT" 2>/dev/null || { rm -f "$PART"; exit 0; }
 
 # Prune to newest 50 snapshots.
 ls -t "$STATE_DIR"/*.json 2>/dev/null \

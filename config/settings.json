@@ -255,13 +255,17 @@
     "Stop": [
       {
         "matcher": "",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-snapshot.sh" }]
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-snapshot.sh", "async": true }]
       }
     ],
     "SessionEnd": [
       {
         "matcher": "",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh" }]
+      },
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-snapshot.sh" }]
       }
     ]
   },
