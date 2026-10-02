@@ -302,19 +302,18 @@ done
   || fail "always-loaded rules fit the budget" "$LOADED bytes, over $BUDGET — trim, or give a rule \`paths:\` frontmatter so it loads on demand"
 
 echo ""
-echo "=== Claude can't install or write a mod: the plugin deny rules ship in both spellings ==="
+echo "=== Claude can't install third-party plugins or touch the plugin cache; it may write mods ==="
 OUT=$(MERGE_HOME=/home/testuser merge '{}' "$(cat config/settings.json)")
-for r in 'Edit(~/.claude/dev-mods/**)' 'Edit(/home/testuser/.claude/dev-mods/**)' \
-         'Edit(~/.claude/plugins/**)' 'Edit(/home/testuser/.claude/plugins/**)' \
+for r in 'Edit(~/.claude/plugins/**)' 'Edit(/home/testuser/.claude/plugins/**)' \
          'Bash(claude plugin install:*)' 'Bash(claude plugin enable:*)' 'Bash(claude plugin update:*)' \
-         'Bash(claude plugin marketplace add:*)' 'Bash(claude --plugin-dir:*)' 'Bash(claude * --plugin-dir:*)' \
-         'Bash(claude --plugin-url:*)' 'Bash(claude * --plugin-url:*)'; do
+         'Bash(claude plugin marketplace add:*)' 'Bash(claude --plugin-url:*)' 'Bash(claude * --plugin-url:*)'; do
   printf '%s' "$OUT" | jq -e --arg r "$r" '.permissions.deny | index($r)' >/dev/null \
     && pass "denies $r" || fail "denies $r" "missing from permissions.deny"
 done
-# The review tools stay usable: validate and test read a mod without loading it.
-printf '%s' "$OUT" | jq -e '[.permissions.deny[] | select(test("plugin (validate|test)"))] | length == 0' >/dev/null \
-  && pass "leaves claude plugin validate and test alone" || fail "leaves claude plugin validate and test alone" "a deny rule names them"
+# Writing mods is allowed and reviewed by mod-gate.sh instead: validate, test and
+# --plugin-dir stay usable, and the session's mods folder stays writable.
+printf '%s' "$OUT" | jq -e '[.permissions.deny[] | select(test("plugin (validate|test)|plugin-dir|dev-mods"))] | length == 0' >/dev/null \
+  && pass "leaves mod authoring alone" || fail "leaves mod authoring alone" "a deny rule names validate, test, --plugin-dir or dev-mods"
 
 echo "=== claude.ai sync is off by default, and a user's own choice wins ==="
 OUT=$(merge '{"env":{"A":"1"}}' "$(cat config/settings.json)")

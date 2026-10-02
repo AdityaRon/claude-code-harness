@@ -199,5 +199,16 @@ OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.282 run_resume "sess
 check_contains "and so does a stale stamp from another day" "Installed 2.1.282" "$OUT"
 
 echo ""
+echo "=== Resume names the mods this session wrote ==="
+export CLAUDE_DEV_MODS_DIR="$TMP/dev-mods"
+mkdir -p "$CLAUDE_DEV_MODS_DIR/sess-mods/branch/.claude-plugin" "$CLAUDE_DEV_MODS_DIR/sess-mods/notamod"
+printf '{"name":"branch"}' > "$CLAUDE_DEV_MODS_DIR/sess-mods/branch/.claude-plugin/plugin.json"
+OUT=$(run_resume "sess-mods")
+case "$OUT" in *"Mod loading from this session: $CLAUDE_DEV_MODS_DIR/sess-mods/branch "*) echo "  OK: names a mod the session wrote"; PASS=$((PASS+1)) ;; *) echo "  FAIL: names a mod the session wrote  [$OUT]"; FAIL=$((FAIL+1)) ;; esac
+case "$OUT" in *notamod*) echo "  FAIL: skips a folder with no manifest  [$OUT]"; FAIL=$((FAIL+1)) ;; *) echo "  OK: skips a folder with no manifest"; PASS=$((PASS+1)) ;; esac
+OUT=$(run_resume "sess-clean")
+case "$OUT" in *"Mod loading"*) echo "  FAIL: silent for a session with no mods  [$OUT]"; FAIL=$((FAIL+1)) ;; *) echo "  OK: silent for a session with no mods"; PASS=$((PASS+1)) ;; esac
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
