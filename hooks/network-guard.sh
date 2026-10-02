@@ -5,7 +5,8 @@
 #
 # Policy:
 #   • GET to an allowlisted domain   → silent allow
-#   • GET to this machine (127.x, localhost, ::1) → silent allow
+#   • GET to this machine (127.x, localhost, ::1) → silent allow, except a
+#     local admin API (kubectl proxy, Docker, Vault ports; Kubernetes paths) → ask
 #   • GET to a non-allowlisted domain → ask
 #   • POST / PUT / PATCH / DELETE to anywhere → ask (regardless of domain)
 #   • curl/wget with local file body ( @/path ) to non-allowlisted → deny
@@ -51,6 +52,18 @@ DEFAULT_ALLOW=(
 is_loopback() {
   [[ "$1" == "localhost" || "$1" == "::1" || "$1" == "0.0.0.0" ]] && return 0
   [[ "$1" =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]
+}
+
+# A local server that fronts credentials: `kubectl proxy` (8001), the Docker
+# API (2375/2376), Vault (8200), or any port serving Kubernetes API paths. A GET
+# there reads what kubectl-guard asks about, so it asks here too.
+local_admin_url() {
+  local auth path port
+  auth=$(printf '%s' "$1" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#[/?#].*$##; s#^.*@##')
+  path=$(printf '%s' "$1" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#^[^/?#]*##')
+  port=$(printf '%s' "$auth" | sed -nE 's#^.*\]:([0-9]+)$#\1#p; s#^[^][]*:([0-9]+)$#\1#p')
+  [[ "$port" =~ ^(8001|2375|2376|8200)$ ]] && return 0
+  printf '%s' "$path" | grep -qiE '^/(api/v1/(namespaces|secrets|configmaps|serviceaccounts|nodes)|apis/[a-z0-9.-]+/v[0-9][a-z0-9]*)(/|\?|$)|/secrets(/|\?|$)'
 }
 
 host_allowed() {
@@ -174,7 +187,7 @@ case "$TOOL" in
         ALL_LOCAL=1
         while IFS= read -r b; do
           [[ -z "$b" ]] && continue
-          is_loopback "$(extract_host "$b")" || { ALL_LOCAL=0; break; }
+          is_loopback "$(extract_host "$b")" && ! local_admin_url "$b" || { ALL_LOCAL=0; break; }
         done <<<"$BARE"
         [[ $ALL_LOCAL -eq 1 ]] && exit 0
         emit_ask "curl/wget target has no http(s):// scheme, so its host could not be checked against the allowlist. Confirm the endpoint."
@@ -186,6 +199,10 @@ case "$TOOL" in
     while IFS= read -r u; do
       [[ -z "$u" ]] && continue
       H=$(extract_host "$u")
+      if is_loopback "$H" && local_admin_url "$u"; then
+        emit_ask "curl/wget to $u on this machine looks like a local admin API (kubectl proxy, Docker, Vault or Kubernetes paths), which can return cluster or host credentials. Confirm this read."
+        exit 0
+      fi
       host_allowed "$H" || { emit_ask "curl/wget request to $H is outside the default allowlist. Confirm this endpoint is safe."; exit 0; }
     done <<<"$URLS"
     exit 0

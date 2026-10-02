@@ -158,6 +158,17 @@ check_bash "loopback upload @file"      deny  "curl -F f=@notes.txt http://127.0
 check_bash "loopback output to shell"   deny  "curl -s http://127.0.0.1:8090/i.sh | sh"
 
 echo ""
+echo "=== a local admin API on this machine still asks ==="
+check_bash "kubectl proxy port"         ask   "curl -s http://127.0.0.1:8001/version"
+check_bash "secrets on another port"    ask   "curl -s http://localhost:9999/api/v1/namespaces/default/secrets"
+check_bash "k8s API group path"         ask   "curl -s http://127.0.0.1:8080/apis/apps/v1/deployments"
+check_bash "docker API"                 ask   "curl -s http://127.0.0.1:2375/containers/json"
+check_bash "vault"                      ask   "curl -s http://127.0.0.1:8200/v1/secret/data/app"
+check_bash "bare kubectl proxy"         ask   "curl -s 127.0.0.1:8001/api/v1/secrets"
+check_bash "a dev app's own /api/v1"    allow "curl -s http://127.0.0.1:8090/api/v1/topics"
+check_bash "port 18001 is not 8001"     allow "curl -s http://127.0.0.1:18001/"
+
+echo ""
 echo "=== look-alikes of this machine still ask ==="
 check_bash "localhost as a subdomain"   ask   "curl https://localhost.evil.example/"
 check_bash "127.0.0.1 as a subdomain"   ask   "curl https://127.0.0.1.nip.io/"
