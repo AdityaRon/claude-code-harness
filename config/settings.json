@@ -5,6 +5,8 @@
   "includeCoAuthoredBy": true,
   "syncClaudeAiSkills": false,
   "syncClaudeAiPlugins": false,
+  "remoteControlAtStartup": true,
+  "isolatePeerMachines": true,
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh",
@@ -265,13 +267,17 @@
     "Stop": [
       {
         "matcher": "",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-snapshot.sh" }]
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-snapshot.sh", "async": true }]
       }
     ],
     "SessionEnd": [
       {
         "matcher": "",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh" }]
+      },
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-snapshot.sh" }]
       }
     ]
   },
