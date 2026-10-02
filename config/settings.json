@@ -152,7 +152,17 @@
       "Bash(kubectl delete:*)",
       "Bash(kubectl * delete:*)",
       "Bash(kubectl -n * delete:*)",
-      "Bash(kubectl --context * delete:*)"
+      "Bash(kubectl --context * delete:*)",
+      "Edit(~/.claude/dev-mods/**)",
+      "Edit(~/.claude/plugins/**)",
+      "Bash(claude plugin install:*)",
+      "Bash(claude plugin enable:*)",
+      "Bash(claude plugin update:*)",
+      "Bash(claude plugin marketplace add:*)",
+      "Bash(claude --plugin-dir:*)",
+      "Bash(claude * --plugin-dir:*)",
+      "Bash(claude --plugin-url:*)",
+      "Bash(claude * --plugin-url:*)"
     ]
   },
   "hooks": {
