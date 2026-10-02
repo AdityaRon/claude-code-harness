@@ -121,5 +121,12 @@ done
   || fail "no docs/ file uses a root-relative path to a sibling" "$BADSIB"
 
 echo ""
+echo "=== Shipped scripts write no fixed /tmp path ==="
+# rules/environment.md says temp files never go in a shared /tmp name; this repo
+# ships that rule, so its own installer and hooks follow it. mktemp is fine.
+HITS=$(grep -nE '/tmp/[A-Za-z]' install.sh doctor.sh hooks/*.sh bin/*.sh 2>/dev/null | grep -v '^[^:]*:[0-9]*:[[:space:]]*#')
+[[ -z "$HITS" ]] && pass "no fixed /tmp file names" || fail "no fixed /tmp file names" "$HITS"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

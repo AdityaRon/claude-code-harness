@@ -183,5 +183,25 @@ AFTER=$(wc -l < "$CLAUDE_AUDIT_LOG")
 [[ $((AFTER - BEFORE)) -eq 1 ]] && pass "an allow logs nothing; a multiline deny is one line" || fail "an allow logs nothing; a multiline deny is one line" "delta=$((AFTER-BEFORE))"
 
 echo ""
+echo "=== A long command is cut on a character boundary, never inside one ==="
+LONG="$(printf 'a%.0s' $(seq 1 199))é and more"
+run "$(jq -nc --arg c "$LONG" '{hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:$c}}')"
+LAST=$(tail -n 1 "$CLAUDE_AUDIT_LOG")
+printf '%s\n' "$LAST" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+  && pass "the logged line is valid UTF-8" || fail "the logged line is valid UTF-8" "$(printf '%s' "$LAST" | tail -c 20 | od -c | head -2)"
+case "$LAST" in *"| $(printf 'a%.0s' $(seq 1 199))"*) pass "keeps the first 199 characters" ;; *) fail "keeps the first 199 characters" "$LAST" ;; esac
+
+echo ""
+echo "=== A guard's decision line is cut on a character boundary too ==="
+GLONG="$(printf 'b%.0s' $(seq 1 199))é tail"
+( export LC_ALL=C   # byte semantics on BSD as on GNU, so a byte cut shows
+  source hooks/lib.sh
+  INPUT=$(jq -nc --arg c "$GLONG" '{tool_input:{command:$c}}')
+  log_decision deny )
+GLAST=$(grep ' | GUARD | ' "$CLAUDE_AUDIT_LOG" | tail -n 1)
+printf '%s\n' "$GLAST" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+  && pass "the GUARD line is valid UTF-8" || fail "the GUARD line is valid UTF-8" "$GLAST"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

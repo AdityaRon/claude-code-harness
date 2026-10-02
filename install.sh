@@ -200,11 +200,14 @@ fi
 if [[ -z "${CCH_SKIP_SELFTEST:-}" && -x "$REPO/doctor.sh" ]]; then
   echo ""
   echo "Running doctor.sh to verify hooks..."
-  if bash "$REPO/doctor.sh" > /tmp/cch-doctor.log 2>&1; then
-    summary=$(grep '^SUMMARY:' /tmp/cch-doctor.log || echo "(no summary)")
+  # A fixed /tmp name is shared by every user and every concurrent run.
+  log=$(mktemp "${TMPDIR:-/tmp}/cch-doctor.XXXXXX")
+  if bash "$REPO/doctor.sh" > "$log" 2>&1; then
+    summary=$(grep '^SUMMARY:' "$log" || echo "(no summary)")
     echo "  ✓ $summary"
+    rm -f "$log"
   else
-    echo "  ✗ doctor.sh reported failures. See /tmp/cch-doctor.log"
+    echo "  ✗ doctor.sh reported failures. See $log"
   fi
 fi
 

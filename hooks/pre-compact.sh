@@ -6,6 +6,8 @@ source "$(dirname "$0")/lib.sh"
 read_input
 TRANSCRIPT=$(jq_get '.transcript_path')
 TRIGGER=$(jq_get '.trigger')
+# It lands in a file name: keep "auto"/"manual", never a "/" or "..".
+TRIGGER=${TRIGGER//[^A-Za-z0-9_-]/}
 [[ -z "$TRIGGER" ]] && TRIGGER="unknown"
 
 [[ -z "$TRANSCRIPT" || ! -f "$TRANSCRIPT" ]] && exit 0

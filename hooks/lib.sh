@@ -130,6 +130,13 @@ jq_get() {
   fi
 }
 
+# First N bytes of stdin, minus a character the cut split. head -c and GNU
+# cut -c both count bytes, so either can leave half a multibyte character and an
+# audit line no UTF-8 reader accepts; iconv -c drops the partial one.
+head_utf8() {
+  head -c "$1" | if command -v iconv >/dev/null; then iconv -f UTF-8 -t UTF-8 -c 2>/dev/null; else cat; fi
+}
+
 # One audit line per guard decision. The PostToolUse audit only sees calls that
 # ran, so without this a deny left no record at all. The target is the command,
 # path or URL, never file content: secret-scanner denies on content.
@@ -137,7 +144,7 @@ log_decision() {
   local target=""
   command -v jq &>/dev/null && target=$(printf '%s' "$INPUT" \
     | jq -j '.tool_input | .command // .file_path // .path // .notebook_path // .url // ""' 2>/dev/null \
-    | tr '\n\t' '  ' | cut -c1-200)
+    | tr '\n\t' '  ' | head_utf8 200)
   log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | GUARD | $1 | $(basename "$0" .sh) | ${target:-unknown} | $PWD"
 }
 
