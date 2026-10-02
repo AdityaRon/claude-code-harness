@@ -206,5 +206,19 @@ check "label value secret"       allow 'kubectl get pods -l tier=secret'
 check "namespace named secrets"  allow 'kubectl get pods -n secrets'
 
 echo ""
+echo "=== mutating verbs are asked about AS mutating, not as unknown ==="
+# Both paths answer "ask", so a decision check alone stays green if a verb falls
+# off MUTATING_VERBS. The reason says which path ran. Listed here, not read from
+# the hook, so the test cannot agree with a list it is meant to check.
+for v in delete apply create replace patch edit scale drain cordon exec cp; do
+  r=$(jq -nc --arg c "kubectl $v pod foo -n vm" '{tool_name:"Bash", tool_input:{command:$c}}' \
+      | bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
+  case "$r" in
+    *"mutates the cluster"*) echo "  OK (reason): $v is named as mutating"; PASS=$((PASS+1)) ;;
+    *) echo "  FAIL (reason): $v is named as mutating  [got: $r]"; FAIL=$((FAIL+1)) ;;
+  esac
+done
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

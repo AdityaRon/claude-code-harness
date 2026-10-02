@@ -20,7 +20,7 @@ DIR=$(pwd)
 # Collapse newlines, tabs, and control chars to single spaces so one log
 # line stays on one line even if the source field contains raw stderr.
 sanitize() {
-  printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '\000-\037' | head -c 200
+  printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '\000-\037' | head_utf8 200
 }
 
 case "$EVENT" in
