@@ -310,6 +310,8 @@ cat > "$TMP/changelog.md" <<EOF
 - Changed a shell write through a symlink onto a sensitive file to ask first
 - Added Claude Mods: plugins may now modify deeper behavior
 - Fixed plugin marketplace listing order
+- Fixed a mod reloading twice after one save
+- Fixed modal dialogs flickering
 
 ## 9.9.1
 
@@ -331,6 +333,8 @@ check_contains "keeps a dangerous rm line with the rm in backticks" "always-ask 
 check_contains "keeps a line about writes onto a sensitive file" "through a symlink" "$OUT"
 check_contains "keeps an Added line about plugins" "Claude Mods" "$OUT"
 check_absent "drops a Fixed line that only mentions plugins" "marketplace listing order" "$OUT"
+check_contains "keeps a Fixed line that names a mod" "reloading twice after one save" "$OUT"
+check_absent "does not read modal as mod" "modal dialogs" "$OUT"
 check_absent "drops an Added line with no feature term" "mouse support" "$OUT"
 check_contains "keeps an Added line naming a camelCase key" "someNewKey" "$OUT"
 check_absent "drops a Fixed line that only mentions subagents" "spinner flicker" "$OUT"

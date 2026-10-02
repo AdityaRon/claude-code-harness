@@ -398,8 +398,8 @@ else
     # Memory and rules files are what install.sh ships; 2.1.284 fixes for both
     # were Fixed/Improved lines and only the reviewer's full read caught them.
     # 2.1.287 wrote "dangerous `rm`", and its sensitive-file and plugin (Mods)
-    # lines were caught the same way.
-    STRONG="hook|permission rule|allow rule|deny|dangerous.{1,3}rm|sensitive file|sandbox|secret|autoMode|settings[.]json|MEMORY[.]md|CLAUDE[.]md|[.]claude/rules${NAMES:+|$NAMES}"
+    # lines were caught the same way; a mod runs above every guard, so any line naming one.
+    STRONG="hook|permission rule|allow rule|deny|dangerous.{1,3}rm|sensitive file|[Mm]ods?([^a-z]|$)|sandbox|secret|autoMode|settings[.]json|MEMORY[.]md|CLAUDE[.]md|[.]claude/rules${NAMES:+|$NAMES}"
     BROAD="tool|setting|effort|plugin|\`CLAUDE_|subagent|auto mode|now the default|\`[a-z]+[A-Z][A-Za-z]+\`"
     HITS=$(printf '%s\n' "$SLICE" | grep -v -E '^- (\[[A-Za-z ]+\]|Self-hosted runner:|Windows:)' \
            | awk -v s="$STRONG" -v b="$BROAD" '/^## /{h=$0; next}
