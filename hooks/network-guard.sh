@@ -187,8 +187,10 @@ case "$TOOL" in
     fi
 
     # Every http(s) URL in the command: curl fetches each one, so checking only
-    # the first let `curl <allowlisted> <anything>` through.
-    URLS=$(printf '%s\n' "$CMD" | grep -oE 'https?://[^[:space:]\"'\''`]+')
+    # the first let `curl <allowlisted> <anything>` through. A backslash is part
+    # of the token: curl 8.7 reads 'https://github.com\@evil.example/' as user
+    # `github.com\` at evil.example, and a token cut at the backslash said github.
+    URLS=$(printf '%s\n' "$CMD" | grep -oE 'https?://[^[:space:]"'\''`]+')
     URL=$(printf '%s\n' "$URLS" | head -1)
     HOST=$(extract_host "$URL")
 

