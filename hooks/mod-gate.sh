@@ -20,12 +20,10 @@ case "$FILE" in /*) ;; *) FILE="$PWD/$FILE" ;; esac
 # The mod is the nearest directory above the file with a manifest. None yet:
 # nothing can load, and the manifest's own write will be reviewed instead.
 ROOT=""
-d=$(dirname "$FILE")
-for _ in 1 2 3 4 5 6; do
-  if [[ -f "$d/.claude-plugin/plugin.json" ]]; then ROOT="$d"; break; fi
-  [[ "$FILE" == "$d/.claude-plugin/plugin.json" ]] && { ROOT="$d"; break; }
-  [[ "$d" == "/" ]] && break
-  d=$(dirname "$d")
+d=${FILE%/*}
+while [[ -n "$d" ]]; do
+  if [[ -f "$d/.claude-plugin/plugin.json" || "$FILE" == "$d/.claude-plugin/plugin.json" ]]; then ROOT="$d"; break; fi
+  d=${d%/*}
 done
 [[ -z "$ROOT" ]] && exit 0
 # Mods need Claude Code 2.1.287; without the CLI there is nothing to load them.
@@ -35,7 +33,9 @@ CLAUDE_BIN=${CLAUDE_MOD_GATE_CLI:-$(command -v claude)}
 # Review the mod as it will be after this write, in a scratch copy.
 WORK=$(mktemp -d) || exit 0
 trap 'rm -rf "$WORK"' EXIT
-cp -R "$ROOT/." "$WORK/" 2>/dev/null
+# node_modules and .git are not the mod's code, and copying them cost ~0.3 s.
+if command -v rsync >/dev/null; then rsync -a --exclude node_modules --exclude .git "$ROOT/" "$WORK/" 2>/dev/null
+else cp -R "$ROOT/." "$WORK/" 2>/dev/null; fi
 REL="${FILE#"$ROOT"/}"
 TARGET="$WORK/$REL"
 mkdir -p "$(dirname "$TARGET")"
@@ -61,10 +61,15 @@ case "$TOOL" in
 esac
 
 REPORT=$(cd "$WORK" && "$CLAUDE_BIN" plugin validate --json "$WORK" 2>/dev/null)
+NAME=$(jq -r '.name // empty' "$WORK/.claude-plugin/plugin.json" 2>/dev/null); NAME=${NAME:-${ROOT##*/}}
+# No report is no review: the person decides, rather than the write passing unseen.
+if ! printf '%s' "$REPORT" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  emit_ask "Mod '$NAME' could not be reviewed: claude plugin validate gave no report. Read the mod before allowing this write."
+  exit 0
+fi
 NOTES=$(printf '%s' "$REPORT" | jq -r '[.contents[]?.notes[]?] | .[]' 2>/dev/null)
 HOOKS=$(printf '%s\n' "$NOTES" | sed -n 's/^.*hooks: //p' | sed 's/{[^}]*}//g' | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' | sort -u)
 CALLS=$(printf '%s\n' "$NOTES" | sed -n 's/^.*calls: //p' | tr ',' '\n' | sed 's/ (via [^)]*)//; s/^ *//; s/ *$//' | grep '^\$' | sort -u)
-NAME=$(jq -r '.name // empty' "$WORK/.claude-plugin/plugin.json" 2>/dev/null); NAME=${NAME:-${ROOT##*/}}
 
 # These replace or reshape permission decisions; nothing a pane, a command or a
 # counter needs. tool.call stays allowed: counting and answering look the same
@@ -83,6 +88,13 @@ elif [[ -n "$HOOKS$CALLS" ]]; then
   [[ -n "$CALLS" ]] && MSG="$MSG It calls: $(printf '%s' "$CALLS" | paste -sd, - | sed 's/,/, /g')."
   [[ -n "$RISKY" ]] && MSG="$MSG Outside the guards: $RISKY run with your permissions and no PreToolUse check."
   printf '%s\n' "$HOOKS" | grep -qx 'tool\.call' && MSG="$MSG It hooks tool.call, which can answer a call itself so the guards never run; read that hook before enabling."
+  # A systemMessage reaches the screen, not the model, and nobody in a
+  # background session: what runs outside the guards is asked instead.
+  if [[ -n "$RISKY" ]] || printf '%s\n' "$HOOKS" | grep -qx 'tool\.call'; then
+    log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | MOD | review | $NAME | $FILE"
+    emit_ask "$MSG"
+    exit 0
+  fi
 else
   exit 0
 fi

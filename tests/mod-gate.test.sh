@@ -22,6 +22,17 @@ OUT=$(jq -nc '{tool_name:"Write",tool_input:{file_path:"/x/notes.md",content:"hi
 OUT=$(jq -nc '{tool_name:"Write",tool_input:{file_path:"/x/src/app.ts",content:"x"}}' | bash "$HOOK")
 [[ -z "$OUT" ]] && pass "a .ts file outside any plugin passes silently" || fail "a .ts file outside any plugin passes silently" "$OUT"
 
+# A validator that fails or prints no JSON is no review: ask, never pass.
+D="$TMP/deep"
+mkdir -p "$D/.claude-plugin" "$D/a/b/c/d/e/f/g"
+printf '{"name":"deep","version":"0.1.0"}' > "$D/.claude-plugin/plugin.json"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/cli-fails"; printf '#!/bin/sh\necho not json\n' > "$TMP/cli-junk"
+chmod +x "$TMP/cli-fails" "$TMP/cli-junk"
+deep(){ jq -nc --arg f "$D/a/b/c/d/e/f/g/register.js" '{tool_name:"Write",tool_input:{file_path:$f,content:"x"}}' \
+  | CLAUDE_MOD_GATE_CLI="$1" bash "$HOOK"; }
+[[ "$(decision "$(deep "$TMP/cli-fails")")" == "ask" ]] && pass "validate fails: ask, seven folders down" || fail "validate fails" "$(deep "$TMP/cli-fails")"
+[[ "$(decision "$(deep "$TMP/cli-junk")")" == "ask" ]] && pass "validate prints no JSON: ask" || fail "validate junk" "$(deep "$TMP/cli-junk")"
+
 CLI=${CLAUDE_MOD_GATE_CLI:-$(command -v claude)}
 if [[ -z "$CLI" ]] || ! "$CLI" plugin validate --help >/dev/null 2>&1; then
   echo "  SKIP: no Claude Code with 'plugin validate' (set CLAUDE_MOD_GATE_CLI); mod reviews untested"
@@ -66,7 +77,7 @@ fi
 rm -f "$M/hooks/register.js"
 
 OUT=$(write "$TMP/benign.js")
-[[ "$(decision "$OUT")" == "allow" ]] && pass "a counter mod is allowed" || fail "a counter mod is allowed" "$OUT"
+[[ "$(decision "$OUT")" == "ask" ]] && pass "a counter mod hooking tool.call asks" || fail "a counter mod hooking tool.call asks" "$OUT"
 case "$OUT" in *"will hook: tool.call, ui.render"*) pass "the person is told what it hooks" ;; *) fail "the person is told what it hooks" "$OUT" ;; esac
 case "$OUT" in *"answer a call itself"*) pass "a tool.call hook is called out" ;; *) fail "a tool.call hook is called out" "$OUT" ;; esac
 [[ ! -f "$M/hooks/register.js" ]] && pass "the review never writes the real mod" || fail "the review never writes the real mod" "register.js exists"

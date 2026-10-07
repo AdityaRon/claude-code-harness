@@ -217,6 +217,16 @@ parity "tfvars"              "prod.tfvars"               deny
 parity "p12"                 "cert.p12"                  deny
 parity "gh hosts"            ".config/gh/hosts.yml"      deny
 parity "tfvars template"     "prod.tfvars.example"       allow
+parity "any ~/.ssh file"     ".ssh/deploy_key"           deny
+parity "ecdsa key"           "id_ecdsa"                  deny
+parity "aws sso cache"       ".aws/sso/cache/a.json"     deny
+parity "gnupg"               ".gnupg/pubring.kbx"        deny
+parity "gcloud ADC"          ".config/gcloud/application_default_credentials.json" deny
+parity "azure cache"         ".azure/msal_token_cache.json" deny
+parity "keystore"            "release.jks"               deny
+parity "kubeconfig"          "kubeconfig"                deny
+parity "claude.json"         ".claude.json"              deny
+parity "secrets doc"         "docs/secrets.yaml.md"      allow
 
 # Parity is asserted on canonical names. On prefixed variants the Bash path is
 # deliberately broader: sensitive-file-guard anchors `credentials.json` and

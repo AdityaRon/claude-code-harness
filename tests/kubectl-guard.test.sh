@@ -95,6 +95,10 @@ check "rollout restart mutates"  ask    'kubectl --context X -n vm rollout resta
 check "auth can-i is read"       allow 'kubectl auth can-i delete pods -n vm'
 check "auth reconcile mutates"   ask    'kubectl auth reconcile -f rbac.yaml'
 check "config view is read"      allow 'kubectl config view --minify'
+check "config view --raw: tokens" ask   'kubectl config view --raw'
+check "--raw with jsonpath"       ask   "kubectl config view --minify --raw -o jsonpath='{.users[0].user.token}'"
+check "--flatten embeds keys"     ask   'kubectl --context x config view --flatten'
+check "--raw=false is redacted"   allow 'kubectl config view --raw=false'
 check "config get-contexts read" allow 'kubectl config get-contexts -o name'
 check "config use-context sets"  ask    'kubectl config use-context prodn1'
 

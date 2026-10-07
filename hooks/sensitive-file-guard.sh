@@ -15,7 +15,9 @@ FILE=$(jq_get '.tool_input.file_path')
 # grepping source for the string `process.env.API_KEY` stays an ordinary read.
 GLOB=$(jq_get '.tool_input.glob')
 
-[[ -z "$FILE" && -z "$GLOB" ]] && exit 0
+TOOL=$(jq_get '.tool_name')
+
+[[ -z "$FILE" && -z "$GLOB" && "$TOOL" != Grep ]] && exit 0
 
 BLOCKED=(
   '\.env$'                     # .env, prod.env, local.env (any *.env)
@@ -23,25 +25,32 @@ BLOCKED=(
   '(^|/)\.envrc$'
   '\.pem$'
   '\.key$'
-  '(^|/)id_rsa'
-  '(^|/)id_ed25519'
-  '\.aws/credentials'
+  '(^|/)id_(rsa|dsa|ecdsa|ed25519)'
+  # Whole folders: ~/.ssh holds keys under any name, ~/.aws keeps SSO and CLI
+  # token caches beside credentials, and gcloud and Azure keep tokens in theirs.
+  '(^|/)\.ssh/'
+  '(^|/)\.aws/'
+  '(^|/)\.gnupg/'
+  '(^|/)\.config/gcloud/'
+  '(^|/)\.azure/'
   '(^|/)\.netrc$'
   # Config-shaped secret files only — not secrets.py / secrets.ts (source code).
-  '(^|/)secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)'
+  '(^|/)secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)$'
   '(^|/)\.npmrc$'
   '(^|/)\.pypirc$'
   '(^|/)\.git-credentials$'
   '(^|/)\.pgpass$'
   '(^|/)\.kube/config$'
-  '(^|/)\.ssh/config$'
+  '(^|/)kubeconfig(\.ya?ml)?$'
+  '\.kubeconfig$'
   '(^|/)\.docker/config\.json$'
   '(^|/)credentials\.json$'
   'service[_-]account.*\.json$'
   '(^|/)\.credentials\.json$'   # ~/.claude: the Claude Code OAuth token
+  '(^|/)\.claude\.json$'        # can hold an API key and MCP server tokens
   'terraform\.tfstate(\.backup)?$'
   '\.tfvars$'
-  '\.(p12|pfx)$'
+  '\.(p12|pfx|jks|keystore)$'
   '(^|/)gh/hosts\.yml$'
 )
 
@@ -54,6 +63,8 @@ CRED_DIRS=(
   '(^|/)\.aws/?$'
   '(^|/)\.gnupg/?$'
   '(^|/)\.kube/?$'
+  '(^|/)\.config/gcloud/?$'
+  '(^|/)\.azure/?$'
 )
 
 # Committed template files (.env.example, credentials.json.sample, …) are safe
@@ -73,9 +84,10 @@ matches_any() {
 }
 
 # --- The path (file_path / path / notebook_path) ------------------------
-if [[ -n "$FILE" ]] && ! is_template "$FILE"; then
-  # Canonicalize to defeat symlink / /private/var bypass attempts.
-  CANON=$(canonical_path "$FILE")
+# Canonicalize first: a template name is safe only if what it resolves to is
+# one too, so a link named x.env.example pointing at .env is not.
+[[ -n "$FILE" ]] && CANON=$(canonical_path "$FILE")
+if [[ -n "$FILE" ]] && ! { is_template "$FILE" && is_template "$CANON"; }; then
   if matches_any "$FILE" "${BLOCKED[@]}" || matches_any "$CANON" "${BLOCKED[@]}"; then
     emit_deny "Blocked: $FILE is a sensitive credentials file. Read env values from process.env in code — do not open the file directly."
     exit 0
@@ -112,6 +124,25 @@ if [[ -n "$GLOB" ]]; then
       exit 0
     fi
   done
+fi
+
+# --- Grep's reach -------------------------------------------------------
+# A content search at or above $HOME reads every dotfile and key under it. The
+# glob check above reads * and one level of braces; ? and [..] it cannot, so a
+# glob using them asks rather than passes.
+if [[ "$TOOL" == Grep ]]; then
+  WHERE=${FILE:-$(jq_get '.cwd')}
+  if [[ -n "$WHERE" ]]; then
+    W=$(canonical_path "$WHERE"); HC=$(canonical_path "$HOME")
+    case "$HC/" in "${W%/}/"*)
+      emit_ask "Grep over ${WHERE} searches everything under your home folder, dotfiles and keys included. Point it at the folder you mean."
+      exit 0 ;;
+    esac
+  fi
+  case "$GLOB" in *'?'*|*'['*|*'{'*'{'*)
+    emit_ask "The glob $GLOB uses ?, [..] or more than one brace group, which the credential check cannot read. Use * and plain names."
+    exit 0 ;;
+  esac
 fi
 
 exit 0
