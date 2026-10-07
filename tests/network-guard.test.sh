@@ -210,6 +210,35 @@ check_bash "upper-case entry refused"      ask   "curl -s https://upper.example/
 CLAUDE_NET_ALLOWLIST="com" check_bash "env entry com refused too" ask "curl -s https://evil.com/"
 CLAUDE_NET_ALLOWLIST="api.myservice.io" check_bash "valid env entry still works" allow "curl -s https://api.myservice.io/x"
 CLAUDE_LOCAL_SETTINGS_DIR="$TMP/none" check_bash "no local-settings dir" ask "curl -s https://logs.corp.example/"
+# Only an array of strings is a list; install.sh counts hosts the same way.
+printf '%s' '{"netAllowlist":{"k":"obj.example"}}' > "$LS/obj.json"
+printf '%s' '{"netAllowlist":"str.example"}' > "$LS/str.json"
+printf '%s' '{"netAllowlist":[7,["nested.example"],null,{"h":"deep.example"}]}' > "$LS/odd.json"
+printf '%s' '["top.example"]' > "$LS/arr.json"
+check_bash "netAllowlist as an object is not a list" ask "curl -s https://obj.example/"
+check_bash "netAllowlist as a string is not a list"  ask "curl -s https://str.example/"
+check_bash "non-string entries are skipped"         ask "curl -s https://nested.example/"
+check_bash "a top-level array is not a fragment"    ask "curl -s https://top.example/"
+check_bash "a list beside odd fragments still works" allow "curl -s https://second.example/"
+mkdir "$LS/dir.json"
+check_bash "a directory named *.json is skipped"    allow "curl -s https://second.example/"
+# jq blocks opening a FIFO with no writer, and a hook that times out does not
+# block the call. check_bash reads synchronously, so this one runs in the
+# background with a deadline. On failure the FIFO is fed until the hook exits
+# (one call reads the list more than once), so no jq is left behind.
+mkfifo "$LS/stuck.json"
+PAYLOAD=$(jq -nc '{tool_name:"Bash", tool_input:{command:"curl -s https://second.example/"}}')
+( printf '%s\n' "$PAYLOAD" | bash "$HOOK" >"$TMP/fifo.out" 2>/dev/null; : >"$TMP/fifo.done" ) &
+HOOKPID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [[ -f "$TMP/fifo.done" ]] && break; sleep 0.25; done
+if [[ -f "$TMP/fifo.done" && ! -s "$TMP/fifo.out" ]]; then
+  echo "  OK (allow): a FIFO in local-settings does not stall the guard"; PASS=$((PASS+1))
+else
+  echo "  FAIL (expected=allow within 5s got=$(cat "$TMP/fifo.out" 2>/dev/null || echo stalled)): a FIFO in local-settings does not stall the guard"; FAIL=$((FAIL+1))
+  ( while [[ ! -f "$TMP/fifo.done" ]]; do : >"$LS/stuck.json" 2>/dev/null; done ) & FEEDER=$!
+  wait "$HOOKPID"; kill "$FEEDER" 2>/dev/null; wait "$FEEDER" 2>/dev/null
+fi
+rm -f "$LS/obj.json" "$LS/str.json" "$LS/odd.json" "$LS/arr.json" "$LS/stuck.json"; rmdir "$LS/dir.json"
 
 echo ""
 echo "=== changing this machine's allowlist asks ==="

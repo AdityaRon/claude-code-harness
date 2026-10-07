@@ -40,7 +40,7 @@ cmd_list() {
       else
         printf '  ✗ %-38s %s: refused, %s\n' "$h" "$(basename "$f")" "$why"
       fi
-    done < <(jq -r '.netAllowlist[]? | strings' "$f")
+    done < <(jq -r '.netAllowlist | arrays | .[] | strings' "$f")
   done
   for h in ${CLAUDE_NET_ALLOWLIST:-}; do
     any=1
@@ -115,7 +115,7 @@ cmd_remove() {
   for h in "$@"; do
     echo "  ✓ $h removed from $(basename "$FILE")"
     for f in "$DIR"/*.json; do
-      [[ "$f" == "$FILE" ]] && continue
+      [[ -f "$f" && "$f" != "$FILE" ]] || continue
       jq -e --arg h "$h" '(.netAllowlist // []) | index($h)' "$f" >/dev/null 2>&1 \
         && echo "    still listed in $(basename "$f")"
     done

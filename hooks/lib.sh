@@ -264,12 +264,15 @@ net_host_problem() {
 # `netAllowlist` entries from ~/.claude/local-settings/*.json that pass
 # net_host_problem. Read on every call, so an edit applies without a reinstall;
 # a file that will not parse contributes nothing, and the guard asks as before.
+# Regular files only: jq blocks on a FIFO, and a hook that times out is not a
+# deny, the call goes on to the permission flow. Arrays only, as install.sh counts.
 local_net_hosts() {
   local dir f h
   dir=$(expand_tilde "${CLAUDE_LOCAL_SETTINGS_DIR:-$HOME/.claude/local-settings}")
   compgen -G "$dir/*.json" >/dev/null || return 0
   for f in "$dir"/*.json; do
-    jq -r '.netAllowlist[]? | strings' "$f" 2>/dev/null
+    [[ -f "$f" ]] || continue
+    jq -r '.netAllowlist | arrays | .[] | strings' "$f" 2>/dev/null
   done | while IFS= read -r h; do
     net_host_problem "$h" >/dev/null && printf '%s\n' "$h"
   done
