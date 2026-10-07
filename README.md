@@ -431,6 +431,11 @@ the Edit and Write tools are denied there. An allow rule never silenced
 the prompt, and a guard's ask comes before it is consulted. After
 `git pull && bash install.sh`, move such hosts here with `add`. `candidates`
 prints your hosts, so keep its output local.
+A new machine has no history for `candidates`, so carry the list instead: keep
+`net-allowlist.json` beside your work skills and symlink it in, as with allow
+rules above (`add` writes through the link), and seed it once on the machine
+that has the history. After that, an ask about an unlisted host names the `add`
+command for that host, so each new one costs one prompt and one confirm.
 
 **Extend the network allowlist per-project** (same refusals apply):
 ```json

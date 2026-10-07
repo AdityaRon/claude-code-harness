@@ -88,6 +88,11 @@ host_allowed() {
   return 1
 }
 
+# The fix for a repeat ask, in the ask itself: only for a host that may be listed.
+add_hint() {
+  net_host_problem "$1" >/dev/null && printf ' To stop asking on this machine: ~/.claude/net-allowlist.sh add %s' "$1"
+}
+
 extract_host() {
   local url="$1"
   # Scheme, then path/query, then userinfo, then port, in that order: cutting at
@@ -105,7 +110,7 @@ case "$TOOL" in
     if host_allowed "$HOST"; then
       exit 0
     fi
-    emit_ask "WebFetch to $HOST is outside the default allowlist. Confirm the URL is safe (no secrets in the path/query)."
+    emit_ask "WebFetch to $HOST is outside the default allowlist. Confirm the URL is safe (no secrets in the path/query).$(add_hint "$HOST")"
     exit 0
     ;;
   Bash)
@@ -230,7 +235,7 @@ case "$TOOL" in
         emit_ask "curl/wget to $u on this machine looks like a local admin API (kubectl proxy, Docker, Vault or Kubernetes paths), which can return cluster or host credentials. Confirm this read."
         exit 0
       fi
-      host_allowed "$H" || { emit_ask "curl/wget request to $H is outside the default allowlist. Confirm this endpoint is safe."; exit 0; }
+      host_allowed "$H" || { emit_ask "curl/wget request to $H is outside the default allowlist. Confirm this endpoint is safe.$(add_hint "$H")"; exit 0; }
     done <<<"$URLS"
     exit 0
     ;;

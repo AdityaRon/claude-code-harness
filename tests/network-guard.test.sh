@@ -257,6 +257,24 @@ check_bash "net-allowlist candidates"      allow "~/.claude/net-allowlist.sh can
 check_bash "net-allowlist remove"          allow "~/.claude/net-allowlist.sh remove a.example"
 check_bash "read a fragment"               allow "jq . ~/.claude/local-settings/work.json 2>/dev/null"
 check_bash "list the folder"               allow "ls ~/.claude/local-settings 2>&1 >/dev/null"
+
+echo ""
+echo "=== an ask about an unlisted host names the add command ==="
+reason_of() { printf '%s' "$1" | CLAUDE_LOCAL_SETTINGS_DIR="$TMP/none" bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""'; }
+hint_check() {
+  local label="$1" want="$2" payload="$3" r
+  r=$(reason_of "$payload")
+  if { [[ "$want" == yes && "$r" == *"net-allowlist.sh add "* ]] || [[ "$want" == no && -n "$r" && "$r" != *"net-allowlist.sh add"* ]]; }; then
+    echo "  OK: $label"; PASS=$((PASS+1))
+  else
+    echo "  FAIL: $label  [reason: $r]"; FAIL=$((FAIL+1))
+  fi
+}
+hint_check "curl GET names the host to add" yes '{"tool_name":"Bash","tool_input":{"command":"curl -s https://logs.corp.example/x"}}'
+hint_check "WebFetch names the host to add" yes '{"tool_name":"WebFetch","tool_input":{"url":"https://docs.vendor.example/a"}}'
+hint_check "no hint for a tunnel host"      no  '{"tool_name":"Bash","tool_input":{"command":"curl -s https://abc.ngrok-free.app/"}}'
+hint_check "no hint for an IP"              no  '{"tool_name":"Bash","tool_input":{"command":"curl -s https://10.1.2.3/"}}'
+hint_check "no hint when sending a body"    no  '{"tool_name":"Bash","tool_input":{"command":"curl -s -X POST https://logs.corp.example/x -d a=b"}}'
 # The script's arguments are what the regex cannot see through quoting or expansion.
 check_bash "quoted script path, add"       ask   'bash "$HOME/.claude/net-allowlist.sh" add logs.corp.example'
 check_bash "quoted add"                    ask   "~/.claude/net-allowlist.sh 'add' x.example"
