@@ -29,5 +29,14 @@ run '{"tool_name":"Bash","session_id":"s3","hook_event_name":"PostToolUse","tool
 [[ -e "$CLAUDE_WORKFLOW_STATE_DIR/s3.path" ]] && fail "ignores non-Workflow" "pointer created" || pass "ignores non-Workflow"
 
 echo ""
+echo ""
+echo "=== the fallback looks only in this session's folder ==="
+rm -rf "$CLAUDE_WORKFLOW_STATE_DIR"
+mkdir -p "$TMP/proj/sessA/workflows/scripts"; echo "// a" > "$TMP/proj/sessA/workflows/scripts/a.js"
+run "$(jq -nc --arg t "$TMP/proj/sessB.jsonl" '{tool_name:"Workflow",session_id:"sB",hook_event_name:"PostToolUse",transcript_path:$t,tool_response:{runId:"x"}}')"
+[[ ! -e "$CLAUDE_WORKFLOW_STATE_DIR/sB.path" ]] && pass "another session's script is not claimed" || fail "another session's script" "$(cat "$CLAUDE_WORKFLOW_STATE_DIR/sB.path")"
+run "$(jq -nc --arg t "$TMP/proj/sessA.jsonl" '{tool_name:"Workflow",session_id:"sA",hook_event_name:"PostToolUse",transcript_path:$t,tool_response:{runId:"x"}}')"
+[[ "$(cat "$CLAUDE_WORKFLOW_STATE_DIR/sA.path" 2>/dev/null)" == "$TMP/proj/sessA/workflows/scripts/a.js" ]] && pass "its own script is found" || fail "own script" ""
+
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

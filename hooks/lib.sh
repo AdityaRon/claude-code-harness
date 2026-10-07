@@ -318,6 +318,15 @@ emit_ask() {
   fi
 }
 
+# Secret-shaped values out of an audit line: URL credentials, well-known token
+# prefixes, and the value after a key-like word. The line keeps its shape.
+redact_secrets() {
+  sed -E \
+    -e 's#(://[^/@[:space:]:]+):[^/@[:space:]]+@#\1:***@#g' \
+    -e 's/((ghp|gho|ghu|ghs|ghr)_|github_pat_|glpat-|xox[abprs]-|sk-(ant-)?|AKIA)[A-Za-z0-9_-]{8,}/\1***/g' \
+    -e "s/([Aa]uthorization|[Bb]earer|[Tt]oken|TOKEN|[Ss]ecret|SECRET|[Pp]assword|PASSWORD|[Pp]asswd|[Aa]pi[_-]?[Kk]ey|API[_-]?KEY)([\"']?[=:[:space:]]+[\"']?)([Bb]earer[[:space:]]+)?[^[:space:]\"'&]+/\1\2\3***/g"
+}
+
 # Append to the audit log. Creates parent dir, rotates at 10MB, keeps 5 backups,
 # and restricts perms to 0600. Never fails the hook on error.
 log_audit() {
@@ -340,7 +349,7 @@ log_audit() {
     fi
   fi
 
-  printf '%s\n' "$line" >> "$log" 2>/dev/null || return 0
+  printf '%s\n' "$line" | redact_secrets >> "$log" 2>/dev/null || return 0
   chmod 600 "$log" 2>/dev/null || true
 }
 

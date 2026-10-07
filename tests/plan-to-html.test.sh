@@ -122,5 +122,10 @@ PTGT=$(cat "$PTR" 2>/dev/null)
 [[ -f "$PTGT" ]] && pass "pointer targets an existing html file" || fail "pointer targets existing file" "tgt=$PTGT"
 
 echo ""
+echo ""
+echo "=== the plan file is private ==="
+M=$(stat -c '%a' "$(newest)" 2>/dev/null || stat -f '%Lp' "$(newest)")
+check_eq "plan html is 600" "600" "$M"
+
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

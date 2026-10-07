@@ -10,6 +10,7 @@
 #   CLAUDE_PLANS_HTML_DIR   output directory (default ~/.claude/plans-html)
 #   CLAUDE_PLAN_HTML_NO_OPEN=1  write the file but do not launch a browser (tests)
 source "$(dirname "$0")/lib.sh"
+umask 077   # ~/.claude is 755 here: without this a plan was readable by every local account
 
 read_input
 

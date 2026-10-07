@@ -113,5 +113,16 @@ check_eq "SessionEnd runs the snapshot synchronously" "false" \
   "$(jq -r '[.hooks.SessionEnd[].hooks[] | select(.command | endswith("session-snapshot.sh")) | (.async // false | tostring)] | first // "missing"' "$SETTINGS")"
 
 echo ""
+echo ""
+echo "=== notebook edits and a subagent's edits are recorded ==="
+printf 'nb\n' > "$WORK/n.ipynb"; printf 'sub\n' > "$WORK/s.txt"
+T5="$TMP/t5.jsonl"; mkdir -p "$TMP/t5/subagents"
+jq -nc --arg p "$WORK/n.ipynb" '{type:"assistant",message:{role:"assistant",content:[{type:"tool_use",id:"9",name:"NotebookEdit",input:{notebook_path:$p,new_source:"x"}}]}}' > "$T5"
+jq -nc --arg p "$WORK/s.txt" '{type:"assistant",message:{role:"assistant",content:[{type:"tool_use",id:"8",name:"Write",input:{file_path:$p,content:"sub"}}]}}' > "$TMP/t5/subagents/agent-1.jsonl"
+run_hook "sess-nb" "$T5" "$WORK"
+P=$(jq -r '[.edited_files[].path] | join(",")' "$CLAUDE_STATE_DIR/sess-nb.json")
+[[ "$P" == *"n.ipynb"* ]] && pass "notebook_path recorded" || fail "notebook_path recorded" "$P"
+[[ "$P" == *"s.txt"* ]] && pass "a subagent's write recorded" || fail "subagent write recorded" "$P"
+
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
