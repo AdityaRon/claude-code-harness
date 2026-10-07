@@ -243,15 +243,20 @@ net_host_problem() {
     mockbin.io hookbin.com requestcatcher.com interact.sh oast.fun oast.live oast.me oast.online
     oast.pro oast.site oastify.com burpcollaborator.net canarytokens.com ngrok.io ngrok.app
     ngrok.dev ngrok-free.app ngrok-free.dev loca.lt localtunnel.me trycloudflare.com serveo.net
-    localhost.run pastebin.com transfer.sh paste.ee hastebin.com dpaste.org 0x0.st termbin.com)
+    localhost.run pastebin.com transfer.sh paste.ee hastebin.com dpaste.org 0x0.st termbin.com
+    ntfy.sh api.telegram.org script.google.com script.googleusercontent.com hooks.slack.com
+    discord.com discordapp.com webhook.office.com zapier.com make.com ifttt.com)
   local shared=(github.io githubusercontent.com pages.dev workers.dev vercel.app netlify.app
     herokuapp.com appspot.com web.app firebaseapp.com run.app cloudfunctions.net
     azurewebsites.net blob.core.windows.net cloudfront.net amazonaws.com s3.amazonaws.com
-    glitch.me repl.co replit.dev onrender.com fly.dev railway.app)
+    glitch.me repl.co replit.dev onrender.com fly.dev railway.app gitlab.io bitbucket.io
+    surge.sh deno.dev val.run pythonanywhere.com ondigitalocean.app azurestaticapps.net
+    r2.dev supabase.co firebaseio.com herokudns.com codeberg.page)
   [[ "$h" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
     || { echo "not a lower-case host name with a dot (no scheme, port, path or wildcard)"; return 1; }
   [[ "$h" =~ ^[0-9.]+$ ]] && { echo "an IP address: subdomain matching would stretch it to others"; return 1; }
   [[ "$h" =~ ^(co|com|net|org|gov|edu|ac|ne|or|go)\.[a-z]{2}$ ]] && { echo "a public suffix"; return 1; }
+  [[ "$h" =~ ^(uk|us|eu|gb|br|cn|de|jpn|ru|sa|se|za|kr|hu|no|ae|qc|uy|mex)\.(com|net|org)$ ]] && { echo "a public suffix"; return 1; }
   for s in "${sinks[@]}"; do
     [[ "$h" == "$s" || "$h" == *".$s" ]] && { echo "a tunnel or request-capture service ($s)"; return 1; }
   done

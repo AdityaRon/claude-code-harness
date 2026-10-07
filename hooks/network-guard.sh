@@ -191,11 +191,33 @@ case "$TOOL" in
       exit 0
     fi
 
+    # A proxy or connection override sends the bytes somewhere other than the
+    # URL's host, which is all the checks below look at. A proxy on this machine
+    # or on a list is a hop and the URL still decides; any other proxy asks, and
+    # so does every flag that reroutes the request or reads options from a file.
+    CURLS=$(printf '%s\n' "$CMD" | grep -oE '\bcurl\b[^|;&]*')
+    if printf '%s\n' "$CURLS" | grep -qE '\s(--connect-to|--resolve|--config|--unix-socket|--abstract-unix-socket|-[a-zA-Z]*K)(\s|=|$)'; then
+      emit_ask "curl --connect-to, --resolve, --unix-socket or -K/--config decides where this request really goes, which the URL check cannot see. Confirm it."
+      exit 0
+    fi
+    PROXIES=$( { printf '%s\n' "$CURLS" | grep -oE '\s(-[a-zA-Z]*x|--proxy|--preproxy|--socks4a?|--socks5(-hostname)?)(\s+|=)?[^[:space:]-][^[:space:]]*' \
+                 | sed -E 's/^[[:space:]]*(-[a-zA-Z]*x|--[a-z0-9-]+)(=|[[:space:]]+)?//'
+               printf '%s\n' "$CMD" | grep -oE '(^|[^A-Za-z0-9_])(https?_proxy|HTTPS?_PROXY|all_proxy|ALL_PROXY|ftp_proxy|FTP_PROXY)[[:space:]]*=[[:space:]]*[^[:space:];&|]+' \
+                 | sed -E 's/^.*=[[:space:]]*//'; } | tr -d "\"'" )
+    while IFS= read -r v; do
+      [[ -z "$v" ]] && continue
+      [[ "$v" == *://* ]] || v="http://$v"
+      PH=$(extract_host "$v")
+      host_allowed "$PH" && continue
+      emit_ask "curl/wget routes this request through ${PH:-an unparsed proxy}, which is on no allowlist, so the URL check does not cover where it goes. Confirm the proxy.$(add_hint "$PH")"
+      exit 0
+    done <<<"$PROXIES"
+
     # Every http(s) URL in the command: curl fetches each one, so checking only
     # the first let `curl <allowlisted> <anything>` through. A backslash is part
     # of the token: curl 8.7 reads 'https://github.com\@evil.example/' as user
     # `github.com\` at evil.example, and a token cut at the backslash said github.
-    URLS=$(printf '%s\n' "$CMD" | grep -oE 'https?://[^[:space:]"'\''`]+')
+    URLS=$(printf '%s\n' "$CMD" | grep -oE 'https?://[^[:space:]"'\''`]+' | awk '!seen[$0]++')
     URL=$(printf '%s\n' "$URLS" | head -1)
     HOST=$(extract_host "$URL")
 
