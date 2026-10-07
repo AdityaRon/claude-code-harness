@@ -285,7 +285,9 @@
     "enabled": false,
     "failIfUnavailable": false,
     "excludedCommands": ["docker *", "gh *", "kubectl *", "tsh *", "gcloud *", "terraform *"],
+    "filesystem": { "denyRead": ["~/.ssh"] },
     "network": {
+      "allowLocalBinding": true,
       "allowedDomains": [
         "github.com",
         "*.github.com",

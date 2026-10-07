@@ -30,10 +30,10 @@ fi
 expect "write: TMPDIR"                  ok      "$(w "${TMPDIR:-/tmp}")" "(${TMPDIR:-/tmp})"
 expect "write: home folder"             blocked "$(w "$HOME")"
 expect "write: ~/.claude"               blocked "$(w "$HOME/.claude")"
-expect "read: ~/.ssh is readable"       any     "$( [[ -r "$HOME/.ssh" ]] && echo ok || echo blocked)" "(reads are open by default)"
+expect "read: ~/.ssh"                   blocked "$(ls "$HOME/.ssh" >/dev/null 2>&1 && echo ok || echo blocked)" "(sandbox.filesystem.denyRead)"
 if command -v python3 >/dev/null; then
   b=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(1); print("ok")' 2>/dev/null)
-  expect "bind: a port on 127.0.0.1"    any     "${b:-blocked}" "(blocked: sandbox.network.allowLocalBinding is off, so dev and test servers cannot listen)"
+  expect "bind: a port on 127.0.0.1"    ok      "${b:-blocked}" "(sandbox.network.allowLocalBinding)"
 fi
 
 if [[ $OFFLINE == 0 ]]; then

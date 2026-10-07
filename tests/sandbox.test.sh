@@ -13,7 +13,7 @@ OUT=$(bash "$T" status 2>&1); rc=$?
 [[ $rc == 1 && "$OUT" == *"run install.sh first"* ]] && pass "no settings file: says so, changes nothing" || fail "no settings" "rc=$rc $OUT"
 jq '{permissions: {defaultMode: "auto"}, env: {A: "1"}, sandbox: .sandbox}' config/settings.json > "$CLAUDE_SETTINGS_FILE"
 OUT=$(bash "$T" on 2>&1); rc=$?
-[[ $rc == 0 && "$(jq -r .sandbox.enabled "$CLAUDE_SETTINGS_FILE")" == true && "$OUT" == *"sandbox:           on"* ]] \
+[[ $rc == 0 && "$(jq -r .sandbox.enabled "$CLAUDE_SETTINGS_FILE")" == true && "$OUT" == *"sandbox:           on"* && "$OUT" == *"denied reads:      ~/.ssh"* ]] \
   && pass "on sets sandbox.enabled true" || fail "on" "rc=$rc $OUT"
 [[ "$(jq -c '[.env.A, .permissions.defaultMode, (.sandbox.excludedCommands | length)]' "$CLAUDE_SETTINGS_FILE")" == '["1","auto",6]' ]] \
   && pass "other keys untouched" || fail "other keys" "$(cat "$CLAUDE_SETTINGS_FILE")"
@@ -33,10 +33,10 @@ OUT=$(bash "$T" sideways 2>&1); rc=$?
 
 echo ""
 echo "=== install keeps the machine's choice ==="
-OLD='{"sandbox":{"enabled":true}}'
+OLD='{"sandbox":{"enabled":true,"filesystem":{"allowWrite":["~/.claude/jobs"]}}}'
 OUT=$(jq -s --arg home "$HOME" --argjson owned '[]' -f config/merge-settings.jq <(printf '%s' "$OLD") config/settings.json)
-[[ "$(printf '%s' "$OUT" | jq -c '[.sandbox.enabled, (.sandbox.excludedCommands | length)]')" == '[true,6]' ]] \
-  && pass "sandbox on survives install, and the shipped exclusions arrive" || fail "merge" "$(printf '%s' "$OUT" | jq -c .sandbox)"
+[[ "$(printf '%s' "$OUT" | jq -c '[.sandbox.enabled, (.sandbox.excludedCommands | length), .sandbox.network.allowLocalBinding, .sandbox.filesystem.denyRead]')" == '[true,6,true,["~/.ssh"]]' ]] \
+  && pass "sandbox on survives install, and the shipped exclusions, local binding and ~/.ssh deny arrive" || fail "merge" "$(printf '%s' "$OUT" | jq -c .sandbox)"
 
 echo ""
 echo "=== sandbox-trial.sh, unsandboxed and offline ==="

@@ -22,6 +22,8 @@ status() {
          "fail if missing:   \(.sandbox.failIfUnavailable // false)",
          "excluded commands: \((.sandbox.excludedCommands // []) | join(", "))",
          "allowed domains:   \((.sandbox.network.allowedDomains // []) | length)",
+         "local binding:     \(.sandbox.network.allowLocalBinding // false)",
+         "denied reads:      \((.sandbox.filesystem.denyRead // []) | join(", "))",
          "extra write paths: \((.sandbox.filesystem.allowWrite // []) | join(", "))"' "$S"
   local m
   if m=$(managed_file); then
