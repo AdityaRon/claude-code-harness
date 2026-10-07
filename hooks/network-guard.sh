@@ -129,7 +129,7 @@ case "$TOOL" in
   Bash)
     CMD=$(jq_get '.tool_input.command')
     [[ -z "$CMD" ]] && exit 0
-    CMD=$(neutralize_quoted_amps "$(strip_inert_heredocs "$CMD")")
+    CMD=$(neutralize_quoted_separators "$(strip_inert_heredocs "$CMD")")
     # `/usr/bin/curl` and `CURL` are curl too: scan the normalized form (lib.sh) as
     # a second line.
     CMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
