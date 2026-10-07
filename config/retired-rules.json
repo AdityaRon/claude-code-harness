@@ -1,0 +1,15 @@
+{
+  "_comment": [
+    "Rules this repo once shipped and no longer does. The install merge only ever",
+    "adds rules, so each install removes these from ~/.claude/settings.json; a",
+    "local-settings fragment that lists one keeps it. Never list a rule here that",
+    "the repo still ships."
+  ],
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(rm -rf /:*)"
+    ],
+    "allow": []
+  }
+}

@@ -264,6 +264,39 @@ while (( i < n )); do
         done
         continue
         ;;
+      exec)
+        # A read-only probe needs no confirmation: no stdin or tty, and after `--`
+        # a command that prints neither file contents nor the environment (cat,
+        # env and printenv read pod secrets), or any command asked only for its
+        # version or help. ps is left out: command lines can carry secrets.
+        k=$i; tty=0; remote=()
+        while (( k < n )) && ! is_operator "${TOKENS[$k]}"; do
+          t="${TOKENS[$k]}"
+          if [[ "$t" == -- ]]; then
+            (( k++ ))
+            while (( k < n )) && ! is_operator "${TOKENS[$k]}"; do remote+=("${TOKENS[$k]//[\"\']/}"); (( k++ )); done
+            break
+          fi
+          case "$t" in --stdin|--stdin=true|--tty|--tty=true) tty=1 ;; --*) ;; -*[it]*) tty=1 ;; esac
+          (( k++ ))
+        done
+        if [[ $tty -eq 0 && ${#remote[@]} -gt 0 ]]; then
+          ok=0
+          case "${remote[0]##*/}" in
+            ls|hostname|id|uname|df|du|date|whoami|pwd|uptime|nproc|free) ok=1 ;;
+          esac
+          if [[ $ok -eq 0 && ${#remote[@]} -gt 1 ]]; then
+            ok=1
+            for a in "${remote[@]:1}"; do
+              case "$a" in --version|version|-version|-v|-V|--help|-h) ;; *) ok=0 ;; esac
+            done
+          fi
+          for a in "${remote[@]}"; do case "$a" in *'$'*|*'`'*|*'>'*|*'<'*) ok=0 ;; esac; done
+          [[ $ok -eq 1 ]] && continue
+        fi
+        emit_ask "kubectl exec runs a command inside a pod; only a non-interactive version probe or ls, id, df and similar run without asking. Name the pod and the command."
+        exit 0
+        ;;
       rollout|auth|config)
         sub=$(next_bare_token "$i")
         case "$verb" in

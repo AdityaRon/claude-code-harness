@@ -216,7 +216,7 @@ echo "=== mutating verbs are asked about AS mutating, not as unknown ==="
 # Both paths answer "ask", so a decision check alone stays green if a verb falls
 # off MUTATING_VERBS. The reason says which path ran. Listed here, not read from
 # the hook, so the test cannot agree with a list it is meant to check.
-for v in delete apply create replace patch edit scale drain cordon exec cp; do
+for v in delete apply create replace patch edit scale drain cordon cp; do   # exec: own branch, own tests below
   r=$(jq -nc --arg c "kubectl $v pod foo -n vm" '{tool_name:"Bash", tool_input:{command:$c}}' \
       | bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
   case "$r" in
@@ -224,6 +224,26 @@ for v in delete apply create replace patch edit scale drain cordon exec cp; do
     *) echo "  FAIL (reason): $v is named as mutating  [got: $r]"; FAIL=$((FAIL+1)) ;;
   esac
 done
+
+echo ""
+echo "=== kubectl exec: read-only probes run, anything else asks ==="
+check "exec -- ls"                  allow 'kubectl exec api-7d9 -- ls -la /app'
+check "exec -c app -- /bin/ls"      allow 'kubectl -n web exec api-7d9 -c app -- /bin/ls /etc'
+check "exec -- hostname"            allow 'kubectl --context prod exec api-7d9 -- hostname'
+check "exec -- java -version"       allow 'kubectl exec api-7d9 -- java -version'
+check "exec -- python --version"    allow 'kubectl exec api-7d9 -- python3 --version'
+check "exec -- ls | grep"           allow 'kubectl exec api-7d9 -- ls /app | grep jar'
+check "exec -- cat a secret"        ask   'kubectl exec api-7d9 -- cat /var/run/secrets/kubernetes.io/serviceaccount/token'
+check "exec -- env"                 ask   'kubectl exec api-7d9 -- env'
+check "exec -- printenv"            ask   'kubectl exec api-7d9 -- printenv DB_PASSWORD'
+check "exec -- ps"                  ask   'kubectl exec api-7d9 -- ps aux'
+check "exec -- sh -c"               ask   "kubectl exec api-7d9 -- sh -c 'ls'"
+check "exec -it -- ls"              ask   'kubectl exec -it api-7d9 -- ls'
+check "exec --stdin -- ls"          ask   'kubectl exec --stdin api-7d9 -- ls'
+check "exec, no -- (old form)"      ask   'kubectl exec api-7d9 ls'
+check "exec -- python -c"           ask   "kubectl exec api-7d9 -- python3 -c 'print(1)'"
+check "exec -- ls, then a delete"   ask   'kubectl exec api-7d9 -- ls && kubectl delete pod api-7d9'
+check "exec -- version and a file"  ask   'kubectl exec api-7d9 -- java --version /etc/passwd'
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

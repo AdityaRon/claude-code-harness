@@ -139,8 +139,6 @@
       "Bash(git branch -d:*)",
       "Bash(gh auth token:*)",
       "Bash(sudo:*)",
-      "Bash(rm -rf:*)",
-      "Bash(rm -rf /:*)",
       "Bash(chmod -R 777:*)",
 
       "Bash(git * push --force:*)",
@@ -180,7 +178,8 @@
           { "type": "command", "command": "~/.claude/hooks/git-guard.sh" },
           { "type": "command", "command": "~/.claude/hooks/interpreter-guard.sh" },
           { "type": "command", "command": "~/.claude/hooks/kubectl-guard.sh" },
-          { "type": "command", "command": "~/.claude/hooks/network-guard.sh" }
+          { "type": "command", "command": "~/.claude/hooks/network-guard.sh" },
+          { "type": "command", "command": "~/.claude/hooks/rm-guard.sh" }
         ]
       },
       {
