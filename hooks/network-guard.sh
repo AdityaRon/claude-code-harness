@@ -8,7 +8,9 @@
 #   • GET to this machine (127.x, localhost, ::1) → silent allow, except a
 #     local admin API (kubectl proxy, Docker, Vault ports; Kubernetes paths) → ask
 #   • GET to a non-allowlisted domain → ask
-#   • POST / PUT / PATCH / DELETE to anywhere → ask (regardless of domain)
+#   • POST / PUT / PATCH with a body → ask, except to this machine (not an admin
+#     API, no tunnel running) or a host added with `net-allowlist.sh add --body`
+#   • DELETE anywhere → ask
 #   • curl/wget with local file body ( @/path ) to non-allowlisted → deny
 #     (obvious exfil shape; env-guard also catches this, defense-in-depth)
 #
@@ -97,8 +99,32 @@ host_allowed() {
   fi
   while IFS= read -r h; do
     [[ "$host" = "$h" || "$host" = *".$h" ]] && return 0
-  done < <(local_net_hosts)
+  done < <(local_net_hosts netAllowlist netAllowBody)
   return 1
+}
+
+# A request body may go, without asking, only to this machine (not an admin API,
+# and not while a port-forward or tunnel could make loopback a remote service) or
+# to a host opted in with `net-allowlist.sh add --body`. DELETE always asks.
+body_allowed() {
+  local u h b
+  printf '%s\n' "$CMD" | grep -qE '(-X|--request)[[:space:]=]*DELETE|-[a-zA-Z]*XDELETE' && return 1
+  [[ -n "$URLS" ]] || return 1
+  while IFS= read -r u; do
+    [[ -z "$u" ]] && continue
+    h=$(extract_host "$u")
+    if is_loopback "$h"; then
+      local_admin_url "$u" && return 1
+      printf '%s\n' "$CMD" | grep -qE 'port-forward|\bssh\b[^|;&]*[[:space:]]-[a-zA-Z]*[LRD]' && return 1
+      pgrep -f "${CLAUDE_NET_TUNNEL_RE:-port-forward|ssh .*-[LRD]|socat |cloudflared|ngrok}" >/dev/null 2>&1 && return 1
+      continue
+    fi
+    while IFS= read -r b; do
+      [[ "$h" = "$b" || "$h" = *".$b" ]] && continue 2
+    done < <(local_net_hosts netAllowBody)
+    return 1
+  done <<<"$URLS"
+  return 0
 }
 
 # The fix for a repeat ask, in the ask itself: only for a host that may be listed.
@@ -240,7 +266,7 @@ case "$TOOL" in
     # POST even with no -X, so `curl -d "$(cat notes)" <allowlisted host>` was
     # a silent allow. This runs before the URL test: a URL with no scheme was
     # never parsed, and its POST went through unseen.
-    BODY_RE='\bcurl\b[^|;&]*(-X\s*(POST|PUT|PATCH|DELETE)|--request\s*(POST|PUT|PATCH|DELETE)|\s(-d|--data[a-z-]*|--json|-F|--form[a-z-]*|-T|--upload-file)(\s|=|$))'
+    BODY_RE='\bcurl\b[^|;&]*((\s-[a-zA-Z]*X|--request)[[:space:]=]*(POST|PUT|PATCH|DELETE)|\s(-d|--data[a-z-]*|--json|-F|--form[a-z-]*|-T|--upload-file)(\s|=|$))'
     # curl -G / --get turns -d/--data-* into the query string: a GET, so the host
     # test below decides. Judged per curl segment, so a second curl without -G
     # still asks. An explicit -X (bundled too: -sXPOST) or a non-data body flag
@@ -255,6 +281,7 @@ case "$TOOL" in
       fi
       SENDS=1; break
     done < <(printf '%s\n' "$CMD" | grep -oE '\bcurl\b[^|;&]*')
+    [[ $SENDS -eq 1 ]] && body_allowed && SENDS=0
     if [[ $SENDS -eq 1 ]] \
        || printf '%s\n' "$CMD" | grep -qE '\bwget\b[^|;&]*--(post-data|post-file|body-data|body-file|method)\b'; then
       emit_ask "curl/wget is sending data (POST/PUT/PATCH/DELETE or a request body) to ${HOST:-a host without a scheme}. Confirm the target and payload."

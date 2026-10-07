@@ -50,7 +50,7 @@ holds your work skills. A machine that already has its rules in
 | `git-guard` | `git push --delete`, `git push origin :branch`, `git remote set-url`, `git config user.email`, non-shell `git config alias.*`, glob staging (`git add '*.ts'`) |
 | `interpreter-guard` | Long inline scripts with no obvious sensitive token |
 | `kubectl-guard` | Every mutating `kubectl` verb (`delete`, `apply`, `patch`, `replace`, `edit`, `scale`, `drain`, `cordon`, `taint`, `exec`, `cp`, `run`, `debug`, `proxy`, `rollout undo/restart`, `auth reconcile`, `config use-context`, …) wherever the verb sits in the command, plus `get secret` in every spelling that returns the data — `secret/db-creds`, `pods,secrets`, `Secret`, `secrets.v1.`, and the `--raw /api/v1/…/secrets` path (credential materialisation) — and any subcommand on neither list (fails closed). Only the resource *kind* is compared, so a CRD that merely starts with the word (`secretproviderclass`, `sealedsecrets`) stays a silent read. Exists because `kubectl` takes its global flags **before** the verb, so a prefix-matched rule like `Bash(kubectl delete:*)` misses `kubectl --namespace vm delete pod foo` — no allow/deny pair in `settings.json` can express this. Escalates rather than blocks: auto mode ships ~10 kubectl-specific `soft_deny` rules that clear when you name the target, and a hook `deny` would preempt all of them. Read-only verbs (`get`, `describe`, `logs`, `top`, `port-forward`, `rollout status`, `auth can-i`, `config view`, …) pass silently; flag *values* are skipped so `--context delete-me get pods` is still a read. |
-| `network-guard` | `curl -X POST/PUT/PATCH/DELETE` (any host, this machine included), `curl`/`wget`/`WebFetch` to a non-allowlisted domain. A GET to this machine (`127.x`, `localhost`, `::1`) is allowed, except a local admin API (ports 8001 `kubectl proxy`, 2375/2376 Docker, 8200 Vault, or Kubernetes API paths on any port), which asks; every URL in the command is checked, by the host curl actually connects to. Adding a host to this machine's allowlist (`net-allowlist.sh add`, or a write into `~/.claude/local-settings`) asks too |
+| `network-guard` | `curl -X DELETE` (any host), a request body (`-X POST/PUT/PATCH`, `-d`, `--json`, `-F`, a bundled `-sXPOST` or `--request=`) to any host except this machine and hosts added with `net-allowlist.sh add --body` (a loopback body still asks for an admin API, or while a port-forward, `ssh -L`, socat, cloudflared or ngrok runs or appears in the command), `curl`/`wget`/`WebFetch` to a non-allowlisted domain. A GET to this machine (`127.x`, `localhost`, `::1`) is allowed, except a local admin API (ports 8001 `kubectl proxy`, 2375/2376 Docker, 8200 Vault, or Kubernetes API paths on any port), which asks; every URL in the command is checked, by the host curl actually connects to. Adding a host to this machine's allowlist (`net-allowlist.sh add`, or a write into `~/.claude/local-settings`) asks too |
 
 ### Audit (async, non-blocking)
 
@@ -428,7 +428,9 @@ seen by no guard at all.
 `add` writes `netAllowlist` in `~/.claude/local-settings/net-allowlist.json`
 (any fragment there may carry one). `network-guard` reads it on every call, so
 it applies at once and survives every install. An entry covers the host and its
-subdomains, for GETs only: a request with a body still asks. Entries that would
+subdomains, for GETs only: a request with a body still asks, unless the host was
+added with `add --body` (POST, PUT and PATCH then run; DELETE still asks; same
+refusals). Entries that would
 allow too much are refused: a name with no dot, a public suffix (`co.uk`), an IP
 address, shared hosting (`github.io`), and tunnel or request-capture services
 (`ngrok`, `webhook.site`). When Claude runs the script with anything but `list`,
