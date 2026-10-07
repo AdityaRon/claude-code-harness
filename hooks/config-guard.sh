@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Guards what the harness runs from and what runs at every shell start.
-# A write into ~/.claude/hooks, or to a script directly in ~/.claude, is denied:
-# the hooks check every call and statusline.sh runs outside the sandbox, so the
-# repo plus install.sh is the way to change them. A write to a Claude Code
+# A write into ~/.claude/hooks, or to a script directly in ~/.claude, asks: the
+# hooks check every call and statusline.sh runs outside the sandbox. Ask, not
+# deny, because people extend these, and the repo plus install.sh reaches them
+# anyway. Moving or emptying ~/.claude itself is denied. A write to a Claude Code
 # settings file, a shell startup file, ~/.gitconfig or ~/Library/LaunchAgents
 # asks first. Reads pass. Writes made from inside an interpreter are not seen.
 source "$(dirname "$0")/lib.sh"
@@ -27,7 +28,8 @@ WORST=""; REASON=""
 note() {   # note LEVEL WORD
   local why
   case "$1" in
-    deny) why="Blocked: $2 is part of the installed harness (~/.claude/hooks and the scripts beside them), which checks every command. Change it in the claude-code-harness repo and run bash install.sh." ;;
+    deny) why="Blocked: $2 holds the installed harness, whose hooks check every command. Move or empty it yourself if you mean to." ;;
+    harness) why="$2 is part of the installed harness, which checks every command. Approve only if you asked for this. bash install.sh overwrites the files it ships; a hook of your own under a new name is kept." ;;
     settings) why="$2 is a Claude Code settings file: a change there can grant permissions or add hooks. Approve only if you asked for this." ;;
     startup) why="$2 runs at every shell start or login, or sets git's behaviour everywhere. Approve only if you asked for this." ;;
     *) return ;;
@@ -69,14 +71,14 @@ abs_path() {
 H=$(abs_path "$HOME")
 HR=$(cd "$H" 2>/dev/null && pwd -P) || HR=$H
 
-level_of() {   # level_of PATH DESTRUCTIVE: deny, settings, startup or nothing
+level_of() {   # level_of PATH DESTRUCTIVE: deny, harness, settings, startup or nothing
   local p="$1" h c
   case "$p" in */.claude/settings.json|*/.claude/settings.local.json) echo settings; return ;; esac
   for h in "$H" "$HR"; do
     c="$h/.claude"
     case "$p" in
-      "$c/hooks"|"$c/hooks/"*) echo deny; return ;;
-      "$c/"*.sh) [[ "${p#"$c"/}" != */* ]] && { echo deny; return; } ;;
+      "$c/hooks"|"$c/hooks/"*) echo harness; return ;;
+      "$c/"*.sh) [[ "${p#"$c"/}" != */* ]] && { echo harness; return; } ;;
       "$c") [[ "$2" == 1 ]] && { echo deny; return; } ;;
       "$h/.zshrc"|"$h/.zshenv"|"$h/.zprofile"|"$h/.zlogin"|"$h/.zlogout"|"$h/.bashrc"|"$h/.bash_profile"|"$h/.bash_login"|"$h/.profile"|"$h/.gitconfig"|"$h/.config/git/config"|"$h/Library/LaunchAgents/"*)
         echo startup; return ;;

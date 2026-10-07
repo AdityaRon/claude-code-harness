@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for hooks/config-guard.sh: writes into the installed harness deny;
+# Tests for hooks/config-guard.sh: writes into the installed harness ask, and moving or emptying ~/.claude denies;
 # writes to settings and shell/git startup files ask; reads and everything
 # else pass.
 set -u
@@ -31,31 +31,31 @@ file_is() {   # file_is WANT TOOL PATH
   else echo "  FAIL: want $1, got $got: $2 $3"; FAIL=$((FAIL+1)); fi
 }
 
-echo "=== writes into the installed harness: deny ==="
-bash_is deny 'cp /srv/x.sh ~/.claude/hooks/env-guard.sh'
-bash_is deny 'mv ~/.claude/hooks/env-guard.sh /srv/x'
+echo "=== writes into the installed harness: ask, and ~/.claude itself: deny ==="
+bash_is ask 'cp /srv/x.sh ~/.claude/hooks/env-guard.sh'
+bash_is ask 'mv ~/.claude/hooks/env-guard.sh /srv/x'
 bash_is deny 'mv ~/.claude ~/.claude.bak'
-bash_is deny 'chmod -x ~/.claude/hooks/*.sh'
+bash_is ask 'chmod -x ~/.claude/hooks/*.sh'
 bash_is deny 'chmod -R 000 ~/.claude'
-bash_is deny "echo 'exit 0' > ~/.claude/hooks/lib.sh"
-bash_is deny 'printf x >> "$HOME/.claude/hooks/lib.sh"'
-bash_is deny 'sed -i "" "s/deny/allow/" ~/.claude/hooks/git-guard.sh'
-bash_is deny 'curl -sLo ~/.claude/hooks/git-guard.sh https://example.com/x'
-bash_is deny 'echo x | tee -a ~/.claude/statusline.sh'
-bash_is deny 'rm -f ~/.claude/hooks/env-guard.sh'
-bash_is deny 'ln -sf /srv/evil ~/.claude/hooks/env-guard.sh'
-bash_is deny 'find ~/.claude/hooks -name "*.sh" -delete'
-bash_is deny 'cd /srv && /bin/cp x.sh ~/.claude/hooks/'
-bash_is deny 'sudo cp x.sh ~/.claude/hooks/x.sh'
-bash_is deny 'ln -s ~/.claude/hooks /srv/h'
-bash_is deny "cp x.sh ~/.claude/hooks/../hooks/env-guard.sh"
-bash_is deny 'rm env-guard.sh' "$HOME/.claude/hooks"
-bash_is deny 'cp ../x.sh ~/.claude/x/../hooks/lib.sh'
-bash_is deny 'rsync -a --delete /empty/ ~/.claude/hooks/'
-file_is deny Edit "$HOME/.claude/hooks/env-guard.sh"
-file_is deny Write "$HOME/.claude/hooks/new.sh"
-file_is deny Write "$HOME/.claude/statusline.sh"
-file_is deny MultiEdit "$TMP/link/lib.sh"
+bash_is ask "echo 'exit 0' > ~/.claude/hooks/lib.sh"
+bash_is ask 'printf x >> "$HOME/.claude/hooks/lib.sh"'
+bash_is ask 'sed -i "" "s/deny/allow/" ~/.claude/hooks/git-guard.sh'
+bash_is ask 'curl -sLo ~/.claude/hooks/git-guard.sh https://example.com/x'
+bash_is ask 'echo x | tee -a ~/.claude/statusline.sh'
+bash_is ask 'rm -f ~/.claude/hooks/env-guard.sh'
+bash_is ask 'ln -sf /srv/evil ~/.claude/hooks/env-guard.sh'
+bash_is ask 'find ~/.claude/hooks -name "*.sh" -delete'
+bash_is ask 'cd /srv && /bin/cp x.sh ~/.claude/hooks/'
+bash_is ask 'sudo cp x.sh ~/.claude/hooks/x.sh'
+bash_is ask 'ln -s ~/.claude/hooks /srv/h'
+bash_is ask "cp x.sh ~/.claude/hooks/../hooks/env-guard.sh"
+bash_is ask 'rm env-guard.sh' "$HOME/.claude/hooks"
+bash_is ask 'cp ../x.sh ~/.claude/x/../hooks/lib.sh'
+bash_is ask 'rsync -a --delete /empty/ ~/.claude/hooks/'
+file_is ask Edit "$HOME/.claude/hooks/env-guard.sh"
+file_is ask Write "$HOME/.claude/hooks/new.sh"
+file_is ask Write "$HOME/.claude/statusline.sh"
+file_is ask MultiEdit "$TMP/link/lib.sh"
 
 echo "=== settings and startup files: ask ==="
 bash_is ask 'echo "export PATH=/x:\$PATH" >> ~/.zshrc'
@@ -87,8 +87,8 @@ bash_is allow 'grep -c zshrc README.md'
 bash_is allow 'bash install.sh'
 bash_is allow 'mkdir -p ~/.claude/projects/x/memory'
 bash_is allow "$(printf 'cat > edit.py <<'"'"'EOF'"'"'\nos.system("cp x ~/.claude/hooks/lib.sh")\nEOF')"
-bash_is deny "$(printf 'bash <<EOF\ncp x ~/.claude/hooks/lib.sh\nEOF')"
-bash_is deny "$(printf 'cat <<EOF\nnever closed\ncp x ~/.claude/hooks/lib.sh')"
+bash_is ask "$(printf 'bash <<EOF\ncp x ~/.claude/hooks/lib.sh\nEOF')"
+bash_is ask "$(printf 'cat <<EOF\nnever closed\ncp x ~/.claude/hooks/lib.sh')"
 bash_is ask "$(printf 'cat > ~/.zshrc <<EOF\nexport A=1\nEOF')"
 file_is allow Read "$HOME/.claude/hooks/env-guard.sh"
 file_is allow Write "$HOME/.claude/projects/x/memory/MEMORY.md"
