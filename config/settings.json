@@ -156,6 +156,7 @@
       "Bash(kubectl -n * delete:*)",
       "Bash(kubectl --context * delete:*)",
       "Edit(~/.claude/plugins/**)",
+      "Edit(~/.claude/local-settings/**)",
       "Bash(claude plugin install:*)",
       "Bash(claude plugin enable:*)",
       "Bash(claude plugin update:*)",

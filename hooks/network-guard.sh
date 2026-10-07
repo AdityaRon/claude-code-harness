@@ -14,7 +14,9 @@
 #
 # The allowlist is intentionally conservative: well-known read-only sources
 # that Claude needs to function (package registries, GitHub docs, Anthropic).
-# Projects can extend it via the CLAUDE_NET_ALLOWLIST env var (space-separated).
+# Projects can extend it via the CLAUDE_NET_ALLOWLIST env var (space-separated),
+# and a machine via `netAllowlist` in ~/.claude/local-settings/*.json, which
+# survives every install (bin/net-allowlist.sh). Both pass net_host_problem.
 source "$(dirname "$0")/lib.sh"
 
 read_input
@@ -89,10 +91,19 @@ host_allowed() {
   done
   if [[ -n "${CLAUDE_NET_ALLOWLIST:-}" ]]; then
     for h in $CLAUDE_NET_ALLOWLIST; do
+      net_host_problem "$h" >/dev/null || continue
       [[ "$host" = "$h" || "$host" = *".$h" ]] && return 0
     done
   fi
+  while IFS= read -r h; do
+    [[ "$host" = "$h" || "$host" = *".$h" ]] && return 0
+  done < <(local_net_hosts)
   return 1
+}
+
+# The fix for a repeat ask, in the ask itself: only for a host that may be listed.
+add_hint() {
+  net_host_problem "$1" >/dev/null && printf ' To stop asking on this machine: ~/.claude/net-allowlist.sh add %s' "$1"
 }
 
 extract_host() {
@@ -112,7 +123,7 @@ case "$TOOL" in
     if host_allowed "$HOST"; then
       exit 0
     fi
-    emit_ask "WebFetch to $HOST is outside the default allowlist. Confirm the URL is safe (no secrets in the path/query)."
+    emit_ask "WebFetch to $HOST is outside the default allowlist. Confirm the URL is safe (no secrets in the path/query).$(add_hint "$HOST")"
     exit 0
     ;;
   Bash)
@@ -131,6 +142,25 @@ case "$TOOL" in
     fi
     if printf '%s\n' "$CMD" | grep -qE '(python3?\s+-m\s+http\.server|php\s+-S|ruby\s+-run\s+-e\s+httpd|npx\s+http-server)'; then
       emit_ask "This starts a local HTTP server exposing files on the network. Confirm this is intended and scoped."
+      exit 0
+    fi
+
+    # The machine-local allowlist is this guard's input: widening it takes one
+    # human click per change, auto mode included. Edit and Write are denied there.
+    # A run of the script asks unless its arguments are plainly list, candidates
+    # or remove: a quoted or expanded `add` ('add', $X, xargs) is unreadable, and
+    # xargs is stripped from the normalized line, so no arguments asks too.
+    Q="[\"']?"
+    NAME="${Q}([^[:space:]]*/)?net-allowlist(\.sh)?${Q}"
+    RUN="^[[:space:]]*((then|do|else|elif|!)[[:space:]]+)*((bash|sh|zsh|source|\.|xargs)([[:space:]]+-[^[:space:]]+)*[[:space:]]+)?${NAME}([[:space:]]|\$)"
+    SAFE="^[[:space:]]*((then|do|else|elif|!)[[:space:]]+)*((bash|sh|zsh|source|\.)([[:space:]]+-[^[:space:]]+)*[[:space:]]+)?${NAME}[[:space:]]+(list|candidates([[:space:]]+[0-9]+)?|remove([[:space:]]+${Q}[a-z0-9.-]+${Q})+)([[:space:]]+[12]?>>?[[:space:]]*[^[:space:]|;&]*)*[[:space:]]*${Q}\$"
+    if [[ "$CMD" == *net-allowlist* || "$CMD" == *local-settings* ]] && {
+       printf '%s\n' "$CMD" | grep -qE "net-allowlist(\.sh)?${Q}[[:space:]]+[^|;&]*\badd\b" \
+       || printf '%s\n' "$CMD" | tr '|;&`(){}' '\n' | grep -E "$RUN" | grep -qvE "$SAFE" \
+       || { printf '%s\n' "$CMD" | grep -q 'local-settings' \
+            && printf '%s\n' "$CMD" | sed -E 's#[0-9]*>&[0-9-]##g; s#[0-9&]*>>?[[:space:]]*/dev/null##g' \
+               | grep -qE '>|\b(tee|cp|mv|ln|rsync|dd|install|sponge|tar|unzip|curl|wget|mkfifo|mknod|python3?|node|ruby|perl|php|ex|ed|vim?|nvim)\b|\b(sed|g?awk)[[:space:]]+-[a-zA-Z]*i'; }; }; then
+      emit_ask "This can change the machine-local network allowlist (~/.claude/local-settings); requests to a host it adds stop asking. Confirm the host."
       exit 0
     fi
 
@@ -176,9 +206,33 @@ case "$TOOL" in
       exit 0
     fi
 
+    # A proxy or connection override sends the bytes somewhere other than the
+    # URL's host, which is all the checks below look at. A proxy on this machine
+    # or on a list is a hop and the URL still decides; any other proxy asks, and
+    # so does every flag that reroutes the request or reads options from a file.
+    CURLS=$(printf '%s\n' "$CMD" | grep -oE '\bcurl\b[^|;&]*')
+    if printf '%s\n' "$CURLS" | grep -qE '\s(--connect-to|--resolve|--config|--unix-socket|--abstract-unix-socket|-[a-zA-Z]*K)(\s|=|$)'; then
+      emit_ask "curl --connect-to, --resolve, --unix-socket or -K/--config decides where this request really goes, which the URL check cannot see. Confirm it."
+      exit 0
+    fi
+    PROXIES=$( { printf '%s\n' "$CURLS" | grep -oE '\s(-[a-zA-Z]*x|--proxy|--preproxy|--socks4a?|--socks5(-hostname)?)(\s+|=)?[^[:space:]-][^[:space:]]*' \
+                 | sed -E 's/^[[:space:]]*(-[a-zA-Z]*x|--[a-z0-9-]+)(=|[[:space:]]+)?//'
+               printf '%s\n' "$CMD" | grep -oE '(^|[^A-Za-z0-9_])(https?_proxy|HTTPS?_PROXY|all_proxy|ALL_PROXY|ftp_proxy|FTP_PROXY)[[:space:]]*=[[:space:]]*[^[:space:];&|]+' \
+                 | sed -E 's/^.*=[[:space:]]*//'; } | tr -d "\"'" )
+    while IFS= read -r v; do
+      [[ -z "$v" ]] && continue
+      [[ "$v" == *://* ]] || v="http://$v"
+      PH=$(extract_host "$v")
+      host_allowed "$PH" && continue
+      emit_ask "curl/wget routes this request through ${PH:-an unparsed proxy}, which is on no allowlist, so the URL check does not cover where it goes. Confirm the proxy.$(add_hint "$PH")"
+      exit 0
+    done <<<"$PROXIES"
+
     # Every http(s) URL in the command: curl fetches each one, so checking only
-    # the first let `curl <allowlisted> <anything>` through.
-    URLS=$(printf '%s\n' "$CMD" | grep -oE 'https?://[^[:space:]\"'\''`]+')
+    # the first let `curl <allowlisted> <anything>` through. A backslash is part
+    # of the token: curl 8.7 reads 'https://github.com\@evil.example/' as user
+    # `github.com\` at evil.example, and a token cut at the backslash said github.
+    URLS=$(printf '%s\n' "$CMD" | grep -oE 'https?://[^[:space:]"'\''`]+' | awk '!seen[$0]++')
     URL=$(printf '%s\n' "$URLS" | head -1)
     HOST=$(extract_host "$URL")
 
@@ -233,7 +287,7 @@ case "$TOOL" in
         emit_ask "curl/wget to $u on this machine looks like a local admin API (kubectl proxy, Docker, Vault or Kubernetes paths), which can return cluster or host credentials. Confirm this read."
         exit 0
       fi
-      host_allowed "$H" || { emit_ask "curl/wget request to $H is outside the default allowlist. Confirm this endpoint is safe."; exit 0; }
+      host_allowed "$H" || { emit_ask "curl/wget request to $H is outside the default allowlist. Confirm this endpoint is safe.$(add_hint "$H")"; exit 0; }
     done <<<"$URLS"
     exit 0
     ;;

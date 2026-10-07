@@ -21,7 +21,7 @@ Then open Claude Code and run `/hooks` to confirm everything is registered.
 
 **On a new machine**, put the machine-local files in place before
 `bash install.sh`: rules in `~/.claude/rules/local-*.md`, and allow rules for
-work tools in `~/.claude/local-settings/<name>.json`. This repo is public and
+work tools and hosts in `~/.claude/local-settings/<name>.json`. This repo is public and
 ships neither, so they come from wherever you keep them, such as the repo that
 holds your work skills. A machine that already has its rules in
 `settings.json` keeps them, because the merge never removes an allow rule.
@@ -50,7 +50,7 @@ holds your work skills. A machine that already has its rules in
 | `git-guard` | `git push --delete`, `git push origin :branch`, `git remote set-url`, `git config user.email`, non-shell `git config alias.*`, glob staging (`git add '*.ts'`) |
 | `interpreter-guard` | Long inline scripts with no obvious sensitive token |
 | `kubectl-guard` | Every mutating `kubectl` verb (`delete`, `apply`, `patch`, `replace`, `edit`, `scale`, `drain`, `cordon`, `taint`, `exec` (except a non-interactive `exec … --` running `ls`, `id`, `df`, `hostname` and similar, or any command asked only for `--version`/`--help`; `cat`, `env`, `printenv` and `ps` still ask), `cp`, `run`, `debug`, `proxy`, `rollout undo/restart`, `auth reconcile`, `config use-context`, …) wherever the verb sits in the command, plus `get secret` in every spelling that returns the data — `secret/db-creds`, `pods,secrets`, `Secret`, `secrets.v1.`, and the `--raw /api/v1/…/secrets` path (credential materialisation) — and any subcommand on neither list (fails closed). Only the resource *kind* is compared, so a CRD that merely starts with the word (`secretproviderclass`, `sealedsecrets`) stays a silent read. Exists because `kubectl` takes its global flags **before** the verb, so a prefix-matched rule like `Bash(kubectl delete:*)` misses `kubectl --namespace vm delete pod foo` — no allow/deny pair in `settings.json` can express this. Escalates rather than blocks: auto mode ships ~10 kubectl-specific `soft_deny` rules that clear when you name the target, and a hook `deny` would preempt all of them. Read-only verbs (`get`, `describe`, `logs`, `top`, `port-forward`, `rollout status`, `auth can-i`, `config view`, …) pass silently; flag *values* are skipped so `--context delete-me get pods` is still a read. |
-| `network-guard` | `curl -X POST/PUT/PATCH/DELETE` (any host, this machine included), `curl`/`wget`/`WebFetch` to a non-allowlisted domain. A GET to this machine (`127.x`, `localhost`, `::1`) is allowed, except a local admin API (ports 8001 `kubectl proxy`, 2375/2376 Docker, 8200 Vault, or Kubernetes API paths on any port), which asks; every URL in the command is checked, by the host curl actually connects to |
+| `network-guard` | `curl -X POST/PUT/PATCH/DELETE` (any host, this machine included), `curl`/`wget`/`WebFetch` to a non-allowlisted domain. A GET to this machine (`127.x`, `localhost`, `::1`) is allowed, except a local admin API (ports 8001 `kubectl proxy`, 2375/2376 Docker, 8200 Vault, or Kubernetes API paths on any port), which asks; every URL in the command is checked, by the host curl actually connects to. Adding a host to this machine's allowlist (`net-allowlist.sh add`, or a write into `~/.claude/local-settings`) asks too |
 
 ### Audit (async, non-blocking)
 
@@ -222,6 +222,8 @@ bin/                     ← executables the harness installs or you invoke
   memory-verify.sh       ← memory staleness check (see Memory staleness)
   upstream-check.sh      ← scheduled drift guard (see Upstream drift)
   session-route.sh       ← which session owns this PR? (see docs/session-routing.md)
+  net-allowlist.sh       ← this machine's network allowlist: list, candidates from
+                           the audit log, add, remove
   memory-provenance.sh   ← who wrote this memory, and when? --session NAME answers
                            "did the session telling me this also write the memory
                            I am about to cite as agreement?"
@@ -418,7 +420,32 @@ the command Claude runs, not what a script runs: a `kubectl create` Claude
 types is still escalated by `kubectl-guard`, one inside an allowed script is
 seen by no guard at all.
 
-**Extend the network allowlist per-project:**
+**Hosts this machine reaches often** (an internal log service, a vendor API):
+```
+~/.claude/net-allowlist.sh candidates 30   # hosts network-guard asked about, most first
+~/.claude/net-allowlist.sh add logs.internal.example
+```
+`add` writes `netAllowlist` in `~/.claude/local-settings/net-allowlist.json`
+(any fragment there may carry one). `network-guard` reads it on every call, so
+it applies at once and survives every install. An entry covers the host and its
+subdomains, for GETs only: a request with a body still asks. Entries that would
+allow too much are refused: a name with no dot, a public suffix (`co.uk`), an IP
+address, shared hosting (`github.io`), and tunnel or request-capture services
+(`ngrok`, `webhook.site`). When Claude runs the script with anything but `list`,
+`candidates` or `remove`, or writes into that folder, the guard asks you first;
+the Edit and Write tools are denied there. An allow rule never silenced
+`network-guard`: a `WebFetch(domain:logs.internal.example)` or
+`Bash(curl -s https://logs.internal.example*)` entry in `permissions.allow` skips
+the prompt, and a guard's ask comes before it is consulted. After
+`git pull && bash install.sh`, move such hosts here with `add`. `candidates`
+prints your hosts, so keep its output local.
+A new machine has no history for `candidates`, so carry the list instead: keep
+`net-allowlist.json` beside your work skills and symlink it in, as with allow
+rules above (`add` writes through the link), and seed it once on the machine
+that has the history. After that, an ask about an unlisted host names the `add`
+command for that host, so each new one costs one prompt and one confirm.
+
+**Extend the network allowlist per-project** (same refusals apply):
 ```json
 { "env": { "CLAUDE_NET_ALLOWLIST": "internal.example.com api.myservice.io" } }
 ```
