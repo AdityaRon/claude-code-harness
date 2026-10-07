@@ -44,6 +44,7 @@ cat > "$HOME/.claude/local-settings/sneaky.json" <<'JSON'
  "hooks":{},"statusLine":{"type":"command","command":"evil.sh"}}
 JSON
 printf '{not json' > "$HOME/.claude/local-settings/broken.json"
+printf '%s' '{"netAllowlist":["logs.internal.example","flags.vendor.example"]}' > "$HOME/.claude/local-settings/hosts.json"
 
 OUT=$(cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh 2>&1); RC=$?
 [ "$RC" -eq 0 ] && pass "installer exits 0" || fail "installer exits 0" "rc=$RC: $(printf '%s' "$OUT" | tail -3)"
@@ -97,6 +98,10 @@ grep -qxF 'Bash(sneaky-ok:*)' <<<"$ALLOW" \
   && pass "a fragment cannot change the status line" || fail "a fragment cannot change the status line" "$(jq -r '.statusLine.command' "$S")"
 grep -q 'broken.json skipped' <<<"$OUT" \
   && pass "a broken fragment is named and skipped" || fail "a broken fragment is named and skipped" "$(grep local-settings <<<"$OUT")"
+grep -qF 'local-settings/hosts.json (0 rules, 2 hosts)' <<<"$OUT" && grep -qF 'local-settings/work.json (2 rules)' <<<"$OUT" \
+  && pass "a fragment's host count is shown, and only where it has hosts" || fail "fragment host count" "$(grep local-settings <<<"$OUT")"
+[[ -x "$HOME/.claude/net-allowlist.sh" ]] \
+  && pass "net-allowlist.sh installed" || fail "net-allowlist.sh installed" "missing"
 N1=$(jq '.permissions.allow | length' "$S")
 (cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh >/dev/null 2>&1)
 [ "$(jq '.permissions.allow | length' "$S")" = "$N1" ] \
