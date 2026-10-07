@@ -63,6 +63,9 @@ echo "  ✓ session-route.sh"
 
 # Hosts network-guard allows on this machine only, read from local-settings at
 # every call; see the README's Customization section.
+for t in sandbox sandbox-trial; do
+  cp "$REPO/bin/$t.sh" ~/.claude/"$t.sh"; chmod +x ~/.claude/"$t.sh"; echo "  ✓ $t.sh"
+done
 cp "$REPO/bin/net-allowlist.sh" ~/.claude/net-allowlist.sh
 chmod +x ~/.claude/net-allowlist.sh
 echo "  ✓ net-allowlist.sh"

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# What Claude's commands can and cannot do here. Run it as one Bash call from a
+# session (sandboxed when sandbox.sh on); each probe cleans up after itself.
+#   sandbox-trial.sh [--offline]     SANDBOX_TRIAL_LOCAL_URL=http://127.0.0.1:PORT/ adds a probe
+set -uo pipefail
+OFFLINE=0; [[ "${1:-}" == --offline ]] && OFFLINE=1
+PASS=0; FAIL=0; ON=""
+row() { printf '  %-5s %-34s %s\n' "$1" "$2" "$3"; }
+try_write() { local f="$1/.sandbox-trial.$$"; (umask 077; : > "$f") 2>/dev/null && { rm -f "$f"; return 0; }; return 1; }
+
+# Is this process sandboxed? A write to $HOME itself is the tell.
+if try_write "$HOME"; then ON=0; else ON=1; fi
+echo "sandbox: $([[ $ON == 1 ]] && echo ON || echo OFF, so every probe below should simply work)"
+expect() {   # expect NAME WANT(ok|blocked|any) RESULT(ok|blocked) DETAIL
+  local name="$1" want="$2" got="$3" detail="${4:-}"
+  if [[ $ON == 0 || "$want" == any ]]; then row INFO "$name" "$got $detail"
+  elif [[ "$want" == "$got" ]]; then row PASS "$name" "$got $detail"; PASS=$((PASS+1))
+  else row FAIL "$name" "$got, wanted $want $detail"; FAIL=$((FAIL+1)); fi
+}
+w() { try_write "$1" && echo ok || echo blocked; }
+
+expect "write: project folder"          ok      "$(w "$PWD")"
+expect "write: session scratch"         ok      "$(w "${CLAUDE_JOB_DIR:-/nonexistent}/tmp")" "(${CLAUDE_JOB_DIR:-no job dir}/tmp; the harness keeps temp files here)"
+expect "write: TMPDIR"                  ok      "$(w "${TMPDIR:-/tmp}")"
+expect "write: home folder"             blocked "$(w "$HOME")"
+expect "write: ~/.claude"               blocked "$(w "$HOME/.claude")"
+expect "read: ~/.ssh is readable"       any     "$( [[ -r "$HOME/.ssh" ]] && echo ok || echo blocked)" "(reads are open by default)"
+
+if [[ $OFFLINE == 0 ]]; then
+  code() { curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$@" 2>/dev/null; }
+  c=$(code https://api.github.com/zen); expect "net: api.github.com (listed)" ok "$([[ $c == 200 ]] && echo ok || echo blocked)" "(HTTP $c)"
+  c=$(code https://example.com/); expect "net: example.com (not listed)" blocked "$([[ $c == 200 ]] && echo ok || echo blocked)" "(HTTP $c)"
+  r=$(git ls-remote https://github.com/AdityaRon/claude-code-harness HEAD 2>/dev/null | head -c 7)
+  expect "net: git over https to github" ok "$([[ -n "$r" ]] && echo ok || echo blocked)"
+  if [[ -n "${SANDBOX_TRIAL_LOCAL_URL:-}" ]]; then
+    c=$(code "$SANDBOX_TRIAL_LOCAL_URL")
+    expect "net: $SANDBOX_TRIAL_LOCAL_URL" ok "$([[ $c =~ ^[1-5][0-9][0-9]$ ]] && echo ok || echo blocked)" \
+      "$([[ $c =~ ^[1-5][0-9][0-9]$ ]] && echo "(HTTP $c)" || echo "(no answer: is the server running? start it first)")"
+  fi
+  if [[ -S /var/run/docker.sock ]]; then
+    c=$(code --unix-socket /var/run/docker.sock http://localhost/_ping)
+    expect "socket: docker.sock" blocked "$([[ $c == 200 ]] && echo ok || echo blocked)" "(docker itself is in excludedCommands)"
+  fi
+fi
+
+echo ""
+if [[ $ON == 1 ]]; then
+  echo "$PASS as expected, $FAIL not. Now run, one per Bash call (excludedCommands match the command as typed):"
+  echo "  docker ps | head -3;  gh api user -q .login;  kubectl version --client;  git fetch --dry-run"
+  echo "and one guard check: cat .env (env-guard should still deny it)."
+fi
+exit $(( FAIL > 0 ? 1 : 0 ))

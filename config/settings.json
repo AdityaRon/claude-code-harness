@@ -284,6 +284,8 @@
   "sandbox": {
     "enabled": false,
     "failIfUnavailable": false,
+    "excludedCommands": ["docker *", "gh *", "kubectl *", "tsh *", "gcloud *", "terraform *"],
+    "filesystem": { "allowWrite": ["~/.claude/jobs"] },
     "network": {
       "allowedDomains": [
         "github.com",
