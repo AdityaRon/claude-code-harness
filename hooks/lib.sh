@@ -99,7 +99,12 @@ strip_inert_heredocs() {
        | grep -qvE '^(cat|tee|cd|mkdir|echo|printf|true|[A-Za-z_][A-Za-z0-9_]*=[^$`]*)([[:space:]]|$)'; then
     printf '%s' "$s"; return
   fi
-  if printf '%s\n' "$rest" | grep -oE '(>>?|tee( +-a)?)[[:space:]]*[^[:space:];&|<]+' | grep -qvE '\.(md|txt|rst|log|csv)$'; then
+  # Every target must be prose: each > or >> target, and every file tee is given
+  # (`tee a.md b.sh` writes both; reading only the first let a script through).
+  if { printf '%s\n' "$rest" | grep -oE '>>?[[:space:]]*[^[:space:];&|<]+' | sed -E 's/^>>?[[:space:]]*//'
+       printf '%s\n' "$rest" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g; s/>>?[[:space:]]*[^[:space:];&|<]+//g' \
+         | sed -E 's/^[[:space:]]+//' | grep -E '^tee([[:space:]]|$)' | tr -s ' \t' '\n' | grep -vxE 'tee|-.*'
+     } | grep -v '^$' | grep -qvE '\.(md|txt|rst|log|csv)$'; then
     printf '%s' "$s"; return
   fi
   printf '%s' "$rest"
