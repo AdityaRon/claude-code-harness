@@ -423,9 +423,14 @@ it applies at once and survives every install. An entry covers the host and its
 subdomains, for GETs only: a request with a body still asks. Entries that would
 allow too much are refused: a name with no dot, a public suffix (`co.uk`), an IP
 address, shared hosting (`github.io`), and tunnel or request-capture services
-(`ngrok`, `webhook.site`). When Claude runs `add`, or writes into that folder, the
-guard asks you first; the Edit tool is denied there. `candidates` prints your
-hosts, so keep its output local.
+(`ngrok`, `webhook.site`). When Claude runs the script with anything but `list`,
+`candidates` or `remove`, or writes into that folder, the guard asks you first;
+the Edit and Write tools are denied there. An allow rule never silenced
+`network-guard`: a `WebFetch(domain:logs.internal.example)` or
+`Bash(curl -s https://logs.internal.example*)` entry in `permissions.allow` skips
+the prompt, and a guard's ask comes before it is consulted. After
+`git pull && bash install.sh`, move such hosts here with `add`. `candidates`
+prints your hosts, so keep its output local.
 
 **Extend the network allowlist per-project** (same refusals apply):
 ```json
