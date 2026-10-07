@@ -22,7 +22,7 @@ CMD=$(jq_get '.tool_input.command')
 # so `cat .env.example && cat .env` still denies on the second half.
 # The second line is the normalized form (lib.sh): `/bin/cat`, `CAT` and `\cat`
 # all run cat.
-NCMD=$(neutralize_quoted_amps "$CMD")
+NCMD=$(neutralize_quoted_separators "$CMD")
 SCAN=$(printf '%s\n%s' "$NCMD" "$(normalize_command "$NCMD")" \
   | sed -E 's#[^[:space:]]*\.(example|sample|template|dist|tpl)([[:space:]]|$)#TEMPLATEFILE\2#g')
 # `.ENV` is `.env` on the default macOS filesystem, so patterns naming a file
