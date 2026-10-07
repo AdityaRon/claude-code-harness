@@ -13,9 +13,11 @@ tool=$(jq_get '.tool_name')
 # first .js path found anywhere in tool_response (robust to the exact field name).
 script=$(printf '%s' "$INPUT" | jq -r 'first(.tool_response | .. | strings | select(endswith(".js"))) // empty' 2>/dev/null)
 
-# Fallback: newest workflow script under any project's session dir.
+# Fallback: newest workflow script in THIS session's folder, beside its
+# transcript. Any project's newest could be another session's run.
 if [[ -z "$script" || ! -f "$script" ]]; then
-  script=$(ls -1t "$HOME"/.claude/projects/*/*/workflows/scripts/*.js 2>/dev/null | head -1)
+  tp=$(jq_get '.transcript_path'); script=""
+  [[ -n "$tp" ]] && script=$(ls -1t "${tp%.jsonl}"/workflows/scripts/*.js 2>/dev/null | head -1)
 fi
 [[ -n "$script" && -f "$script" ]] || exit 0
 

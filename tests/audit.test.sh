@@ -203,5 +203,22 @@ printf '%s\n' "$GLAST" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
   && pass "the GUARD line is valid UTF-8" || fail "the GUARD line is valid UTF-8" "$GLAST"
 
 echo ""
+echo ""
+echo "=== secret-shaped values are redacted in the log ==="
+run '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"curl -H \"Authorization: Bearer x1y2z3\" https://u:hunter2@example.com/a?token=q9w8e7 --data api_key=k5k5"}}'
+L=$(tail -1 "$CLAUDE_AUDIT_LOG")
+[[ "$L" != *x1y2z3* && "$L" != *hunter2* && "$L" != *q9w8e7* && "$L" != *k5k5* && "$L" == *"Bearer ***"* ]] \
+  && pass "bearer, URL password, token= and api_key= values redacted" || fail "redaction" "$L"
+run '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"git push https://github.com/a/b ghp_abcdefgh1234"}}'
+L=$(tail -1 "$CLAUDE_AUDIT_LOG")
+[[ "$L" == *"ghp_***"* && "$L" != *abcdefgh1234* && "$L" == *"github.com/a/b"* ]] && pass "a token prefix redacted, the rest kept" || fail "prefix redaction" "$L"
+
+echo ""
+echo "=== a notebook edit is logged by its path ==="
+run '{"hook_event_name":"PostToolUse","tool_name":"NotebookEdit","tool_input":{"notebook_path":"/tmp/n.ipynb"}}'
+grep -qF "| NotebookEdit | /tmp/n.ipynb |" "$CLAUDE_AUDIT_LOG" && pass "notebook path logged" || fail "notebook path logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+jq -e '[.hooks.PostToolUse[] | select(any(.hooks[]; .command | test("audit.sh"))) | .matcher] | any(test("NotebookEdit") and test("MultiEdit"))' config/settings.json >/dev/null 2>&1 \
+  && pass "audit is wired on MultiEdit and NotebookEdit" || fail "audit matcher" "$(jq -c '[.hooks.PostToolUse[].matcher]' config/settings.json)"
+
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

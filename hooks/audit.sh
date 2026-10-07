@@ -65,6 +65,7 @@ case "$EVENT" in
     else
       TARGET=$(sanitize "$(jq_get '.tool_input.file_path')")
       [[ -z "$TARGET" ]] && TARGET=$(sanitize "$(jq_get '.tool_input.path')")
+      [[ -z "$TARGET" ]] && TARGET=$(sanitize "$(jq_get '.tool_input.notebook_path')")
     fi
     log_audit "$TS | DENIED | ${TOOL:-unknown} | ${TARGET:-unknown} | ${WHY:-no reason given} | $DIR"
     ;;
@@ -129,6 +130,7 @@ case "$EVENT" in
     else
       FILE=$(sanitize "$(jq_get '.tool_input.file_path')")
       [[ -z "$FILE" ]] && FILE=$(sanitize "$(jq_get '.tool_input.path')")
+      [[ -z "$FILE" ]] && FILE=$(sanitize "$(jq_get '.tool_input.notebook_path')")
       log_audit "$TS | ${TOOL:-unknown} | ${FILE:-unknown} | $DIR"
     fi
     ;;

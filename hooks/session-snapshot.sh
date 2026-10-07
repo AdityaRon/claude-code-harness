@@ -24,14 +24,17 @@ TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # Transcript entries are JSONL; each line may be a user/assistant/tool message.
 # Tool invocations live in assistant messages as content blocks with type
 # "tool_use"; we take the last write to each path.
+# A subagent's edits are in its own transcript, beside the session's.
+SOURCES=("$TRANSCRIPT")
+for f in "${TRANSCRIPT%.jsonl}"/subagents/*.jsonl; do [[ -f "$f" ]] && SOURCES+=("$f"); done
 FILES_JSON=$(jq -rcs '
   [ .[]
     | select(.message? // {} | type == "object")
     | (.message.content? // [])[]?
     | select(.type? == "tool_use")
     | select(.name? == "Edit" or .name? == "Write" or .name? == "MultiEdit" or .name? == "NotebookEdit")
-    | (.input.file_path? // .input.path? // empty)
-  ] | unique' "$TRANSCRIPT" 2>/dev/null)
+    | (.input.file_path? // .input.path? // .input.notebook_path? // empty)
+  ] | unique' "${SOURCES[@]}" 2>/dev/null)
 [[ -z "$FILES_JSON" ]] && FILES_JSON='[]'
 
 # Build the edited_files array: resolve each path to absolute, hash contents.
