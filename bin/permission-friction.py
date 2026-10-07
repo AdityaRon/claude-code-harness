@@ -575,9 +575,12 @@ def render(d):
 def decide(hook, tool, inp, extra_env=None):
     """Run one PreToolUse guard on a recorded call: its decision, or allow when it is silent."""
     payload = json.dumps(dict(tool_name=tool, tool_input=inp, hook_event_name='PreToolUse', cwd=HOME, permission_mode='auto'))
-    # Out of the real audit log, and blind to this machine's allowlists unless a case sets one.
+    # Out of the real audit log, and blind to this machine's allowlists and to any
+    # tunnel running now (a port-forward turns a loopback POST into an ask) unless
+    # a case sets one.
     env = {**os.environ, 'CLAUDE_AUDIT_LOG': os.devnull, 'CLAUDE_NET_ALLOWLIST': '',
-           'CLAUDE_LOCAL_SETTINGS_DIR': os.devnull, **(extra_env or {})}
+           'CLAUDE_LOCAL_SETTINGS_DIR': os.devnull, 'CLAUDE_NET_TUNNEL_RE': '^cch-no-tunnel$',
+           **(extra_env or {})}
     try:
         p = subprocess.run(['bash', hook], input=payload, capture_output=True, text=True, env=env, timeout=30)
     except subprocess.TimeoutExpired:

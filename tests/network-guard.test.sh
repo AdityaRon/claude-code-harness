@@ -4,6 +4,7 @@ set -u
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 export CLAUDE_LOCAL_SETTINGS_DIR="$TMP/no-local"  # this machine's allowlist must not change results
+export CLAUDE_NET_TUNNEL_RE='^cch-no-tunnel$'     # nor a port-forward a session left open
 HOOK="hooks/network-guard.sh"
 PASS=0; FAIL=0
 

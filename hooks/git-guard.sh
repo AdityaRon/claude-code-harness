@@ -114,16 +114,35 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}stash\s+(drop|clear)\b"; then
   exit 0
 fi
 # A forced worktree removal asks, unless every path is a scratch worktree this
-# session made: git needs --force there whenever the tree is dirty.
+# session made (git needs --force there whenever the tree is dirty), or a
+# worktree with nothing to lose: git removes one whose status is empty without
+# --force, ignored files included, so --force there deletes nothing more.
+clean_worktree() {
+  local p="${1//\"/}" s
+  p="${p//\'/}"
+  case "$p" in ''|*'$'*) return 1 ;; esac
+  # shellcheck disable=SC2088  # '~/' is the tilde as typed; it is expanded here
+  case "$p" in
+    '~/'*) p="$HOME/${p#\~/}" ;;
+    /*) ;;
+    *) [[ -n "$RELBASE" ]] || return 1; p="$RELBASE/$p" ;;
+  esac
+  [[ -d "$p" ]] && s=$(git -C "$p" status --porcelain 2>/dev/null) && [[ -z "$s" ]]
+}
 if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}worktree\s+remove\s[^|;&]*(--force|-f)\b"; then
   SCRATCH=$(session_scratch)
   # The raw command: normalizing strips the `CLAUDE_JOB_DIR=/x` prefix this looks for.
   jq_get '.tool_input.command' | grep -qE '(^|[^A-Za-z0-9_])(CLAUDE_JOB_DIR|HOME|TMPDIR)[[:space:]]*=' && SCRATCH=""
   BASE=$(in_scratch "$(jq_get '.cwd')" "$SCRATCH" "") || BASE=""
+  # A relative path means the session's cwd only when nothing moves it first.
+  RELBASE=$(jq_get '.cwd')
+  printf '%s\n' "$CMD" | grep -qE "${A}(cd|pushd)\b|\s(-C|--git-dir|--work-tree)\b" && RELBASE=""
   PATHS=$(printf '%s\n' "$CMD" | grep -oE "${GIT}worktree\s+remove\s[^|;&]*" | sed -E 's/^.*worktree[[:space:]]+remove[[:space:]]+//' \
     | tr -s ' \t' '\n' | grep -vE '^-' | grep -v '^$')
   ALL=1
-  while IFS= read -r wp; do in_scratch "$wp" "$SCRATCH" "$BASE" >/dev/null || { ALL=0; break; }; done <<<"$PATHS"
+  while IFS= read -r wp; do
+    in_scratch "$wp" "$SCRATCH" "$BASE" >/dev/null || clean_worktree "$wp" || { ALL=0; break; }
+  done <<<"$PATHS"
   if [[ -z "$PATHS" || $ALL -eq 0 ]]; then
     emit_ask "This deletes a worktree with its uncommitted changes. Confirm nothing in it is needed."
     exit 0

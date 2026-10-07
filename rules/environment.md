@@ -10,6 +10,8 @@
   parallel jobs share. Under the sandbox, Bash cannot write there (Claude Code
   keeps `~/.claude` read-only to commands): Bash-written files go in
   `$TMPDIR/<job id>`, and the Write tool can still use the job directory.
+- Claude Code refuses `sleep N` followed by a command. To wait, run an
+  until-loop with `run_in_background`, or use Monitor.
 - A Bash permission rule matches a prefix and fails closed past a leading
   `VAR=value`, so one command can be allowed bare and denied with an env prefix.
   Put the binary first. Inline the value, or set it in its own command.

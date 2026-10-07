@@ -300,6 +300,23 @@ check_wt "--force, redefines CLAUDE_JOB_DIR" ask   'CLAUDE_JOB_DIR=/ git worktre
 check_wt "--force, another session"          ask   'git worktree remove --force ~/.claude/jobs/ffffffff/tmp/wt'
 check_wt "--force, CLAUDE_JOB_DIR set inline"  ask   'CLAUDE_JOB_DIR=/x git worktree remove --force "$CLAUDE_JOB_DIR/tmp/wt"'
 check_wt "stash drop still asks"             ask   'git stash drop'
+
+echo ""
+echo "=== worktree remove --force: a worktree with nothing to lose runs ==="
+R="$TMP/wtrepo"; mkdir -p "$R"
+git init -q "$R/main" && printf 'build/\n' > "$R/main/.gitignore" && git -C "$R/main" add .gitignore \
+  && git -C "$R/main" -c user.email=t@t -c user.name=t commit -q -m init
+for k in clean ign dirty mod; do git -C "$R/main" worktree add -q "$R/$k" -b "b-$k"; done
+mkdir -p "$R/ign/build" && echo x > "$R/ign/build/out"; echo u > "$R/dirty/new.txt"; echo m >> "$R/mod/.gitignore"
+check_wt "--force, clean worktree"           allow "git worktree remove --force $R/clean"
+check_wt "--force, only ignored files"       allow "git worktree remove -f $R/ign"
+check_wt "--force, an untracked file"        ask   "git worktree remove --force $R/dirty"
+check_wt "--force, a modified file"          ask   "git worktree remove --force $R/mod"
+check_wt "--force, relative from the cwd"    allow 'git worktree remove --force ../clean' "$R/main"
+check_wt "--force, relative after a cd"      ask   'cd /tmp && git worktree remove --force ../clean' "$R/main"
+check_wt "--force, a path in a variable"     ask   "W=$R/clean; git worktree remove --force \$W"
+check_wt "--force, clean then dirty"         ask   "git worktree remove --force $R/clean && git worktree remove --force $R/dirty"
+check_wt "--force, no such path"             ask   "git worktree remove --force $R/gone"
 rm -rf "$WT_HOME"
 
 echo ""
