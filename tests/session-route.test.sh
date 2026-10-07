@@ -14,7 +14,7 @@ set -u
 SCRIPT_UT="bin/session-route.sh"
 PASS=0; FAIL=0
 
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_SESSION_PROJECTS_DIR="$TMP/projects"
 export CLAUDE_SESSION_JOBS_DIR="$TMP/jobs"

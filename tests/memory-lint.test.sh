@@ -8,7 +8,7 @@ set -u
 HOOK="hooks/memory-lint.sh"
 PASS=0; FAIL=0
 
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 STORE="$TMP/projects/teststore/memory"
 mkdir -p "$STORE"

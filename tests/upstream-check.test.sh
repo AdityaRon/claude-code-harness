@@ -10,7 +10,7 @@
 set -u
 CHECK="bin/upstream-check.sh"
 PASS=0; FAIL=0
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
 fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 # Defined because they were not, and calling one anyway printed "command not

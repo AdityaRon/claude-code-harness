@@ -128,5 +128,15 @@ HITS=$(grep -nE '/tmp/[A-Za-z]' install.sh doctor.sh hooks/*.sh bin/*.sh 2>/dev/
 [[ -z "$HITS" ]] && pass "no fixed /tmp file names" || fail "no fixed /tmp file names" "$HITS"
 
 echo ""
+echo "=== mktemp gets a template under \$TMPDIR ==="
+# Without one, macOS mktemp uses /var/folders/…/T, not $TMPDIR, and the sandbox
+# refuses that ("mkdtemp failed … Operation not permitted"). Hooks and install.sh
+# run outside the sandbox; sandbox-trial.sh's bare call is the probe for this.
+HITS=$(grep -nE '\$\([[:space:]]*mktemp' doctor.sh bin/*.sh tests/*.sh 2>/dev/null | grep -v 'XXX' \
+  | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' | grep -v '^bin/sandbox-trial\.sh:')
+[[ -z "$HITS" ]] && pass "every mktemp in tests, doctor and bin has a template" \
+  || fail "every mktemp in tests, doctor and bin has a template" "$HITS"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

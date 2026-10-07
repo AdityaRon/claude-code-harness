@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for bin/sandbox.sh and bin/sandbox-trial.sh (the trial runs unsandboxed here).
 set -u
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_SETTINGS_FILE="$TMP/settings.json"
 T="bin/sandbox.sh"
 PASS=0; FAIL=0

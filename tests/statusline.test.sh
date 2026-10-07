@@ -4,7 +4,7 @@
 set -u
 HOOK="bin/statusline.sh"
 PASS=0; FAIL=0
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_PLAN_STATE_DIR="$TMP/plans"
 mkdir -p "$CLAUDE_PLAN_STATE_DIR"
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }

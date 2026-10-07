@@ -2,7 +2,7 @@
 # Tests for git-guard.sh — payloads built via jq so the outer command
 # doesn't contain trigger strings.
 set -u
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 HOOK="hooks/git-guard.sh"
 PASS=0; FAIL=0
@@ -282,7 +282,7 @@ check "near miss: cd into git"    allow 'cd /usr/bin/git'
 
 echo ""
 echo "=== worktree remove --force: a scratch worktree of this session runs ==="
-WT_HOME="$(mktemp -d)"; mkdir -p "$WT_HOME/.claude/jobs/abcd1234/tmp"
+WT_HOME="$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")"; mkdir -p "$WT_HOME/.claude/jobs/abcd1234/tmp"
 check_wt() {
   local label="$1" expect="$2" cmd="$3" cwd="${4:-/repo}" out got
   out=$(jq -nc --arg c "$cmd" --arg d "$cwd" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"abcd1234-0000-4000-8000-000000000000"}' \

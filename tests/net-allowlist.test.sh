@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for bin/net-allowlist.sh
 set -u
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_LOCAL_SETTINGS_DIR="$TMP/ls"
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"
 unset CLAUDE_NET_ALLOWLIST

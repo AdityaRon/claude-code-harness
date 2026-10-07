@@ -8,7 +8,7 @@ set -u
 SCRIPT="bin/memory-fix.sh"
 PASS=0; FAIL=0
 
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
 export CLAUDE_MEMORY_PROJECTS_DIR="$TMP/projects"

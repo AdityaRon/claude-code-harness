@@ -6,7 +6,7 @@ set -u
 HOOK="hooks/plan-to-html.sh"
 PASS=0; FAIL=0
 
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_PLANS_HTML_DIR="$TMP/plans-html"
 export CLAUDE_PLAN_HTML_NO_OPEN=1
