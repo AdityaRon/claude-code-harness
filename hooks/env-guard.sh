@@ -22,7 +22,8 @@ CMD=$(jq_get '.tool_input.command')
 # so `cat .env.example && cat .env` still denies on the second half.
 # The second line is the normalized form (lib.sh): `/bin/cat`, `CAT` and `\cat`
 # all run cat.
-SCAN=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")" \
+NCMD=$(neutralize_quoted_amps "$CMD")
+SCAN=$(printf '%s\n%s' "$NCMD" "$(normalize_command "$NCMD")" \
   | sed -E 's#[^[:space:]]*\.(example|sample|template|dist|tpl)([[:space:]]|$)#TEMPLATEFILE\2#g')
 # `.ENV` is `.env` on the default macOS filesystem, so patterns naming a file
 # also run on a lower-cased copy, as sensitive-file-guard matches without case.
@@ -82,7 +83,7 @@ DD_READ="\bdd\b[^|;&]*if=[^|;&]*${DOTFILES}"
 # curl/wget uploading a LOCAL FILE as the body (@file) or via -T/--upload-file.
 # Plain POSTs (-d name=foo) are left to network-guard's "ask"; only the exfil
 # shapes are hard-denied here. Secret-var exfil is caught by the VAR rules.
-NET_EXFIL_FILE='(curl|wget)\b[^|;&]*((-d|--data|--data-binary|--data-urlencode|--data-raw|--json|--post-data)(=|\s)*@|(-F|--form)\s+[^|;&@]*@|(-T|--upload-file|--post-file|--body-file)\b)'
+NET_EXFIL_FILE='(curl|wget)\b[^|;&]*((-d|--data|--data-binary|--data-urlencode|--data-raw|--json|--post-data)(=|\s)*@|(-F|--form)\s+[^|;&@]*@|(-T|--upload-file|--post-file|--body-file)\b|--data-urlencode(=|\s)+["'"'"']?[^=@"'"'"'[:space:]]*@)'
 
 # Sockets.
 SOCKETS='\b(nc|ncat|socat)\b'
