@@ -109,9 +109,25 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}(checkout|restore)\s+([^|;&]*[[:sp
   emit_deny "Blocked: this discards every uncommitted change in the tree with no recovery path. Restore the files you mean by name, or ask the user to run this manually."
   exit 0
 fi
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}(stash\s+(drop|clear)\b|worktree\s+remove\s[^|;&]*(--force|-f)\b)"; then
-  emit_ask "This deletes a stash or a worktree with its uncommitted changes. Confirm nothing in it is needed."
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}stash\s+(drop|clear)\b"; then
+  emit_ask "This deletes a stash with its uncommitted changes. Confirm nothing in it is needed."
   exit 0
+fi
+# A forced worktree removal asks, unless every path is a scratch worktree this
+# session made: git needs --force there whenever the tree is dirty.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}worktree\s+remove\s[^|;&]*(--force|-f)\b"; then
+  SCRATCH=$(session_scratch)
+  # The raw command: normalizing strips the `CLAUDE_JOB_DIR=/x` prefix this looks for.
+  jq_get '.tool_input.command' | grep -qE '(^|[^A-Za-z0-9_])(CLAUDE_JOB_DIR|HOME|TMPDIR)[[:space:]]*=' && SCRATCH=""
+  BASE=$(in_scratch "$(jq_get '.cwd')" "$SCRATCH" "") || BASE=""
+  PATHS=$(printf '%s\n' "$CMD" | grep -oE "${GIT}worktree\s+remove\s[^|;&]*" | sed -E 's/^.*worktree[[:space:]]+remove[[:space:]]+//' \
+    | tr -s ' \t' '\n' | grep -vE '^-' | grep -v '^$')
+  ALL=1
+  while IFS= read -r wp; do in_scratch "$wp" "$SCRATCH" "$BASE" >/dev/null || { ALL=0; break; }; done <<<"$PATHS"
+  if [[ -z "$PATHS" || $ALL -eq 0 ]]; then
+    emit_ask "This deletes a worktree with its uncommitted changes. Confirm nothing in it is needed."
+    exit 0
+  fi
 fi
 
 # --- Remote branch deletion (push --delete OR push <remote> :branch) ----
