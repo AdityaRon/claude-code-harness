@@ -93,7 +93,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 | `fileCheckpointingEnabled` | `true` | Snapshots files before edits so `/rewind` can restore them |
 | `effortLevel` | `xhigh` | Default reasoning effort (portable across machines) |
 | `skipAutoPermissionPrompt` | `true` | Pre-accepts the auto-mode opt-in dialog, so auto mode is live on first launch rather than waiting behind a dialog |
-| `sandbox` | off by default | OS sandbox (Seatbelt on macOS, bubblewrap on Linux) around each command Claude runs: writes only to the project, TMPDIR and the session scratch folder, network only to listed domains. `~/.claude/sandbox.sh on`/`off`/`status` flips it per machine and every install keeps your choice; `~/.claude/sandbox-trial.sh` reports what works under it. docker, gh, kubectl, tsh, gcloud and terraform are in `excludedCommands` (incompatible or failing TLS under it), so they run as today, guards included. |
+| `sandbox` | off by default | OS sandbox (Seatbelt on macOS, bubblewrap on Linux) around each command Claude runs: writes only to the project and TMPDIR (Claude Code keeps `~/.claude` read-only to commands, the session scratch folder included), no reads of `~/.ssh`, network only to listed domains, and listening on localhost allowed for dev and test servers (`allowLocalBinding`; Claude Code then serves no device tools from this machine to cloud sessions). `~/.claude/sandbox.sh on`/`off`/`status` flips it per machine and every install keeps your choice; `~/.claude/sandbox-trial.sh` reports what works under it. docker, gh, kubectl, tsh, gcloud and terraform are in `excludedCommands` (incompatible or failing TLS under it), so they run as today, guards included, but only when the command is that tool alone: `docker ps | head` runs sandboxed. |
 | `includeCoAuthoredBy` | `true` | Adds `Co-authored-by: Claude` to commits |
 | `syncClaudeAiSkills` / `syncClaudeAiPlugins` | `false` | Keeps the skills and plugins enabled on your claude.ai account out of terminal sessions. Each synced skill adds its description to every session, and a synced plugin can run hooks or inline shell under this machine's allow rules. They still work on claude.ai. Set either to `true` in `~/.claude/settings.json` to opt back in; the install keeps your value. |
 | `remoteControlAtStartup` | `true` | Every interactive session connects to [Remote Control](https://code.claude.com/docs/en/remote-control), so you can pick it up from claude.ai or the Claude app. Needs a claude.ai login. Anyone signed in to your account can then steer the session; turn on **Require trusted devices** in your claude.ai account settings to tie that to known devices. Set `false` to opt out; the install keeps your value. |
@@ -503,16 +503,16 @@ For true percentage semantics instead, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` takes
 *lower* the trigger. It collapses the precompute head start onto the trigger
 itself, so compaction stalls while it summarises rather than swapping in.
 
-**Try the OS sandbox** (off by default). Run these yourself, with `!` in a session or in a terminal:
+**Try the OS sandbox** (off by default). Run these yourself, with `!` as the first character of a message, or in a terminal. Once it is on, Claude cannot switch it off: a sandboxed command cannot write settings.
 ```
 ~/.claude/sandbox.sh on        # sandbox.enabled = true in ~/.claude/settings.json (backup kept)
 ~/.claude/sandbox.sh status    # also shows managed settings, whose sandbox values win over yours
 ~/.claude/sandbox.sh off       # back to how it was
 ```
-Start a new session after switching, then ask Claude to run `~/.claude/sandbox-trial.sh`
-and the four direct checks it prints. Each probe says PASS, FAIL or INFO; a FAIL
-on the scratch-folder write or on a tool you use is the cue to switch it off and
-adjust `sandbox` in `config/settings.json` first.
+Running sessions use the change from their next command. Ask Claude to run
+`~/.claude/sandbox-trial.sh` and the four direct checks it prints. Each probe says
+PASS, FAIL or INFO; a FAIL on a tool you use is the cue to switch it off and adjust
+`sandbox` in `config/settings.json` first.
 
 To enable it by hand instead, set it globally in `~/.claude/settings.json`, or per-project in `.claude/settings.json`:
 ```json

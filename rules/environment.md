@@ -7,7 +7,9 @@
 - A conflict spanning every line of a file is a line-ending flip, not content.
 - Never root a long-running background job inside `.claude/worktrees/`.
 - Temp files go in the session's own job tmp directory, never `/tmp`, which
-  parallel jobs share.
+  parallel jobs share. Under the sandbox, Bash cannot write there (Claude Code
+  keeps `~/.claude` read-only to commands): Bash-written files go in
+  `$TMPDIR/<job id>`, and the Write tool can still use the job directory.
 - A Bash permission rule matches a prefix and fails closed past a leading
   `VAR=value`, so one command can be allowed bare and denied with an env prefix.
   Put the binary first. Inline the value, or set it in its own command.
