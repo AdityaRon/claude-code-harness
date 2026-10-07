@@ -308,7 +308,7 @@ echo "=== Claude can't install third-party plugins or touch the plugin cache; it
 OUT=$(MERGE_HOME=/home/testuser merge '{}' "$(cat config/settings.json)")
 for r in 'Edit(~/.claude/plugins/**)' 'Edit(/home/testuser/.claude/plugins/**)' \
          'Bash(claude plugin install:*)' 'Bash(claude plugin enable:*)' 'Bash(claude plugin update:*)' \
-         'Bash(claude plugin marketplace add:*)' 'Bash(claude --plugin-url:*)' 'Bash(claude * --plugin-url:*)'; do
+         'Bash(claude plugin marketplace add:*)' 'Bash(claude --plugin-url:*)' 'Bash(claude * --plugin-url*)'; do
   printf '%s' "$OUT" | jq -e --arg r "$r" '.permissions.deny | index($r)' >/dev/null \
     && pass "denies $r" || fail "denies $r" "missing from permissions.deny"
 done
@@ -360,6 +360,13 @@ jq -n -e 'input as $s | input as $r | [$s.permissions.deny[], $s.permissions.all
     config/settings.json config/retired-rules.json >/dev/null \
   && pass "nothing the repo ships is on the retired list" || fail "a shipped rule is retired" "$(jq -c '.permissions' config/retired-rules.json)"
 unset RETIRED
+
+echo ""
+echo "=== no Bash rule mixes a mid-pattern * with a trailing :* ==="
+# 2.1.292 reads such a rule as a literal prefix: the * matches only a literal *,
+# so the rule never fires, and it warns on every launch.
+MIXED=$(jq -r '.permissions | (.allow + .deny + (.ask // []))[] | select(test("^Bash\\(.*\\*.*:\\*\\)$"))' config/settings.json)
+[[ -z "$MIXED" ]] && pass "every shipped Bash rule can match" || fail "a shipped Bash rule can never match" "$MIXED"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
