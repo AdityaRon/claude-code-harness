@@ -23,6 +23,11 @@ bash "$T" off >/dev/null 2>&1
 printf '{not json' > "$CLAUDE_SETTINGS_FILE"
 OUT=$(bash "$T" on 2>&1); rc=$?
 [[ $rc == 1 && "$(cat "$CLAUDE_SETTINGS_FILE")" == '{not json' ]] && pass "broken settings left alone" || fail "broken settings" "rc=$rc $OUT"
+mkdir "$TMP/ro" && jq -n '{sandbox: {enabled: false}}' > "$TMP/ro/settings.json" && chmod 555 "$TMP/ro"
+OUT=$(CLAUDE_SETTINGS_FILE="$TMP/ro/settings.json" bash "$T" on 2>&1); rc=$?
+chmod 755 "$TMP/ro"
+[[ $rc == 1 && "$OUT" == *"as the first character"* && "$(jq -c . "$TMP/ro/settings.json")" == '{"sandbox":{"enabled":false}}' ]] \
+  && pass "an unwritable settings folder: says how to run it, changes nothing" || fail "unwritable" "rc=$rc $OUT"
 OUT=$(bash "$T" sideways 2>&1); rc=$?
 [[ $rc == 2 && "$OUT" == *"on | off | status"* ]] && pass "unknown word prints usage" || fail "usage" "rc=$rc $OUT"
 
@@ -30,7 +35,7 @@ echo ""
 echo "=== install keeps the machine's choice ==="
 OLD='{"sandbox":{"enabled":true}}'
 OUT=$(jq -s --arg home "$HOME" --argjson owned '[]' -f config/merge-settings.jq <(printf '%s' "$OLD") config/settings.json)
-[[ "$(printf '%s' "$OUT" | jq -c '[.sandbox.enabled, (.sandbox.excludedCommands | length), .sandbox.filesystem.allowWrite]')" == '[true,6,["~/.claude/jobs"]]' ]] \
+[[ "$(printf '%s' "$OUT" | jq -c '[.sandbox.enabled, (.sandbox.excludedCommands | length)]')" == '[true,6]' ]] \
   && pass "sandbox on survives install, and the shipped exclusions arrive" || fail "merge" "$(printf '%s' "$OUT" | jq -c .sandbox)"
 
 echo ""
@@ -38,7 +43,9 @@ echo "=== sandbox-trial.sh, unsandboxed and offline ==="
 mkdir -p "$TMP/home/.claude" "$TMP/job/tmp"
 OUT=$(cd "$TMP" && HOME="$TMP/home" CLAUDE_JOB_DIR="$TMP/job" bash "$OLDPWD/bin/sandbox-trial.sh" --offline 2>&1); rc=$?
 [[ $rc == 0 && "$OUT" == *"sandbox: OFF"* ]] && pass "detects that it is not sandboxed" || fail "detect off" "rc=$rc $OUT"
-[[ "$(grep -c '^  INFO' <<<"$OUT")" == 6 ]] && pass "reports every offline probe" || fail "probe count" "$OUT"
+OUT2=$(cd "$TMP" && env -u CLAUDE_JOB_DIR HOME="$TMP/home" bash "$OLDPWD/bin/sandbox-trial.sh" --offline 2>&1)
+[[ "$OUT2" == *"session scratch"*"skipped: CLAUDE_JOB_DIR is unset"* ]] && pass "no job dir: the scratch probe is skipped, not failed" || fail "no job dir" "$OUT2"
+[[ "$(grep -c '^  INFO' <<<"$OUT")" == 7 ]] && pass "reports every offline probe" || fail "probe count" "$OUT"
 [[ -z "$(find "$TMP" -name '.sandbox-trial.*')" ]] && pass "leaves no probe files behind" || fail "cleanup" "$(find "$TMP" -name '.sandbox-trial.*')"
 
 echo ""

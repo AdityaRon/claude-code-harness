@@ -20,11 +20,21 @@ expect() {   # expect NAME WANT(ok|blocked|any) RESULT(ok|blocked) DETAIL
 w() { try_write "$1" && echo ok || echo blocked; }
 
 expect "write: project folder"          ok      "$(w "$PWD")"
-expect "write: session scratch"         ok      "$(w "${CLAUDE_JOB_DIR:-/nonexistent}/tmp")" "(${CLAUDE_JOB_DIR:-no job dir}/tmp; the harness keeps temp files here)"
-expect "write: TMPDIR"                  ok      "$(w "${TMPDIR:-/tmp}")"
+# Claude Code keeps ~/.claude read-only to commands, ~/.claude/jobs included,
+# and an allowWrite entry does not reopen it. Reported, not judged.
+if [[ -n "${CLAUDE_JOB_DIR:-}" ]]; then
+  expect "write: session scratch"       any     "$(w "$CLAUDE_JOB_DIR/tmp")" "(blocked is expected when on: Bash temp files go under \$TMPDIR)"
+else
+  row INFO "write: session scratch" "skipped: CLAUDE_JOB_DIR is unset, not a background job"
+fi
+expect "write: TMPDIR"                  ok      "$(w "${TMPDIR:-/tmp}")" "(${TMPDIR:-/tmp})"
 expect "write: home folder"             blocked "$(w "$HOME")"
 expect "write: ~/.claude"               blocked "$(w "$HOME/.claude")"
 expect "read: ~/.ssh is readable"       any     "$( [[ -r "$HOME/.ssh" ]] && echo ok || echo blocked)" "(reads are open by default)"
+if command -v python3 >/dev/null; then
+  b=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(1); print("ok")' 2>/dev/null)
+  expect "bind: a port on 127.0.0.1"    any     "${b:-blocked}" "(blocked: sandbox.network.allowLocalBinding is off, so dev and test servers cannot listen)"
+fi
 
 if [[ $OFFLINE == 0 ]]; then
   code() { curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$@" 2>/dev/null; }
@@ -37,16 +47,18 @@ if [[ $OFFLINE == 0 ]]; then
     expect "net: $SANDBOX_TRIAL_LOCAL_URL" ok "$([[ $c =~ ^[1-5][0-9][0-9]$ ]] && echo ok || echo blocked)" \
       "$([[ $c =~ ^[1-5][0-9][0-9]$ ]] && echo "(HTTP $c)" || echo "(no answer: is the server running? start it first)")"
   fi
-  if [[ -S /var/run/docker.sock ]]; then
-    c=$(code --unix-socket /var/run/docker.sock http://localhost/_ping)
-    expect "socket: docker.sock" blocked "$([[ $c == 200 ]] && echo ok || echo blocked)" "(docker itself is in excludedCommands)"
-  fi
+  for sock in /var/run/docker.sock "$HOME/.docker/run/docker.sock"; do   # Docker Desktop uses the second
+    [[ -S "$sock" ]] || continue
+    c=$(code --unix-socket "$sock" http://localhost/_ping)
+    expect "socket: ${sock/#$HOME/~}" blocked "$([[ $c == 200 ]] && echo ok || echo blocked)" "(docker itself is in excludedCommands)"
+  done
 fi
 
 echo ""
 if [[ $ON == 1 ]]; then
-  echo "$PASS as expected, $FAIL not. Now run, one per Bash call (excludedCommands match the command as typed):"
-  echo "  docker ps | head -3;  gh api user -q .login;  kubectl version --client;  git fetch --dry-run"
-  echo "and one guard check: cat .env (env-guard should still deny it)."
+  echo "$PASS as expected, $FAIL not. Now run, one per Bash call:"
+  echo "  docker ps;  gh api user -q .login;  kubectl version --client;  git fetch --dry-run"
+  echo "excludedCommands match the whole command: 'docker ps | head' runs sandboxed and fails."
+  echo "And one guard check: cat .env (env-guard should still deny it)."
 fi
 exit $(( FAIL > 0 ? 1 : 0 ))
