@@ -1,6 +1,6 @@
 # Writing: prose, comments, messages
 
-For anything Aditya sends or reads: chat, PR reviews and bodies, tickets, code
+For anything the user sends or reads: chat, PR reviews and bodies, tickets, code
 comments, reports.
 
 ## Length

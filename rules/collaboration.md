@@ -10,10 +10,10 @@ How to write, answer and request a review lives in the pr-review skill.
 
 ## Handing work back
 
-- The handoff IS the deliverable: per item, the link, the verdict, and what he
+- The handoff IS the deliverable: per item, the link, the verdict, and what the user
   must do. Separate "approved, needs a merge" from "needs you to read and approve".
 - Give facts and evidence; present the call, do not take it.
 - Never say tests or builds passed unless you ran them.
-- Approval is Aditya's, always.
+- Approval is the user's, always.
 - Never hand over a path to a file I created. Give the command that produces it.
 - Never cite a session-local task id in shared text.
