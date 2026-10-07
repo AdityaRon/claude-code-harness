@@ -62,11 +62,10 @@ check_contains "drift heading"      "Resume drift detected" "$OUT"
 check_contains "drifted file named" "drifted: $TARGET"      "$OUT"
 
 echo ""
-echo "=== Matching hash → 'Resume drift: none' ==="
+echo "=== Matching hash → silent ==="
 write_snap "sess-clean" "$TARGET" "$CURRENT_HASH" "true"
 OUT=$(run_resume "sess-clean")
-check_contains "no-drift banner"  "Resume drift: none"     "$OUT"
-check_not_contains "no heading"   "Resume drift detected"  "$OUT"
+check_not_contains "no drift line" "Resume drift" "$OUT"
 
 echo ""
 echo "=== File deleted since last session → 'missing:' line ==="
@@ -112,7 +111,7 @@ else
 fi
 
 echo ""
-echo "=== memory index: out of tier order → reordered and announced ==="
+echo "=== memory index: out of tier order → reordered, silently ==="
 # The store slug is the launch directory with every non-alphanumeric a dash.
 STORE="$CLAUDE_MEMORY_PROJECTS_DIR/$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')/memory"
 mkdir -p "$STORE"
@@ -127,8 +126,7 @@ mkmem feedback_one feedback
 { echo "- [P](project_old.md) — hook"
   echo "- [F](feedback_one.md) — hook"; } > "$STORE/MEMORY.md"
 OUT=$(run_resume "sess-clean")
-check_contains "reorder announced"   "Memory index reordered" "$OUT"
-check_contains "names the store"     "reordered"              "$OUT"
+check_not_contains "nothing in context" "eordered" "$OUT"
 # The tool also writes tier markers, so assert the ORDER of the entries rather
 # than which line is first.
 check_eq "feedback sorts above project" "feedback_one" \
@@ -136,9 +134,10 @@ check_eq "feedback sorts above project" "feedback_one" \
 check_eq "entry count unchanged" "2" "$(grep -c '^- \[' "$STORE/MEMORY.md")"
 
 echo ""
-echo "=== memory index: already ordered → silent ==="
-OUT=$(run_resume "sess-clean")
-check_not_contains "no reorder banner" "Memory index reordered" "$OUT"
+echo "=== memory index: already ordered → untouched ==="
+BEFORE=$(shasum "$STORE/MEMORY.md")
+run_resume "sess-clean" >/dev/null
+check_eq "index unchanged" "$BEFORE" "$(shasum "$STORE/MEMORY.md")"
 
 echo ""
 echo "=== a worktree path: every non-alphanumeric becomes a dash (issue #2, G) ==="
@@ -153,14 +152,14 @@ mkmem feedback_one feedback
   echo "- [F](feedback_one.md) — hook"; } > "$STORE/MEMORY.md"
 OUT=$(jq -nc --arg d "$WT" '{source:"resume", session_id:"sess-wt", hook_event_name:"SessionStart", cwd:$d}' \
   | bash "$HOOK" 2>/dev/null)
-check_contains "worktree store reordered" "Memory index reordered" "$OUT"
+check_eq "worktree store reordered" "feedback_one" \
+  "$(grep -o 'feedback_one\|project_old' "$STORE/MEMORY.md" | head -1)"
 
 echo ""
 echo "=== no store for this launch directory → silent, and nothing created ==="
 rm -rf "$CLAUDE_MEMORY_PROJECTS_DIR"
 mkdir -p "$CLAUDE_MEMORY_PROJECTS_DIR"
-OUT=$(run_resume "sess-clean")
-check_not_contains "silent without a store" "Memory index reordered" "$OUT"
+run_resume "sess-clean" >/dev/null
 check_eq "created nothing" "0" "$(ls -1 "$CLAUDE_MEMORY_PROJECTS_DIR" | wc -l | tr -d ' ')"
 
 echo ""

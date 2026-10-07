@@ -69,17 +69,10 @@ INDEX_TOOL=""
 for cand in "$(dirname "$0")/../memory-index.sh" "$(dirname "$0")/../bin/memory-index.sh"; do
   [[ -f "$cand" ]] && INDEX_TOOL="$cand" && break
 done
+# Silent: a pure permutation leaves the model nothing to act on.
 if [[ -n "$INDEX_TOOL" && -f "$PROJECTS_DIR/$STORE_SLUG/memory/MEMORY.md" ]]; then
-  ORDER_OUT=$(CLAUDE_MEMORY_PROJECTS_DIR="$PROJECTS_DIR" \
-    bash "$INDEX_TOOL" --store "$STORE_SLUG" --write 2>/dev/null \
-    | grep ': reordered' || true)
-  # Silent when it was already ordered, which is the common case.
-  if [[ -n "$ORDER_OUT" ]]; then
-    echo ""
-    echo "## Memory index reordered"
-    echo "$ORDER_OUT"
-    echo "Entries had drifted out of tier order and were restored to ACTIVE → feedback → reference → project (newest first within reference and project). Nothing was added, removed or edited."
-  fi
+  CLAUDE_MEMORY_PROJECTS_DIR="$PROJECTS_DIR" \
+    bash "$INDEX_TOOL" --store "$STORE_SLUG" --write >/dev/null 2>&1 || true
 fi
 
 STATE_DIR=$(expand_tilde "${CLAUDE_STATE_DIR:-$HOME/.claude/state/sessions}")
@@ -129,10 +122,8 @@ git rev-parse --git-dir &>/dev/null 2>&1 && CUR_HEAD=$(git rev-parse HEAD 2>/dev
 
 # Walk edited_files, classify each.
 DRIFT_LINES=()
-TOTAL=0
 while IFS=$'\t' read -r path expected_hash expected_exists; do
   [[ -z "$path" ]] && continue
-  TOTAL=$((TOTAL + 1))
   if [[ ! -f "$path" ]]; then
     if [[ "$expected_exists" == "true" ]]; then
       DRIFT_LINES+=("missing: $path")
@@ -150,12 +141,9 @@ if [[ -n "$SNAP_HEAD" && -n "$CUR_HEAD" && "$SNAP_HEAD" != "$CUR_HEAD" ]]; then
   HEAD_CHANGED=1
 fi
 
-echo ""
-if [[ ${#DRIFT_LINES[@]} -eq 0 && "$HEAD_CHANGED" -eq 0 ]]; then
-  echo "Resume drift: none ($TOTAL file(s) checked against prior-session snapshot)"
-  exit 0
-fi
+[[ ${#DRIFT_LINES[@]} -eq 0 && "$HEAD_CHANGED" -eq 0 ]] && exit 0
 
+echo ""
 echo "## Resume drift detected"
 echo "The prior session recorded edits to the files below, but the current"
 echo "on-disk state no longer matches. Re-verify before trusting conclusions"
