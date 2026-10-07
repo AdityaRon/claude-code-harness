@@ -41,11 +41,63 @@ normalize_wrappers() {
   for i in 1 2 3 4; do
     s=$(printf '%s' "$s" | sed -E \
       -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+/\1\2/g' \
-      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(command|builtin|noglob|nohup|time)[[:space:]]+/\1\2/g' \
+      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(command|builtin|noglob|nohup|time|if|then|else|elif|do|while|until|function|!)[[:space:]]+/\1\2/g' \
       -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(nice([[:space:]]+-n[[:space:]]*[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|stdbuf([[:space:]]+-[ioe][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|env([[:space:]]+-[uSCP][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|sudo([[:space:]]+-[ugCph][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|doas([[:space:]]+-[uC][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|ionice([[:space:]]+-[cnp][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|exec([[:space:]]+-a[[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|caffeinate([[:space:]]+-[tw][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|xargs([[:space:]]+-[IndPLsEa][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*)[[:space:]]+/\1\2/g' \
       -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)timeout[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[0-9]+[smhd]?[[:space:]]+/\1\2/g')
   done
   printf '%s' "$s"
+}
+
+# `{ git push -f; }`, `(printenv)`, `if X; then`, `! X` and a case arm put the
+# command after a character or word no boundary pattern admitted, and four
+# guards went silent. Outside quotes, `(` (not `$(`), `)`, and a `{` or `}`
+# standing alone become `;`; normalize_wrappers strips the reserved words.
+# Run it on text whose quotes are intact. A heredoc body is another program's
+# input (python parens, a comment's apostrophe), so it is left alone unless a
+# shell reads it.
+separate_groups() {
+  case "$1" in *'('*|*')'*|*'{'*|*'}'*) ;; *) printf '%s' "$1"; return ;; esac
+  printf '%s\n' "$1" | awk '
+    BEGIN { q = ""; body = 0 }
+    body { t = $0; if (dash) sub(/^\t+/, "", t)
+           if (t == term) { body = 0; q = ""; print; next }
+           if (!shell) { print; next } }
+    { out = ""; n = length($0); hd = ""
+      for (i = 1; i <= n; i++) {
+        c = substr($0, i, 1); p = (i > 1) ? substr($0, i - 1, 1) : ""; x = substr($0, i + 1, 1)
+        if (c == "\\" && q != "\047") { out = out c x; i++; continue }
+        if (q == "" && c == "<" && x == "<" && p != "<" && hd == "" \
+            && match(substr($0, i + 2), /^-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/)) {
+          hd = substr($0, i + 2, RLENGTH); hdash = (hd ~ /^-/); sub(/^-?[ \t]*["\047]?/, "", hd)
+          hshell = (substr($0, 1, i - 1) ~ /(^|[;&|])[ \t]*(bash|sh|zsh|dash|ksh)([ \t][^;&|]*)?$/)
+        }
+        if (q == "") {
+          if (c == "\047") q = (p == "$") ? "A" : "\047"
+          else if (c == "\"") q = "\""
+          else if ((c == "(" && p != "$") || c == ")") c = ";"
+          else if ((c == "{" || c == "}") && (p == "" || p ~ /[ \t;&|]/) && (x == "" || x ~ /[ \t;&|]/)) c = ";"
+        } else if (c == "\047" && (q == "\047" || q == "A")) q = ""
+        else if (c == "\"" && q == "\"") q = ""
+        out = out c
+      }
+      print out
+      if (hd != "") { body = 1; term = hd; dash = hdash; shell = hshell; q = "" } }'
+}
+
+# A function that runs "$@" makes its arguments a command: after
+# `probe() { …; "$@"; }`, `probe "label" python3 -c …` runs python3 where no
+# boundary pattern looks. Print each call's argument suffixes, one per line.
+exec_fn_suffixes() {
+  case "$1" in *'$@'*|*'$*'*) ;; *) return ;; esac
+  local names
+  names=$(printf '%s\n' "$1" \
+    | grep -oE '(^|[^A-Za-z0-9_-])[A-Za-z_][A-Za-z0-9_-]*[[:space:]]*\([[:space:]]*\)|function[[:space:]]+[A-Za-z_][A-Za-z0-9_-]*' \
+    | sed -E 's/^function[[:space:]]+//; s/[[:space:]]*\([[:space:]]*\)$//; s/^[^A-Za-z_]//' | sort -u | tr '\n' ' ')
+  [[ -n "${names// /}" ]] || return
+  separate_groups "$1" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g' | awk -v names=" $names" '
+    { n = split($0, w, /[ \t]+/); i = (w[1] == "") ? 2 : 1
+      if (i > n || index(names, " " w[i] " ") == 0) next
+      for (k = i + 1; k <= n && k <= i + 5; k++) { s = w[k]; for (j = k + 1; j <= n; j++) s = s " " w[j]; print s } }'
 }
 
 # The shell runs `/usr/bin/git`, `"git"`, `\git` and, on the default
@@ -75,9 +127,13 @@ normalize_binaries() {
 # Binaries, then wrappers, then binaries again: `sudo /usr/bin/git` needs the
 # wrapper gone before its binary is at a boundary. Guards scan this alongside
 # the original, never instead of it, so a rewrite can only add a match.
+# separate_groups goes first: normalize_binaries drops quotes from a first word,
+# and the group pass needs them to tell `"a (b)"` from `(b)`.
 normalize_command() {
-  local s
-  s=$(normalize_binaries "$1"); s=$(normalize_wrappers "$s"); s=$(normalize_binaries "$s")
+  local s x
+  s=$(separate_groups "$1"); x=$(exec_fn_suffixes "$1")
+  [[ -n "$x" ]] && s="$s"$'\n'"$x"
+  s=$(normalize_binaries "$s"); s=$(normalize_wrappers "$s"); s=$(normalize_binaries "$s")
   printf '%s' "${s:-$1}"
 }
 

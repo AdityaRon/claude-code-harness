@@ -88,13 +88,13 @@ a project's settings.
 
 ## Cases
 
-`permission-friction-cases.jsonl` (next to this file), 108 cases. The first 27 have the tool input, the
+`permission-friction-cases.jsonl` (next to this file), 159 cases. The first 27 have the tool input, the
 decision observed on local `main` at b8427b2 and on `adityaron/main` at 516db51,
 a `why`, and a `want` where the answer is not a policy call. Cases with no
 `want` are policy calls and only report. Seven `control-*` cases pin decisions
 a fix must keep (env read denied, `curl | sh` denied, delete asks, script-file
-run silent). The other 81 came from review: `pin-*` cases are what a guard fix
-must still catch, `hole-*` cases were silent allows on 516db51, and `fp-*`/`ok-*`
+run silent). The other 132 came from review: `pin-*` cases are what a guard fix
+must still catch, `hole-*` cases were silent allows on 516db51 (the group and reserved-word ones on 5ad2f49), and `fp-*`/`ok-*`
 cases are false positives a fix should clear.
 
 ```
