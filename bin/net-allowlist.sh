@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # This machine's network allowlist, in ~/.claude/local-settings/net-allowlist.json
-# so installs keep it and this public repo never sees it. GETs only; a body still asks.
-#   net-allowlist.sh list | candidates [DAYS] | add HOST... | remove HOST...
+# so installs keep it and this public repo never sees it. GETs only, unless added with
+# --body: then POST/PUT/PATCH with a body too (DELETE always asks).
+#   net-allowlist.sh list | candidates [DAYS] | add [--body] HOST... | remove [--body] HOST...
 # Output names this machine's hosts: keep it local.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -38,14 +39,15 @@ cmd_list() {
     if ! jq -e . "$f" >/dev/null 2>&1; then
       echo "  ⚠ $(basename "$f"): not JSON, so none of its hosts apply"; continue
     fi
-    while IFS= read -r h; do
+    while IFS=$'\t' read -r k h; do
       any=1
+      what="GET"; [[ "$k" == netAllowBody ]] && what="GET and body"
       if why=$(net_host_problem "$h"); then
-        printf '  %-40s %s\n' "$h" "$(basename "$f")"
+        printf '  %-40s %-13s %s\n' "$h" "$what" "$(basename "$f")"
       else
         printf '  ✗ %-38s %s: refused, %s\n' "$h" "$(basename "$f")" "$why"
       fi
-    done < <(jq -r '.netAllowlist | arrays | .[] | strings' "$f")
+    done < <(jq -r '(.netAllowlist | arrays | .[] | strings | "netAllowlist\t\(.)"), (.netAllowBody | arrays | .[] | strings | "netAllowBody\t\(.)")' "$f")
   done
   for h in ${CLAUDE_NET_ALLOWLIST:-}; do
     any=1
@@ -92,6 +94,7 @@ cmd_candidates() {
 }
 
 cmd_add() {
+  local key=netAllowlist; [[ "${1:-}" == --body ]] && { key=netAllowBody; shift; }
   [[ $# -gt 0 ]] || usage
   local h why rc=0 add=()
   for h in "$@"; do
@@ -104,22 +107,26 @@ cmd_add() {
   fi
   mkdir -p "$DIR"
   local cur='{}'; [[ -f "$FILE" ]] && cur=$(cat "$FILE")
-  printf '%s' "$cur" | jq --args '.netAllowlist = ((.netAllowlist // []) + $ARGS.positional | unique)' "${add[@]}" \
+  printf '%s' "$cur" | jq --arg k "$key" --args '.[$k] = ((.[$k] // []) + $ARGS.positional | unique)' "${add[@]}" \
     > "$FILE.part.$$" && mv -f "$FILE.part.$$" "$FILE" || { rm -f "$FILE.part.$$"; return 1; }
-  for h in "${add[@]}"; do echo "  ✓ $h (and its subdomains)"; done
+  for h in "${add[@]}"; do
+    if [[ $key == netAllowBody ]]; then echo "  ✓ $h (and its subdomains), GET and POST/PUT/PATCH with a body"
+    else echo "  ✓ $h (and its subdomains)"; fi
+  done
   return $rc
 }
 
 cmd_remove() {
+  local key=netAllowlist; [[ "${1:-}" == --body ]] && { key=netAllowBody; shift; }
   [[ $# -gt 0 ]] || usage
   [[ -f "$FILE" ]] || { echo "  nothing in $FILE"; return 1; }
   jq -e . "$FILE" >/dev/null 2>&1 || { echo "  ✗ $FILE is not JSON; fix it by hand first"; return 1; }
   local h f hosts=() had=()
   for h in "$@"; do
     h=$(host_key "$h"); hosts+=("$h")
-    jq -e --arg h "$h" '(.netAllowlist // []) | index($h)' "$FILE" >/dev/null 2>&1 && had+=("$h")
+    jq -e --arg k "$key" --arg h "$h" '(.[$k] // []) | index($h)' "$FILE" >/dev/null 2>&1 && had+=("$h")
   done
-  jq --args '.netAllowlist = ((.netAllowlist // []) - $ARGS.positional)' "${hosts[@]}" < "$FILE" \
+  jq --arg k "$key" --args '.[$k] = ((.[$k] // []) - $ARGS.positional)' "${hosts[@]}" < "$FILE" \
     > "$FILE.part.$$" && mv -f "$FILE.part.$$" "$FILE" || { rm -f "$FILE.part.$$"; return 1; }
   for h in "${hosts[@]}"; do
     case " ${had[*]:-} " in
@@ -128,7 +135,7 @@ cmd_remove() {
     esac
     for f in "$DIR"/*.json; do
       [[ -f "$f" ]] && ! [[ "$f" -ef "$FILE" ]] || continue
-      jq -e --arg h "$h" '(.netAllowlist // []) | index($h)' "$f" >/dev/null 2>&1 \
+      jq -e --arg k "$key" --arg h "$h" '(.[$k] // []) | index($h)' "$f" >/dev/null 2>&1 \
         && echo "    still listed in $(basename "$f")"
     done
   done

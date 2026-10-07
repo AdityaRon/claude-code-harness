@@ -90,5 +90,16 @@ LINE=$(grep 'logs.corp.example' <<<"$OUT")
 [[ "$(grep -c GUARD "$CLAUDE_AUDIT_LOG")" == 7 ]] && pass "its own guard probes are not audited" || fail "audit untouched" "$(cat "$CLAUDE_AUDIT_LOG")"
 
 echo ""
+echo "=== --body ==="
+OUT=$(bash "$T" add --body Search.Corp.Example 2>&1); rc=$?
+[[ $rc == 0 && "$(jq -c '.netAllowBody' "$F")" == '["search.corp.example"]' && "$OUT" == *"GET and POST/PUT/PATCH"* ]] \
+  && pass "add --body writes netAllowBody" || fail "add --body" "rc=$rc $(cat "$F") $OUT"
+OUT=$(bash "$T" add --body co.uk 2>&1); rc=$?
+[[ $rc == 1 && "$(jq -c '.netAllowBody' "$F")" == '["search.corp.example"]' ]] && pass "add --body applies the same refusals" || fail "add --body refusal" "$OUT"
+[[ "$(bash "$T" list 2>&1)" == *"search.corp.example"*"GET and body"* ]] && pass "list labels body hosts" || fail "list body label" "$(bash "$T" list 2>&1)"
+bash "$T" remove --body search.corp.example >/dev/null 2>&1
+[[ "$(jq -c '.netAllowBody' "$F")" == '[]' ]] && pass "remove --body" || fail "remove --body" "$(cat "$F")"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
