@@ -37,6 +37,9 @@ def load_masks():
                 rx, _, rep = line.partition(' => ')
                 out.append((re.compile(rx.strip()), rep.strip() or '<MASKED>'))
     return out + [
+        (re.compile(r'(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+'), 'Bearer <MASKED>'),
+        (re.compile(r'(?i)(password|passwd|secret|token|api[_-]?key|access[_-]?key|authorization)(["\']?\s*[:=]\s*["\']?)[^\s"\'&,;]+'), r'\1\2<MASKED>'),
+        (re.compile(r'(://)[^/\s:@]+:[^/\s@]+@'), r'\1<MASKED>@'),
         (re.compile(r'\b(ghp|gho|ghs|github_pat|xox[abpr]|sk|AKIA)[-_A-Za-z0-9]{12,}'), '<TOKEN>'),
         (re.compile(r'[\w.+-]+@[\w-]+\.[\w.]+'), '<EMAIL>'),
         (re.compile(r'[A-Za-z0-9+/=_-]{48,}'), '<LONG>'),
@@ -146,7 +149,7 @@ def shape(cmd):
     """Command family: the commands that decide permission, minus pipeline glue."""
     words = [w for w in (word(t) for t in segments(cmd)) if w]
     core = [w for w in words if w not in NOISE] or words
-    return ' | '.join(list(dict.fromkeys(core))[:4]) or '(empty)'
+    return mask(' | '.join(list(dict.fromkeys(core))[:4]) or '(empty)')
 
 
 def interp_kind(cmd):
@@ -420,7 +423,7 @@ def summarize(events, uses, baseline, streaks, audit, audit_tests, audit_first, 
         sends = bool(re.search(r'sending data|mutating request', e['reason']))
         hosts[h]['data' if sends else 'get'] += 1
         hosts[h][e['outcome']] += 1
-    net_hosts = sorted(({'host': h, 'asks': c['get'] + c['data'], 'get': c['get'], 'data': c['data'],
+    net_hosts = sorted(({'host': mask(h, 80), 'asks': c['get'] + c['data'], 'get': c['get'], 'data': c['data'],
                          'approved': c['approved'], 'loopback': bool(re.match(r'^(localhost|127\.|::1|0\.0\.0\.0)', h))}
                         for h, c in hosts.items()), key=lambda r: -r['asks'])
     il = [e for e in asks if 'interp_kind' in e]
@@ -565,29 +568,33 @@ def render(d):
              '- An approved prompt raised by Claude Code itself (not a hook) leaves no transcript record; only rejections show.\n'
              '- Wait includes the command\'s own run time; compare with the no-prompt baseline.\n'
              '- Transcript asks can exceed audit asks where a subagent transcript repeats a parent call, and fall short where a session file was deleted.\n'
-             '- Commands are masked (tokens, emails, long blobs, plus ~/.claude/permission-friction.masks) and truncated; masking is pattern-based.\n')
+             '- Commands, hosts and command families are masked (tokens, secret values, URL credentials, emails, long blobs, plus ~/.claude/permission-friction.masks) and truncated; masking is pattern-based.\n')
     return '\n'.join(L) + '\n'
 
 
 def decide(hook, tool, inp, extra_env=None):
     """Run one PreToolUse guard on a recorded call: its decision, or allow when it is silent."""
     payload = json.dumps(dict(tool_name=tool, tool_input=inp, hook_event_name='PreToolUse', cwd=HOME, permission_mode='auto'))
-    env = dict(os.environ, CLAUDE_AUDIT_LOG=os.devnull, **(extra_env or {}))  # replays stay out of the real audit log
+    # Out of the real audit log, and blind to this machine's allowlists unless a case sets one.
+    env = {**os.environ, 'CLAUDE_AUDIT_LOG': os.devnull, 'CLAUDE_NET_ALLOWLIST': '',
+           'CLAUDE_LOCAL_SETTINGS_DIR': os.devnull, **(extra_env or {})}
     try:
         p = subprocess.run(['bash', hook], input=payload, capture_output=True, text=True, env=env, timeout=30)
     except subprocess.TimeoutExpired:
         return 'timeout'
     if p.returncode == 2:
         return 'deny'
+    if p.returncode != 0:
+        return 'error'
     try:
         return (json.loads(p.stdout or '{}').get('hookSpecificOutput') or {}).get('permissionDecision') or 'allow'
-    except ValueError:
-        return 'allow'
+    except (ValueError, AttributeError):
+        return 'error'
 
 
 def replay(events, hooks_dir):
     """Re-run every recorded guard ask and guard block through the guards in hooks_dir."""
-    rank = dict(deny=3, ask=2, timeout=1, allow=0)
+    rank = dict(error=4, deny=3, ask=2, timeout=1, allow=0)
     rows = collections.defaultdict(collections.Counter)
     for e in events:
         if e['cat'] not in ('guard_ask', 'hook_block') or e['guard'] == 'unattributed hook':
@@ -626,9 +633,9 @@ def render_replay(rows, hooks_dir):
     L = [f'\n## 9. Replay: the same calls through `{hooks_dir}`\n',
          "Each recorded guard ask or block, re-run through that directory's guard script(s) with the recorded tool input "
          '(cwd = $HOME, so guards that inspect repo state answer approximately).\n',
-         '| was | total | now allow | now ask | now deny |\n|---|---:|---:|---:|---:|']
+         '| was | total | now allow | now ask | now deny | guard error |\n|---|---:|---:|---:|---:|---:|']
     for r in rows:
-        L.append(f"| {r['key']} | {r['total']} | {r.get('allow', 0)} | {r.get('ask', 0)} | {r.get('deny', 0)} |")
+        L.append(f"| {r['key']} | {r['total']} | {r.get('allow', 0)} | {r.get('ask', 0)} | {r.get('deny', 0)} | {r.get('error', 0)} |")
     return '\n'.join(L) + '\n'
 
 
