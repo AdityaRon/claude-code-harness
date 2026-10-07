@@ -29,6 +29,15 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 
+# The runner image ships jq and shellcheck. apt-get update hung on its mirror
+# for 11 minutes on 2026-10-07, so skip apt when every command is already here.
+missing=()
+for p in "$@"; do command -v "$p" >/dev/null 2>&1 || missing+=("$p"); done
+if [ "${#missing[@]}" -eq 0 ]; then
+  echo "Already installed: $* ($(command -v "$@" | tr '\n' ' '))"
+  exit 0
+fi
+
 echo "::group::apt sources before"
 ls -1 /etc/apt/sources.list.d/ 2>/dev/null || echo "(no sources.list.d)"
 echo "::endgroup::"
