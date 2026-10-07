@@ -125,6 +125,41 @@ neutralize_quoted_amps() {
       print out }'
 }
 
+# This session's scratch folder. A background session gets ~/.claude/jobs/<the
+# first 8 characters of its session id>/tmp, and a hook's environment has no
+# CLAUDE_JOB_DIR, so it is derived. Empty for an interactive session.
+session_scratch() {
+  local sid
+  sid=$(jq_get '.session_id')
+  [[ "$sid" =~ ^[0-9a-f]{8}- ]] || return 0
+  [[ -d "$HOME/.claude/jobs/${sid:0:8}" ]] && printf '%s\n' "$HOME/.claude/jobs/${sid:0:8}/tmp"
+  return 0
+}
+
+# Is path $1, as typed, inside scratch folder $2 (or strictly inside TMPDIR)?
+# Understands quotes, ~, $HOME, $CLAUDE_JOB_DIR and $TMPDIR; any other
+# expansion or a `..` is never inside. $3 resolves a relative path; empty, never.
+# Prints the resolved path when it is inside.
+in_scratch() {
+  local p="$1" scratch="$2" base="$3" t="${TMPDIR:-}"
+  p="${p//\"/}"; p="${p//\'/}"; t="${t%/}"
+  [[ -n "$p" ]] || return 1
+  case "$p" in *..*) return 1 ;; esac
+  case "$p" in
+    '$CLAUDE_JOB_DIR/'*|'${CLAUDE_JOB_DIR}/'*) [[ -n "$scratch" ]] || return 1; p="${scratch%/tmp}/${p#*/}" ;;
+    '~/'*) p="$HOME/${p#\~/}" ;;
+    '$HOME/'*|'${HOME}/'*) p="$HOME/${p#*/}" ;;
+    '$TMPDIR/'*|'${TMPDIR}/'*) [[ -n "$t" ]] || return 1; p="$t/${p#*/}" ;;
+    /*) ;;
+    *) [[ -n "$base" ]] || return 1; p="${base%/}/$p" ;;
+  esac
+  case "$p" in *'$'*|*'`'*) return 1 ;; esac
+  if [[ -n "$scratch" && ( "$p" == "$scratch" || "$p" == "$scratch/"* ) ]] || [[ -n "$t" && "$p" == "$t/"?* ]]; then
+    printf '%s\n' "$p"; return 0
+  fi
+  return 1
+}
+
 # Read full stdin once into $INPUT. Safe to call with no stdin.
 read_input() {
   if [[ -t 0 ]]; then
