@@ -93,37 +93,41 @@ SOCKETS='\b(nc|ncat|socat)\b'
 # Eval / indirect execution of env-dumping content.
 EVAL_ENV='\beval\b[^|;&]*\$\(.*(printenv|env\b|cat\b)'
 
-BLOCKED=(
-  "${A}${WRAP}${READERS}\s+[^|;&]*${DOTFILES}"
-  "${A}${WRAP}${COPIERS}\s+[^|;&]*${DOTFILES}"
-  # find hands its matches to -exec, and a pipe hands them to xargs, so the
-  # file and the reader sit apart.
-  "${A}find\b[^|;&]*${DOTFILES}[^|;&]*-(exec|execdir|ok|okdir)\s+${READERS}\b"
-  "${A}find\b[^|;&]*-(exec|execdir|ok|okdir)\s+${READERS}\s+[^|;&]*${DOTFILES}"
-  "${DOTFILES}[^;&]*\|\s*xargs\b[^|;&]*\s${READERS}\b"
-  "${A}${DOTSOURCE}\s+[^|;&]*${DOTFILES}"
-  "${A}${ENV_DUMP}"
-  "${A}${JQ_ENV}"
-  "${A}${AWK_ENV}"
-  "(echo|printf)\b[^|;&]*${SECRET_VAR_CONTAINS}"
-  "(echo|printf)\b[^|;&]*${SECRET_VAR_SUFFIX}"
-  "${REDIR_READ}"
-  "${DD_READ}"
-  "${A}${NET_EXFIL_FILE}"
-  "(curl|wget)\b[^|;&]*${SECRET_VAR_CONTAINS}"
-  "(curl|wget)\b[^|;&]*${SECRET_VAR_SUFFIX}"
-  "${A}${SOCKETS}"
-  "${A}${EVAL_ENV}"
-)
+# Each pattern with what it means, so a deny can say what it matched and why.
+BLOCKED=(); WHY=()
+add() { WHY+=("$1"); BLOCKED+=("$2"); }
+add "reads a credential file"               "${A}${WRAP}${READERS}\s+[^|;&]*${DOTFILES}"
+add "copies a credential file"              "${A}${WRAP}${COPIERS}\s+[^|;&]*${DOTFILES}"
+# find hands its matches to -exec, and a pipe hands them to xargs, so the
+# file and the reader sit apart.
+add "reads a credential file through find"  "${A}find\b[^|;&]*${DOTFILES}[^|;&]*-(exec|execdir|ok|okdir)\s+${READERS}\b"
+add "reads a credential file through find"  "${A}find\b[^|;&]*-(exec|execdir|ok|okdir)\s+${READERS}\s+[^|;&]*${DOTFILES}"
+add "reads a credential file through xargs" "${DOTFILES}[^;&]*\|\s*xargs\b[^|;&]*\s${READERS}\b"
+add "sources a credential file"             "${A}${DOTSOURCE}\s+[^|;&]*${DOTFILES}"
+add "prints the environment"                "${A}${ENV_DUMP}"
+add "prints the environment"                "${A}${JQ_ENV}"
+add "prints the environment"                "${A}${AWK_ENV}"
+add "prints a secret variable"              "(echo|printf)\b[^|;&]*${SECRET_VAR_CONTAINS}"
+add "prints a secret variable"              "(echo|printf)\b[^|;&]*${SECRET_VAR_SUFFIX}"
+add "reads a credential file"               "${REDIR_READ}"
+add "reads a credential file"               "${DD_READ}"
+add "uploads a local file"                  "${A}${NET_EXFIL_FILE}"
+add "sends a secret variable"               "(curl|wget)\b[^|;&]*${SECRET_VAR_CONTAINS}"
+add "sends a secret variable"               "(curl|wget)\b[^|;&]*${SECRET_VAR_SUFFIX}"
+add "opens a raw socket"                    "${A}${SOCKETS}"
+add "evaluates an environment dump"         "${A}${EVAL_ENV}"
 
-DENY_MSG="Blocked: command may read or exfiltrate sensitive env values / dotfiles. Reference variables by name in code; do not print, dump, or transmit their values."
+block() {   # block WHY MATCH
+  local m
+  m=$(printf '%s' "$2" | head -1 | sed -E 's/^[|&;`$([:space:]]+//; s/[|&;`)>[:space:]]+$//' | cut -c1-80)
+  emit_deny "Blocked: \`$m\` $1. Reference variables by name in code; do not print, dump, or transmit their values."
+  exit 0
+}
 
-for P in "${BLOCKED[@]}"; do
+for i in "${!BLOCKED[@]}"; do
+  P=${BLOCKED[$i]}
   T=$SCAN; [[ "$P" == *"$DOTFILES"* ]] && T=$SCAN_LC
-  if printf '%s\n' "$T" | grep -qE "$P"; then
-    emit_deny "$DENY_MSG"
-    exit 0
-  fi
+  M=$(printf '%s\n' "$T" | grep -oE "$P") && block "${WHY[$i]}" "$M"
 done
 
 # jq and yq read files like any reader, but their first operand is a filter,
@@ -156,10 +160,7 @@ case "$SCAN" in *jq*|*yq*)
     for w in "${W[@]:$i}"; do
       # Spaces plus filter syntax: a nested filter, as in <(jq '… ["~/.ssh"]'), not a path.
       case "$w" in *[[:space:]]*) case "$w" in *'{'*|*'['*|*'('*|*'='*|*'|'*|*%7C*) continue ;; esac ;; esac
-      if printf '%s\n' "$w" | grep -qE "$DOTFILES"; then
-        emit_deny "$DENY_MSG"
-        exit 0
-      fi
+      printf '%s\n' "$w" | grep -qE "$DOTFILES" && block "reads a credential file" "jq … $w"
     done
   done < <(printf '%s\n' "$SCAN" | grep -oE "${A}(jq|yq)\s[^|;&]*")
 esac

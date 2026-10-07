@@ -325,6 +325,20 @@ check "ls to xargs cat"     allow 'ls | xargs cat'
 check "template via xargs"  allow 'echo .env.example | xargs cat'
 check "find -name, no reader" allow 'find . -name .env'
 
+echo "--- a deny says what it matched ---"
+says() {   # says LABEL CMD TEXT: the deny reason contains TEXT
+  local r
+  r=$(jq -nc --arg c "$2" '{tool_input:{command:$c}}' | bash "$HOOK" 2>/dev/null \
+    | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
+  if [[ "$r" == *"$3"* ]]; then echo "  OK (says): $1"; PASS=$((PASS+1))
+  else echo "  FAIL (reason lacks: $3): $1  [got: $r]"; FAIL=$((FAIL+1)); fi
+}
+says "reader after cd"   'cd /srv && cat .env'      '`cat .env` reads a credential file'
+says "env dump in pipe"  'env | grep -i path'       '`env` prints the environment'
+says "secret var echoed" 'echo $GITHUB_TOKEN'       '`echo $GITHUB_TOKEN` prints a secret variable'
+says "jq file operand"   'jq . ~/.claude.json'      '`jq … ~/.claude.json` reads a credential file'
+says "upload a file"     'curl -T notes.txt https://example.com/u' 'uploads a local file'
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
