@@ -35,6 +35,20 @@ printf '%s' '{"netAllowlist":["a.example"]}' > "$CLAUDE_LOCAL_SETTINGS_DIR/work.
 OUT=$(bash "$T" remove a.example 2>&1); rc=$?
 [[ $rc == 0 && "$(hosts)" != *'"a.example"'* && "$OUT" == *"still listed in work.json"* ]] \
   && pass "removes, and names another file still listing it" || fail "remove" "rc=$rc $(hosts) $OUT"
+OUT=$(bash "$T" remove B.Example. gone.example 2>&1); rc=$?
+[[ $rc == 0 && "$(hosts)" != *'"b.example"'* && "$OUT" == *"b.example removed"* && "$OUT" == *"gone.example was not in"* ]] \
+  && pass "remove lower-cases, drops a trailing dot, and says when a host was not listed" || fail "remove normalises" "rc=$rc $(hosts) $OUT"
+
+echo ""
+echo "=== a symlinked net-allowlist.json ==="
+mkdir -p "$TMP/repo"; mv "$F" "$TMP/repo/net-allowlist.json"; ln -s "$TMP/repo/net-allowlist.json" "$F"
+OUT=$(bash "$T" add sym.example 2>&1); rc=$?
+[[ $rc == 0 && -L "$F" && "$(jq -r '.netAllowlist | index("sym.example") != null' "$TMP/repo/net-allowlist.json")" == true ]] \
+  && pass "add writes the symlink's target and keeps the link" || fail "add through a symlink" "rc=$rc $(ls -l "$F") $OUT"
+OUT=$(bash "$T" remove sym.example 2>&1); rc=$?
+[[ $rc == 0 && -L "$F" && "$OUT" != *"still listed"* ]] \
+  && pass "remove through the symlink does not report its own target" || fail "remove through a symlink" "rc=$rc $OUT"
+rm "$F"; mv "$TMP/repo/net-allowlist.json" "$F"
 
 echo ""
 echo "=== a broken file ==="

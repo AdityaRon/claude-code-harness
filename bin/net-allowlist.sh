@@ -10,6 +10,11 @@ source "$HOOKS/lib.sh"
 
 DIR=$(expand_tilde "${CLAUDE_LOCAL_SETTINGS_DIR:-$HOME/.claude/local-settings}")
 FILE="$DIR/net-allowlist.json"
+# A fragment symlinked in from another repo (README) must stay a symlink: write the target.
+[[ -L "$FILE" ]] && FILE=$(canonical_path "$FILE")
+
+# Lower-case, no trailing dot: what network-guard compares against.
+host_key() { local h; h=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]'); printf '%s\n' "${h%.}"; }
 
 usage() { sed -n '2,5s/^# \{0,1\}//p' "$0"; exit 2; }
 
@@ -90,7 +95,7 @@ cmd_add() {
   [[ $# -gt 0 ]] || usage
   local h why rc=0 add=()
   for h in "$@"; do
-    h=$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]'); h=${h%.}
+    h=$(host_key "$h")
     if why=$(net_host_problem "$h"); then add+=("$h"); else echo "  ✗ $h refused: $why"; rc=1; fi
   done
   [[ ${#add[@]} -gt 0 ]] || return $rc
@@ -109,13 +114,20 @@ cmd_remove() {
   [[ $# -gt 0 ]] || usage
   [[ -f "$FILE" ]] || { echo "  nothing in $FILE"; return 1; }
   jq -e . "$FILE" >/dev/null 2>&1 || { echo "  ✗ $FILE is not JSON; fix it by hand first"; return 1; }
-  local h f
-  jq --args '.netAllowlist = ((.netAllowlist // []) - $ARGS.positional)' "$@" < "$FILE" \
-    > "$FILE.part.$$" && mv -f "$FILE.part.$$" "$FILE" || { rm -f "$FILE.part.$$"; return 1; }
+  local h f hosts=() had=()
   for h in "$@"; do
-    echo "  ✓ $h removed from $(basename "$FILE")"
+    h=$(host_key "$h"); hosts+=("$h")
+    jq -e --arg h "$h" '(.netAllowlist // []) | index($h)' "$FILE" >/dev/null 2>&1 && had+=("$h")
+  done
+  jq --args '.netAllowlist = ((.netAllowlist // []) - $ARGS.positional)' "${hosts[@]}" < "$FILE" \
+    > "$FILE.part.$$" && mv -f "$FILE.part.$$" "$FILE" || { rm -f "$FILE.part.$$"; return 1; }
+  for h in "${hosts[@]}"; do
+    case " ${had[*]:-} " in
+      *" $h "*) echo "  ✓ $h removed from $(basename "$FILE")" ;;
+      *)        echo "  - $h was not in $(basename "$FILE")" ;;
+    esac
     for f in "$DIR"/*.json; do
-      [[ -f "$f" && "$f" != "$FILE" ]] || continue
+      [[ -f "$f" ]] && ! [[ "$f" -ef "$FILE" ]] || continue
       jq -e --arg h "$h" '(.netAllowlist // []) | index($h)' "$f" >/dev/null 2>&1 \
         && echo "    still listed in $(basename "$f")"
     done
