@@ -153,6 +153,7 @@ in_scratch() {
   p="${p//\"/}"; p="${p//\'/}"; t="${t%/}"
   [[ -n "$p" ]] || return 1
   case "$p" in *..*) return 1 ;; esac
+  # shellcheck disable=SC2088  # '~/' is the tilde as typed; it is expanded below
   case "$p" in
     '$CLAUDE_JOB_DIR/'*|'${CLAUDE_JOB_DIR}/'*) [[ -n "$scratch" ]] || return 1; p="${scratch%/tmp}/${p#*/}" ;;
     '~/'*) p="$HOME/${p#\~/}" ;;

@@ -43,6 +43,7 @@ expand_var() {   # $NAME/rest or ${NAME}/rest → value/rest, for names set abov
 
 catastrophic() {
   local t="${1//\"/}"; t="${t//\'/}"; t="${t%/}"
+  # shellcheck disable=SC2088  # literal targets as typed, not paths to expand
   case "$t" in
     ''|'~'|'$HOME'|'${HOME}'|'.'|'..'|'*'|'./*'|'../*'|'~/*'|'$HOME/*'|'${HOME}/*'|'/*') return 0 ;;
   esac
