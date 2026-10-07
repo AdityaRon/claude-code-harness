@@ -127,13 +127,21 @@ case "$TOOL" in
     fi
 
     # The machine-local allowlist is this guard's input: widening it takes one
-    # human click per change, auto mode included. The Edit tool is denied there.
+    # human click per change, auto mode included. Edit and Write are denied there.
+    # A run of the script asks unless its arguments are plainly list, candidates
+    # or remove: a quoted or expanded `add` ('add', $X, xargs) is unreadable, and
+    # xargs is stripped from the normalized line, so no arguments asks too.
+    Q="[\"']?"
+    NAME="${Q}([^[:space:]]*/)?net-allowlist(\.sh)?${Q}"
+    RUN="^[[:space:]]*((then|do|else|elif|!)[[:space:]]+)*((bash|sh|zsh|source|\.|xargs)([[:space:]]+-[^[:space:]]+)*[[:space:]]+)?${NAME}([[:space:]]|\$)"
+    SAFE="^[[:space:]]*((then|do|else|elif|!)[[:space:]]+)*((bash|sh|zsh|source|\.)([[:space:]]+-[^[:space:]]+)*[[:space:]]+)?${NAME}[[:space:]]+(list|candidates([[:space:]]+[0-9]+)?|remove([[:space:]]+${Q}[a-z0-9.-]+${Q})+)([[:space:]]+[12]?>>?[[:space:]]*[^[:space:]|;&]*)*[[:space:]]*${Q}\$"
     if [[ "$CMD" == *net-allowlist* || "$CMD" == *local-settings* ]] && {
-       printf '%s\n' "$CMD" | grep -qE '\bnet-allowlist(\.sh)?[[:space:]]+([^|;&]*[[:space:]])?add\b' \
+       printf '%s\n' "$CMD" | grep -qE "net-allowlist(\.sh)?${Q}[[:space:]]+[^|;&]*\badd\b" \
+       || printf '%s\n' "$CMD" | tr '|;&`(){}' '\n' | grep -E "$RUN" | grep -qvE "$SAFE" \
        || { printf '%s\n' "$CMD" | grep -q 'local-settings' \
             && printf '%s\n' "$CMD" | sed -E 's#[0-9]*>&[0-9-]##g; s#[0-9&]*>>?[[:space:]]*/dev/null##g' \
-               | grep -qE '>|\b(tee|cp|mv|ln|rsync|dd|python3?|node|ruby)\b|\b(sed|perl)[[:space:]]+-[a-zA-Z]*i'; }; }; then
-      emit_ask "This changes the machine-local network allowlist (~/.claude/local-settings), so requests to a host it adds stop asking. Confirm the host."
+               | grep -qE '>|\b(tee|cp|mv|ln|rsync|dd|install|sponge|tar|unzip|curl|wget|mkfifo|mknod|python3?|node|ruby|perl|php|ex|ed|vim?|nvim)\b|\b(sed|g?awk)[[:space:]]+-[a-zA-Z]*i'; }; }; then
+      emit_ask "This can change the machine-local network allowlist (~/.claude/local-settings); requests to a host it adds stop asking. Confirm the host."
       exit 0
     fi
 

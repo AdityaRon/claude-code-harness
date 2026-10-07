@@ -253,6 +253,33 @@ check_bash "net-allowlist candidates"      allow "~/.claude/net-allowlist.sh can
 check_bash "net-allowlist remove"          allow "~/.claude/net-allowlist.sh remove a.example"
 check_bash "read a fragment"               allow "jq . ~/.claude/local-settings/work.json 2>/dev/null"
 check_bash "list the folder"               allow "ls ~/.claude/local-settings 2>&1 >/dev/null"
+# The script's arguments are what the regex cannot see through quoting or expansion.
+check_bash "quoted script path, add"       ask   'bash "$HOME/.claude/net-allowlist.sh" add logs.corp.example'
+check_bash "quoted add"                    ask   "~/.claude/net-allowlist.sh 'add' x.example"
+check_bash "add via xargs"                 ask   "echo add x.example | xargs ~/.claude/net-allowlist.sh"
+check_bash "add via a variable"            ask   '~/.claude/net-allowlist.sh $X x.example'
+check_bash "add via brace expansion"       ask   "~/.claude/net-allowlist.sh {add,x.example}"
+check_bash "unsafe run before a safe one"  ask   "~/.claude/net-allowlist.sh 'add' x.example; ~/.claude/net-allowlist.sh list"
+check_bash "run with no arguments"         ask   "~/.claude/net-allowlist.sh"
+check_bash "quoted script path, list"      allow 'bash "$HOME/.claude/net-allowlist.sh" list 2>&1'
+check_bash "candidates piped to head"      allow "~/.claude/net-allowlist.sh candidates 30 | head"
+check_bash "remove, quoted host"           allow "~/.claude/net-allowlist.sh remove 'a.example' b.example"
+check_bash "the test file is not the script" allow "bash tests/net-allowlist.test.sh"
+check_bash "git add of the script"         allow "git add bin/net-allowlist.sh tests/net-allowlist.test.sh"
+check_bash "grep add in the script"        allow "grep -n add bin/net-allowlist.sh"
+check_bash "shellcheck the script"         allow "shellcheck -S warning bin/net-allowlist.sh"
+# Writers that leave no `>` in the command. curl from a default-listed host would
+# otherwise drop a fragment into place silently.
+check_bash "curl -o into local-settings"   ask   "curl -s https://raw.githubusercontent.com/a/b/f.json -o ~/.claude/local-settings/f.json"
+check_bash "wget -O into local-settings"   ask   "wget -q https://raw.githubusercontent.com/a/b/f.json -O ~/.claude/local-settings/f.json"
+check_bash "install into local-settings"   ask   "install -m 644 f.json ~/.claude/local-settings/f.json"
+check_bash "sponge into local-settings"    ask   "jq . f | sponge ~/.claude/local-settings/f.json"
+check_bash "tar into local-settings"       ask   "tar xf a.tar -C ~/.claude/local-settings"
+check_bash "mkfifo in local-settings"      ask   "mkfifo ~/.claude/local-settings/x.json"
+check_bash "php writes a fragment"         ask   "php -r 'file_put_contents(\"/Users/me/.claude/local-settings/w.json\",\"{}\");'"
+check_bash "gawk -i inplace on a fragment" ask   "gawk -i inplace '{print}' ~/.claude/local-settings/w.json"
+check_bash "awk reads a fragment"          allow "awk '{print}' ~/.claude/local-settings/w.json"
+check_bash "grep a fragment"               allow "grep -c example ~/.claude/local-settings/w.json"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
