@@ -31,6 +31,12 @@ check() {
 echo "=== read-only verbs, flags BEFORE the verb (expect: allow) ==="
 check "get svc, context+ns first"  allow 'kubectl --context teleport.prod-prodn1 -n vm get svc vmselect-vm'
 check "get pods -A"                allow 'kubectl get pods -A'
+check "delete on a second line"    ask   $'echo start\nkubectl --context prod delete pod api-1'
+check "current-context then ;"     allow 'kubectl config current-context; echo done'
+check "which kubectl 2>&1"         allow 'which kubectl 2>&1'
+check "grep pattern naming kubectl" allow 'grep -rn "kubectl port-forward" docs/ | head -5'
+check "grep, then a real delete"   ask   'grep -l kubectl scripts/* && kubectl delete pod foo'
+check "text piped to a shell"      ask   "echo 'kubectl delete pod x' | \$SHELL"
 check "describe with ns first"     allow 'kubectl -n vm describe pod vmselect-vm-0'
 check "logs"                       allow 'kubectl --context X -n vm logs deploy/foo --tail 100'
 check "top"                        allow 'kubectl top pods -n vm'

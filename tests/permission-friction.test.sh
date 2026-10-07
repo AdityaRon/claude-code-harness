@@ -66,6 +66,12 @@ PY
 )
 [[ "$OUT" != *acmecorp* && "$OUT" == *CORP* ]] && pass "command families go through the masks file" || fail "shape masking" "$OUT"
 
+
+echo ""
+echo "=== every shipped case meets its want on this repo's hooks ==="
+OUT=$(HOME="$TMP/home" python3 "$PF" --cases --replay "$PWD/hooks" 2>&1); rc=$?
+[[ $rc == 0 ]] && pass "$(tail -1 <<<"$OUT")" || fail "shipped cases" "$(grep MISS <<<"$OUT")"
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

@@ -39,12 +39,13 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+CMD=$(strip_inert_heredocs "$CMD")
 
 # Normalise BEFORE the bail-out, not after. The bail-out's own pattern requires
 # whitespace or a slash in front of `kubectl`, and `$(` is neither — so
 # `echo "$(kubectl delete pod foo)"` exited here and was allowed silently, no
 # matter what the scan below did. See the tokenizer note further down.
-SCAN=$(normalize_command "$CMD" | sed -E 's/\$\(/ /g; s/`/ /g')
+SCAN=$(normalize_command "$CMD" | tr '\n' ';' | sed -E 's/\$\(/ ; /g; s/`/ ; /g; s/\|\||&&|[|;]/ & /g; s/&([[:space:]]|$)/ & \1/g')
 
 # Cheap bail-out: no kubectl anywhere, nothing to do.
 # Both sides use "not a word character" rather than "whitespace": a quote can
@@ -108,6 +109,14 @@ is_operator() {
     *) return 1 ;;
   esac
 }
+# A command separator (not a redirection): starts a new segment.
+is_separator() {
+  case "$1" in '|'|'||'|'&&'|';'|'&') return 0 ;; *) return 1 ;; esac
+}
+# A redirection glued to its target: 2>&1, 2>/dev/null, >out, <in, &>x. Skipped, never the verb.
+is_redirect() {
+  case "$1" in [0-9]'>'*|[0-9][0-9]'>'*|'>'*|'<'*|'&>'*) return 0 ;; *) return 1 ;; esac
+}
 
 # Echo the next bare (non-flag) token at or after index $1, skipping global
 # flags and the values they consume. Empty if the command ends first.
@@ -117,6 +126,8 @@ next_bare_token() {
     t="${TOKENS[$k]}"
     if is_operator "$t"; then
       return 0
+    elif is_redirect "$t"; then
+      (( k++ ))
     elif [[ "$t" == -* ]]; then
       if [[ "$t" != *=* ]] && is_value_flag "$t"; then (( k += 2 )); else (( k++ )); fi
     else
@@ -173,8 +184,31 @@ read -ra TOKENS <<<"$SCAN"
 
 i=0
 n=${#TOKENS[@]}
+# `grep "kubectl delete"` / `which kubectl` name kubectl without running it. The
+# exemption holds only when EVERY segment's command is on this text-only list, so
+# `echo 'kubectl delete' | $SHELL` (or `| bash`, `| . /dev/stdin`, `| awk system`)
+# is read as a command. Quoted spans are blanked for this structural check only.
+TEXT_ONLY=1
+while IFS= read -r seg; do
+  set -f; set -- $seg; set +f
+  while [[ $# -gt 0 ]] && is_redirect "$1"; do shift; done
+  [[ $# -eq 0 ]] && continue
+  w="${1//[\"\']/}"; w="${w##*/}"
+  case "$w" in
+    grep|egrep|fgrep|rg|which|type|whereis|echo|printf|head|tail|wc|sort|uniq|cut|tr|cat|less|more|column|ls|cd|true|kubectl) ;;
+    *) TEXT_ONLY=0; break ;;
+  esac
+# Raw CMD, not SCAN: normalize_binaries strips a quote off a segment's first word,
+# which unbalances the quote blanking. A wrapper first word just loses the exemption.
+done < <(printf '%s\n' "$CMD" | tr '\n' ';' | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g" | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;]/\n/g; s/&([[:space:]]|$)/\n/g')
+SEG_FIRST=""
 while (( i < n )); do
   tok="${TOKENS[$i]}"
+  if is_separator "$tok"; then SEG_FIRST=""; (( i++ )); continue; fi
+  if [[ -z "$SEG_FIRST" ]] && ! is_redirect "$tok"; then SEG_FIRST="${tok//[\"\']/}"; fi
+  if [[ $TEXT_ONLY -eq 1 ]]; then
+    case "$SEG_FIRST" in grep|egrep|fgrep|rg|which|type|whereis|echo|printf) (( i++ )); continue ;; esac
+  fi
   # A quote can still cling to the token (`'kubectl'`, `"kubectl`). Strip quote
   # characters for the binary comparison only — the verb scan below keeps using
   # raw tokens, so flag parsing is unchanged.

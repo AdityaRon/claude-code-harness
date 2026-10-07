@@ -20,6 +20,7 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+CMD=$(strip_inert_heredocs "$CMD")
 
 # Strip assignment/wrapper prefixes before anything below matches. The anchor A
 # admits only real command boundaries, so `VAR=1 git push -f`, `env FOO=bar git

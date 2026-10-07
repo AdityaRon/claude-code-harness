@@ -88,18 +88,21 @@ a project's settings.
 
 ## Cases
 
-`permission-friction-cases.jsonl` (next to this file), 27 cases. Each has the tool input, the
+`permission-friction-cases.jsonl` (next to this file), 101 cases. The first 27 have the tool input, the
 decision observed on local `main` at b8427b2 and on `adityaron/main` at 516db51,
 a `why`, and a `want` where the answer is not a policy call. Cases with no
 `want` are policy calls and only report. Seven `control-*` cases pin decisions
 a fix must keep (env read denied, `curl | sh` denied, delete asks, script-file
-run silent).
+run silent). The other 74 came from review: `pin-*` cases are what a guard fix
+must still catch, `hole-*` cases were silent allows on 516db51, and `fp-*`/`ok-*`
+cases are false positives a fix should clear.
 
 ```
 bin/permission-friction.py --cases --replay hooks/
 ```
 
-It exits 1 while any `want` misses: 11 on b8427b2, 9 on 516db51.
+It exits 1 while any `want` misses: 25 on 516db51, 0 with the guard parsing
+fixes. `tests/permission-friction.test.sh` runs it, so doctor fails on a miss.
 
 ## Re-measure on your own history
 

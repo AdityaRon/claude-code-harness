@@ -45,7 +45,8 @@ INTERP='(python3?|node|ruby|perl|php|bash|sh|zsh|deno|bun)'
 # Inline-code flags. The `-[A-Za-z]*[ce]` form catches combined short flags
 # (perl -ne, perl -pe, ruby -ne) that would evade a bare -c/-e. -r is php/ruby
 # inline. A trailing "-" means "read from stdin".
-INLINE='(-[A-Za-z]*[ce]\b|--eval\b|--exec\b|-r\b|\s-(\s|$))'
+# Each flag must open a token: `team-performance` and `--store` end in c/e but are not flags.
+INLINE='(\s-[A-Za-z]*[ce]\b|\s--eval\b|\s--exec\b|\s-r\b|\s-(\s|$))'
 # Inline flags that only one family has. node -p evaluates and prints, perl -E
 # is -e with features on. Kept out of INLINE because `python -m pytest -p x`
 # and `python -E` are not inline code, and INLINE also drives the long-script ask.
@@ -97,7 +98,7 @@ SENSITIVE_TOKENS=(
 # Does the command invoke an interpreter with inline code (flag) or a heredoc?
 # Heredocs (python3 <<EOF … EOF) carry a payload with no -c flag, so match them
 # too and let the token scan below inspect the heredoc body.
-INTERP_INLINE_RE="${IB}${INTERP}\s+[^|;&]*${INLINE}"
+INTERP_INLINE_RE="${IB}${INTERP}\b[^|;&]*${INLINE}"
 INTERP_HEREDOC_RE="${IB}${INTERP}\b[^|;&]*<<-?"
 if ! printf '%s\n' "$ICMD" | grep -qE "$INTERP_INLINE_RE" \
    && ! printf '%s\n' "$ICMD" | grep -qE "$INLINE_ONLY" \
@@ -175,7 +176,8 @@ fi
 # Interpreter with inline code but no obvious sensitive token — ask.
 # This catches novel payloads without producing false positives on trivial
 # one-liners like `python -c "print(1)"`.
-if printf '%s\n' "$ICMD" | grep -qE "${IB}${INTERP}\s+.{120,}${INLINE}|${IB}${INTERP}\s+[^|;&]*${INLINE}[^|;&]{200,}"; then
+# Both spans stay inside the interpreter's own segment: a `grep -c` after && is not its flag.
+if printf '%s\n' "$ICMD" | grep -qE "${IB}${INTERP}\b[^|;&]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&]{200,}"; then
   emit_ask "Long inline script passed to an interpreter. Review the payload before running — inline code bypasses file-based review."
   exit 0
 fi
