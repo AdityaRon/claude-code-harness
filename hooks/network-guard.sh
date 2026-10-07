@@ -14,7 +14,9 @@
 #
 # The allowlist is intentionally conservative: well-known read-only sources
 # that Claude needs to function (package registries, GitHub docs, Anthropic).
-# Projects can extend it via the CLAUDE_NET_ALLOWLIST env var (space-separated).
+# Projects can extend it via the CLAUDE_NET_ALLOWLIST env var (space-separated),
+# and a machine via `netAllowlist` in ~/.claude/local-settings/*.json, which
+# survives every install (bin/net-allowlist.sh). Both pass net_host_problem.
 source "$(dirname "$0")/lib.sh"
 
 read_input
@@ -76,9 +78,13 @@ host_allowed() {
   done
   if [[ -n "${CLAUDE_NET_ALLOWLIST:-}" ]]; then
     for h in $CLAUDE_NET_ALLOWLIST; do
+      net_host_problem "$h" >/dev/null || continue
       [[ "$host" = "$h" || "$host" = *".$h" ]] && return 0
     done
   fi
+  while IFS= read -r h; do
+    [[ "$host" = "$h" || "$host" = *".$h" ]] && return 0
+  done < <(local_net_hosts)
   return 1
 }
 
@@ -117,6 +123,17 @@ case "$TOOL" in
     fi
     if printf '%s\n' "$CMD" | grep -qE '(python3?\s+-m\s+http\.server|php\s+-S|ruby\s+-run\s+-e\s+httpd|npx\s+http-server)'; then
       emit_ask "This starts a local HTTP server exposing files on the network. Confirm this is intended and scoped."
+      exit 0
+    fi
+
+    # The machine-local allowlist is this guard's input: widening it takes one
+    # human click per change, auto mode included. The Edit tool is denied there.
+    if [[ "$CMD" == *net-allowlist* || "$CMD" == *local-settings* ]] && {
+       printf '%s\n' "$CMD" | grep -qE '\bnet-allowlist(\.sh)?[[:space:]]+([^|;&]*[[:space:]])?add\b' \
+       || { printf '%s\n' "$CMD" | grep -q 'local-settings' \
+            && printf '%s\n' "$CMD" | sed -E 's#[0-9]*>&[0-9-]##g; s#[0-9&]*>>?[[:space:]]*/dev/null##g' \
+               | grep -qE '>|\b(tee|cp|mv|ln|rsync|dd|python3?|node|ruby)\b|\b(sed|perl)[[:space:]]+-[a-zA-Z]*i'; }; }; then
+      emit_ask "This changes the machine-local network allowlist (~/.claude/local-settings), so requests to a host it adds stop asking. Confirm the host."
       exit 0
     fi
 
