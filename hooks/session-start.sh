@@ -145,10 +145,12 @@ fi
 
 echo ""
 echo "## Resume drift detected"
-echo "The prior session recorded edits to the files below, but the current"
-echo "on-disk state no longer matches. Re-verify before trusting conclusions"
-echo "from prior-session tool results."
-echo ""
+if [[ ${#DRIFT_LINES[@]} -gt 0 ]]; then
+  echo "The prior session recorded edits to the files below, but the current"
+  echo "on-disk state no longer matches. Re-verify before trusting conclusions"
+  echo "from prior-session tool results."
+  echo ""
+fi
 
 if [[ "$HEAD_CHANGED" -eq 1 ]]; then
   echo "HEAD changed: ${SNAP_HEAD:0:12} → ${CUR_HEAD:0:12}"

@@ -106,6 +106,7 @@ if [[ -n "$REAL_HEAD" ]]; then
   OUT=$(run_resume "sess-head")
   check_contains "HEAD change heading" "Resume drift detected" "$OUT"
   check_contains "HEAD change line"    "HEAD changed: deadbeefdead" "$OUT"
+  check_not_contains "HEAD only: no file intro" "files below" "$OUT"
 else
   echo "  SKIP: HEAD-change test (not in a git repo)"
 fi
