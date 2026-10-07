@@ -171,7 +171,7 @@ grep -qF "| GUARD | deny | env-guard | cat .env |" "$CLAUDE_AUDIT_LOG" \
 guard network-guard.sh '{"tool_name":"WebFetch","tool_input":{"url":"https://evil.example/x"}}'
 grep -qF "| GUARD | ask | network-guard | https://evil.example/x |" "$CLAUDE_AUDIT_LOG" \
   && pass "ask logged with the URL" || fail "ask logged with the URL" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
-SECRET="AKIA""IOSFODNN7EXAMPLE"
+SECRET="AKIA""Q3EGW7PZJ4XN2KHM"
 guard secret-scanner.sh "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/k.ts\",\"content\":\"$SECRET\"}}"
 grep -qF "| GUARD | deny | secret-scanner | /tmp/k.ts |" "$CLAUDE_AUDIT_LOG" \
   && pass "content deny logs the path" || fail "content deny logs the path" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
