@@ -62,8 +62,8 @@ cmd_candidates() {
   local rows
   rows=$(grep -F '| GUARD | ask | network-guard |' "$log" | awk -v s="$since" 'substr($0,1,10) >= s' \
     | while IFS= read -r line; do
-        kind=get
-        printf '%s\n' "$line" | grep -qE '(-X *(POST|PUT|PATCH|DELETE)|--request *(POST|PUT|PATCH|DELETE)|[[:space:]](-d|--data[a-z-]*|--json|-F|--form[a-z-]*|-T|--upload-file)([[:space:]]|=|$))' && kind=body
+        kind="get"
+        printf '%s\n' "$line" | grep -qE '(-X *(POST|PUT|PATCH|DELETE)|--request *(POST|PUT|PATCH|DELETE)|[[:space:]](-d|--data[a-z-]*|--json|-F|--form[a-z-]*|-T|--upload-file)([[:space:]]|=|$))' && kind="body"
         printf '%s\n' "$line" | grep -oE 'https?://[^][:space:]"'\''`|<>]+' | url_host \
           | grep -E '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' | sort -u | sed "s/\$/	$kind/"
       done)
