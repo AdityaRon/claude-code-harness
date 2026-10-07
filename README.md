@@ -6,7 +6,7 @@ Install once per developer machine — works across all projects without touchin
 ## Install
 
 ```bash
-git clone https://github.com/aditya-samalla/claude-code-harness.git
+git clone https://github.com/AdityaRon/claude-code-harness.git
 cd claude-code-harness
 bash install.sh
 ```
