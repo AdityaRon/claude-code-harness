@@ -105,6 +105,7 @@ case "$TOOL" in
   Bash)
     CMD=$(jq_get '.tool_input.command')
     [[ -z "$CMD" ]] && exit 0
+    CMD=$(neutralize_quoted_amps "$(strip_inert_heredocs "$CMD")")
     # `/usr/bin/curl` and `CURL` are curl too: scan the normalized form (lib.sh) as
     # a second line.
     CMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
@@ -148,7 +149,8 @@ case "$TOOL" in
     #   -d @file   --data @file   --data-binary @file   --data-urlencode @file
     #   -F key=@file   -F @file   --form key=@file
     #   -T /local/path   --upload-file /local/path
-    if printf '%s\n' "$CMD" | grep -qE '\b(curl|wget)\b[^|;&]*(-d|--data|--data-binary|--data-urlencode|--data-raw)(\s+|=)?@'; then
+    # --data-urlencode also reads a file in its name@file form; name=value@x is literal content.
+    if printf '%s\n' "$CMD" | grep -qE '\b(curl|wget)\b[^|;&]*((-d|--data|--data-binary|--data-urlencode|--data-raw)(\s+|=)?@|--data-urlencode(\s+|=)["'"'"']?[^=@"'"'"'[:space:]]*@)'; then
       emit_deny "Blocked: curl/wget uploading a local file as request body (@file). Move data into code, or run manually if legitimate."
       exit 0
     fi
@@ -171,7 +173,22 @@ case "$TOOL" in
     # POST even with no -X, so `curl -d "$(cat notes)" <allowlisted host>` was
     # a silent allow. This runs before the URL test: a URL with no scheme was
     # never parsed, and its POST went through unseen.
-    if printf '%s\n' "$CMD" | grep -qE '\bcurl\b[^|;&]*(-X\s*(POST|PUT|PATCH|DELETE)|--request\s*(POST|PUT|PATCH|DELETE)|\s(-d|--data[a-z-]*|--json|-F|--form[a-z-]*|-T|--upload-file)(\s|=|$))' \
+    BODY_RE='\bcurl\b[^|;&]*(-X\s*(POST|PUT|PATCH|DELETE)|--request\s*(POST|PUT|PATCH|DELETE)|\s(-d|--data[a-z-]*|--json|-F|--form[a-z-]*|-T|--upload-file)(\s|=|$))'
+    # curl -G / --get turns -d/--data-* into the query string: a GET, so the host
+    # test below decides. Judged per curl segment, so a second curl without -G
+    # still asks. An explicit -X (bundled too: -sXPOST) or a non-data body flag
+    # (-F, -T, --json) is still a write.
+    SENDS=0
+    while IFS= read -r seg; do
+      [[ -z "$seg" ]] && continue
+      printf '%s\n' "$seg" | grep -qE "$BODY_RE" || continue
+      if printf '%s\n' "$seg" | grep -qE '\s(-[a-zA-Z]*G[a-zA-Z]*|--get)(\s|$)' \
+         && ! printf '%s\n' "$seg" | grep -qE '\s(-[a-zA-Z]*X[a-zA-Z]*|--request)(\s|=|[A-Z])|\s(--json|-F|--form[a-z-]*|-T|--upload-file)(\s|=|$)'; then
+        continue
+      fi
+      SENDS=1; break
+    done < <(printf '%s\n' "$CMD" | grep -oE '\bcurl\b[^|;&]*')
+    if [[ $SENDS -eq 1 ]] \
        || printf '%s\n' "$CMD" | grep -qE '\bwget\b[^|;&]*--(post-data|post-file|body-data|body-file|method)\b'; then
       emit_ask "curl/wget is sending data (POST/PUT/PATCH/DELETE or a request body) to ${HOST:-a host without a scheme}. Confirm the target and payload."
       exit 0
