@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for rm-guard.sh
 set -u
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"
 HOOK="$PWD/hooks/rm-guard.sh"
 export HOME="$TMP/home" TMPDIR="$TMP/t"

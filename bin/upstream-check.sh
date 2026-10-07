@@ -47,7 +47,8 @@ if [ -z "${CLAUDE_DOCTOR_CMD:-}" ] && ! command -v claude >/dev/null 2>&1; then
   exit 0
 fi
 
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
+TMP=$(cd "$TMP" && pwd)   # macOS TMPDIR ends in /; the CLI prints the path without the //
 # Deliberately NO EXIT trap: an EXIT trap also fires when a *subshell* exits, and
 # the doctor probes below run inside $( ), so it would delete the temp directory
 # out from under the rest of the run. bash 3.2 (macOS) has no BASHPID to guard on,

@@ -5,7 +5,7 @@ HOOK="hooks/sensitive-file-guard.sh"
 PASS=0; FAIL=0
 
 # Set up fixture: real dotfile + symlink pointing to it
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 echo "SECRET=abc" > "$TMP/.env"

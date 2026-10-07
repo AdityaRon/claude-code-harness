@@ -3,7 +3,7 @@
 # command line (bash tests/env-guard.test.sh) does not contain trigger strings
 # that env-guard would match against itself.
 set -u
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 HOOK="hooks/env-guard.sh"
 PASS=0; FAIL=0

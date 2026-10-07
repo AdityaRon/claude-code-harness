@@ -4,7 +4,7 @@
 set -u
 HOOK="hooks/notify.sh"
 PASS=0; FAIL=0
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
 fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 check_eq(){ [[ "$3" == "$2" ]] && pass "$1" || fail "$1" "expected: $2  got: $3"; }

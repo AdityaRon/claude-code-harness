@@ -9,7 +9,7 @@
 set -u
 PASS=0; FAIL=0
 
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 mkdir -p "$TMP/hooks" "$TMP/bin"

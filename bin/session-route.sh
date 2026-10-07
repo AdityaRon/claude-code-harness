@@ -72,7 +72,7 @@ done
 
 command -v jq >/dev/null 2>&1 || { echo "session-route: jq is required" >&2; exit 2; }
 
-TMP=$(mktemp -d) || exit 2
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX") || exit 2
 trap 'rm -rf "$TMP"' EXIT
 
 # ---- PR -> sessionId, from the transcripts -----------------------------

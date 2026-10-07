@@ -4,7 +4,7 @@
 set -u
 HOOK="hooks/pre-compact.sh"
 PASS=0; FAIL=0
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_TRANSCRIPT_DIR="$TMP/backups"
 # A long retention for the count test; the age test sets its own.
 printf '{"cleanupPeriodDays": 100000}' > "$TMP/settings.json"; export CLAUDE_SETTINGS_FILE="$TMP/settings.json"

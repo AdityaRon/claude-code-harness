@@ -5,7 +5,7 @@ set -u
 HOOK="hooks/session-snapshot.sh"
 PASS=0; FAIL=0
 
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_STATE_DIR="$TMP/state"
 WORK="$TMP/work"

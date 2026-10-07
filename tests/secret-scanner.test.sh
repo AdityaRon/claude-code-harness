@@ -7,7 +7,7 @@
 # literal pattern in source — keeping GitHub push-protection, CI secret
 # scanners, and this repo's own secret-scanner from flagging the fixtures.
 set -u
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
 HOOK="hooks/secret-scanner.sh"
 PASS=0; FAIL=0

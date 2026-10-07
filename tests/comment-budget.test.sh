@@ -75,7 +75,7 @@ check_eq       "exit 2" "2" "$(run_rc "$P")"
 
 echo ""
 echo "=== a repo shipping its own comment-budget.py is left to it, silently ==="
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/.claude/hooks"
 : > "$TMP/.claude/hooks/comment-budget.py"

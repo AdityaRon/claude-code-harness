@@ -11,7 +11,7 @@ fi
 
 # Guards write every deny and ask to the audit log. A suite that forgets to
 # point it elsewhere would fill the real log with test decisions.
-AUDIT_TMP=$(mktemp -d); trap 'rm -rf "$AUDIT_TMP"' EXIT
+AUDIT_TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$AUDIT_TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$AUDIT_TMP/audit.log"
 
 TOTAL_SUITES=0
