@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
-# Blocks dangerous git operations that bypass other guards:
-#   1. force-push variants
-#   2. indiscriminate staging (git add . / -A / --all / '*')
-#   3. staging sensitive file patterns
-#   4. git config tampering (core.hooksPath, user.email, etc.)
-#   5. writes into .git/hooks/*
-#   6. remote redirection (git remote set-url / add origin)
-#   7. push --delete / push :branch (remote branch deletion)
-#   8. history rewrites (filter-branch, update-ref)
-#   9. glob staging ('*.env'-style patterns)
-#  10. destructive worktree ops (reset --hard, clean -f, branch -d/-D)
-#
-# All regexes are anchored to command boundaries so text inside commit
-# messages, heredocs, and single-quoted strings does not false-positive.
+# Git operations that the deny rules miss or that lose work:
+#   deny: force pushes (--force, an f in any short cluster, a + refspec,
+#         --mirror), broad staging (., -A, :/, $(pwd)), staging credential
+#         files, core.hooksPath by -c or git config, a ! alias, any mention of
+#         .git/hooks, history rewrites, reset --hard, clean -f, branch -d/-D,
+#         and checkout or restore of the whole tree
+#   ask:  glob staging, stash drop/clear, worktree remove --force outside this
+#         session's scratch, remote branch deletion, remote set-url/add, any
+#         other alias, identity and signing config
+# Most patterns start at a command boundary, but matching is textual: the same
+# words in a commit message or heredoc can still match.
 source "$(dirname "$0")/lib.sh"
 
 read_input

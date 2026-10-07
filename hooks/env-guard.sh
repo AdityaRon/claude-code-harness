@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Blocks bash commands that would print, read, or transmit env variable values
-# and dotfile secrets. All patterns are anchored to command boundaries
-# (line start, pipe, chain, heredoc, $(…), backticks) so that occurrences
-# inside commit messages, single-quoted strings, and literal arguments to
-# unrelated programs do not false-positive.
+# and dotfile secrets. Most patterns start at a command boundary (line start,
+# pipe, chain, $(…), backticks), so a word in another program's arguments does
+# not match. Matching is still textual: the same words in a quoted string or a
+# commit message can.
 source "$(dirname "$0")/lib.sh"
 
 read_input
