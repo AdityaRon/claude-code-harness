@@ -63,5 +63,19 @@ OUT=$(bash bin/sandbox-trial.sh --sideways 2>&1); rc=$?
 [[ -z "$(find "$TMP" -name '.sandbox-trial.*')" ]] && pass "leaves no probe files behind" || fail "cleanup" "$(find "$TMP" -name '.sandbox-trial.*')"
 
 echo ""
+echo "=== sandbox-trial.sh online, curl and git stubbed ==="
+mkdir -p "$TMP/stub"
+printf '#!/bin/sh\necho 200\n' > "$TMP/stub/curl"
+printf '#!/bin/sh\nprintf "0123456789abcdef\\tHEAD\\n"\n' > "$TMP/stub/git"
+chmod +x "$TMP/stub/curl" "$TMP/stub/git"
+OUT=$(cd "$TMP" && PATH="$TMP/stub:$PATH" HOME="$TMP/home" bash "$OLDPWD/bin/sandbox-trial.sh" 2>&1)
+[[ "$OUT" == *"example.com (not listed)"*"strictAllowlist denies them"* ]] \
+  && pass "no strictAllowlist: an unlisted host is reported, not judged" || fail "not strict" "$OUT"
+jq -n '{sandbox: {network: {strictAllowlist: true}}}' > "$TMP/strict.json"
+OUT=$(cd "$TMP" && CLAUDE_SETTINGS_FILE="$TMP/strict.json" PATH="$TMP/stub:$PATH" HOME="$TMP/home" bash "$OLDPWD/bin/sandbox-trial.sh" 2>&1)
+[[ "$OUT" == *"example.com (not listed)"*"(HTTP 200, strictAllowlist)"* ]] \
+  && pass "strictAllowlist: an unlisted host must be blocked" || fail "strict" "$OUT"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

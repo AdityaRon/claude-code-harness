@@ -21,7 +21,9 @@ try_write() { local f="$1/.sandbox-trial.$$"; (umask 077; : > "$f") 2>/dev/null 
 
 # Is this process sandboxed? A write to $HOME itself is the tell.
 if try_write "$HOME"; then ON=0; else ON=1; fi
-SET=$(jq -r '.sandbox.enabled // false' "${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}" 2>/dev/null)
+SETTINGS="${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}"
+SET=$(jq -r '.sandbox.enabled // false' "$SETTINGS" 2>/dev/null)
+STRICT=$(jq -r '.sandbox.network.strictAllowlist // false' "$SETTINGS" 2>/dev/null)
 if [[ $ON == 1 ]]; then echo "sandbox: ON"
 elif [[ "$SET" == true ]]; then
   echo "sandbox: settings say on, but this shell is not sandboxed. Started with ! or from a terminal? Ask Claude to run it."
@@ -62,7 +64,10 @@ if [[ -n "$LOCAL_URL" ]]; then   # loopback, so it runs with --offline too
 fi
 if [[ $OFFLINE == 0 ]]; then
   c=$(code https://api.github.com/zen); expect "net: api.github.com (listed)" ok "$([[ $c == 200 ]] && echo ok || echo blocked)" "(HTTP $c)"
-  c=$(code https://example.com/); expect "net: example.com (not listed)" blocked "$([[ $c == 200 ]] && echo ok || echo blocked)" "(HTTP $c)"
+  # Without strictAllowlist an unlisted host prompts, or goes to the classifier in auto mode.
+  c=$(code https://example.com/); r=$([[ $c == 200 ]] && echo ok || echo blocked)
+  if [[ "$STRICT" == true ]]; then expect "net: example.com (not listed)" blocked "$r" "(HTTP $c, strictAllowlist)"
+  else expect "net: example.com (not listed)" any "$r" "(HTTP $c; unlisted hosts ask first: sandbox.network.strictAllowlist denies them)"; fi
   r=$(git ls-remote https://github.com/AdityaRon/claude-code-harness HEAD 2>/dev/null | head -c 7)
   expect "net: git over https to github" ok "$([[ -n "$r" ]] && echo ok || echo blocked)"
   for sock in /var/run/docker.sock "$HOME/.docker/run/docker.sock"; do   # Docker Desktop uses the second
