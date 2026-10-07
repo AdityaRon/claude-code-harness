@@ -281,5 +281,27 @@ check "near miss: echoed"         allow 'echo GIT push --force'
 check "near miss: cd into git"    allow 'cd /usr/bin/git'
 
 echo ""
+echo "=== worktree remove --force: a scratch worktree of this session runs ==="
+WT_HOME="$(mktemp -d)"; mkdir -p "$WT_HOME/.claude/jobs/abcd1234/tmp"
+check_wt() {
+  local label="$1" expect="$2" cmd="$3" cwd="${4:-/repo}" out got
+  out=$(jq -nc --arg c "$cmd" --arg d "$cwd" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"abcd1234-0000-4000-8000-000000000000"}' \
+    | HOME="$WT_HOME" TMPDIR="" bash hooks/git-guard.sh 2>/dev/null)
+  got=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null); got="${got:-allow}"
+  if [[ "$got" == "$expect" ]]; then echo "  OK ($expect): $label"; PASS=$((PASS+1))
+  else echo "  FAIL (expected=$expect got=$got): $label  [cmd: $cmd]"; FAIL=$((FAIL+1)); fi
+}
+check_wt "--force on \$CLAUDE_JOB_DIR/tmp/wt" allow 'git worktree remove --force "$CLAUDE_JOB_DIR/tmp/wt-1"'
+check_wt "-f on a literal scratch path"      allow "git worktree remove -f $WT_HOME/.claude/jobs/abcd1234/tmp/wt-2"
+check_wt "-C repo, scratch worktree"         allow 'git -C ~/src/app worktree remove --force ~/.claude/jobs/abcd1234/tmp/wt-3'
+check_wt "--force on a repo worktree"        ask   'git worktree remove --force ../app-feature'
+check_wt "--force, climbs out with .."       ask   'git worktree remove --force "$CLAUDE_JOB_DIR/tmp/../../repo"'
+check_wt "--force, redefines CLAUDE_JOB_DIR" ask   'CLAUDE_JOB_DIR=/ git worktree remove --force "$CLAUDE_JOB_DIR/tmp/../../repo"'
+check_wt "--force, another session"          ask   'git worktree remove --force ~/.claude/jobs/ffffffff/tmp/wt'
+check_wt "--force, CLAUDE_JOB_DIR set inline"  ask   'CLAUDE_JOB_DIR=/x git worktree remove --force "$CLAUDE_JOB_DIR/tmp/wt"'
+check_wt "stash drop still asks"             ask   'git stash drop'
+rm -rf "$WT_HOME"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

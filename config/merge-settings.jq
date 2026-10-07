@@ -11,11 +11,10 @@
 #   - statusLine and permissions.defaultMode are harness-owned
 #   - the harness owns the hook entries it installed; yours are preserved
 #
-# Note on the union: it can only ever ADD rules. An update that drops a rule
-# from config/settings.json will not remove it from a machine that already has
-# it, so narrowing a rule (say Bash(kubectl:*) down to Bash(kubectl get:*))
-# means editing ~/.claude/settings.json by hand. Widening is the only direction
-# the installer can deliver.
+# Note on the union: it only ever ADDS rules, except those listed in
+# config/retired-rules.json (--argjson retired), which are taken out of the
+# installed lists. A fragment that lists a retired rule keeps it, because
+# fragments arrive in NEW, which is never subtracted from.
 
 # Bash rules are matched against the literal command text, and whether `~` is
 # expanded on either side is undocumented upstream. A rule written with `~/`
@@ -48,12 +47,15 @@ def keep_foreign($h):
   | map(select((.hooks | length) > 0));
 
 .[0] as $old | .[1] as $new
+| ($ARGS.named.retired // {}) as $retired
 | (($old.hooks // {}) | with_entries(.value |= keep_foreign($home))
                       | with_entries(select(.value | length > 0))) as $foreign
 | $new
   * $old                                                     # user wins for overlapping top-level keys
-| .permissions.allow = (($old.permissions.allow // []) + ($new.permissions.allow // []) | expand_home($home))
-| .permissions.deny  = (($old.permissions.deny  // []) + ($new.permissions.deny  // []) | expand_home($home))
+| .permissions.allow = ((($old.permissions.allow // []) - ($retired.permissions.allow // [] | expand_home($home)))
+                         + ($new.permissions.allow // []) | expand_home($home))
+| .permissions.deny  = ((($old.permissions.deny  // []) - ($retired.permissions.deny  // [] | expand_home($home)))
+                         + ($new.permissions.deny  // []) | expand_home($home))
 # Harness owns the permission mode, so a stale value can't shadow it — but
 # never write a null key if a customized source has dropped it.
 | (if $new.permissions.defaultMode
