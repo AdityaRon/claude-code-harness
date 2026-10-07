@@ -63,6 +63,14 @@ check "cd scratch && relative"     allow 'cd "$CLAUDE_JOB_DIR/tmp" && rm -rf old
 check "cwd is scratch, relative"   allow 'rm -rf old' "$S"
 check "inside TMPDIR"              allow 'rm -rf "$TMPDIR/tmp.abc"'
 check "the scratch folder itself"  allow 'rm -rf "$CLAUDE_JOB_DIR/tmp"'
+check "scratch rm in a subshell"   allow '(rm -rf "$CLAUDE_JOB_DIR/tmp/x")'
+
+echo ""
+echo "=== groups, and a cd that does not outlast its subshell ==="
+check "in a { } group"             deny '{ rm -rf build; }'
+check "in a loop body"             deny 'for d in a b; do rm -rf "$d"; done'
+check "(cd scratch) then relative" deny '(cd "$CLAUDE_JOB_DIR/tmp" && ls); rm -rf build'
+check "\$(cd scratch) then relative" deny 'D=$(cd "$CLAUDE_JOB_DIR/tmp" && pwd); rm -rf build'
 
 echo ""
 echo "=== not a recursive force remove: untouched ==="

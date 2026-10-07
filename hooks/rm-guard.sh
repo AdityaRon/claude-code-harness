@@ -22,8 +22,11 @@ CWD=$(jq_get '.cwd')
 
 # One segment per line, quoted separators kept as text. Split before normalizing:
 # normalize_command drops a leading `J=…;`, and the assignment is needed below.
-SEGS=$(neutralize_quoted_separators "$CMD" | tr '\n' ';' \
-  | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;&]/\n/g')
+SEGS=$(neutralize_quoted_separators "$(separate_groups "$CMD")" | tr '\n' ';' \
+  | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;&]/\n/g'; echo; exec_fn_suffixes "$CMD")
+# A cd inside ( ) or $( ) does not outlast it, and the split above cannot see
+# where one ends, so with any parenthesis present a cd never widens BASE.
+SUBSHELL=0; [[ "$CMD" == *'('* ]] && SUBSHELL=1
 
 NAMES=(); VALUES=()
 lookup() {   # value of a simple NAME=value set earlier in this command
@@ -65,6 +68,7 @@ while IFS= read -r seg; do
   seg=$(normalize_command "$seg"); set -f; set -- $seg; set +f
   [[ $# -gt 0 ]] || continue
   if [[ "$1" == cd ]]; then
+    [[ $SUBSHELL == 1 ]] && { BASE=""; continue; }
     BASE=$(in_scratch "$(expand_var "${2:-}")" "$SCRATCH" "$BASE") || BASE=""
     continue
   fi
