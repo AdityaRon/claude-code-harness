@@ -18,13 +18,16 @@ managed_file() {
 
 status() {
   [[ -f "$S" ]] || { echo "no $S: run install.sh first"; return 1; }
-  jq -r '"sandbox:           \(if .sandbox.enabled == true then "on" else "off" end)",
+  jq -r --arg home "$HOME" '"sandbox:           \(if .sandbox.enabled == true then "on" else "off" end)",
          "fail if missing:   \(.sandbox.failIfUnavailable // false)",
          "excluded commands: \((.sandbox.excludedCommands // []) | join(", "))",
          "allowed domains:   \((.sandbox.network.allowedDomains // []) | length)",
          "local binding:     \(.sandbox.network.allowLocalBinding // false)",
          "denied reads:      \((.sandbox.filesystem.denyRead // []) | join(", "))",
-         "extra write paths: \((.sandbox.filesystem.allowWrite // []) | join(", "))"' "$S"
+         "extra write paths: \((.sandbox.filesystem.allowWrite // [])
+           | map(if startswith("~/.claude") or startswith($home + "/.claude")
+                 then . + " (no effect: Claude Code keeps ~/.claude read-only to commands)" else . end)
+           | join(", "))"' "$S"
   local m
   if m=$(managed_file); then
     echo "managed settings:  $m (its sandbox values win over yours: $(jq -c '.sandbox // "none"' "$m" 2>/dev/null || echo unreadable))"

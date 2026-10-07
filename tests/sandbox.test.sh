@@ -15,6 +15,10 @@ jq '{permissions: {defaultMode: "auto"}, env: {A: "1"}, sandbox: .sandbox}' conf
 OUT=$(bash "$T" on 2>&1); rc=$?
 [[ $rc == 0 && "$(jq -r .sandbox.enabled "$CLAUDE_SETTINGS_FILE")" == true && "$OUT" == *"sandbox:           on"* && "$OUT" == *"denied reads:      ~/.ssh"* ]] \
   && pass "on sets sandbox.enabled true" || fail "on" "rc=$rc $OUT"
+jq '.sandbox.filesystem.allowWrite = ["~/.claude/jobs", "/opt/data"]' "$CLAUDE_SETTINGS_FILE" > "$TMP/aw.json"
+OUT=$(CLAUDE_SETTINGS_FILE="$TMP/aw.json" bash "$T" status 2>&1)
+[[ "$OUT" == *"~/.claude/jobs (no effect"* && "$OUT" == *"/opt/data"* && "$OUT" != *"/opt/data (no effect"* ]] \
+  && pass "status flags a write path under ~/.claude as having no effect" || fail "write path flag" "$OUT"
 [[ "$(jq -c '[.env.A, .permissions.defaultMode, (.sandbox.excludedCommands | length)]' "$CLAUDE_SETTINGS_FILE")" == '["1","auto",6]' ]] \
   && pass "other keys untouched" || fail "other keys" "$(cat "$CLAUDE_SETTINGS_FILE")"
 compgen -G "$CLAUDE_SETTINGS_FILE.bak.*" >/dev/null && pass "a backup is kept" || fail "backup" "$(ls "$TMP")"
@@ -41,11 +45,21 @@ OUT=$(jq -s --arg home "$HOME" --argjson owned '[]' -f config/merge-settings.jq 
 echo ""
 echo "=== sandbox-trial.sh, unsandboxed and offline ==="
 mkdir -p "$TMP/home/.claude" "$TMP/job/tmp"
+export CLAUDE_SETTINGS_FILE="$TMP/none.json"
 OUT=$(cd "$TMP" && HOME="$TMP/home" CLAUDE_JOB_DIR="$TMP/job" bash "$OLDPWD/bin/sandbox-trial.sh" --offline 2>&1); rc=$?
 [[ $rc == 0 && "$OUT" == *"sandbox: OFF"* ]] && pass "detects that it is not sandboxed" || fail "detect off" "rc=$rc $OUT"
 OUT2=$(cd "$TMP" && env -u CLAUDE_JOB_DIR HOME="$TMP/home" bash "$OLDPWD/bin/sandbox-trial.sh" --offline 2>&1)
 [[ "$OUT2" == *"session scratch"*"skipped: CLAUDE_JOB_DIR is unset"* ]] && pass "no job dir: the scratch probe is skipped, not failed" || fail "no job dir" "$OUT2"
-[[ "$(grep -c '^  INFO' <<<"$OUT")" == 7 ]] && pass "reports every offline probe" || fail "probe count" "$OUT"
+[[ "$(grep -c '^  INFO' <<<"$OUT")" == 8 ]] && pass "reports every offline probe" || fail "probe count" "$OUT"
+jq -n '{sandbox: {enabled: true}}' > "$TMP/on.json"
+OUT=$(cd "$TMP" && CLAUDE_SETTINGS_FILE="$TMP/on.json" HOME="$TMP/home" bash "$OLDPWD/bin/sandbox-trial.sh" --offline 2>&1)
+[[ "$OUT" == *"settings say on, but this shell is not sandboxed"* ]] && pass "settings on, shell not sandboxed: says so" || fail "settings on" "$OUT"
+OUT=$(cd "$TMP" && HOME="$TMP/home" bash "$OLDPWD/bin/sandbox-trial.sh" --offline --local-url http://127.0.0.1:9/ 2>&1)
+[[ "$OUT" == *"net: http://127.0.0.1:9/"*"no answer"* ]] && pass "--local-url adds the probe, offline too" || fail "--local-url" "$OUT"
+OUT=$(cd "$TMP" && SANDBOX_TRIAL_LOCAL_URL=http://127.0.0.1:9/ HOME="$TMP/home" bash "$OLDPWD/bin/sandbox-trial.sh" --offline 2>&1)
+[[ "$OUT" == *"net: http://127.0.0.1:9/"* ]] && pass "the env var still works" || fail "env var" "$OUT"
+OUT=$(bash bin/sandbox-trial.sh --sideways 2>&1); rc=$?
+[[ $rc == 2 && "$OUT" == *"--local-url"* ]] && pass "unknown flag prints usage" || fail "trial usage" "rc=$rc $OUT"
 [[ -z "$(find "$TMP" -name '.sandbox-trial.*')" ]] && pass "leaves no probe files behind" || fail "cleanup" "$(find "$TMP" -name '.sandbox-trial.*')"
 
 echo ""
