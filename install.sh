@@ -180,9 +180,15 @@ else
   fi
 
   RETIRED=$(jq -c . "$REPO/config/retired-rules.json" 2>/dev/null || echo '{}')
-  jq -r --argjson r "$RETIRED" '[(.permissions.deny // [])[], (.permissions.allow // [])[]] - ([$r.permissions.deny, $r.permissions.allow] | map(. // []) | add) as $kept
-      | [(.permissions.deny // [])[], (.permissions.allow // [])[]] - $kept | unique[]' "$TARGET" 2>/dev/null \
-    | while IFS= read -r rule; do echo "  ✓ retired rule removed: $rule"; done
+  # Only a message, so a failure here must not stop the install; a rule a
+  # fragment lists is kept by the merge, so it is not named.
+  jq -r --argjson r "$RETIRED" --slurpfile s "$SOURCE" '
+      ([$r.permissions.deny, $r.permissions.allow] | map(. // []) | add) as $gone
+      | ([$s[0].permissions.deny, $s[0].permissions.allow] | map(. // []) | add) as $kept
+      | [(.permissions.deny // [])[], (.permissions.allow // [])[]]
+      | map(select(. as $x | any($gone[]; . == $x) and (any($kept[]; . == $x) | not))) | unique[]' "$TARGET" 2>/dev/null \
+    | while IFS= read -r rule; do echo "  ✓ retired rule removed: $rule"; done \
+    || echo "  ⚠ could not list retired rules; the merge below still removes them."
 
   TMP=$(mktemp)
   if ! jq -s --arg home "$HOME" --argjson owned "$OWNED" --argjson retired "$RETIRED" -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then

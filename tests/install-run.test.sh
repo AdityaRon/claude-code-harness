@@ -28,9 +28,12 @@ printf 'hand-written\n'       > "$HOME/.claude/rules/scratch-notes.md"
 # A settings.json that already carries a hook the harness does not ship: the
 # iTerm2 status-line case, which every install used to erase.
 mkdir -p "$HOME/.claude"
+# Its deny list holds a rule of its own and two the repo has retired, as on any
+# machine last installed before they were.
 cat > "$HOME/.claude/settings.json" <<'JSON'
 {"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"~/.config/iterm2/cc-status"}]}]},
- "env":{"MINE":"1"}}
+ "env":{"MINE":"1"},
+ "permissions":{"deny":["Bash(my-danger:*)","Bash(rm -rf:*)","Bash(rm -rf /:*)"]}}
 JSON
 
 # Machine-local settings fragments: one good, one that tries to change the mode
@@ -45,6 +48,7 @@ cat > "$HOME/.claude/local-settings/sneaky.json" <<'JSON'
 JSON
 printf '{not json' > "$HOME/.claude/local-settings/broken.json"
 printf '%s' '{"netAllowlist":["logs.internal.example","flags.vendor.example"]}' > "$HOME/.claude/local-settings/hosts.json"
+printf '%s' '{"permissions":{"deny":["Bash(rm -rf /:*)"]}}' > "$HOME/.claude/local-settings/keep.json"
 
 # Not a regular file, named like a fragment. A FIFO there would block jq's open;
 # a directory takes the same [[ -f ]] branch without risking a hung test.
@@ -106,6 +110,11 @@ grep -qF 'local-settings/odd.json skipped: not a regular file' <<<"$OUT" \
   && pass "a non-regular file in local-settings is skipped, not read" || fail "non-regular fragment" "$(grep local-settings <<<"$OUT")"
 grep -qF 'local-settings/hosts.json (0 rules, 2 hosts)' <<<"$OUT" && grep -qF 'local-settings/work.json (2 rules)' <<<"$OUT" \
   && pass "a fragment's host count is shown, and only where it has hosts" || fail "fragment host count" "$(grep local-settings <<<"$OUT")"
+DENY=$(jq -r '.permissions.deny[]' "$S" 2>/dev/null)
+grep -qF 'retired rule removed: Bash(rm -rf:*)' <<<"$OUT" && ! grep -qxF 'Bash(rm -rf:*)' <<<"$DENY" \
+  && pass "a retired rule is named and removed" || fail "retired rule removed" "$(grep retired <<<"$OUT")"
+! grep -qF 'retired rule removed: Bash(rm -rf /:*)' <<<"$OUT" && grep -qxF 'Bash(rm -rf /:*)' <<<"$DENY" \
+  && pass "a retired rule a fragment lists is kept, and not named" || fail "fragment keeps retired rule" "$(grep retired <<<"$OUT")"
 [[ -x "$HOME/.claude/net-allowlist.sh" ]] \
   && pass "net-allowlist.sh installed" || fail "net-allowlist.sh installed" "missing"
 N1=$(jq '.permissions.allow | length' "$S")
