@@ -45,6 +45,19 @@ DEFAULT_ALLOW=(
   'stackoverflow.com'
   'developer.mozilla.org'
   'rubygems.org'
+  # Reference docs: static pages whose request logs no one else can read, and
+  # most of the remaining GET asks on one machine (2026-10-06). Exact doc hosts
+  # where the parent domain also serves user content (hub.docker.com).
+  'www.postgresql.org'
+  'www.rfc-editor.org'
+  'web.dev'
+  'wikipedia.org'
+  'nodejs.org'
+  'kubernetes.io'
+  'docs.docker.com'
+  'www.anthropic.com'
+  'support.claude.com'
+  'platform.claude.com'
 )
 
 # This machine. A GET here never leaves it; a local dev server is most of what
