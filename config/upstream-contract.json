@@ -22,8 +22,8 @@
     "capability no one has noticed will not appear here on its own — that is a",
     "standing limitation, and the check prints it rather than implying coverage."
   ],
-  "last_verified_version": "2.1.292 (Claude Code)",
-  "last_verified_date": "2026-10-06",
+  "last_verified_version": "2.1.293 (Claude Code)",
+  "last_verified_date": "2026-10-07",
   "acknowledged_surface": {
     "_comment": [
       "Capability -> the decision a human made about it. Verified by substring",
@@ -189,7 +189,15 @@
     "permission rules re-applied after a PreToolUse hook rewrites input": "2.1.290: permission rules and safety checks now apply to a call after a PreToolUse hook rewrites its input. No harness hook returns updatedInput (grep hooks/). Nothing to change.",
     "status and doctor warn when managed settings ignore user sandbox paths or domains": "2.1.290: /status and doctor warn when managed settings ignore user-configured sandbox allowRead paths or allowed domains. config/settings.json drafts sandbox.network.allowedDomains with the sandbox off; on a work machine whose managed settings ignore user domains, that list would not apply if the sandbox were turned on, and /status now says so. Nothing to change.",
     "edits through a symlinked settings file now ask": "2.1.290: an edit to the file a symlinked settings file points at now gets the settings-file permission question. install.sh copies settings.json into place rather than linking it; the README's symlinked local-settings fragments are read by install.sh and network-guard, not by Claude Code as settings. Nothing to change.",
-    "async Stop hook with an unquoted path under a space": "2.1.290: a plugin's async Stop hook passing an unquoted script path under a folder with a space no longer loops. The harness's async Stop hook (session-snapshot.sh) is registered in user settings as ~/.claude/hooks/session-snapshot.sh, not by a plugin. Nothing to change."
+    "async Stop hook with an unquoted path under a space": "2.1.290: a plugin's async Stop hook passing an unquoted script path under a folder with a space no longer loops. The harness's async Stop hook (session-snapshot.sh) is registered in user settings as ~/.claude/hooks/session-snapshot.sh, not by a plugin. Nothing to change.",
+    "mod hooks on classic.* events kept while the plugin hooks worker restarts": "2.1.293: a mod's classic.* hooks were skipped during a plugin hooks worker restart, leaving settings hooks to answer alone. The harness's guards are settings hooks, so they answered throughout, and hooks/mod-gate.sh still refuses a mod that hooks classic.PreToolUse or classic.PermissionRequest. Nothing to change.",
+    "claude plugin test reads $.session.append rows (mock.session)": "2.1.293: plugin tests can read back the rows a mod appends with $.session.append. hooks/mod-gate.sh runs claude plugin validate, not plugin test, and its list of calls that act outside the guards names $.session.send and $.session.authorize, not append. Nothing to change.",
+    "mods: $.tool.register isDeferred": "2.1.293: a mod can list its tool's schema in the prompt from the start instead of behind tool search. A context cost, not a permission change; hooks/mod-gate.sh does not read register options. Nothing to change.",
+    "path-scoped rules load when a file is viewed through Bash": "2.1.293: path-scoped rules and nested CLAUDE.md files now load when Claude views a file with a single-file cat, head, tail, sed -n or grep. rules/python-tests.md is path-scoped (paths: **/*.py), so it now loads on those views as well. Upstream fix; nothing to change.",
+    "auto mode denial message: the 2.1.281 outcome wording is reverted": "2.1.293: Claude is no longer told that an auto mode denial covers the outcome, not only the exact command. The harness ships defaultMode auto, and no file in this repo quotes that message (git grep). Nothing to change.",
+    "Claude Haiku 5.5 is the default Haiku model": "2.1.293. No harness setting names a Haiku model or sets ANTHROPIC_DEFAULT_HAIKU_MODEL; claude-haiku-4-5 appears only as fixture text in tests/audit.test.sh. Nothing to change.",
+    "subagentStatusLine payload gains agentType": "2.1.293. The harness ships statusLine only, not subagentStatusLine. Not adopted.",
+    "claude agents asks for bypass consent first": "2.1.293: claude agents offered bypass permissions that background sessions then ignored when consent was saved only in settings.local.json or a --settings file. config/settings.json ships defaultMode auto and records no bypass consent. Nothing to change."
   },
   "memory_index_limits": {
     "_comment": [
