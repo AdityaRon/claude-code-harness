@@ -86,8 +86,9 @@ if [ "$BASE" = "MEMORY.md" ]; then
     && iadd "${STRAY} line(s) are neither an entry nor a tier marker — likely an append with no trailing newline fused to the next line. Repair before reordering, or the entry is discarded."
 
   if [ -n "$IFIND" ]; then
-    printf 'memory-lint on %s:\n%s\n' "$BASE" "$IFIND"
-    printf 'The index is what tells the model a memory exists. Fix these now.\n'
+    # stderr: on exit 2 that is the stream Claude Code hands back to the model.
+    printf 'memory-lint on %s:\n%s\n' "$BASE" "$IFIND" >&2
+    printf 'The index is what tells the model a memory exists. Fix these now.\n' >&2
     exit 2
   fi
   exit 0
@@ -138,13 +139,21 @@ grep -q '^[[:space:]]*modified:' "$FILE" \
 #
 # Claude Code stamps originSessionId on memories it writes itself; one written
 # straight through the Write tool gets whatever frontmatter the author chose, so
-# this is where that gap closes. The hook knows the writing session, so report the
-# value rather than the absence: naming the field costs an edit and a guess,
-# supplying it costs an edit.
+# this is where that gap closes. The hook knows the writing session, so it stamps
+# the field itself: asking cost the writer an edit on 8 of every 9 new memories.
 if ! grep -q 'originSessionId:' "$FILE"; then
   SID=$(jq_get '.session_id')
-  if [ -n "$SID" ]; then
-    add "no \`metadata.originSessionId\`. Add \`originSessionId: $SID\` so this memory can be attributed later — without it nothing can tell a fact that survived months from one appended minutes ago."
+  STAMP="$FILE.stamp.$$"
+  if [ -n "$SID" ] && awk -v sid="$SID" '
+      NR == 1 && $0 != "---" { exit 1 }
+      NR > 1 && !done && /^---[[:space:]]*$/ { if (!meta) print "metadata:"; print "  originSessionId: " sid; done = 1 }
+      { print }
+      NR > 1 && !done && /^metadata:[[:space:]]*$/ { meta = 1; print "  originSessionId: " sid; done = 1 }
+      END { if (!done) exit 1 }' "$FILE" > "$STAMP" 2>/dev/null; then
+    mv -f "$STAMP" "$FILE"
+  elif [ -n "$SID" ]; then
+    rm -f "$STAMP"
+    add "no \`metadata.originSessionId\`, and no frontmatter to add it to. Add \`originSessionId: $SID\` under \`metadata:\` so this memory can be attributed later."
   else
     add "no \`metadata.originSessionId\`, and this hook could not read its own session id. Add the writing session's id by hand."
   fi

@@ -35,8 +35,13 @@ if [ -n "$PROJECT_DIR" ] && [ -f "$PROJECT_DIR/.claude/hooks/comment-budget.py" 
   exit 0
 fi
 
+# The comment markers of each language: `---` is a YAML document start, and
+# `--` is a comment only in SQL.
 case "${FILE##*.}" in
-  py|ts|tsx|js|java|go|scala|sql|j2|sh|yaml|yml) ;;
+  py|sh|yaml|yml)          PFX='#' ;;
+  ts|tsx|js|java|go|scala) PFX='//|/\*|\*' ;;
+  sql)                     PFX='--|/\*|\*' ;;
+  j2)                      PFX='\{#|#' ;;
   *) exit 0 ;;
 esac
 
@@ -44,16 +49,23 @@ MAX_RUN=6
 
 # Longest run of consecutive comment lines in stdin. A shebang line resets the
 # run instead of extending it — `#!/usr/bin/env bash` is not a comment block.
+# A license header or a doc comment with tags (@param, @returns) is not
+# rationale, so such a run does not count.
 longest_run() {
-  awk '
+  # Through the environment: awk -v would unescape the \* in it.
+  PFX="$PFX" awk '
+    BEGIN { pfx = ENVIRON["PFX"] }
+    function close_run() { if (run > best && !exempt) best = run; run = 0; exempt = 0 }
     {
       trimmed = $0
       sub(/^[ \t]*/, "", trimmed)
-      if (trimmed ~ /^#!/) { run = 0 }
-      else if ($0 ~ /^[ \t]*(#|\/\/|--|\/\*|\*)/) { run++; if (run > best) best = run }
-      else { run = 0 }
+      if (trimmed ~ /^#!/) { close_run(); next }
+      if ($0 ~ ("^[ \t]*(" pfx ")")) {
+        run++
+        if ($0 ~ /Copyright|License|SPDX-License-Identifier|@(param|returns?|throws|example|typedef|type|template|see|deprecated)([^A-Za-z]|$)/) exempt = 1
+      } else close_run()
     }
-    END { print best + 0 }
+    END { close_run(); print best + 0 }
   '
 }
 
@@ -80,8 +92,11 @@ case "$TOOL" in
     check_pair "$OLD_B64" "$NEW_B64"
     ;;
   Write)
-    NEW_B64=$(printf '%s' "$INPUT" | jq -r '(.tool_input.content // "") | @base64')
-    check_pair "" "$NEW_B64"
+    NEW_B64=$(printf '%s' "$INPUT" | jq -r '(.tool_input.content // .tool_input.file_text // .tool_input.file_content // "") | @base64')
+    # The committed copy is the old side, so re-writing a file whose block was
+    # already there stays silent.
+    OLD_B64=$(cd "$(dirname "$FILE")" 2>/dev/null && git show "HEAD:./$(basename "$FILE")" 2>/dev/null | base64 | tr -d '\n')
+    check_pair "$OLD_B64" "$NEW_B64"
     ;;
   MultiEdit)
     # NUL/newline-unsafe fields go through base64 first — old_string/new_string
@@ -96,6 +111,6 @@ esac
 
 [ -n "$FOUND" ] || exit 0
 
-printf '%s: added an %s-line comment block. Say only what the code cannot (trap, constraint, reason) and move the rationale to the PR body.\n' \
+printf '%s: added a comment block of %s lines. Say only what the code cannot (trap, constraint, reason) and move the rationale to the PR body.\n' \
   "$FILE" "$FOUND" >&2
 exit 2

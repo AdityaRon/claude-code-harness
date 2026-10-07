@@ -363,5 +363,23 @@ check_absent   "no hubs, no hub advice"          "principle hubs"               
 check_contains "falls back to generic advice"    "Add one, in the section"         "$OUT"
 
 echo ""
+echo ""
+echo "=== a memory without originSessionId is stamped, not flagged ==="
+: > "$STORE/MEMORY.md"
+printf -- '---\nname: unstamped\ndescription: a cue\nmetadata:\n  type: reference\n  modified: 2026-01-01\n---\n\nbody\n' > "$STORE/unstamped.md"
+echo "- [T](unstamped.md) — hook" > "$STORE/MEMORY.md"
+OUT=$(printf '{"tool_name":"Write","session_id":"abcd-1234","tool_input":{"file_path":"%s"}}' "$STORE/unstamped.md" | bash "$HOOK" 2>&1)
+check_absent  "no finding for it"            "originSessionId" "$OUT"
+check_contains "the field is written"        "  originSessionId: abcd-1234" "$(cat "$STORE/unstamped.md")"
+check_eq      "under metadata, once"         "1" "$(grep -c originSessionId "$STORE/unstamped.md")"
+check_contains "the body is untouched"       "body" "$(tail -1 "$STORE/unstamped.md")"
+
+echo ""
+echo "=== index findings reach the model (stderr) ==="
+: > "$STORE/MEMORY.md"
+printf 'not an entry line\n' >> "$STORE/MEMORY.md"
+ERR=$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s"}}' "$STORE/MEMORY.md" | bash "$HOOK" 2>&1 >/dev/null)
+check_contains "on stderr" "neither an entry nor a tier marker" "$ERR"
+
 echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
