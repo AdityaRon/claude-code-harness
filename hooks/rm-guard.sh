@@ -9,7 +9,7 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
-case "$CMD" in *rm*) ;; *) exit 0 ;; esac
+[[ "$CMD" =~ (^|[^[:alnum:]_.-])rm([[:space:]]|$) ]] || exit 0
 
 SCRATCH=$(session_scratch)
 # A command that sets the variables in_scratch trusts gets no scratch allowance.
@@ -20,8 +20,9 @@ BASE=""
 CWD=$(jq_get '.cwd')
 [[ -n "$CWD" ]] && BASE=$(in_scratch "$CWD" "$SCRATCH" "") || BASE=""
 
-# One segment per line, quoted separators kept as text.
-SEGS=$(neutralize_quoted_separators "$(normalize_command "$CMD")" | tr '\n' ';' \
+# One segment per line, quoted separators kept as text. Split before normalizing:
+# normalize_command drops a leading `J=…;`, and the assignment is needed below.
+SEGS=$(neutralize_quoted_separators "$CMD" | tr '\n' ';' \
   | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;&]/\n/g')
 
 NAMES=(); VALUES=()
@@ -31,7 +32,8 @@ lookup() {   # value of a simple NAME=value set earlier in this command
   return 1
 }
 expand_var() {   # $NAME/rest or ${NAME}/rest → value/rest, for names set above
-  local t="$1" name rest v
+  local t="${1//\"/}" name rest v
+  t="${t//\'/}"
   if [[ "$t" =~ ^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?(/.*)?$ ]]; then
     name="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
     v=$(lookup "$name") && { printf '%s%s' "$v" "$rest"; return; }
@@ -59,6 +61,8 @@ while IFS= read -r seg; do
     NAMES+=("${BASH_REMATCH[1]}"); VALUES+=("$(expand_var "$v")")
     continue
   fi
+  seg=$(normalize_command "$seg"); set -f; set -- $seg; set +f
+  [[ $# -gt 0 ]] || continue
   if [[ "$1" == cd ]]; then
     BASE=$(in_scratch "$(expand_var "${2:-}")" "$SCRATCH" "$BASE") || BASE=""
     continue

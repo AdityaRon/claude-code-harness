@@ -167,8 +167,13 @@ else
     exit 1
   fi
 
+  RETIRED=$(jq -c . "$REPO/config/retired-rules.json" 2>/dev/null || echo '{}')
+  jq -r --argjson r "$RETIRED" '[(.permissions.deny // [])[], (.permissions.allow // [])[]] - ([$r.permissions.deny, $r.permissions.allow] | map(. // []) | add) as $kept
+      | [(.permissions.deny // [])[], (.permissions.allow // [])[]] - $kept | unique[]' "$TARGET" 2>/dev/null \
+    | while IFS= read -r rule; do echo "  ✓ retired rule removed: $rule"; done
+
   TMP=$(mktemp)
-  if ! jq -s --arg home "$HOME" --argjson owned "$OWNED" -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
+  if ! jq -s --arg home "$HOME" --argjson owned "$OWNED" --argjson retired "$RETIRED" -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
     rm -f "$TMP"
     echo "  ✗ settings.json merge failed — left untouched (backup: $BACKUP)"
     exit 1

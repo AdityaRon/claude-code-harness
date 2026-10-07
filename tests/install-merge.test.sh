@@ -16,7 +16,9 @@ fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 merge(){
   printf '%s' "$1" > "$TMP/old.json"
   printf '%s' "$2" > "$TMP/new.json"
-  jq -s --arg home "${MERGE_HOME:-$HOME}" --argjson owned "$OWNED" -f "$FILTER" "$TMP/old.json" "$TMP/new.json"
+  local retired="${RETIRED:-}"; [[ -n "$retired" ]] || retired='{}'
+  jq -s --arg home "${MERGE_HOME:-$HOME}" --argjson owned "$OWNED" --argjson retired "$retired" \
+    -f "$FILTER" "$TMP/old.json" "$TMP/new.json"
 }
 # The hook file names the harness ships, passed the way install.sh passes them.
 OWNED=$(cd hooks && printf '%s\n' *.sh | jq -R . | jq -sc .)
@@ -342,6 +344,22 @@ for s in $(grep -oE '/\.claude/skills/[^/"]+' config/settings.json | sed 's#.*/#
 done
 [[ -z "$FOREIGN" ]] && pass "no allow rule for a skill outside skills/" \
   || fail "no allow rule for a skill outside skills/" "$FOREIGN"
+
+echo ""
+echo "=== retired rules leave an installed settings.json ==="
+RETIRED=$(jq -c . config/retired-rules.json)
+OUT=$(merge '{"permissions":{"deny":["Bash(rm -rf:*)","Bash(rm -rf /:*)","Bash(mine:*)"]}}' '{"permissions":{"deny":["Bash(sudo:*)"]}}')
+DENY=$(printf '%s' "$OUT" | jq -c '.permissions.deny')
+[[ "$DENY" != *'rm -rf'* ]] && pass "rm -rf rules removed from an installed settings.json" || fail "retired rules removed" "$DENY"
+[[ "$DENY" == *'Bash(mine:*)'* && "$DENY" == *'Bash(sudo:*)'* ]] && pass "other installed and shipped deny rules kept" || fail "others kept" "$DENY"
+OUT=$(merge '{"permissions":{"deny":["Bash(rm -rf:*)"]}}' '{"permissions":{"deny":["Bash(rm -rf:*)"]}}')
+[[ "$(printf '%s' "$OUT" | jq -c '.permissions.deny')" == *'rm -rf'* ]] \
+  && pass "a retired rule that arrives in NEW (a local-settings fragment) is kept" || fail "fragment keeps a retired rule" "$OUT"
+jq -n -e 'input as $s | input as $r | [$s.permissions.deny[], $s.permissions.allow[]] as $ship
+    | ($ship - ([$r.permissions.deny, $r.permissions.allow] | add)) | length == ($ship | length)' \
+    config/settings.json config/retired-rules.json >/dev/null \
+  && pass "nothing the repo ships is on the retired list" || fail "a shipped rule is retired" "$(jq -c '.permissions' config/retired-rules.json)"
+unset RETIRED
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
