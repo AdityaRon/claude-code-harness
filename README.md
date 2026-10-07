@@ -225,6 +225,9 @@ bin/                     ← executables the harness installs or you invoke
   memory-provenance.sh   ← who wrote this memory, and when? --session NAME answers
                            "did the session telling me this also write the memory
                            I am about to cite as agreement?"
+  permission-friction.py ← which guard asks and denies cost the most, from local
+                           transcripts; --replay hooks/ re-runs them through a
+                           branch's guards to measure a fix
 config/
   settings.json          ← the settings the installer merges in. Portable
                            only, like rules/: an allow for a work tool or an
@@ -263,6 +266,11 @@ docs/                    ← research notes and working documents
   memory-hygiene-problems.md
                          ← measured problems and the rules learned; the
                            memory skills cite this one
+  permission-friction.md ← which guard asks and denies cost the most, and why;
+                           bugs vs policy vs machine-local
+  permission-friction-cases.jsonl
+                         ← sanitized cases with observed and wanted decisions;
+                           run with bin/permission-friction.py --cases
 ```
 
 Paths inside `~/.claude` after install are flat — the grouping above is for
