@@ -29,7 +29,7 @@ check() {
 }
 
 echo "=== read-only verbs, flags BEFORE the verb (expect: allow) ==="
-check "get svc, context+ns first"  allow 'kubectl --context teleport.prod-prodn1 -n vm get svc vmselect-vm'
+check "get svc, context+ns first"  allow 'kubectl --context teleport.example-prod -n vm get svc vmselect-vm'
 check "get pods -A"                allow 'kubectl get pods -A'
 check "delete on a second line"    ask   $'echo start\nkubectl --context prod delete pod api-1'
 check "current-context then ;"     allow 'kubectl config current-context; echo done'
@@ -59,10 +59,10 @@ check "upper case read"          allow 'KUBECTL get pods'
 echo "=== the bypasses that permission rules cannot express (expect: ask) ==="
 check "plain delete"               ask  'kubectl delete pod foo -n vm'
 check "--namespace, not -n"        ask  'kubectl --namespace vm delete pod foo'
-check "--context= equals form"     ask  'kubectl --context=prodn1 delete pod foo'
+check "--context= equals form"     ask  'kubectl --context=example-prod delete pod foo'
 check "--kubeconfig first"         ask  'kubectl --kubeconfig /tmp/kc delete pod foo'
-check "-n then --context"          ask  'kubectl -n vm --context prodn1 delete pod foo'
-check "context+ns before delete"   ask  'kubectl --context prodn1 -n vm delete deploy/incident-builder'
+check "-n then --context"          ask  'kubectl -n vm --context example-prod delete pod foo'
+check "context+ns before delete"   ask  'kubectl --context example-prod -n vm delete deploy/api'
 
 echo ""
 echo "=== other destructive verbs, none of them covered by a delete deny (expect: ask) ==="
@@ -95,8 +95,12 @@ check "rollout restart mutates"  ask    'kubectl --context X -n vm rollout resta
 check "auth can-i is read"       allow 'kubectl auth can-i delete pods -n vm'
 check "auth reconcile mutates"   ask    'kubectl auth reconcile -f rbac.yaml'
 check "config view is read"      allow 'kubectl config view --minify'
+check "config view --raw: tokens" ask   'kubectl config view --raw'
+check "--raw with jsonpath"       ask   "kubectl config view --minify --raw -o jsonpath='{.users[0].user.token}'"
+check "--flatten embeds keys"     ask   'kubectl --context x config view --flatten'
+check "--raw=false is redacted"   allow 'kubectl config view --raw=false'
 check "config get-contexts read" allow 'kubectl config get-contexts -o name'
-check "config use-context sets"  ask    'kubectl config use-context prodn1'
+check "config use-context sets"  ask    'kubectl config use-context example-prod'
 
 echo ""
 echo "=== flag VALUES must not be read as the verb (expect: allow) ==="
@@ -108,14 +112,14 @@ echo ""
 echo "=== runners, chains and paths still resolve the verb (expect: ask) ==="
 check "sudo prefix"        ask  'sudo kubectl delete pod foo'
 check "timeout prefix"     ask  'timeout 30 kubectl --context X drain node-1'
-check "after tsh login"    ask  'tsh kube login prod-prodn1 >/dev/null 2>&1; kubectl -n vm delete pod foo'
+check "after tsh login"    ask  'tsh kube login example-prod >/dev/null 2>&1; kubectl -n vm delete pod foo'
 check "absolute path"      ask  '/usr/local/bin/kubectl delete pod foo'
 check "xargs"              ask  'echo foo | xargs kubectl delete pod'
 
 echo ""
 echo "=== get secret materialises credentials (expect: ask) ==="
 check "get secret -o yaml"        ask   'kubectl get secret -o yaml -n vm'
-check "get secrets plural"        ask   'kubectl --context prodn1 get secrets -n default'
+check "get secrets plural"        ask   'kubectl --context example-prod get secrets -n default'
 check "get secret jsonpath"       ask   'kubectl -n vm get secret db-creds -o jsonpath={.data}'
 check "get svc is still a read"   allow 'kubectl -n vm get svc vmselect-vm'
 check "get pods is still a read"  allow 'kubectl --context X -n vm get pods'
@@ -123,7 +127,7 @@ echo ""
 
 echo "=== describe secret prints key names and annotations (expect: ask) ==="
 check "describe secret name"      ask   'kubectl -n vm describe secret db-creds'
-check "describe secrets plural"   ask   'kubectl --context prodn1 describe secrets -n default'
+check "describe secrets plural"   ask   'kubectl --context example-prod describe secrets -n default'
 check "describe secret/name"      ask   'kubectl describe secret/db-creds'
 check "describe Secret, case"     ask   'kubectl describe Secret db-creds'
 check "describe flags first"      ask   'kubectl describe -n vm secret db-creds'
@@ -162,7 +166,7 @@ check "quoted binary"            ask   "'kubectl' delete pod foo"
 echo ""
 echo "=== Reads stay silent after normalisation (expect: allow) ==="
 check "port-forward"             allow 'kubectl port-forward svc/vmselect-vm 8481:8481 -n vm'
-check "context flag first"       allow 'kubectl --context teleport.prod-prodn1 get svc -A'
+check "context flag first"       allow 'kubectl --context teleport.example-prod get svc -A'
 check "no kubectl, has a \$("     allow 'echo "$(date +%s)"'
 
 echo ""

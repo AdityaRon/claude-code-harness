@@ -302,7 +302,18 @@ while (( i < n )); do
         case "$verb" in
           rollout) in_list "$sub" "${SUBVERB_READONLY_rollout[@]}" && continue ;;
           auth)    in_list "$sub" "${SUBVERB_READONLY_auth[@]}"    && continue ;;
-          config)  in_list "$sub" "${SUBVERB_READONLY_config[@]}"  && continue ;;
+          config)
+            if in_list "$sub" "${SUBVERB_READONLY_config[@]}"; then
+              # view --raw or --flatten prints the kubeconfig's tokens and client keys.
+              k=$i; raw=0
+              while (( k < n )) && ! is_operator "${TOKENS[$k]}"; do
+                case "${TOKENS[$k]}" in --raw|--raw=true|--flatten|--flatten=true) raw=1 ;; esac
+                k=$((k + 1))
+              done
+              [[ $raw -eq 0 ]] && continue
+              emit_ask "kubectl config view --raw puts the kubeconfig's tokens and client keys into the transcript. Confirm this is intended."
+              exit 0
+            fi ;;
         esac
         emit_ask "kubectl $verb ${sub:-<subcommand>} changes cluster or kubeconfig state. Name the target context/namespace and the specific change."
         exit 0

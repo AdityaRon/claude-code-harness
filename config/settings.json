@@ -168,7 +168,8 @@
           { "type": "command", "command": "~/.claude/hooks/interpreter-guard.sh" },
           { "type": "command", "command": "~/.claude/hooks/kubectl-guard.sh" },
           { "type": "command", "command": "~/.claude/hooks/network-guard.sh" },
-          { "type": "command", "command": "~/.claude/hooks/rm-guard.sh" }
+          { "type": "command", "command": "~/.claude/hooks/rm-guard.sh" },
+          { "type": "command", "command": "~/.claude/hooks/config-guard.sh" }
         ]
       },
       {
@@ -179,7 +180,8 @@
         "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           { "type": "command", "command": "~/.claude/hooks/secret-scanner.sh" },
-          { "type": "command", "command": "~/.claude/hooks/mod-gate.sh" }
+          { "type": "command", "command": "~/.claude/hooks/mod-gate.sh" },
+          { "type": "command", "command": "~/.claude/hooks/config-guard.sh" }
         ]
       },
       {

@@ -48,12 +48,13 @@ DOTSOURCE='\.'
 # now enforces it rather than a comment asserting it. Add to both lists or
 # neither. The extension list on `secrets.` is explicit to keep source files
 # (secrets.py, secrets.ts) readable.
-DOTFILES='(\.env(\b|\.)|\.envrc\b|\.aws/credentials|\.netrc\b|id_rsa\b|id_ed25519\b'
+DOTFILES='(\.env(\b|\.)|\.envrc\b|\.aws(/|\b)|\.netrc\b|id_(rsa|dsa|ecdsa|ed25519)\b'
 DOTFILES="${DOTFILES}|\.pem\b|\.key\b|\.git-credentials\b|\.npmrc\b|\.pgpass\b"
-DOTFILES="${DOTFILES}|\.kube/config|\.docker/config\.json|\.pypirc\b|\.ssh/config\b"
+DOTFILES="${DOTFILES}|\.kube/config|\.docker/config\.json|\.pypirc\b|\.ssh(/|\b)|\.gnupg(/|\b)"
+DOTFILES="${DOTFILES}|\.config/gcloud(/|\b)|\.azure(/|\b)|kubeconfig\b|\.claude\.json\b"
 DOTFILES="${DOTFILES}|credentials\.json\b|service[_-]account[^|;&[:space:]]*\.json\b"
-DOTFILES="${DOTFILES}|terraform\.tfstate\b|\.tfvars\b|\.p12\b|\.pfx\b|gh/hosts\.yml\b"
-DOTFILES="${DOTFILES}|secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)\b)"
+DOTFILES="${DOTFILES}|terraform\.tfstate\b|\.tfvars\b|\.(p12|pfx|jks|keystore)\b|gh/hosts\.yml\b"
+DOTFILES="${DOTFILES}|secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)([^.[:alnum:]_]|$))"
 
 # Env dumpers. Used after the boundary A, so a bare `env`, `export -p` or `set`
 # counts anywhere in a chain. The old form anchored each to ^ inside the
@@ -75,7 +76,8 @@ SECRET_VAR_SUFFIX='\$\{?([A-Za-z0-9_]*_)?(KEY|TOKEN|CREDENTIALS?)([^A-Za-z0-9_]|
 
 # Reading a dotfile via input redirection, with no reader command at all.
 #   while read l; do …; done < .env      cmd < .aws/credentials
-REDIR_READ="<\s*['\"]?[^|;&<>]*${DOTFILES}"
+#   Not <( … ), a process substitution: its command is scanned as a segment.
+REDIR_READ="<\s*['\"]?[^|;&<>(]*${DOTFILES}"
 
 # dd reading a dotfile:  dd if=.env of=/tmp/x
 DD_READ="\bdd\b[^|;&]*if=[^|;&]*${DOTFILES}"
@@ -127,25 +129,38 @@ done
 # jq and yq read files like any reader, but their first operand is a filter,
 # and `.env.X` there is a key: `jq -r '.env.FOO' settings.json` is how this
 # harness's own env block gets read. Drop options and the filter, then test
-# only the file operands. Word splitting is naive about a filter with spaces;
-# a stray fragment of one can over-block, never under-block a file operand.
+# only the file operands. Words split as the shell would (xargs), so a quoted
+# filter is one word; naive splitting if its quotes do not balance.
 case "$SCAN" in *jq*|*yq*)
   while IFS= read -r seg; do
     # Each segment opens with its boundary (| ; && $( or a backtick), then jq.
-    set -f; read -ra W <<<"$(printf '%s' "$seg" | sed -E 's/^[^a-z]*(jq|yq)[[:space:]]+//')"; set +f
-    i=0
+    rest=$(printf '%s' "$seg" | sed -E 's/^[^a-z]*(jq|yq)[[:space:]]+//')
+    W=()
+    if toks=$(printf '%s' "$rest" | xargs printf '%s\n' 2>/dev/null); then
+      while IFS= read -r w; do W+=("$w"); done <<<"$toks"
+    else
+      set -f; read -ra W <<<"$rest"; set +f
+    fi
+    i=0; from_file=0
     while [[ $i -lt ${#W[@]} ]]; do
       case "${W[$i]}" in
         --arg|--argjson|--slurpfile|--rawfile) i=$((i+3)) ;;
         --indent|-L) i=$((i+2)) ;;
+        -f|--from-file) from_file=1; i=$((i+2)) ;;
+        --args|--jsonargs) i=${#W[@]} ;;
         -*) i=$((i+1)) ;;
         *) break ;;
       esac
     done
-    if printf '%s\n' "${W[@]:$((i+1))}" | grep -qE "$DOTFILES"; then
-      emit_deny "$DENY_MSG"
-      exit 0
-    fi
+    [[ $from_file == 0 ]] && i=$((i+1))
+    for w in "${W[@]:$i}"; do
+      # Spaces plus filter syntax: a nested filter, as in <(jq '… ["~/.ssh"]'), not a path.
+      case "$w" in *[[:space:]]*) case "$w" in *'{'*|*'['*|*'('*|*'='*|*'|'*|*%7C*) continue ;; esac ;; esac
+      if printf '%s\n' "$w" | grep -qE "$DOTFILES"; then
+        emit_deny "$DENY_MSG"
+        exit 0
+      fi
+    done
   done < <(printf '%s\n' "$SCAN" | grep -oE "${A}(jq|yq)\s[^|;&]*")
 esac
 
