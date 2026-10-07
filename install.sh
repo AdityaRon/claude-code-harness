@@ -61,6 +61,12 @@ cp "$REPO/bin/session-route.sh" ~/.claude/session-route.sh
 chmod +x ~/.claude/session-route.sh
 echo "  ✓ session-route.sh"
 
+# Hosts network-guard allows on this machine only, read from local-settings at
+# every call; see the README's Customization section.
+cp "$REPO/bin/net-allowlist.sh" ~/.claude/net-allowlist.sh
+chmod +x ~/.claude/net-allowlist.sh
+echo "  ✓ net-allowlist.sh"
+
 # ---- Contract pin -----------------------------------------------------
 # session-start.sh compares this with `claude --version`, so a session says when
 # the CLI has moved past the release the harness was checked against.
@@ -110,12 +116,15 @@ if compgen -G "$LOCAL_SETTINGS/*.json" >/dev/null && command -v jq &>/dev/null; 
   COMBINED=$(mktemp)
   cp "$SOURCE" "$COMBINED"
   for frag in "$LOCAL_SETTINGS"/*.json; do
+    # jq blocks opening a FIFO; only a regular file (or a link to one) is read.
+    [[ -f "$frag" ]] || { echo "  ⚠ local-settings/$(basename "$frag") skipped: not a regular file."; continue; }
     if jq -e '(.permissions.allow // []) + (.permissions.deny // []) | all(type == "string")' "$frag" >/dev/null 2>&1 \
        && jq --slurpfile f "$frag" '.permissions.allow += ($f[0].permissions.allow // [])
                                    | .permissions.deny  += ($f[0].permissions.deny  // [])' \
             "$COMBINED" > "$COMBINED.next"; then
       mv "$COMBINED.next" "$COMBINED"
-      echo "  ✓ local-settings/$(basename "$frag") ($(jq '(.permissions.allow // []) + (.permissions.deny // []) | length' "$frag") rules)"
+      echo "  ✓ local-settings/$(basename "$frag") ($(jq -r '"\((.permissions.allow // []) + (.permissions.deny // []) | length) rules"
+        + (if (.netAllowlist | type) == "array" then ", \(.netAllowlist | length) hosts" else "" end)' "$frag"))"
     else
       rm -f "$COMBINED.next"
       echo "  ⚠ local-settings/$(basename "$frag") skipped: not JSON, or allow/deny not lists of strings."
