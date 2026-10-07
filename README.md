@@ -99,7 +99,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 | `remoteControlAtStartup` | `true` | Every interactive session connects to [Remote Control](https://code.claude.com/docs/en/remote-control), so you can pick it up from claude.ai or the Claude app. Needs a claude.ai login. Anyone signed in to your account can then steer the session; turn on **Require trusted devices** in your claude.ai account settings to tie that to known devices. Set `false` to opt out; the install keeps your value. |
 | `isolatePeerMachines` | `true` | With Remote Control on, a `SendMessage` to a session on another machine waits for your approval. Sessions on this machine are unaffected. |
 | `permissions.allow` | Scoped allowlist | Covers common safe ops: `npm test/run lint/build`, `pytest`, `python3`, `poetry run/install/lock`, `gh run/search`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. Read-only verbs added from the audit-log census: `git grep/rev-parse/ls-tree/ls-files/show-ref/cat-file/blame/describe/merge-base/shortlog`, `git remote -v`, `git worktree list`, and read-only `docker` subcommands (`run`/`exec`/`rm`/`cp` deliberately excluded). Interpreter wildcards (`python3`, `poetry run`) are allowed because a permission `allow` only skips the *prompt* — the PreToolUse guards still run, and `interpreter-guard` inspects inline `-c`/`-e`/heredoc code even when wrapped in a runner (`poetry run python -c …`). `gh api` and `kubectl` are both allowlisted, but they are not equally safe. `kubectl` is covered by `kubectl-guard`, which denies every mutating verb wherever it sits in the command. `gh api` has **no** equivalent coverage — it can POST/DELETE through the GitHub API and `network-guard` never inspects it, so that entry is a deliberate convenience trade rather than a guarded one. With the OS sandbox off, an auto-approved `python3 script.py` runs the script's contents unscanned — enable the sandbox for containment. |
-| `permissions.deny` | `git push --force`, `git * reset --hard`, `sudo`, `gh auth token`, … (`rm -rf` moved to `rm-guard`) | Deny always wins over allow. Over a loaded mod it wins only on a machine with managed settings or a Team/Enterprise login; see [Known limitations](#known-limitations). The deny list also covers writes into the installed-plugin cache `~/.claude/plugins`, `claude plugin install`/`enable`/`update`/`marketplace add`, and `--plugin-url` |
+| `permissions.deny` | `git push --force`, `git reset --hard`, `sudo`, `gh auth token`, … (`rm -rf` moved to `rm-guard`) | Deny always wins over allow. Over a loaded mod it wins only on a machine with managed settings or a Team/Enterprise login; see [Known limitations](#known-limitations). The deny list also covers writes into the installed-plugin cache `~/.claude/plugins`, `claude plugin install`/`enable`/`update`/`marketplace add`, and `--plugin-url` |
 
 ### How Bash rules actually match
 
@@ -126,11 +126,12 @@ never fires. Both were present here.
   **no rule can fix it**: the first token contains a machine-specific value.
   Put the binary first instead.
 - **`git -C <path>` is not a wrapper and is not stripped.** A rule written
-  `Bash(git reset --hard:*)` therefore never matched `git -C /tmp/x reset
-  --hard`, which is why the deny list here uses `Bash(git * reset --hard:*)`.
-- **A `*` may appear anywhere in a rule**, not only at the end, and `:*` is
-  just a compact spelling of a trailing ` *`. Mid-pattern wildcards are what
-  make the `git *` and `kubectl * delete` deny rules load-bearing.
+  `Bash(git reset --hard:*)` therefore never matches `git -C /tmp/x reset
+  --hard`; `git-guard` denies that form instead.
+- **A `*` may appear anywhere in a rule, but not beside a trailing `:*`.**
+  2.1.292 reads `Bash(git * push --force:*)` as a literal prefix, so its `*`
+  matches only a literal `*`, and it warns about the rule at every launch.
+  Write the wildcard form without `:*`, as in `Bash(claude * --plugin-url*)`.
 - **Whether `~` is expanded is undocumented.** Rather than guess,
   `merge-settings.jq` emits a `$HOME`-expanded twin for every rule containing
   `~/`, so both spellings are present whichever way the CLI compares them.

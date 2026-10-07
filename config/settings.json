@@ -141,18 +141,7 @@
       "Bash(sudo:*)",
       "Bash(chmod -R 777:*)",
 
-      "Bash(git * push --force:*)",
-      "Bash(git * push -f:*)",
-      "Bash(git * reset --hard:*)",
-      "Bash(git * clean -f:*)",
-      "Bash(git * clean -fd:*)",
-      "Bash(git * branch -D:*)",
-      "Bash(git * branch -d:*)",
-
       "Bash(kubectl delete:*)",
-      "Bash(kubectl * delete:*)",
-      "Bash(kubectl -n * delete:*)",
-      "Bash(kubectl --context * delete:*)",
       "Edit(~/.claude/plugins/**)",
       "Edit(~/.claude/local-settings/**)",
       "Bash(claude plugin install:*)",
@@ -160,7 +149,7 @@
       "Bash(claude plugin update:*)",
       "Bash(claude plugin marketplace add:*)",
       "Bash(claude --plugin-url:*)",
-      "Bash(claude * --plugin-url:*)"
+      "Bash(claude * --plugin-url*)"
     ]
   },
   "hooks": {

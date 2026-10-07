@@ -8,7 +8,18 @@
   "permissions": {
     "deny": [
       "Bash(rm -rf:*)",
-      "Bash(rm -rf /:*)"
+      "Bash(rm -rf /:*)",
+      "Bash(git * push --force:*)",
+      "Bash(git * push -f:*)",
+      "Bash(git * reset --hard:*)",
+      "Bash(git * clean -f:*)",
+      "Bash(git * clean -fd:*)",
+      "Bash(git * branch -D:*)",
+      "Bash(git * branch -d:*)",
+      "Bash(kubectl * delete:*)",
+      "Bash(kubectl -n * delete:*)",
+      "Bash(kubectl --context * delete:*)",
+      "Bash(claude * --plugin-url:*)"
     ],
     "allow": []
   }
