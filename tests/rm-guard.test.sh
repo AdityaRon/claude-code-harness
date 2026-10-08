@@ -66,6 +66,19 @@ check "the scratch folder itself"  allow 'rm -rf "$CLAUDE_JOB_DIR/tmp"'
 check "scratch rm in a subshell"   allow '(rm -rf "$CLAUDE_JOB_DIR/tmp/x")'
 
 echo ""
+echo "=== the sandbox's folder for this job (/tmp/claude-<uid>/<job id>) runs ==="
+SB="/tmp/claude-$(id -u)/abcd1234"
+check "inside it"                  allow "rm -rf $SB/wt-1"
+check "the folder itself"          allow "rm -rf $SB"
+check "/private/tmp spelling"      allow "rm -rf /private$SB/x"
+check "cd there && relative"       allow "cd $SB && rm -rf old"
+check "the uid folder itself"      deny  "rm -rf /tmp/claude-$(id -u)"
+check "another job's folder"       deny  "rm -rf /tmp/claude-$(id -u)/ffffffff/x"
+check "the CLI's task output"      deny  "rm -rf /tmp/claude-$(id -u)/-Users-x-proj/tasks"
+check "another uid"                deny  "rm -rf /tmp/claude-0/abcd1234/x"
+check "interactive: no job folder" deny  "rm -rf $SB/x" "$TMP" "not-a-session-id"
+
+echo ""
 echo "=== groups, and a cd that does not outlast its subshell ==="
 check "in a { } group"             deny '{ rm -rf build; }'
 check "in a loop body"             deny 'for d in a b; do rm -rf "$d"; done'

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Recursive remove guard, replacing the Bash(rm -rf:*) deny rules: those matched
 # one spelling and refused this session's own scratch folder. Catastrophic targets
-# deny; rm -rf runs silently only when every target is in the scratch folder.
+# deny; rm -rf runs silently only when every target is in a scratch folder.
 source "$(dirname "$0")/lib.sh"
 
 read_input
@@ -100,7 +100,7 @@ while IFS= read -r seg; do
   done
   if [[ $ok -eq 0 ]]; then
     if [[ -n "$SCRATCH" ]]; then
-      emit_deny "Blocked: rm -rf outside this session's scratch folder (\$CLAUDE_JOB_DIR/tmp, where it runs freely). Remove files by name, or ask the user to run it."
+      emit_deny "Blocked: rm -rf outside this session's scratch folders (\$CLAUDE_JOB_DIR/tmp, or \$TMPDIR/<job id> under the sandbox), where it runs freely. Remove files by name, or ask the user to run it."
     else
       emit_deny "Blocked: rm -rf with no session scratch folder to confine it. Remove files by name, or ask the user to run it."
     fi

@@ -123,8 +123,11 @@ done
 echo ""
 echo "=== Shipped scripts write no fixed /tmp path ==="
 # rules/environment.md says temp files never go in a shared /tmp name; this repo
-# ships that rule, so its own installer and hooks follow it. mktemp is fine.
-HITS=$(grep -nE '/tmp/[A-Za-z]' install.sh doctor.sh hooks/*.sh bin/*.sh 2>/dev/null | grep -v '^[^:]*:[0-9]*:[[:space:]]*#')
+# ships that rule, so its own installer and hooks follow it. mktemp is fine, and
+# so is /tmp/claude-$UID: Claude Code's own per-user folder, which lib.sh only
+# compares paths against.
+HITS=$(grep -nE '/tmp/[A-Za-z]' install.sh doctor.sh hooks/*.sh bin/*.sh 2>/dev/null | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' \
+  | grep -v '/tmp/claude-\$UID/')
 [[ -z "$HITS" ]] && pass "no fixed /tmp file names" || fail "no fixed /tmp file names" "$HITS"
 
 echo ""

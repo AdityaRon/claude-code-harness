@@ -299,6 +299,8 @@ check_wt "--force, climbs out with .."       ask   'git worktree remove --force 
 check_wt "--force, redefines CLAUDE_JOB_DIR" ask   'CLAUDE_JOB_DIR=/ git worktree remove --force "$CLAUDE_JOB_DIR/tmp/../../repo"'
 check_wt "--force, another session"          ask   'git worktree remove --force ~/.claude/jobs/ffffffff/tmp/wt'
 check_wt "--force, CLAUDE_JOB_DIR set inline"  ask   'CLAUDE_JOB_DIR=/x git worktree remove --force "$CLAUDE_JOB_DIR/tmp/wt"'
+check_wt "--force in the sandbox job folder"  allow "git worktree remove --force /tmp/claude-$(id -u)/abcd1234/wt-4"
+check_wt "--force, another job's folder"      ask   "git worktree remove --force /tmp/claude-$(id -u)/ffffffff/wt"
 check_wt "stash drop still asks"             ask   'git stash drop'
 
 echo ""

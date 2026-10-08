@@ -222,6 +222,13 @@ in_scratch() {
   if [[ -n "$scratch" && ( "$p" == "$scratch" || "$p" == "$scratch/"* ) ]] || [[ -n "$t" && "$p" == "$t/"?* ]]; then
     printf '%s\n' "$p"; return 0
   fi
+  # Sandboxed commands get TMPDIR=/tmp/claude-<uid>, and rules/environment.md puts
+  # a job's Bash temp files in $TMPDIR/<job id>. Hooks run outside the sandbox.
+  local sb
+  if [[ -n "$scratch" ]]; then
+    sb="${scratch%/tmp}"; sb="/tmp/claude-$UID/${sb##*/}"
+    case "$p" in "$sb"|"$sb/"*|"/private$sb"|"/private$sb/"*) printf '%s\n' "$p"; return 0 ;; esac
+  fi
   return 1
 }
 
