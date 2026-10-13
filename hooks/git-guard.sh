@@ -17,6 +17,12 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+# Every check below names git. Normalizing drops quotes and backslashes, lowers
+# case, and removes paths and prefixes, but never adds a letter, so a command
+# with no git once quotes and backslashes are gone is done, before ~35 ms of it.
+# tr, not ${CMD//…}: bash 3.2's substitution took 30 s on an 8,000-byte command.
+R=$(printf '%s' "$CMD" | tr -d '"'\''\\')
+[[ "$R" == *[Gg][Ii][Tt]* ]] || exit 0
 CMD=$(strip_inert_heredocs "$CMD")
 
 # Strip assignment/wrapper prefixes before anything below matches. The anchor A
@@ -42,6 +48,10 @@ GOPT='(-c[= ][^ ]+|-C[= ][^ ]+|--git-dir[= ][^ ]+|--work-tree[= ][^ ]+|--namespa
 # reaches git from behind a word that is not a command boundary.
 XARGS='(xargs(\s+-[A-Za-z0-9]+(\s+\{\})?)*\s+)?'
 GIT="${XARGS}git(\s+${GOPT})*\s+"
+
+# Each check below contains one of these, so one grep stands in for all of them
+# when none is present: git status, log, diff, show and commit skip the rest.
+printf '%s\n%s\n' "$CMD" "$SCAN" | grep -qiE "core\.hookspath|\.git/hooks|${GIT}(push|reset|clean|branch|checkout|restore|stash|worktree|add|config|remote|filter-branch|filter-repo|update-ref|reflog)" || exit 0
 
 # --- core.hooksPath via -c on ANY subcommand ----------------------------
 # `git -c core.hooksPath=/tmp/evil <anything>` points hooks at an attacker
