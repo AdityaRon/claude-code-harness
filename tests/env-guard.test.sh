@@ -296,6 +296,16 @@ check "jq \\(\$r.key) string"  allow 'jq -r '\''.[] as $r | "\($r.key): \($r.val
 check "jq \\(.key) string"     allow 'jq -r '\''.[] | "\(.key) \(.value)"'\'' f.json'
 check "jq .key as \$e, join()" allow 'jq -r '\''to_entries[] | .key as $e | "\($e) \([.value[]] | join(","))"'\'' s.json'
 check "jq \\(.a) then a dotfile" deny 'jq -r '\''"\(.a)"'\'' ~/.aws/credentials'
+# grep and rg take a pattern first: a .env there is text to find. A dotfile
+# operand is still read, and an option that takes a value keeps the whole line.
+check "grep pattern names .env"   allow "grep -rn '\\.env' src/"
+check "rg pattern names .env"     allow "rg -n '\\.env\\b' ."
+check "grep alternation, .env"    allow "grep -nE 'foo|\\.env' README.md"
+check "grep pattern .env.example" allow "grep -rn '.env.example' docs/"
+check "grep reads .env"           deny "grep -n API .env"
+check "grep .env pattern on .env" deny "grep -rn '\\.env' .env"
+check "grep -f reads .env"        deny "grep -f .env src/app.py"
+check "grep --include=*.env"      deny "grep -rn --include='*.env' API ."
 # The same fix keeps the quote after a command name; the name is still rewritten.
 check "ENV inside \"\$( )\""       deny 'echo "$(ENV)"'
 check "PRINTENV inside \"\$( )\""  deny 'echo "$(PRINTENV)"'

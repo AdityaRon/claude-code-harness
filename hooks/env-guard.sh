@@ -28,6 +28,16 @@ SCAN=$(printf '%s\n%s' "$NCMD" "$(normalize_command "$NCMD")" \
 # `.ENV` is `.env` on the default macOS filesystem, so patterns naming a file
 # also run on a lower-cased copy, as sensitive-file-guard matches without case.
 SCAN_LC=$(printf '%s\n%s' "$SCAN" "$(printf '%s' "$SCAN" | tr 'A-Z' 'a-z')")
+# grep and rg take a pattern first: `grep -rn '\.env' src/` searches for text.
+# For the reader check that operand is dropped, but only behind options that
+# take no value; -e, -f, --include and the rest keep the whole line.
+GOPT='(-[cFHhiLlnoqsvwxrREPIaZz]+|--colou?r(=[a-z]+)?|--(line-number|ignore-case|count|files-with-matches|no-heading|with-filename|no-filename|recursive|fixed-strings|word-regexp|only-matching|smart-case|hidden|invert-match|extended-regexp))'
+GPAT=$'\'[^\']*\'|"[^"$`]*"|[^-[:space:]\'"|;&$`<>()][^[:space:]\'"|;&$`<>()]*'
+SCAN_R_LC=$SCAN_LC
+case "$SCAN" in *grep*|*rg*)
+  SCAN_R=$(printf '%s\n' "$SCAN" | sed -E "s/((^|[|&;]|\\\$\\(|\`)[[:space:]]*(grep|egrep|fgrep|rg)([[:space:]]+${GOPT})*[[:space:]]+)(${GPAT})([[:space:]]|\$)/\\1PATTERN\\9/g")
+  SCAN_R_LC=$(printf '%s\n%s' "$SCAN_R" "$(printf '%s' "$SCAN_R" | tr 'A-Z' 'a-z')") ;;
+esac
 
 # Command boundary: start-of-line, pipe, logical chain, subshell, semicolon, &.
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
@@ -127,6 +137,7 @@ block() {   # block WHY MATCH
 for i in "${!BLOCKED[@]}"; do
   P=${BLOCKED[$i]}
   T=$SCAN; [[ "$P" == *"$DOTFILES"* ]] && T=$SCAN_LC
+  [[ "$P" == "${A}${WRAP}${READERS}"* ]] && T=$SCAN_R_LC
   M=$(printf '%s\n' "$T" | grep -oE "$P") && block "${WHY[$i]}" "$M"
 done
 
