@@ -33,8 +33,11 @@ SCAN_LC=$(printf '%s\n%s' "$SCAN" "$(printf '%s' "$SCAN" | tr 'A-Z' 'a-z')")
 # take no value; -e, -f, --include and the rest keep the whole line.
 GOPT='(-[cFHhiLlnoqsvwxrREPIaZz]+|--colou?r(=[a-z]+)?|--(line-number|ignore-case|count|files-with-matches|no-heading|with-filename|no-filename|recursive|fixed-strings|word-regexp|only-matching|smart-case|hidden|invert-match|extended-regexp))'
 GPAT=$'\'[^\']*\'|"[^"$`]*"|[^-[:space:]\'"|;&$`<>()][^[:space:]\'"|;&$`<>()]*'
-SCAN_R=$(printf '%s\n' "$SCAN" | sed -E "s/((^|[|&;]|\\\$\\(|\`)[[:space:]]*(grep|egrep|fgrep|rg)([[:space:]]+${GOPT})*[[:space:]]+)(${GPAT})([[:space:]]|\$)/\\1PATTERN\\9/g")
-SCAN_R_LC=$(printf '%s\n%s' "$SCAN_R" "$(printf '%s' "$SCAN_R" | tr 'A-Z' 'a-z')")
+SCAN_R_LC=$SCAN_LC
+case "$SCAN" in *grep*|*rg*)
+  SCAN_R=$(printf '%s\n' "$SCAN" | sed -E "s/((^|[|&;]|\\\$\\(|\`)[[:space:]]*(grep|egrep|fgrep|rg)([[:space:]]+${GOPT})*[[:space:]]+)(${GPAT})([[:space:]]|\$)/\\1PATTERN\\9/g")
+  SCAN_R_LC=$(printf '%s\n%s' "$SCAN_R" "$(printf '%s' "$SCAN_R" | tr 'A-Z' 'a-z')") ;;
+esac
 
 # Command boundary: start-of-line, pipe, logical chain, subshell, semicolon, &.
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
