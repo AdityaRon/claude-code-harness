@@ -197,7 +197,12 @@ case "$TOOL" in
 
     # Remote code execution: piping curl/wget output into a shell/interpreter.
     #   curl … | sh      wget … | bash      curl … | sudo bash
-    if printf '%s\n' "$CMD" | grep -qE '\b(curl|wget)\b[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(bash|sh|zsh|ksh|dash|fish|python3?|perl|ruby|node|php)\b'; then
+    # Not a script file or json.tool reading the download as data: `curl … |
+    # python3 parse.py`, `| python3 -m json.tool`. Any option before the file
+    # (-c, -s, -) keeps the deny.
+    INTERP='(bash|sh|zsh|ksh|dash|fish|python3?|perl|ruby|node|php)'
+    DATA_ONLY="\|[[:space:]]*(sudo[[:space:]]+)?${INTERP}[[:space:]]+([^[:space:]-][^[:space:]]*\.(sh|bash|py|pl|rb|js|mjs|cjs|php)|-m[[:space:]]+json\.tool)([[:space:])]|\$)"
+    if printf '%s\n' "$CMD" | grep -oE "\b(curl|wget)\b[^|]*\|[[:space:]]*(sudo[[:space:]]+)?${INTERP}\b[^|;&]*" | grep -qvE "$DATA_ONLY"; then
       emit_deny "Blocked: piping curl/wget output into a shell/interpreter (remote code execution). Download to a file, inspect it, then run."
       exit 0
     fi
