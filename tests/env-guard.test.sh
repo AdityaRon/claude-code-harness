@@ -290,6 +290,16 @@ check "yq on secrets.yaml"    deny "yq '.db' secrets.yaml"
 check "jq after a chain"      deny "cd /x && jq -r .a secrets.json"
 check "jq bracket env key"    allow "jq '.[\"env\"]' package.json"
 check "jq on json"            allow "jq '.name' package.json"
+# A ( inside the filter used to cost the normalized line its closing quote
+# (lib.sh normalize_binaries), and the filter was then read as file names.
+check "jq \\(\$r.key) string"  allow 'jq -r '\''.[] as $r | "\($r.key): \($r.value)"'\'' f.json'
+check "jq \\(.key) string"     allow 'jq -r '\''.[] | "\(.key) \(.value)"'\'' f.json'
+check "jq .key as \$e, join()" allow 'jq -r '\''to_entries[] | .key as $e | "\($e) \([.value[]] | join(","))"'\'' s.json'
+check "jq \\(.a) then a dotfile" deny 'jq -r '\''"\(.a)"'\'' ~/.aws/credentials'
+# The same fix keeps the quote after a command name; the name is still rewritten.
+check "ENV inside \"\$( )\""       deny 'echo "$(ENV)"'
+check "PRINTENV inside \"\$( )\""  deny 'echo "$(PRINTENV)"'
+check "/usr/bin/env inside \"\$( )\"" deny 'X="$(/usr/bin/env)"'
 check "awk without ENVIRON"   allow 'awk "{print \$1}" data.txt'
 check "sort a file"           allow "sort names.txt"
 check "word env in a message" allow "git commit -m 'update env docs'"

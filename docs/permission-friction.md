@@ -88,17 +88,19 @@ a project's settings.
 
 ## Cases
 
-`permission-friction-cases.jsonl` (next to this file), 171 cases. The first 27 have the tool input, the
+`permission-friction-cases.jsonl` (next to this file), 175 cases. The first 27 have the tool input, the
 decision observed on local `main` at b8427b2 and on `adityaron/main` at 516db51,
 a `why`, and a `want` where the answer is not a policy call. Cases with no
 `want` are policy calls and only report. Seven `control-*` cases pin decisions
 a fix must keep (env read denied, `curl | sh` denied, delete asks, script-file
 run silent). The other 132 came from review: `pin-*` cases are what a guard fix
 must still catch, `hole-*` cases were silent allows on 516db51 (the group and reserved-word ones on 5ad2f49), and `fp-*`/`ok-*`
-cases are false positives a fix should clear. The last 12 (2026-10-07) carry
+cases are false positives a fix should clear. The 12 added on 2026-10-07 carry
 decisions on `main` at 960d21e and 0a34c00: false denies #64 and #66 cleared,
 two controls, the harness-write policy, and three false denies still open (#72),
-which have no `want`.
+which have no `want`. The 4 added on 2026-10-13 are jq filters with a `(` inside
+quotes: three cleared by the quote fix in `normalize_binaries`, and one, jq
+inside `"$( )"`, still open (#72).
 
 ```
 bin/permission-friction.py --cases --replay hooks/

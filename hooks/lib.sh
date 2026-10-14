@@ -28,23 +28,26 @@ expand_tilde() {
 #   `cd /x && VAR=1 nohup git push -f`  ->  `cd /x && git push -f`
 # Four passes handle stacked prefixes (`env A=1 B=2 nohup timeout 60 git …`);
 # a fixed count avoids sed label/branch syntax, which differs on BSD and GNU.
+# Every expression works within one line, so the passes run as one sed: each
+# Bash guard calls this, and five sed processes cost ~12 ms against one.
 # Output feeds pattern matching only — never execution — so a mangled quote is
 # harmless, and ambiguity makes the guards fail closed by design.
 normalize_wrappers() {
-  local s="$1" i
+  local s i e=()
   # Give a command-substitution opener its own whitespace BEFORE the assignment
   # rule runs. Without this the assignment pattern swallows the substitution
   # body — `X=$(kubectl delete pod foo)` normalised to `delete pod foo)`, and
   # the kubectl scan then found nothing at all. The openers are separated, not
   # removed: git-guard anchors on `$(` as a command boundary.
-  s=$(printf '%s' "$s" | sed -E 's/\$\(/ $( /g; s/`/ ` /g')
+  e=(-e 's/\$\(/ $( /g; s/`/ ` /g')
   for i in 1 2 3 4; do
-    s=$(printf '%s' "$s" | sed -E \
-      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+/\1\2/g' \
-      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(command|builtin|noglob|nohup|time|if|then|else|elif|do|while|until|function|!)[[:space:]]+/\1\2/g' \
-      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(nice([[:space:]]+-n[[:space:]]*[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|stdbuf([[:space:]]+-[ioe][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|env([[:space:]]+-[uSCP][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|sudo([[:space:]]+-[ugCph][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|doas([[:space:]]+-[uC][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|ionice([[:space:]]+-[cnp][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|exec([[:space:]]+-a[[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|caffeinate([[:space:]]+-[tw][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|xargs([[:space:]]+-[IndPLsEa][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*)[[:space:]]+/\1\2/g' \
+    e+=(
+      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+/\1\2/g'
+      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(command|builtin|noglob|nohup|time|if|then|else|elif|do|while|until|function|!)[[:space:]]+/\1\2/g'
+      -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(nice([[:space:]]+-n[[:space:]]*[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|stdbuf([[:space:]]+-[ioe][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|env([[:space:]]+-[uSCP][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|sudo([[:space:]]+-[ugCph][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|doas([[:space:]]+-[uC][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|ionice([[:space:]]+-[cnp][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|exec([[:space:]]+-a[[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|caffeinate([[:space:]]+-[tw][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|xargs([[:space:]]+-[IndPLsEa][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*)[[:space:]]+/\1\2/g'
       -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)timeout[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[0-9]+[smhd]?[[:space:]]+/\1\2/g')
   done
+  s=$(printf '%s' "$1" | sed -E "${e[@]}")
   printf '%s' "$s"
 }
 
@@ -104,16 +107,23 @@ exec_fn_suffixes() {
 # case-insensitive macOS filesystem, `GIT` as git. Rewrite the first word of
 # each command to its bare lower-case name; arguments are never touched, and
 # neither is an assignment (`X=/usr/bin/git` is not a command).
+# A word can end in a quote that closes text around it: `"$(ENV)"`, or the tail
+# of a quoted jq filter after a `(`. Dropping that quote left the line unbalanced
+# and env-guard's jq check read the filter as file names, so the last unpaired
+# quote of each kind goes back after the name, in its order.
 normalize_binaries() {
   printf '%s' "$1" | awk '
-    function fix(seg,   pre, tok, t, n) {
+    function last(s, c,   i) { for (i = length(s); i > 0; i--) if (substr(s, i, 1) == c) return i; return 0 }
+    function fix(seg,   pre, tok, t, n, q, d, a, keep) {
       match(seg, /^[ \t]*/); pre = substr(seg, 1, RLENGTH); seg = substr(seg, RLENGTH + 1)
       if (!match(seg, /^[^ \t]+/)) return pre seg
       n = RLENGTH; tok = substr(seg, 1, n)
       if (tok ~ /=/) return pre seg
       t = tok; sub(/^\\/, "", t); gsub(/["\047]/, "", t); sub(/.*\//, "", t)
       if (t == "") return pre seg
-      return pre tolower(t) substr(seg, n + 1)
+      q = tok; d = (gsub(/"/, "", q) % 2) ? last(tok, "\"") : 0; a = (gsub(/\047/, "", q) % 2) ? last(tok, "\047") : 0
+      keep = (d && a) ? (d < a ? "\"\047" : "\047\"") : (d ? "\"" : (a ? "\047" : ""))
+      return pre tolower(t) keep substr(seg, n + 1)
     }
     { out = ""; s = $0   # fix() calls match(), so keep RSTART and RLENGTH first
       while (match(s, /&&|[|][|]|[|&;`(]|[$][(]/)) {

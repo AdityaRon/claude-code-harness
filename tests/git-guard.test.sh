@@ -263,6 +263,7 @@ echo "=== Other spellings of the binary, more wrappers (issue #2 E) ==="
 # The shell runs each of these as git; every one was allowed silently.
 check "absolute path"             deny '/usr/bin/git push --force origin main'
 check "quoted binary"             deny '"git" push -f origin main'
+check "quotes inside the binary"  deny 'g"i"t push -f origin main'
 check "backslash-escaped binary"  deny '\git push -f origin main'
 check "upper case, case-insensitive fs" deny 'GIT push --force origin main'
 check "path after a chain"        deny 'cd x && /usr/bin/git reset --hard'
