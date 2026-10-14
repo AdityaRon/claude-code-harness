@@ -163,30 +163,30 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/env-guard.sh" },
-          { "type": "command", "command": "~/.claude/hooks/git-guard.sh" },
-          { "type": "command", "command": "~/.claude/hooks/interpreter-guard.sh" },
-          { "type": "command", "command": "~/.claude/hooks/kubectl-guard.sh" },
-          { "type": "command", "command": "~/.claude/hooks/network-guard.sh" },
-          { "type": "command", "command": "~/.claude/hooks/rm-guard.sh" },
-          { "type": "command", "command": "~/.claude/hooks/config-guard.sh" }
+          { "type": "command", "command": "~/.claude/hooks/env-guard.sh", "onFailure": "block" },
+          { "type": "command", "command": "~/.claude/hooks/git-guard.sh", "onFailure": "block" },
+          { "type": "command", "command": "~/.claude/hooks/interpreter-guard.sh", "onFailure": "block" },
+          { "type": "command", "command": "~/.claude/hooks/kubectl-guard.sh", "onFailure": "block" },
+          { "type": "command", "command": "~/.claude/hooks/network-guard.sh", "onFailure": "block" },
+          { "type": "command", "command": "~/.claude/hooks/rm-guard.sh", "onFailure": "block" },
+          { "type": "command", "command": "~/.claude/hooks/config-guard.sh", "onFailure": "block" }
         ]
       },
       {
         "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit|Grep",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/sensitive-file-guard.sh" }]
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/sensitive-file-guard.sh", "onFailure": "block" }]
       },
       {
         "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/secret-scanner.sh" },
-          { "type": "command", "command": "~/.claude/hooks/mod-gate.sh" },
-          { "type": "command", "command": "~/.claude/hooks/config-guard.sh" }
+          { "type": "command", "command": "~/.claude/hooks/secret-scanner.sh", "onFailure": "block" },
+          { "type": "command", "command": "~/.claude/hooks/mod-gate.sh", "onFailure": "block" },
+          { "type": "command", "command": "~/.claude/hooks/config-guard.sh", "onFailure": "block" }
         ]
       },
       {
         "matcher": "WebFetch",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/network-guard.sh" }]
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/network-guard.sh", "onFailure": "block" }]
       },
       {
         "matcher": "ExitPlanMode",

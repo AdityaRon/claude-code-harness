@@ -102,6 +102,16 @@ echo ""
 echo "=== No input is not a parse failure ==="
 check_decision "env-guard, empty input"               env-guard.sh            '' allow
 
+# Without onFailure, Claude Code runs the call when a guard crashes or times
+# out (checked on 2.1.296). Async hooks cannot block, so they are left out.
+echo ""
+echo "=== Every blocking PreToolUse hook blocks when it fails ==="
+while IFS=$'\t' read -r matcher cmd on; do
+  if [[ "$on" == block ]]; then echo "  OK: $matcher ${cmd##*/}"; PASS=$((PASS+1))
+  else echo "  FAIL (onFailure=$on): $matcher ${cmd##*/}"; FAIL=$((FAIL+1)); fi
+done < <(jq -r '.hooks.PreToolUse[] | .matcher as $m | .hooks[] | select(.async | not)
+  | [$m, .command, (.onFailure // "unset")] | @tsv' config/settings.json)
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
