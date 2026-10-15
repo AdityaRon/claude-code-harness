@@ -130,9 +130,10 @@ jobs:
           CLAUDE_CHANGELOG_PATH: changelog.md
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # The 2.1.283 review finished in 43 turns and the action failed it at 40.
+          # The 2.1.283 review finished in 43 turns and the action failed it at 40;
+          # the 2.1.299 one finished in 69 and was failed at 60 (2026-10-14).
           claude_args: >-
-            --max-turns 60
+            --max-turns 100
             --allowedTools "Read(./**),Edit(config/upstream-contract.json),Write(pr-body.md),Bash(bash bin/upstream-check.sh)"
             --disallowedTools "WebFetch,WebSearch,mcp__github,mcp__github_comment,mcp__github_file_ops,mcp__github_inline_comment,mcp__github_ci"
             --setting-sources project
