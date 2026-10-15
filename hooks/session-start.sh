@@ -91,8 +91,15 @@ if [[ -f "$PIN_FILE" ]]; then
     STAMP="$CLI $(date +%Y-%m-%d)"
     if [[ ! -f "$STAMP_FILE" || "$(head -1 "$STAMP_FILE" 2>/dev/null)" != "$STAMP" ]]; then
       echo ""
-      echo "## Claude Code is past the harness contract"
-      echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift workflow drafts the review PR. After it merges, run bash install.sh."
+      # An older CLI is behind, not past: the review already merged, and settings
+      # it added (onFailure needs 2.1.295) are ignored until Claude Code updates.
+      if [[ "$(printf '%s\n%s\n' "$CLI" "$PIN" | sort -V | head -1)" == "$CLI" ]]; then
+        echo "## Claude Code is older than the harness contract"
+        echo "Installed $CLI; the harness was verified at $PIN, so settings added since may be ignored. Update Claude Code."
+      else
+        echo "## Claude Code is past the harness contract"
+        echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift workflow drafts the review PR. After it merges, run bash install.sh."
+      fi
       mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
     fi
   fi

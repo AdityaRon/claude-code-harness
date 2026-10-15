@@ -184,6 +184,11 @@ OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.280 run_resume "sess
 check_not_contains "silent at the pinned version" "past the harness contract" "$OUT"
 OUT=$(CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
 check_not_contains "silent without a pin file" "past the harness contract" "$OUT"
+rm -f "$CLAUDE_STATE_DIR/contract-nudge"
+OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.99 run_resume "sess-clean")
+check_contains     "an older CLI is told to update" "older than the harness contract" "$OUT"
+check_not_contains "and is not called past it"      "past the harness contract" "$OUT"
+printf '2.1.281 %s\n' "$(date +%Y-%m-%d)" > "$CLAUDE_STATE_DIR/contract-nudge"
 
 echo ""
 echo "=== the nudge is stamped: once per CLI version per day, not every session ==="
