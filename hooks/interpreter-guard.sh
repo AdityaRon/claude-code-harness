@@ -4,7 +4,7 @@
 # Wildcard allows for python/node/ruby/perl/php/bash -c let Claude sidestep
 # every regex-based guard by writing a tiny script that reads env vars or
 # dotfiles. This hook inspects inline-code flags (-c, -e, --eval, combined
-# short flags like -ne, -r, a trailing -, and heredoc payloads) and denies
+# short flags like -ne, -r, a trailing -, and heredoc payloads) and asks
 # when the payload references env vars, dotfile paths, raw sockets, or
 # network exfil APIs. It sees through common command runners (poetry run,
 # env, timeout, nohup, …) so wrapping an interpreter doesn't evade the check.
@@ -109,7 +109,9 @@ fi
 # Yes — scan the payload for sensitive tokens.
 for T in "${SENSITIVE_TOKENS[@]}"; do
   if printf '%s\n' "$ICMD" | grep -qE "$T"; then
-    emit_deny "Blocked: interpreter invoked with inline code that references env vars, dotfiles, sockets, or subprocess-spawning APIs. Put the logic in a committed script so it can be reviewed."
+    # Asks rather than denies (#72): a deny had Claude rewrite routine glue as a
+    # script file: 15 unique commands in the 16 days to 2026-10-15.
+    emit_ask "Inline code passed to an interpreter references env vars, dotfiles, sockets, or subprocess-spawning APIs. Review the payload before running it."
     exit 0
   fi
 done
@@ -122,7 +124,7 @@ done
 # Exempt only a single-quoted payload holding one s///, tr/// or y///. The `e`
 # modifier compiles the replacement as code, and `@{...}` / `${\...}` reach
 # code from an ordinary replacement, so those still fall through to the ask.
-# The deny scan above has already exited, so a dotfile payload never gets here.
+# The token scan above has already exited, so a dotfile payload never gets here.
 STREAM_EDIT_RE="${IB}(perl|ruby)\s+(-[A-Za-z0-9]*[pni][A-Za-z0-9]*\s+)"
 
 payload_is_pure_substitution() {

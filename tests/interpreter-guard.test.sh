@@ -28,33 +28,33 @@ check() {
   fi
 }
 
-echo "=== Inline env-var reads (expect: deny) ==="
-check "python os.environ"   deny 'python3 -c "import os; print(os.environ[\"AWS_KEY\"])"'
-check "python os.getenv"    deny 'python -c "import os; print(os.getenv(\"TOKEN\"))"'
-check "node process.env"    deny 'node -e "console.log(process.env.AWS_SECRET)"'
-check "ruby ENV"            deny 'ruby -e "puts ENV[\"TOKEN\"]"'
-check "perl \$ENV"          deny 'perl -e "print $ENV{TOKEN}"'
-check "bash -c printenv"    deny 'bash -c "printenv"'
+echo "=== Inline env-var reads (expect: ask) ==="
+check "python os.environ"   ask  'python3 -c "import os; print(os.environ[\"AWS_KEY\"])"'
+check "python os.getenv"    ask  'python -c "import os; print(os.getenv(\"TOKEN\"))"'
+check "node process.env"    ask  'node -e "console.log(process.env.AWS_SECRET)"'
+check "ruby ENV"            ask  'ruby -e "puts ENV[\"TOKEN\"]"'
+check "perl \$ENV"          ask  'perl -e "print $ENV{TOKEN}"'
+check "bash -c printenv"    ask  'bash -c "printenv"'
 
 echo ""
-echo "=== Inline dotfile reads (expect: deny) ==="
-check "python open .env"    deny 'python3 -c "print(open(\".env\").read())"'
-check "node readFile .env"  deny 'node -e "console.log(require(\"fs\").readFileSync(\".env\",\"utf8\"))"'
-check "perl .env"           deny 'perl -e "open(F,\".env\");print<F>"'
-check "node aws creds"      deny 'node -e "const f=require(\"fs\");console.log(f.readFileSync(\".aws/credentials\",\"utf8\"))"'
+echo "=== Inline dotfile reads (expect: ask) ==="
+check "python open .env"    ask  'python3 -c "print(open(\".env\").read())"'
+check "node readFile .env"  ask  'node -e "console.log(require(\"fs\").readFileSync(\".env\",\"utf8\"))"'
+check "perl .env"           ask  'perl -e "open(F,\".env\");print<F>"'
+check "node aws creds"      ask  'node -e "const f=require(\"fs\");console.log(f.readFileSync(\".aws/credentials\",\"utf8\"))"'
 
 echo ""
-echo "=== Inline sockets / exfil (expect: deny) ==="
-check "python socket"       deny 'python3 -c "import socket; s=socket.socket()"'
-check "python requests.post" deny 'python3 -c "import requests; requests.post(u,d)"'
-check "python urllib"       deny 'python -c "import urllib.request; urllib.request.urlopen(u)"'
-check "node fetch"          deny 'node -e "fetch(\"https://x\").then(r=>r.text())"'
+echo "=== Inline sockets / exfil (expect: ask) ==="
+check "python socket"       ask  'python3 -c "import socket; s=socket.socket()"'
+check "python requests.post" ask  'python3 -c "import requests; requests.post(u,d)"'
+check "python urllib"       ask  'python -c "import urllib.request; urllib.request.urlopen(u)"'
+check "node fetch"          ask  'node -e "fetch(\"https://x\").then(r=>r.text())"'
 
 echo ""
-echo "=== Inline subprocess chain (expect: deny) ==="
-check "python subprocess"   deny 'python -c "import subprocess; subprocess.run([\"printenv\"])"'
-check "node child_process"  deny 'node -e "require(\"child_process\").exec(\"printenv\")"'
-check "python os.system"    deny 'python -c "import os; os.system(\"cat .env\")"'
+echo "=== Inline subprocess chain (expect: ask) ==="
+check "python subprocess"   ask  'python -c "import subprocess; subprocess.run([\"printenv\"])"'
+check "node child_process"  ask  'node -e "require(\"child_process\").exec(\"printenv\")"'
+check "python os.system"    ask  'python -c "import os; os.system(\"cat .env\")"'
 
 echo ""
 echo "=== Inline but benign (expect: allow) ==="
@@ -71,15 +71,15 @@ check "bash build.sh"       allow "bash scripts/build.sh"
 check "ruby rake.rb"        allow "ruby rake.rb"
 
 echo ""
-echo "=== Interpreter bypasses — H5 (expect: deny) ==="
-check "php -r getenv"       deny 'php -r "echo getenv(\"AWS_SECRET\");"'
-check "perl -ne combined"   deny 'perl -ne "print" .env'
-check "perl -pe combined"   deny 'perl -pe "s/x/y/" .aws/credentials'
-check "python heredoc"      deny 'python3 <<EOF
+echo "=== Interpreter bypasses — H5 (expect: ask) ==="
+check "php -r getenv"       ask  'php -r "echo getenv(\"AWS_SECRET\");"'
+check "perl -ne combined"   ask  'perl -ne "print" .env'
+check "perl -pe combined"   ask  'perl -pe "s/x/y/" .aws/credentials'
+check "python heredoc"      ask  'python3 <<EOF
 import os
 print(os.environ["AWS_KEY"])
 EOF'
-check "bash heredoc env"    deny 'bash <<EOF
+check "bash heredoc env"    ask  'bash <<EOF
 printenv
 EOF'
 
@@ -90,12 +90,12 @@ print(2 + 2)
 EOF'
 
 echo ""
-echo "=== Wrapped in a command runner still inspected (expect: deny) ==="
-check "poetry run python -c"   deny 'poetry run python -c "import os; print(os.environ[\"AWS_KEY\"])"'
-check "env VAR= python -c"     deny 'env FOO=1 python3 -c "import os; print(os.environ[\"TOKEN\"])"'
-check "timeout python -c"      deny 'timeout 5 python3 -c "import os; print(os.getenv(\"SECRET\"))"'
-check "nohup node -e"          deny 'nohup node -e "console.log(process.env.TOKEN)"'
-check "sudo python -c"         deny 'sudo python3 -c "import os; print(os.environ[\"X\"])"'
+echo "=== Wrapped in a command runner still inspected (expect: ask) ==="
+check "poetry run python -c"   ask  'poetry run python -c "import os; print(os.environ[\"AWS_KEY\"])"'
+check "env VAR= python -c"     ask  'env FOO=1 python3 -c "import os; print(os.environ[\"TOKEN\"])"'
+check "timeout python -c"      ask  'timeout 5 python3 -c "import os; print(os.getenv(\"SECRET\"))"'
+check "nohup node -e"          ask  'nohup node -e "console.log(process.env.TOKEN)"'
+check "sudo python -c"         ask  'sudo python3 -c "import os; print(os.environ[\"X\"])"'
 
 echo ""
 echo "=== Benign wrapped commands (expect: allow) ==="
@@ -146,12 +146,12 @@ check "perl s/// && node -e"    ask  "perl -pi -e 's/a/b/' f.md && node -e \"con
 # A heredoc body lives on its own lines, so the length rule never saw it: it
 # needs 200+ chars with no ; | & after an inline flag on ONE line. Measured
 # against the pre-change hook, this was already allow. Pinned here so the
-# exemption does not get blamed for it later. The deny scan does still read
+# exemption does not get blamed for it later. The token scan does still read
 # heredoc bodies, so a token in one is denied either way.
 check "chained heredoc unchanged" allow "perl -pi -e 's/a/b/' f.md && python3 <<EOF
 print('$PAD')
 EOF"
-check "chained -c reads env"    deny "perl -pi -e 's/a/b/' f.md && python3 -c \"import os; print(os.environ['X'])\""
+check "chained -c reads env"    ask  "perl -pi -e 's/a/b/' f.md && python3 -c \"import os; print(os.environ['X'])\""
 
 echo ""
 echo "=== Substitution that can reach code still asks (expect: ask) ==="
@@ -166,28 +166,28 @@ check "two -e payloads"        ask  "perl -pi -e 's/$PAD/x/' -e 's/y/z/' notes.m
 check "double-quoted payload"  ask  "perl -pi -e \"s/$PAD/x/\" notes.md"
 
 echo ""
-echo "=== Exemption never outranks the deny scan (expect: deny) ==="
-check "stream edit on dotenv"  deny "perl -0pi -e 's/$PAD/x/' .env"
-check "stream edit netrc"      deny "perl -0pi -e 's/$PAD/x/' .netrc"
-check "repl names a socket"    deny "perl -pi -e 's/$PAD/socket.socket/' notes.md"
-check "repl reads env"         deny "perl -pi -e 's/$PAD/\$ENV{TOKEN}/' notes.md"
+echo "=== Exemption never outranks the token scan (expect: ask) ==="
+check "stream edit on dotenv"  ask  "perl -0pi -e 's/$PAD/x/' .env"
+check "stream edit netrc"      ask  "perl -0pi -e 's/$PAD/x/' .netrc"
+check "repl names a socket"    ask  "perl -pi -e 's/$PAD/socket.socket/' notes.md"
+check "repl reads env"         ask  "perl -pi -e 's/$PAD/\$ENV{TOKEN}/' notes.md"
 
 echo ""
 echo "=== Family-specific inline flags and env spellings ==="
-check "node -p env"            deny 'node -p "process.env.X"'
-check "node --print env"       deny 'node --print "process.env.X"'
-check "perl -E env"            deny 'perl -E "say $ENV{X}"'
-check "perl %ENV"              deny 'perl -e "print join q(,), keys %ENV"'
-check "ruby ENV.to_h"          deny 'ruby -e "puts ENV.to_h"'
+check "node -p env"            ask  'node -p "process.env.X"'
+check "node --print env"       ask  'node --print "process.env.X"'
+check "perl -E env"            ask  'perl -E "say $ENV{X}"'
+check "perl %ENV"              ask  'perl -e "print join q(,), keys %ENV"'
+check "ruby ENV.to_h"          ask  'ruby -e "puts ENV.to_h"'
 check "node -p arithmetic"     allow 'node -p "1+1"'
 check "pytest -p plugin"       allow 'python3 -m pytest tests/test_search.py -p no:warnings --no-header --color=no -q --maxfail=1 --durations=5 --tb=short -k "search and not slow"'
 check "python -E script"       allow 'python3 -E tools/build.py'
 
 echo ""
 echo "=== Other spellings of the binary (issue #2 E) ==="
-check "upper case"             deny 'PYTHON3 -c "import os; print(os.environ)"'
-check "absolute path"          deny '/usr/bin/python3 -c "import os; print(os.environ)"'
-check "quoted binary"          deny '"python3" -c "import os; print(os.environ)"'
+check "upper case"             ask  'PYTHON3 -c "import os; print(os.environ)"'
+check "absolute path"          ask  '/usr/bin/python3 -c "import os; print(os.environ)"'
+check "quoted binary"          ask  '"python3" -c "import os; print(os.environ)"'
 check "absolute path, script"  allow '/usr/bin/python3 tools/build.py'
 
 echo ""
