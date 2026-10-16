@@ -215,5 +215,18 @@ OUT=$(run_resume "sess-clean")
 case "$OUT" in *"Mod loading"*) echo "  FAIL: silent for a session with no mods  [$OUT]"; FAIL=$((FAIL+1)) ;; *) echo "  OK: silent for a session with no mods"; PASS=$((PASS+1)) ;; esac
 
 echo ""
+echo "=== Start prunes worktree records whose folder is gone ==="
+L="$TMP/launch"; mkdir -p "$L"
+git init -q "$L/repo" && git -C "$L/repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+git -C "$L/repo" worktree add -q "$TMP/wt-live" -b live && git -C "$L/repo" worktree add -q "$TMP/wt-gone" -b gone
+rm -rf "$TMP/wt-gone"
+jq -nc --arg d "$L" '{source:"startup",session_id:"sess-prune",cwd:$d}' | bash "$HOOK" >/dev/null 2>&1
+# The prune is detached; give it up to 10 s.
+for _ in $(seq 50); do git -C "$L/repo" worktree list | grep -q wt-gone || break; sleep 0.2; done
+WT=$(git -C "$L/repo" worktree list)
+check_not_contains "stale record pruned" "wt-gone" "$WT"
+check_contains "live worktree kept" "wt-live" "$WT"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

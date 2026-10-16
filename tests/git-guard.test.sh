@@ -158,8 +158,8 @@ check "reset --hard VAR="        deny "VAR=1 git reset --hard origin/main"
 check "clean -fd"                deny "git clean -fd"
 check "clean -fd -C"             deny "git -C /tmp/x clean -fd"
 check "clean --force"            deny "git clean --force"
-check "branch -D"                deny "git branch -D topic"
-check "branch -D -C"             deny "git -C /tmp/x branch -D topic"
+check "branch -D, no repo to check" ask "git branch -D topic"
+check "branch -D -C, not a repo"     ask "git -C /tmp/x branch -D topic"
 
 echo ""
 echo "=== Read-only and near-miss forms must stay silent (expect: allow) ==="
@@ -320,6 +320,29 @@ check_wt "--force, relative after a cd"      ask   'cd /tmp && git worktree remo
 check_wt "--force, a path in a variable"     ask   "W=$R/clean; git worktree remove --force \$W"
 check_wt "--force, clean then dirty"         ask   "git worktree remove --force $R/clean && git worktree remove --force $R/dirty"
 check_wt "--force, no such path"             ask   "git worktree remove --force $R/gone"
+
+echo ""
+echo "=== branch delete: runs only when a remote-tracking ref holds the tip ==="
+git init -q --bare "$R/remote.git" && git -C "$R/main" remote add origin "$R/remote.git"
+git -C "$R/main" branch b-pushed && git -C "$R/main" branch Feature-X
+git -C "$R/main" push -q origin b-pushed Feature-X 2>/dev/null
+git -C "$R/main" checkout -q -b b-local \
+  && git -C "$R/main" -c user.email=t@t -c user.name=t commit -q --allow-empty -m local && git -C "$R/main" checkout -q -
+M="$R/main"
+check_wt "-D, tip on a remote"               allow "git branch -D b-pushed" "$M"
+check_wt "-d, tip on a remote"               allow "git branch -d b-pushed" "$M"
+check_wt "-D, mixed-case name on a remote"   allow "git branch -D Feature-X" "$M"
+check_wt "-D -C, tip on a remote"            allow "git -C $M branch -D b-pushed"
+check_wt "-D, redirect after the name"       allow "git branch -D b-pushed 2>/dev/null" "$M"
+check_wt "--delete --force"                  allow "git branch --delete --force b-pushed" "$M"
+check_wt "-D, commits only local"            ask   "git branch -D b-local" "$M"
+check_wt "-D, one of two only local"         ask   "git branch -D b-pushed b-local" "$M"
+check_wt "-D, no such branch"                ask   "git branch -D b-gone" "$M"
+check_wt "-D, name in a variable"            ask   "B=b-pushed; git branch -D \$B" "$M"
+check_wt "-D, after a cd"                    ask   "cd $M && git branch -D b-pushed" "/tmp"
+check_wt "-D, names from xargs"              ask   "git branch | xargs git branch -D" "$M"
+check_wt "-D, unknown flag"                  ask   "git branch -D -r origin/b-pushed" "$M"
+check_wt "-D, then a local-only delete"      ask   "git branch -D b-pushed && git branch -D b-local" "$M"
 rm -rf "$WT_HOME"
 
 echo ""

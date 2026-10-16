@@ -75,6 +75,23 @@ if [[ -n "$INDEX_TOOL" && -f "$PROJECTS_DIR/$STORE_SLUG/memory/MEMORY.md" ]]; th
     bash "$INDEX_TOOL" --store "$STORE_SLUG" --write >/dev/null 2>&1 || true
 fi
 
+# --- worktree records whose folder is gone ------------------------------------
+# A session's scratch worktree goes when its job folder does, but the repo keeps
+# the record, and the branch stays checked out there: it cannot be deleted or
+# checked out again. Prune the launch repo and the repos one level under it.
+# Reading the records forks nothing; git runs only when one is stale, detached.
+for g in "$LAUNCH_DIR/.git" "$LAUNCH_DIR"/*/.git; do
+  [[ -d "$g/worktrees" ]] || continue
+  for f in "$g"/worktrees/*/gitdir; do
+    [[ -f "$f" ]] || continue
+    IFS= read -r wt < "$f" || continue
+    if [[ ! -e "$wt" ]]; then
+      (git --git-dir="$g" worktree prune >/dev/null 2>&1 &)
+      break
+    fi
+  done
+done
+
 STATE_DIR=$(expand_tilde "${CLAUDE_STATE_DIR:-$HOME/.claude/state/sessions}")
 
 # --- CLI ahead of the harness contract --------------------------------------
