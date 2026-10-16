@@ -341,6 +341,28 @@ check_absent "drops a Fixed line that only mentions subagents" "spinner flicker"
 check_absent "drops editor-only lines" "[VSCode]" "$OUT"
 check_absent "drops a release with no hits" "## 9.9.1" "$OUT"
 check_absent "stops at the verified release" "already assessed" "$OUT"
+check_absent "a release with hits does not read as unmatched" "no entry matched the harness filter" "$OUT"
+
+# upstream-drift.yml bumps the pin itself on this line, so a release with hits
+# must never print it, and a release without any must still exit 2: the pin is
+# behind either way, and the workflow is what moves it.
+cat > "$TMP/quiet.md" <<EOF
+# Changelog
+
+## 9.9.1
+
+- Fixed a typo in /help
+- Fixed the mouse wheel in fullscreen mode
+
+## $PIN
+
+- Added something already assessed
+EOF
+OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/quiet.md" CLAUDE_CLI_VERSION=9.9.1 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 2 ] && pass "a release with no matching entry still exits 2" || fail "no matching entry exits 2" "exit=$ST"
+check_contains "and says nothing matched" "no entry matched the harness filter" "$OUT"
+check_contains "and names the release to record" 'last_verified_version to "9.9.1 (Claude Code)"' "$OUT"
+check_absent "and does not ask for an assessment" "Assess each" "$OUT"
 
 OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION="$PIN" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
 [ "$ST" -eq 0 ] && pass "verified at the installed version exits 0" || fail "verified at installed version exits 0" "exit=$ST"

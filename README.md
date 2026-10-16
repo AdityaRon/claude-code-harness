@@ -393,12 +393,19 @@ settings key arrives silently. Section 6 closes that: it reads the changelog
 field. Entries naming something the contract already has a decision for are
 included, because that decision may now be stale.
 
-When the daily run finds a new release, Claude reviews it and opens a **draft PR**
-that edits only `upstream-contract.json`, once per release, assigned to the repo
-owner. New settings, and anything touching deny, ask or a guard, come back as
-questions in the PR body, never as changes. Your part: read and approve, merge,
-`bash install.sh`. Without a token the same run keeps one open issue with section 6
-instead. Locally, `session-start` says when the installed CLI is past the contract.
+When the daily run finds a new release it triages first: if no entry since the pin
+matches the section 6 filter (1 of the 21 releases 2.1.280 to 2.1.302), it moves
+`last_verified_version` itself. Otherwise Claude reviews the releases and edits only
+`upstream-contract.json`, once per release. A PR whose body starts with `Nothing to
+decide.` is opened ready and merged by the workflow once the dispatched CI run
+passes; one that starts with `Decide:` is a **draft** assigned to you, with new
+settings and anything touching deny, ask or a guard as questions, never as changes.
+Landing on its own needs a branch rule `github-actions` can satisfy; as of 2026-10-16
+`main` requires one approving review, so a ready PR waits for your merge. After any
+merge: `bash install.sh`. Without a token the same run keeps one open issue with
+section 6 instead. Locally, `session-start` says when the installed CLI is past the
+contract. On push and PR the workflow fails only on exit 1 or 3; exit 2 is the
+scheduled run's to clear.
 
 Setup, once: run `/install-github-app` in Claude Code for this repo. It installs
 the Claude GitHub App, which lets the draft PR run CI, and stores

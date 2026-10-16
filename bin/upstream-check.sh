@@ -406,9 +406,17 @@ else
            | awk -v s="$STRONG" -v b="$BROAD" '/^## /{h=$0; next}
                $0 ~ s || ($0 ~ /^- (Added|Changed|Removed|Reverted)/ && $0 ~ b) {if(h){print h; h=""} print}')
     warn "$RELEASES release(s) since $PIN have not been assessed; harness-relevant entries:"
-    printf '%s\n' "$HITS" | cut -c1-200 | sed 's/^/      /'
-    say "      Assess each, record decisions in upstream-contract.json, then set"
-    say "      last_verified_version to \"$CUR (Claude Code)\"."
+    if [ -z "$HITS" ]; then
+      # upstream-drift.yml greps this line and moves the pin itself; it then
+      # re-runs the check to prove nothing else warned. Rare: 1 of the 21
+      # releases 2.1.280-2.1.302 (2.1.291, two entries) matched nothing.
+      say "      (no entry matched the harness filter)"
+      say "      Nothing to assess: set last_verified_version to \"$CUR (Claude Code)\"."
+    else
+      printf '%s\n' "$HITS" | cut -c1-200 | sed 's/^/      /'
+      say "      Assess each, record decisions in upstream-contract.json, then set"
+      say "      last_verified_version to \"$CUR (Claude Code)\"."
+    fi
   fi
   fi
 fi
