@@ -115,8 +115,8 @@ case "$TYPE" in
   *)  add "\`metadata.type: $TYPE\` is not one of user, feedback, project, reference." ;;
 esac
 
-# No `modified:` check: Claude Code stamps it on every write to a memory file
-# with frontmatter (2.1.214), after this hook has run.
+# No `modified:` check: Claude Code stamps it on the write itself, for any
+# memory file with frontmatter (2.1.214).
 
 # Provenance. A memory records what is believed, never who came to believe it, so
 # an unattributed file is a claim with no origin: a paragraph a peer session

@@ -9,8 +9,9 @@ description: Relieve a MEMORY.md index that Claude Code reports as over or appro
 lines or 25,000 bytes the tail is dropped at session start, silently.
 
 **What already happens without you.** Claude Code checks the index on every
-write: over the limit it returns an error to the writer ("this write left the
-index over its read limit"), near it a reminder to compact. Where auto-dream is
+write: over the limit it returns an error to the writer (`Error: this write
+left the` index `over its` cap `read limit`), near it a reminder to compact
+(`approaching the` cap `read limit. Compact it`). Where auto-dream is
 enabled it also prunes and reindexes in the background. And `memory-index.sh`
 keeps the index in tier order (ACTIVE, `feedback`, `reference`, `project`,
 newest first inside the last two) so that whatever truncation takes is the

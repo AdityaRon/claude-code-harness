@@ -41,18 +41,23 @@ says so. The 2026-08 research this supersedes is in `history/`.
   with its mtime set to the consolidation time, which is also how "hours since
   last consolidation" is read. A kill rolls the mtime back.
 - **On this machine.** No `.consolidate-lock` exists in any store
-  (`find ~/.claude -maxdepth 5 -name '*consolidat*'` is empty), `autoDreamEnabled`
-  is not set in `~/.claude/settings.json`, and no memory file has been rewritten
-  by anything but the sessions named in its `originSessionId`. Auto-dream has
-  never run here. To check for yourself: `/memory` shows an Auto-dream row only
-  where the flag allows it.
+  (`find ~/.claude -maxdepth 5 -name '*consolidat*'` is empty) and
+  `autoDreamEnabled` is not set in `~/.claude/settings.json`. Auto-dream has
+  never run here. Of the six memory files across three stores, four have a
+  `modified` stamp within 2 s of their mtime; the other two were rewritten
+  16 h and 5 days after their stamp, and the harness audit log names the
+  writer: sessions appending with `cat >>` and `python3 - <<EOF` from Bash.
+  Neither the CLI's stamp nor memory-lint sees a shell write (both act on the
+  Write and Edit tools), which is a gap worth knowing about, and not a dream.
+  To check for yourself: `/memory` shows an Auto-dream row only where the flag
+  allows it.
 
 ## What the harness still does, and why
 
 | Component | Verdict | Reason |
 |---|---|---|
 | `hooks/session-start.sh` reorder of the index | **Demoted** | Runs only when the index is at or past the pressure thresholds memory-lint uses (180 lines or 20,000 bytes), only when the index changed since the last run (mtime and size stamped under `state/sessions/memory-index/`), and never while `.consolidate-lock` is under an hour old. Was 60-80 ms of a ~100 ms start here, 1.7 s on a slower machine, on stores far from the cap. |
-| `hooks/memory-lint.sh` | **Kept, trimmed** | Write-time checks the CLI does not make: name matches filename, valid type, description present and state-free, liveness claims carry a `verify:` block, link separator typos, the memory is indexed and filed under the right tier, `feedback_` past the cut. Dropped: the `modified` check (the CLI stamps it after the hook) and the generic over-limit index findings (the CLI errors on them). The `originSessionId` stamp stays; auto-dream's `priorMtime` is the lock's, not the files', so the stamp cannot trip its rollback. |
+| `hooks/memory-lint.sh` | **Kept, trimmed** | Write-time checks the CLI does not make: name matches filename, valid type, description present and state-free, liveness claims carry a `verify:` block, link separator typos, the memory is indexed and filed under the right tier, `feedback_` past the cut. Dropped: the `modified` check (the CLI stamps it on the write) and the generic over-limit index findings (the CLI errors on them). The `originSessionId` stamp stays as a backstop: the CLI stamps it on the memories it writes through its own path, and whether every Write-tool path into a memory directory gets one is unverified. Auto-dream's `priorMtime` is the lock's, not the files', so the stamp cannot trip its rollback. |
 | `bin/memory-verify.sh`, `/memory-audit` | **Kept** | Checks claims against GitHub and Jira. Nothing upstream leaves the machine to do this, and auto-dream's prompt reasons only over the files and transcripts. |
 | `bin/memory-provenance.sh` | **Kept** | Who wrote a memory and whether the session citing it also wrote it. Not upstream. |
 | `bin/memory-index.sh` | **Kept, on demand** | Tier ordering and `--archive-overflow`, invoked by the gated session-start path and by `/memory-archive`. Auto-dream prunes pointers; it does not order or archive. |

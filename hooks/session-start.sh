@@ -47,11 +47,9 @@ STATE_DIR=$(expand_tilde "${CLAUDE_STATE_DIR:-$HOME/.claude/state/sessions}")
 # --- keep the memory index in tier order, when that can matter --------------
 # MEMORY.md is cut tail-first at 200 lines and the memory writer appends at the
 # end, so a feedback_ entry can land past the cut, where it never loads.
-# memory-index.sh restores tier order as a pure permutation. It ran on every
-# start and was 60-80 ms of a ~100 ms start here, 1.7 s on a slower machine, so
-# it is skipped unless all three hold:
-#   - the index is under pressure (same thresholds memory-lint.sh uses): far
-#     from the cap, order changes nothing;
+# memory-index.sh restores tier order as a pure permutation. It was most of
+# session start, so it runs only when all three hold:
+#   - the index is under pressure (memory-lint.sh's thresholds);
 #   - the index changed since the last run (mtime and size, stamped below);
 #   - auto-dream's .consolidate-lock is older than its 1 h TTL: a younger one
 #     means the CLI's own consolidation may be rewriting this store.

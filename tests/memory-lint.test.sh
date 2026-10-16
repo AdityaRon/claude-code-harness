@@ -73,8 +73,8 @@ echo "- [T](bare.md) — hook" > "$STORE/MEMORY.md"
 OUT=$(lint "$STORE/bare.md")
 check_contains "missing description" "no \`description:\`"     "$OUT"
 check_contains "missing type"        "no \`metadata.type\`"    "$OUT"
-# Claude Code stamps `modified` itself on every memory write (2.1.214), after
-# this hook has run, so flagging its absence would fire on every new memory.
+# Claude Code stamps `modified` itself on every memory write (2.1.214), so
+# flagging its absence here would be a second report of the CLI's own field.
 check_absent   "modified is the CLI's" "metadata.modified"      "$OUT"
 
 : > "$STORE/MEMORY.md"
