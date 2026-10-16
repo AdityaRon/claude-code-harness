@@ -101,8 +101,62 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}clean\s+[^|;&]*-[a-zA-Z]*f"; then
   emit_deny "Blocked: git clean -f permanently deletes untracked files. Remove the files you mean by name instead."
   exit 0
 fi
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}branch\s+[^|;&]*(-D\b|-d\b|--delete\b)"; then
-  emit_deny "Blocked: deleting a git branch. Both -d and -D are blocked, matching permissions.deny. Run it manually if the branch is really finished."
+
+# --- Branch deletion ----------------------------------------------------
+# A branch whose tip a remote-tracking ref contains loses nothing when deleted,
+# so it runs. Sessions make a branch per worktree and could never remove one:
+# 398 piled up in one repo. Anything this cannot prove asks: a name in a
+# variable, xargs, a cd first, an unknown flag, a tip only this branch holds.
+# The raw command, not $CMD: its second line is lower-cased, and refs are not.
+branch_on_remote() {
+  local tip
+  [[ "$2" =~ ^[A-Za-z0-9._/@+-]+$ && "$2" != -* ]] || return 1
+  tip=$(git -C "$1" rev-parse -q --verify "refs/heads/$2^{commit}" 2>/dev/null) || return 1
+  [[ -n $(git -C "$1" for-each-ref --count=1 --contains "$tip" --format=x refs/remotes 2>/dev/null) ]]
+}
+branch_delete_safe() {
+  local raw segs seg t i b repo cwd n=0 names
+  cwd=$(jq_get '.cwd')
+  raw=$(normalize_wrappers "$(separate_groups "$(strip_inert_heredocs "$(jq_get '.tool_input.command')")")")
+  printf '%s\n' "$raw" | grep -qE "${A}(cd|pushd)\b" && return 1
+  segs=$(printf '%s\n' "$raw" | grep -oE "${A}${GIT}branch\s+[^|;&]*" | sed -E 's/^[|&;`$( ]*//')
+  while IFS= read -r seg; do
+    printf '%s\n' "$seg" | grep -qE "\s(-[a-zA-Z]*[dD][a-zA-Z]*|--delete)\b" || continue
+    read -ra t <<<"$seg"
+    [[ "${t[0]}" == git ]] || return 1
+    repo="$cwd"; i=1
+    while [[ "${t[i]:-}" != branch ]]; do
+      case "${t[i]:-}" in
+        -C) repo="${t[i+1]:-}"; i=$((i + 2)) ;;
+        -C?*) repo="${t[i]#-C}"; i=$((i + 1)) ;;
+        --no-pager) i=$((i + 1)) ;;
+        *) return 1 ;;
+      esac
+    done
+    # shellcheck disable=SC2088  # '~/' is the tilde as typed; it is expanded here
+    case "$repo" in
+      ''|*'$'*|*'`'*) return 1 ;;
+      '~/'*) repo="$HOME/${repo#\~/}" ;;
+      /*) ;;
+      *) [[ -n "$cwd" ]] || return 1; repo="$cwd/$repo" ;;
+    esac
+    names=()
+    for ((i = i + 1; i < ${#t[@]}; i++)); do
+      case "${t[i]}" in
+        [0-9]\>*|\>*|[0-9]\<*|\<*) break ;;
+        -[dDfq]|-[dDfq][dDfq]|--delete|--force|--quiet) ;;
+        -*) return 1 ;;
+        *) names+=("${t[i]}") ;;
+      esac
+    done
+    [[ ${#names[@]} -gt 0 ]] || return 1
+    for b in "${names[@]}"; do branch_on_remote "$repo" "$b" || return 1; done
+    n=$((n + 1))
+  done <<<"$segs"
+  [[ $n -gt 0 ]]
+}
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}branch\s+[^|;&]*(-D\b|-d\b|--delete\b)" && ! branch_delete_safe; then
+  emit_ask "This deletes a branch whose commits no remote-tracking ref holds, or one this guard could not check. Confirm the work is merged or no longer needed."
   exit 0
 fi
 

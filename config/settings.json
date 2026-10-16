@@ -135,8 +135,6 @@
       "Bash(git reset --hard:*)",
       "Bash(git clean -f:*)",
       "Bash(git clean -fd:*)",
-      "Bash(git branch -D:*)",
-      "Bash(git branch -d:*)",
       "Bash(gh auth token:*)",
       "Bash(sudo:*)",
       "Bash(chmod -R 777:*)",
