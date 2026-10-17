@@ -267,15 +267,12 @@ tests/                   ← one <name>.test.sh per hook or script
 docs/                    ← research notes and working documents
   session-routing.md     ← routing a PR to the session that owns it; read the
                            precondition — it only holds in single-author repos
-  memory-hygiene-brief.md
-                         ← the original audit: what is wrong with file-based
-                           memory, and why nothing collects it
-  memory-hygiene-research.md
-                         ← what Claude Code already ships; read the Errata
-                           first — two claims in the body did not hold
-  memory-hygiene-problems.md
-                         ← measured problems and the rules learned; the
-                           memory skills cite this one
+  memory.md              ← what Claude Code's auto memory and auto-dream do
+                           now, measured on the installed CLI, and the verdict
+                           on each harness memory tool (see Memory)
+  history/               ← superseded research, kept for the measurements the
+                           skills still cite: the 2026-08 memory-hygiene brief,
+                           research addendum and measured problems
   permission-friction.md ← which guard asks and denies cost the most, and why;
                            bugs vs policy vs machine-local
   permission-friction-cases.jsonl
@@ -557,55 +554,41 @@ Each repo manages its own:
 - `.claude/settings.json` — project-specific deny rules, auto-formatter, test runner
 - Slack notifications — via MCP connector, instructed through CLAUDE.md
 
-## Memory staleness
+## Memory
 
-Claude Code stores memories under `~/.claude/projects/<slug>/memory/`, and ships
-its own hygiene pass (auto-dream) that merges duplicates, resolves
-contradictions, and rewrites relative dates. That pass reasons over memory
-content and session logs — it never leaves the machine.
+Claude Code stores memories under `~/.claude/projects/<slug>/memory/` and now
+does most of the hygiene itself: it loads the first 200 lines / 25 KB of
+`MEMORY.md`, reminds the writer when a write leaves the index near that limit
+and returns an error when it is over it, stamps `modified` and
+`originSessionId` on what it writes, and ships a background consolidation pass
+(auto-dream) that merges, rewrites relative dates and prunes the index. That
+pass is gated on a server flag and had never run on the machine this was
+measured on. `docs/memory.md` has the evidence, version by version, and the
+verdict on each harness tool.
 
-So one failure mode survives it: a memory whose claim was overtaken by the
-outside world. *"Draft PR #4821, held, land only if…"* stays internally
-consistent forever, while the PR merged two months ago. Nothing in the file
-disagrees; GitHub does.
+What the harness still adds is the part that needs the outside world or the
+write itself:
 
-`memory-verify.sh` closes that gap, and `/memory-audit` handles the half that
-needs judgment.
+- **`memory-verify.sh` and `/memory-audit`** check a memory's claims against
+  GitHub and Jira. *"Draft PR #4821, held"* stays internally consistent
+  forever while the PR merged two months ago; nothing in the file disagrees,
+  GitHub does. A memory becomes mechanically checkable by carrying a
+  `verify:` block (`- gh acme/api#4821 merged`, `- jira PROJ-123 Done`); the
+  skill resolves the bare references a script cannot and writes the block
+  back. Read-only by contract: it proposes, never deletes.
 
-```bash
-bash ~/.claude/memory-verify.sh                    # every store
-bash ~/.claude/memory-verify.sh --store <slug>     # one store
-bash ~/.claude/memory-verify.sh --json             # for the skill
-```
+  ```bash
+  bash ~/.claude/memory-verify.sh --store <slug>     # exit 0 fine, 1 stale, 2 triage, 3 could not run
+  ```
 
-Exit codes: `0` nothing to do · `1` something is provably stale · `2` needs
-triage · `3` could not run.
-
-A memory becomes mechanically checkable by carrying a `verify:` block:
-
-```yaml
-verify:
-  - gh acme/api#4821 merged
-  - jira PROJ-123 Done
-```
-
-Anything with a block is resolved directly against GitHub. Anything without one
-is reported as `TRIAGE` — because real memories cite bare `#4821` rather than
-`owner/repo#4821`, and often cite twenty of them, so choosing *which* reference
-is the claim under test needs a model. That is `/memory-audit`: it resolves the
-ambiguous ones, proposes corrections, and writes a `verify:` block back, so each
-audited memory is mechanical from then on.
-
-`MEMORY.md` itself is checked too, reported as `MEMORY.md:<line>` and aged by
-the memory each line links to. The index is skipped as a *memory* — it is a list
-of links, so it gets no `verify:` resolution — but its one-liners are prose that
-goes stale like any other, and the index is the part loaded into context every
-session. A stale hook there is read far more often than the memory behind it.
-
-The script is read-only by contract — it never edits, moves, or deletes a
-memory, and `/memory-audit` proposes rather than deletes. Deleting on a
-heuristic destroys knowledge silently, which is worse than staleness.
-
-**Note:** auto-dream is gated behind a server-side rollout flag
-(`tengu_onyx_plover`). Where it is off, the built-in hygiene described above is
-not running at all — check `/memory` to see whether it is available to you.
+- **`memory-lint`** checks a memory at the moment it is written, for what the
+  CLI does not check: name matches filename, a valid type, a state-free
+  description, a `verify:` block on any in-flight claim, link typos, an index
+  line in the right tier. Advisory, never blocks.
+- **`memory-provenance.sh`** answers who wrote a memory, so a session cannot
+  cite as corroboration a memory it wrote itself.
+- **`memory-index.sh` and `/memory-archive`** keep the index in tier order and
+  relieve one the CLI reports as over its limit, by moving lines to an archive
+  rather than deleting. `session-start` runs the reorder only when the index is
+  near its cap, has changed since the last run, and auto-dream's
+  `.consolidate-lock` is not fresh; on an ordinary store it costs nothing.

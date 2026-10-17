@@ -51,24 +51,13 @@ INDEX_PRESSURE_LINES="${MEMORY_INDEX_PRESSURE_LINES:-180}"
 INDEX_MAX_LINES="${MEMORY_INDEX_MAX_LINES:-200}"   # same name memory-verify reads
 
 # ---- the index itself ---------------------------------------------------
-# MEMORY.md used to exit here unchecked, and that is why tier ordering decayed:
-# every memory write appends to the index, nothing ever looked at the index on
-# write, and feedback_ entries drifted below the truncation cut where they stop
-# being loaded at all. Measured on a live store: ordering went from clean to two
-# feedback_ entries past the cut in under two hours.
-#
 # The per-memory checks below do not apply to an index, so this is its own pass.
+# Size is not checked here: since 2.1.210 Claude Code itself returns an error
+# on a write that leaves MEMORY.md over its limit, and a reminder near it.
 if [ "$BASE" = "MEMORY.md" ]; then
-  IBYTES=$(wc -c < "$FILE" | tr -d ' ')
-  ILINES=$(wc -l < "$FILE" | tr -d ' ')
   IFIND=""
   iadd() { IFIND="${IFIND}  - $1
 "; }
-
-  [ "$IBYTES" -gt "$INDEX_MAX_BYTES" ] \
-    && iadd "index is ${IBYTES} bytes, over the ~${INDEX_MAX_BYTES} limit — everything past it is dropped at session start. Shorten hooks; that is the only lever on bytes that does not cost an entry."
-  [ "$ILINES" -gt "$INDEX_MAX_LINES" ] \
-    && iadd "index is ${ILINES} lines, over the ${INDEX_MAX_LINES}-line limit. One line per memory, so only fewer entries fixes this — archive settled project_ memories, never feedback_."
 
   # The harm is never the limit, it is WHICH entries fall past it. A tail of
   # settled project_ entries is the designed sacrifice; a feedback_ entry there
@@ -126,9 +115,8 @@ case "$TYPE" in
   *)  add "\`metadata.type: $TYPE\` is not one of user, feedback, project, reference." ;;
 esac
 
-# --- timestamp ------------------------------------------------------------
-grep -q '^[[:space:]]*modified:' "$FILE" \
-  || add "no \`metadata.modified\`. Without it, age falls back to file mtime, which any tool touching the file resets."
+# No `modified:` check: Claude Code stamps it on the write itself, for any
+# memory file with frontmatter (2.1.214).
 
 # Provenance. A memory records what is believed, never who came to believe it, so
 # an unattributed file is a claim with no origin: a paragraph a peer session
@@ -213,7 +201,7 @@ if [ -f "$DIR/MEMORY.md" ]; then
     # a line. Measured on a live store: feedback held 138 of 185 entries (75%)
     # while being 30% of the files, and reading all 138 showed 76 were instances
     # of 12 principles. Grouping them under hub memories freed 63 lines with no
-    # deletion (see docs/memory-hygiene-problems.md).
+    # deletion (see docs/history/memory-hygiene-problems.md).
     #
     # Fires only where hubs already exist, so a store that has not adopted the
     # pattern stays silent, and only on creation — an edit to an established
