@@ -49,14 +49,17 @@ quietly when jq is missing.
 
 | Hook | Event | Behaviour |
 |---|---|---|
-| `workflow-record` | PostToolUse → Workflow | Logs each workflow run's persisted `.js` script path to the audit log and records a per-session pointer the status line links to. Clicking the `wf` link opens the script in your editor (auto-detects VS Code / Cursor / Zed; override with `CLAUDE_EDITOR_URI`). Discoverability only, no rendering. |
 | `plan-to-html` | PreToolUse → ExitPlanMode | Renders the proposed plan as a styled HTML file and opens it in your browser, so long plans are comfortable to read before you approve/reject in the terminal. Runs `async`, so it never blocks or delays the approval prompt. Markdown is base64-embedded (no escaping can break the page) and decoded as UTF-8 client-side via [marked](https://marked.js.org/) and rendered with a GitHub-dark theme plus [highlight.js](https://highlightjs.org/) syntax highlighting for fenced code. The page loads `marked`/`highlight.js` from a CDN, so it is not fully self-contained, and falls back to readable raw markdown when offline. Plans authored as a **full HTML document** are served verbatim (no double-wrap). Output lands in `~/.claude/plans-html/` (newest 50 kept), and the session's latest plan is linked from the status line. |
 
 ## Status line
 
 `bin/statusline.sh`, installed as `~/.claude/statusline.sh`, shows model and
 effort, repo and branch, context, tokens, cost and duration, lines changed,
-rate limits, and the plan and workflow links as clickable OSC-8 hyperlinks. It
+rate limits, and the plan and workflow links as clickable OSC-8 hyperlinks. The
+`wf` link is the newest script this session's Workflow runs saved, which Claude
+Code writes to `workflows/scripts` in the session's folder beside its
+transcript; it opens in your editor (auto-detects VS Code, Cursor or Zed;
+override with `CLAUDE_EDITOR_URI`). It
 also warns `cold: next msg re-caches Nk` when upstream's
 `prompt_cache.expires_at` has passed and `recache_tokens_if_cold` is at least
 100k: the first message after the cache goes cold re-sends everything at write
