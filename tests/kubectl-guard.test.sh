@@ -250,5 +250,22 @@ check "exec -- ls, then a delete"   ask   'kubectl exec api-7d9 -- ls && kubectl
 check "exec -- version and a file"  ask   'kubectl exec api-7d9 -- java --version /etc/passwd'
 
 echo ""
+echo "=== kubectl as text in a PR title or commit message (expect: allow) ==="
+check "gh pr title"              allow 'gh pr create --title "kubectl reason checks" --body-file notes.md'
+check "git commit -m"            allow "git commit -m 'note the kubectl delete step'"
+check "git stash push -m"        allow "git stash push -m 'kubectl delete wip' -- a.sh"
+check "git commit -F heredoc"    allow $'git commit -q -F - <<\'EOF\'\nkubectl delete pod x is documented\nEOF'
+check "git bisect run"           ask   'git bisect run kubectl delete pod x'
+check "git rebase -x"            ask   'git rebase -x "kubectl delete pod x" main'
+check "gh, then a real delete"   ask   'gh pr view 1 && kubectl delete pod x'
+
+echo ""
+echo "=== The raw pre-filter: spellings that dodge a naive word test still ask ==="
+check "upper-case binary"        ask   'KUBECTL delete pod x'
+check "quotes split the word"    ask   '"kub""ectl" delete pod x'
+check "backslash in the word"    ask   '\kubectl delete pod x'
+check "nothing it guards"        allow 'ls -la && npm test'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

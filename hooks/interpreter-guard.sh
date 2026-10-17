@@ -24,6 +24,13 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+# Every check below names an interpreter. Normalizing drops quotes, backslashes
+# and case but never adds a letter, so a command naming none once those are
+# gone is done before ~20 ms of normalizing. `sh` counts only as its own word:
+# `push`, `x.sh` and `ssh` are not shells, `/bin/sh` and `;sh` are.
+printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qiE 'python|node|ruby|perl|php|bash|zsh|deno|bun|(^|[^a-z0-9_.-])sh([^a-z0-9_-]|$)' || exit 0
+# A commit message or a notes file is text, not a command (lib.sh).
+CMD=$(strip_inert_heredocs "$CMD")
 # `/usr/bin/python3` and `PYTHON3` run python too. ICMD adds the normalized form
 # (lib.sh) as a second line; the stream-edit exemption below keeps to CMD.
 ICMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")

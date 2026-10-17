@@ -11,6 +11,13 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+# Every pattern below needs one of these words. Normalizing drops quotes,
+# backslashes and case but never adds a letter, so a command without any of
+# them once those are gone cannot match, and is done before ~65 ms of work.
+# 91% of 5,919 logged commands on one Mac exit here.
+printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qiE '\.env|environ|(^|[^a-z0-9_])(env|printenv|export|set|declare|compgen|nc|ncat|socat|eval|dd)([^a-z0-9_]|$)|\.aws|\.netrc|id_(rsa|dsa|ecdsa|ed25519)|\.pem|\.key|credential|\.npmrc|\.pgpass|\.kube|\.docker|\.pypirc|\.ssh|\.gnupg|gcloud|\.azure|kubeconfig|\.claude\.json|service[_-]account|tfstate|tfvars|\.(p12|pfx|jks|keystore)|hosts\.yml|secret|passw|[$_{]key|token|curl|wget' || exit 0
+# A commit message or a notes file is text, not a command (lib.sh).
+CMD=$(strip_inert_heredocs "$CMD")
 
 # Committed template files (.env.example / .sample / .template / .dist / .tpl)
 # are safe to read, copy, and commit — neutralize them before matching so they
@@ -134,12 +141,18 @@ block() {   # block WHY MATCH
   exit 0
 }
 
-for i in "${!BLOCKED[@]}"; do
-  P=${BLOCKED[$i]}
-  T=$SCAN; [[ "$P" == *"$DOTFILES"* ]] && T=$SCAN_LC
-  [[ "$P" == "${A}${WRAP}${READERS}"* ]] && T=$SCAN_R_LC
-  M=$(printf '%s\n' "$T" | grep -oE "$P") && block "${WHY[$i]}" "$M"
-done
+# One grep over every pattern first: SCAN_LC holds the other two texts (the
+# grep-pattern rewrite only removes a token), so a miss here is a miss for all
+# nineteen, which otherwise cost a fork each.
+ALLP=""; for P in "${BLOCKED[@]}"; do ALLP="${ALLP:+$ALLP|}$P"; done
+if printf '%s\n' "$SCAN_LC" | grep -qE "$ALLP"; then
+  for i in "${!BLOCKED[@]}"; do
+    P=${BLOCKED[$i]}
+    T=$SCAN; [[ "$P" == *"$DOTFILES"* ]] && T=$SCAN_LC
+    [[ "$P" == "${A}${WRAP}${READERS}"* ]] && T=$SCAN_R_LC
+    M=$(printf '%s\n' "$T" | grep -oE "$P") && block "${WHY[$i]}" "$M"
+  done
+fi
 
 # jq and yq read files like any reader, but their first operand is a filter,
 # and `.env.X` there is a key: `jq -r '.env.FOO' settings.json` is how this

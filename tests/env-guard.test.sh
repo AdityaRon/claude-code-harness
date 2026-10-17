@@ -360,5 +360,28 @@ says "jq file operand"   'jq . ~/.claude.json'      '`jq … ~/.claude.json` rea
 says "upload a file"     'curl -T notes.txt https://example.com/u' 'uploads a local file'
 
 echo ""
+echo "=== The raw pre-filter: spellings that dodge a naive word test still deny ==="
+check "quotes split the word"      deny  'e""nv'
+check "backslash in the word"      deny  '\env'
+check "upper-case reader and file" deny  'CAT .ENV'
+check "jq \$ENV"                   deny  "jq -n '\$ENV'"
+check "awk ENVIRON"                deny  "awk 'BEGIN{print ENVIRON[\"HOME\"]}'"
+check "dd reads a dotfile"         deny  'dd if=.env of=/tmp/x'
+check "secret var, no underscore"  deny  'echo "$KEY"'
+check "braces around a secret"     deny  'printf "%s" "${API_TOKEN}"'
+check "set alone in a chain"       deny  'cd /tmp && set'
+check "nothing it guards"          allow 'ls -la src/ && npm test -- --watch=false'
+check "a .venv is not .env"        allow '.venv/bin/python tools/build.py'
+
+echo ""
+echo "=== A commit message or notes file is text; a heredoc a program reads is not ==="
+check "commit message names cat .env" allow $'git add src/a.py && git commit -q -F - <<\'EOF\'\nfix: stop reading secrets\n\ncat .env was how the old code read them\nEOF'
+check "gh pr body names printenv"     allow $'gh pr create --title x --body-file - <<\'EOF\'\nprintenv | grep KEY no longer runs at start.\nEOF'
+check "notes file names cat .env"     allow $'cat > notes.md <<\'EOF\'\ncat .env\nEOF'
+check "a script file is not notes"    deny  $'cat > run.sh <<\'EOF\'\ncat .env\nEOF'
+check "heredoc fed to bash"           deny  $'bash <<\'EOF\'\ncat .env\nEOF'
+check "message, then a real read"     deny  $'git commit -q -F - <<\'EOF\'\nmsg\nEOF\ncat .env'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

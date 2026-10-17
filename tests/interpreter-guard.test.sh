@@ -191,5 +191,21 @@ check "quoted binary"          ask  '"python3" -c "import os; print(os.environ)"
 check "absolute path, script"  allow '/usr/bin/python3 tools/build.py'
 
 echo ""
+echo "=== The raw pre-filter: spellings that dodge a naive word test still ask ==="
+check "quotes split the word"       ask   '"py""thon3" -c "import os; print(os.environ)"'
+check "sh after a semicolon"        ask   'true;sh -c "printenv"'
+check "/bin/sh"                     ask   '/bin/sh -c "printenv"'
+check "SH upper case"               ask   'SH -c "printenv"'
+check "a .sh script is not a shell" allow './run.sh -c "os.environ"'
+check "ssh is not sh"               allow 'ssh host -c "os.environ"'
+check "nothing it guards"           allow 'ls -la && npm test'
+
+echo ""
+echo "=== A commit message or notes file is text ==="
+check "commit message names python -c" allow $'git commit -q -F - <<\'EOF\'\nDrop the startup probe:\npython3 -c "import os; os.environ" is gone\nEOF'
+check "notes file names node -e"       allow $'cat > notes.md <<\'EOF\'\nnode -e "process.env"\nEOF'
+check "message, then real inline code" ask   $'git commit -q -F - <<\'EOF\'\nmsg\nEOF\npython3 -c "import os; print(os.environ)"'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

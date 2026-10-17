@@ -147,6 +147,25 @@ normalize_command() {
   printf '%s' "${s:-$1}"
 }
 
+# A heredoc fed to `git commit -F -` or `gh pr|issue … --body-file -` is a
+# commit message or PR body: nothing runs it, whatever else the line does. The
+# body goes; the opener and terminator stay, so the command itself is scanned
+# and a later pass still sees a balanced heredoc.
+strip_message_heredocs() {
+  case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
+  printf '%s\n' "$1" | awk '
+    body { t = $0; if (dash) sub(/^\t+/, "", t)
+           if (t == term) { body = 0; print }
+           next }
+    { print
+      if (match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/)) {
+        pre = substr($0, 1, RSTART - 1); n = split(pre, seg, /\|\||&&|[|;&]/); last = seg[n]
+        if (last ~ /^[ \t]*(git[ \t]+(-[^ \t]+[ \t]+)*commit|gh[ \t]+(pr|issue))[ \t]/ \
+            && last ~ /(^|[ \t])(-F|--file|--body-file)[ \t]*=?[ \t]*-([ \t]|$)/) {
+          term = substr($0, RSTART + 2, RLENGTH - 2); dash = (term ~ /^-/)
+          sub(/^-?[ \t]*["\047]?/, "", term); body = 1 } } }'
+}
+
 # Text written to a notes file is not a command. Drop heredoc bodies from the
 # scan only when every segment is an inert writer (cat, tee, cd, mkdir, echo,
 # printf, true, a plain assignment) and every redirect target is a prose file.
@@ -155,6 +174,7 @@ normalize_command() {
 strip_inert_heredocs() {
   local s="$1" rest
   case "$s" in *'<<'*) ;; *) printf '%s' "$s"; return ;; esac
+  s=$(strip_message_heredocs "$s")
   rest=$(printf '%s\n' "$s" | awk '
     body { if ($0 ~ ("^[ \t]*" term "[ \t]*$")) body = 0; next }
     match($0, /<<-?[ \t]*["'"'"']?[A-Za-z_][A-Za-z0-9_]*/) {
@@ -203,10 +223,18 @@ neutralize_quoted_separators() {
 # first 8 characters of its session id>/tmp, and a hook's environment has no
 # CLAUDE_JOB_DIR, so it is derived. Empty for an interactive session.
 session_scratch() {
-  local sid
+  local sid d
   sid=$(jq_get '.session_id')
   [[ "$sid" =~ ^[0-9a-f]{8}- ]] || return 0
-  [[ -d "$HOME/.claude/jobs/${sid:0:8}" ]] && printf '%s\n' "$HOME/.claude/jobs/${sid:0:8}/tmp"
+  [[ -d "$HOME/.claude/jobs/${sid:0:8}" ]] && { printf '%s\n' "$HOME/.claude/jobs/${sid:0:8}/tmp"; return 0; }
+  # A resumed job keeps its folder under the first session's id and runs under
+  # a new one; its state.json names the new id. Measured: every rm-guard deny
+  # on one Mac (2026-09-24 to 2026-10-15) was a resumed job's own scratch.
+  for d in "$HOME"/.claude/jobs/*/; do
+    [[ -f "$d/state.json" ]] || continue
+    grep -qE "\"(sessionId|resumeSessionId)\":[[:space:]]*\"$sid\"" "$d/state.json" 2>/dev/null \
+      && { printf '%s\n' "${d%/}/tmp"; return 0; }
+  done
   return 0
 }
 

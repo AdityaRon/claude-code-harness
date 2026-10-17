@@ -227,8 +227,66 @@ fi
 # as wide as `.`; each of those was a silent allow. normalize_wrappers pads
 # `$(` to ` $( `, hence the spaces inside the $(pwd) form.
 BROAD="['\"]?(-A|--all|\.{1,2}/?|:/|\\$\(\s*pwd\s*\)|\\$\{?PWD\}?)['\"]?"
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||$)"; then
-  emit_deny "Blocked: broad git add (., ./, -A, --all) may stage sensitive files. Stage files by name instead."
+# What a broad add would stage, git status lists (porcelain paths are always
+# repo-relative, so a subdirectory's `.` is covered by a superset). Deny only
+# when one of those paths is a credential file; a clean broad add runs. -f adds
+# ignored files status does not list, and a cd, xargs, or a path in a variable
+# hides the repo: each keeps the deny. Named paths are not checked here.
+SENSITIVE_PATH='\.env$|\.env\.|(^|/)\.envrc$|\.pem$|\.key$|id_rsa|id_ed25519|\.aws/credentials|(^|/)\.netrc$|(^|/)\.git-credentials$|(^|/)\.pgpass$|secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)$'
+FOUND=""
+broad_add_safe() {
+  local raw segs seg t i repo cwd n=0 p out
+  cwd=$(jq_get '.cwd')
+  raw=$(separate_groups "$(strip_inert_heredocs "$(jq_get '.tool_input.command')")")
+  # xargs appends stdin, which can hold -f; normalize_wrappers would hide it.
+  printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
+  raw=$(normalize_wrappers "$raw")
+  printf '%s\n' "$raw" | grep -qE "${A}(cd|pushd)\b" && return 1
+  segs=$(printf '%s\n' "$raw" | grep -oE "${A}${GIT}add\s+[^|;&]*" | sed -E 's/^[|&;`$( ]*//')
+  while IFS= read -r seg; do
+    printf '%s\n' "$seg" | grep -qE "\s(--\s+)?${BROAD}([[:space:]]|$)" || continue
+    read -ra t <<<"$seg"
+    [[ "${t[0]}" == git ]] || return 1
+    repo="$cwd"; i=1
+    while [[ "${t[i]:-}" != add ]]; do
+      case "${t[i]:-}" in
+        -C) repo="${t[i+1]:-}"; i=$((i + 2)) ;;
+        -C?*) repo="${t[i]#-C}"; i=$((i + 1)) ;;
+        --no-pager) i=$((i + 1)) ;;
+        *) return 1 ;;
+      esac
+    done
+    # shellcheck disable=SC2088  # '~/' is the tilde as typed; it is expanded here
+    case "$repo" in
+      ''|*'$'*|*'`'*) return 1 ;;
+      '~/'*) repo="$HOME/${repo#\~/}" ;;
+      /*) ;;
+      *) [[ -n "$cwd" ]] || return 1; repo="$cwd/$repo" ;;
+    esac
+    for ((i = i + 1; i < ${#t[@]}; i++)); do
+      case "${t[i]}" in
+        --force|-[A-Za-z]*f*) return 1 ;;
+        [0-9]\>*|\>*|\<*) break ;;
+      esac
+    done
+    out=$(git -C "$repo" status --porcelain --untracked-files=all 2>/dev/null) || return 1
+    while IFS= read -r p; do
+      [[ -n "$p" ]] || continue
+      p=${p:3}; p=${p#* -> }; p=${p%\"}; p=${p#\"}
+      if printf '%s\n' "$p" | grep -qE "$SENSITIVE_PATH" && ! printf '%s\n' "$p" | grep -qE '\.(example|sample|template|dist|tpl)$'; then
+        FOUND=$p; return 1
+      fi
+    done <<<"$out"
+    n=$((n + 1))
+  done <<<"$segs"
+  [[ $n -gt 0 ]]
+}
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||$)" && ! broad_add_safe; then
+  if [[ -n "$FOUND" ]]; then
+    emit_deny "Blocked: this broad git add would stage $FOUND, a credential file. Stage files by name instead."
+  else
+    emit_deny "Blocked: broad git add (., ./, -A, --all) may stage sensitive files, and this guard could not list what it would stage (a cd first, -f, or a repo it cannot find). Stage files by name instead."
+  fi
   exit 0
 fi
 
