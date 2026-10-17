@@ -55,9 +55,9 @@ jqo() { jq -r "$1" "$TMP/out.json"; }
 
 echo ""
 echo "=== A/A: same ref on both sides passes the gate ==="
-# --floor-ms 50 where speed is not under test: seven sleep-based calls on a
-# loaded CI runner can wobble p95 past 20% and 5 ms.
-run --base v0.1.0 --head v0.1.0 --gate --floor-ms 50; RC=$?
+# --floor-ms 100000 where speed is not under test: seven sleep-based calls on a
+# loaded macOS runner wobbled past a 50 ms floor (run 39048457929).
+run --base v0.1.0 --head v0.1.0 --gate --floor-ms 100000; RC=$?
 [ "$RC" = 0 ] && pass "exit 0" || fail "exit 0" "rc=$RC $(cat "$TMP/err")"
 [ "$(jqo '.classes.Bash.base.wait.n')" = 7 ] && pass "7 Bash calls counted" || fail "Bash calls" "$(jqo '.classes.Bash.base.wait.n')"
 jq -e '.classes.Bash.base.wait.p50 < (.hooks["fast.sh"].base.wall.p50 + .hooks["second.sh"].base.wall.p50 - 10)
@@ -82,7 +82,7 @@ jqo '.gate.failures[]' | grep -q 'decision changed without --intended: danger as
 [ "$(jqo '.decisions.changed | length')" = 1 ] && pass "one changed decision" || fail "changed count" "$(jqo '.decisions.changed')"
 grep -q '| danger `danger` | ask (fast.sh) | deny (fast.sh) |' "$TMP/out.md" \
   && pass "markdown lists it with the deciding hook" || fail "markdown diff" "$(grep danger "$TMP/out.md")"
-run --base v0.1.0 --head worktree --gate --intended "other,danger" --floor-ms 50; RC=$?
+run --base v0.1.0 --head worktree --gate --intended "other,danger" --floor-ms 100000; RC=$?
 [ "$RC" = 0 ] && pass "--intended danger passes" || fail "--intended" "rc=$RC $(jqo '.gate.failures')"
 run --base v0.1.0 --head worktree; RC=$?
 [ "$RC" = 0 ] && pass "without --gate the exit is 0 either way" || fail "no gate" "rc=$RC"
@@ -109,7 +109,7 @@ echo ""
 echo "=== a hook one side registers but does not ship is skipped, not a crash ==="
 jq '.hooks.PreToolUse[0].hooks += [{"type":"command","command":"~/.claude/hooks/ghost.sh"}]' "$FIX/config/settings.json" > "$TMP/s.json" \
   && cp "$TMP/s.json" "$FIX/config/settings.json"
-run --base v0.1.0 --head worktree --gate --floor-ms 50; RC=$?
+run --base v0.1.0 --head worktree --gate --floor-ms 100000; RC=$?
 [ "$RC" = 0 ] && [ "$(jqo '.hooks | has("ghost.sh")')" = false ] && pass "ghost.sh ignored" || fail "ghost" "rc=$RC $(cat "$TMP/err")"
 ( cd "$FIX" && git checkout -q -- config/settings.json )
 
