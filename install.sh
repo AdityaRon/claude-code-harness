@@ -136,6 +136,11 @@ if compgen -G "$LOCAL_SETTINGS/*.json" >/dev/null && command -v jq &>/dev/null; 
   SOURCE="$COMBINED"
 fi
 
+# effortLevel shipped as xhigh until 2026-10-17. Until this marker exists the
+# merge moves an installed xhigh to the shipped value. Every install writes it,
+# so that happens once per machine and an xhigh chosen later is kept.
+EFFORT_MARK=~/.claude/state/effort-high.migrated
+
 if [[ ! -f "$TARGET" ]]; then
   cp "$SOURCE" "$TARGET"
   echo "  ✓ settings.json (installed fresh)"
@@ -179,6 +184,14 @@ else
     exit 1
   fi
 
+  EFFORT_WAS=""
+  if [[ ! -f "$EFFORT_MARK" ]]; then
+    EFFORT_WAS=xhigh
+    if [[ "$(jq -r '.effortLevel // empty' "$TARGET" 2>/dev/null)" == "$EFFORT_WAS" ]]; then
+      echo "  ✓ effortLevel: \"$EFFORT_WAS\" → \"$(jq -r '.effortLevel' "$SOURCE")\" (the old shipped default, moved once; set it again and later installs keep it)."
+    fi
+  fi
+
   RETIRED=$(jq -c . "$REPO/config/retired-rules.json" 2>/dev/null || echo '{}')
   # Only a message, so a failure here must not stop the install; a rule a
   # fragment lists is kept by the merge, so it is not named.
@@ -191,7 +204,8 @@ else
     || echo "  ⚠ could not list retired rules; the merge below still removes them."
 
   TMP=$(mktemp)
-  if ! jq -s --arg home "$HOME" --argjson owned "$OWNED" --argjson retired "$RETIRED" -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
+  if ! jq -s --arg home "$HOME" --argjson owned "$OWNED" --argjson retired "$RETIRED" --arg effort_was "$EFFORT_WAS" \
+          -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
     rm -f "$TMP"
     echo "  ✗ settings.json merge failed — left untouched (backup: $BACKUP)"
     exit 1
@@ -199,6 +213,7 @@ else
   mv "$TMP" "$TARGET"
   echo "  ✓ settings.json (merged; backup: $BACKUP)"
 fi
+touch "$EFFORT_MARK"
 [[ -n "${COMBINED:-}" ]] && rm -f "$COMBINED"
 
 # ---- Sanity checks ----------------------------------------------------

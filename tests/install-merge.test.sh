@@ -18,7 +18,7 @@ merge(){
   printf '%s' "$2" > "$TMP/new.json"
   local retired="${RETIRED:-}"; [[ -n "$retired" ]] || retired='{}'
   jq -s --arg home "${MERGE_HOME:-$HOME}" --argjson owned "$OWNED" --argjson retired "$retired" \
-    -f "$FILTER" "$TMP/old.json" "$TMP/new.json"
+    --arg effort_was "${EFFORT_WAS:-}" -f "$FILTER" "$TMP/old.json" "$TMP/new.json"
 }
 # The hook file names the harness ships, passed the way install.sh passes them.
 OWNED=$(cd hooks && printf '%s\n' *.sh | jq -R . | jq -sc .)
@@ -27,7 +27,7 @@ HARNESS='{
   "permissions": {"defaultMode":"auto","allow":["Bash(ls:*)"],"deny":["Bash(sudo:*)"]},
   "hooks": {"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"~/.claude/hooks/audit.sh"}]}]},
   "statusLine": {"type":"command","command":"~/.claude/statusline.sh"},
-  "effortLevel": "xhigh"
+  "effortLevel": "high"
 }'
 
 echo "=== A stale permissions.defaultMode is replaced by the harness value ==="
@@ -83,7 +83,7 @@ OUT=$(merge '{"env":{"CLAUDE_AUDIT_LOG":"~/mine.log"},"tui":"fullscreen"}' "$HAR
   && pass "user env preserved" || fail "user env preserved" "$OUT"
 [[ "$(printf '%s' "$OUT" | jq -r '.tui')" == "fullscreen" ]] \
   && pass "unrelated user key preserved" || fail "unrelated user key preserved" "$OUT"
-[[ "$(printf '%s' "$OUT" | jq -r '.effortLevel')" == "xhigh" ]] \
+[[ "$(printf '%s' "$OUT" | jq -r '.effortLevel')" == "high" ]] \
   && pass "harness key added" || fail "harness key added" "$OUT"
 
 echo ""
@@ -360,6 +360,19 @@ jq -n -e 'input as $s | input as $r | [$s.permissions.deny[], $s.permissions.all
     config/settings.json config/retired-rules.json >/dev/null \
   && pass "nothing the repo ships is on the retired list" || fail "a shipped rule is retired" "$(jq -c '.permissions' config/retired-rules.json)"
 unset RETIRED
+
+echo ""
+echo "=== effortLevel: an installed xhigh moves to high once; other values are kept ==="
+# install.sh passes effort_was=xhigh until its marker exists, and nothing after.
+SHIPPED=$(cat config/settings.json)
+[[ "$(jq -r .effortLevel config/settings.json)" == "high" ]] \
+  && pass "a fresh install gets high" || fail "a fresh install gets high" "$(jq -r .effortLevel config/settings.json)"
+GOT=$(EFFORT_WAS=xhigh merge '{"effortLevel":"xhigh"}' "$SHIPPED" | jq -r .effortLevel)
+[[ "$GOT" == "high" ]] && pass "an installed xhigh becomes high on the first install" || fail "installed xhigh becomes high" "$GOT"
+GOT=$(merge '{"effortLevel":"xhigh"}' "$SHIPPED" | jq -r .effortLevel)
+[[ "$GOT" == "xhigh" ]] && pass "an xhigh set after the move is kept" || fail "a later xhigh is kept" "$GOT"
+GOT=$(EFFORT_WAS=xhigh merge '{"effortLevel":"medium"}' "$SHIPPED" | jq -r .effortLevel)
+[[ "$GOT" == "medium" ]] && pass "another user value is kept" || fail "another user value is kept" "$GOT"
 
 echo ""
 echo "=== no Bash rule mixes a mid-pattern * with a trailing :* ==="

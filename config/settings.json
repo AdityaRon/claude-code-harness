@@ -1,6 +1,6 @@
 {
   "fileCheckpointingEnabled": true,
-  "effortLevel": "xhigh",
+  "effortLevel": "high",
   "skipAutoPermissionPrompt": true,
   "includeCoAuthoredBy": true,
   "syncClaudeAiSkills": false,

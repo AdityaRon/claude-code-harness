@@ -52,6 +52,12 @@ def keep_foreign($h):
                       | with_entries(select(.value | length > 0))) as $foreign
 | $new
   * $old                                                     # user wins for overlapping top-level keys
+# effortLevel shipped as xhigh until 2026-10-17. install.sh passes that value as
+# effort_was until the move has run once on this machine, so an installed xhigh
+# takes the shipped value once and an xhigh chosen later is kept.
+| (($ARGS.named.effort_was // "") as $was
+   | if $was != "" and $old.effortLevel == $was and $new.effortLevel
+     then .effortLevel = $new.effortLevel else . end)
 | .permissions.allow = ((($old.permissions.allow // []) - ($retired.permissions.allow // [] | expand_home($home)))
                          + ($new.permissions.allow // []) | expand_home($home))
 | .permissions.deny  = ((($old.permissions.deny  // []) - ($retired.permissions.deny  // [] | expand_home($home)))
