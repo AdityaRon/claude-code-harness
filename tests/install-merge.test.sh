@@ -335,6 +335,20 @@ OUT=$(merge '{"remoteControlAtStartup":false}' "$(cat config/settings.json)")
   && pass "an explicit user false is kept" || fail "an explicit user false is kept" "$(printf '%s' "$OUT" | jq -r '.remoteControlAtStartup')"
 
 echo ""
+echo "=== auto-dream is on by default, and a user's false wins ==="
+# A fresh install copies config/settings.json as is; a merge adds what is missing.
+[[ "$(jq -r '.autoDreamEnabled' config/settings.json)" == "true" ]] \
+  && pass "shipped settings.json sets autoDreamEnabled true" \
+  || fail "shipped settings.json sets autoDreamEnabled true" "$(jq -r '.autoDreamEnabled' config/settings.json)"
+OUT=$(merge '{"env":{"A":"1"}}' "$(cat config/settings.json)")
+[[ "$(printf '%s' "$OUT" | jq -r '.autoDreamEnabled')" == "true" ]] \
+  && pass "autoDreamEnabled lands true where unset" || fail "autoDreamEnabled lands true where unset" "$(printf '%s' "$OUT" | jq -r '.autoDreamEnabled')"
+OUT=$(merge '{"autoDreamEnabled":false}' "$(cat config/settings.json)")
+[[ "$(printf '%s' "$OUT" | jq -r '.autoDreamEnabled')" == "false" ]] \
+  && pass "an explicit user autoDreamEnabled false is kept" \
+  || fail "an explicit user autoDreamEnabled false is kept" "$(printf '%s' "$OUT" | jq -r '.autoDreamEnabled')"
+
+echo ""
 echo "=== The shipped config names only skills this repo ships ==="
 # The repo is public. Allow rules for machine-local skills named work tools and
 # could never be removed by a later install, because the merge unions allow.

@@ -99,6 +99,7 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 | `syncClaudeAiSkills` / `syncClaudeAiPlugins` | `false` | Keeps the skills and plugins enabled on your claude.ai account out of terminal sessions. Each synced skill adds its description to every session, and a synced plugin can run hooks or inline shell under this machine's allow rules. They still work on claude.ai. Set either to `true` in `~/.claude/settings.json` to opt back in; the install keeps your value. |
 | `remoteControlAtStartup` | `true` | Every interactive session connects to [Remote Control](https://code.claude.com/docs/en/remote-control), so you can pick it up from claude.ai or the Claude app. Needs a claude.ai login. Anyone signed in to your account can then steer the session; turn on **Require trusted devices** in your claude.ai account settings to tie that to known devices. Set `false` to opt out; the install keeps your value. |
 | `isolatePeerMachines` | `true` | With Remote Control on, a `SendMessage` to a session on another machine waits for your approval. Sessions on this machine are unaffected. |
+| `autoDreamEnabled` | `true` | Turns on auto-dream, Claude Code's background memory consolidation, where its server flag allows it; elsewhere it does nothing. It may delete memory files it finds contradicted, unlike the harness's memory tools, which never delete. See [Memory](#memory). Set `false` to opt out; the install keeps your value. |
 | `permissions.allow` | Scoped allowlist | Covers common safe ops: `npm test/run lint/build`, `pytest`, `python3`, `poetry run/install/lock`, `gh run/search`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. Read-only verbs added from the audit-log census: `git grep/rev-parse/ls-tree/ls-files/show-ref/cat-file/blame/describe/merge-base/shortlog`, `git remote -v`, `git worktree list`, and read-only `docker` subcommands (`run`/`exec`/`rm`/`cp` deliberately excluded). Interpreter wildcards (`python3`, `poetry run`) are allowed because a permission `allow` only skips the *prompt* — the PreToolUse guards still run, and `interpreter-guard` inspects inline `-c`/`-e`/heredoc code even when wrapped in a runner (`poetry run python -c …`). `gh api` and `kubectl` are both allowlisted, but they are not equally safe. `kubectl` is covered by `kubectl-guard`, which denies every mutating verb wherever it sits in the command. `gh api` has **no** equivalent coverage — it can POST/DELETE through the GitHub API and `network-guard` never inspects it, so that entry is a deliberate convenience trade rather than a guarded one. With the OS sandbox off, an auto-approved `python3 script.py` runs the script's contents unscanned — enable the sandbox for containment. |
 | `permissions.deny` | `git push --force`, `git reset --hard`, `sudo`, `gh auth token`, … (`rm -rf` moved to `rm-guard`) | Deny always wins over allow. Over a loaded mod it wins only on a machine with managed settings or a Team/Enterprise login; see [Known limitations](#known-limitations). The deny list also covers writes into the installed-plugin cache `~/.claude/plugins`, `claude plugin install`/`enable`/`update`/`marketplace add`, and `--plugin-url` |
 
@@ -556,8 +557,10 @@ and returns an error when it is over it, stamps `modified` and
 `originSessionId` on what it writes, and ships a background consolidation pass
 (auto-dream) that merges, rewrites relative dates and prunes the index. That
 pass is gated on a server flag and had never run on the machine this was
-measured on. `docs/memory.md` has the evidence, version by version, and the
-verdict on each harness tool.
+measured on. The harness sets `autoDreamEnabled: true`, so it runs wherever
+the flag allows; it may delete memory files it finds contradicted, which the
+harness's own tools never do. `docs/memory.md` has the evidence, version by
+version, and the verdict on each harness tool.
 
 What the harness still adds is the part that needs the outside world or the
 write itself:

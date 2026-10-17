@@ -7,6 +7,7 @@
   "syncClaudeAiPlugins": false,
   "remoteControlAtStartup": true,
   "isolatePeerMachines": true,
+  "autoDreamEnabled": true,
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh",
