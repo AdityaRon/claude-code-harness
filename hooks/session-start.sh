@@ -115,8 +115,30 @@ if [[ -f "$PIN_FILE" ]]; then
         echo "Installed $CLI; the harness was verified at $PIN, so settings added since may be ignored. Update Claude Code."
       else
         echo "## Claude Code is past the harness contract"
-        echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift workflow drafts the review PR. After it merges, run bash install.sh."
+        echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift run lands the review and the release that follows; the scheduled harness-update installs it. If this persists for more than a day, see the Release blocked issue."
       fi
+      mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
+    fi
+  fi
+fi
+
+# --- a newer harness release ------------------------------------------------
+# harness-update.sh writes the newest tag it fetched; nothing here touches the
+# network. Only a machine installed from a plain tag is nudged: a clone past
+# the tag is being worked on.
+LATEST_FILE=$(expand_tilde "${CLAUDE_HARNESS_LATEST:-$HOME/.claude/state/harness-latest}")
+VERSION_FILE=$(expand_tilde "${CLAUDE_HARNESS_VERSION:-$HOME/.claude/harness.version}")
+if [[ -f "$LATEST_FILE" && -f "$VERSION_FILE" ]]; then
+  LATEST=$(head -1 "$LATEST_FILE" | cut -d' ' -f1)
+  INSTALLED=$(sed -n 's/^version=//p' "$VERSION_FILE" | head -1)
+  SEMVER='^v[0-9]+\.[0-9]+\.[0-9]+$'
+  if [[ "$LATEST" =~ $SEMVER && "$INSTALLED" =~ $SEMVER && "$LATEST" != "$INSTALLED" \
+        && "$(printf '%s\n%s\n' "$LATEST" "$INSTALLED" | sort -V | tail -1)" == "$LATEST" ]]; then
+    STAMP_FILE="$STATE_DIR/release-nudge"
+    STAMP="$LATEST $(date +%Y-%m-%d)"
+    if [[ ! -f "$STAMP_FILE" || "$(head -1 "$STAMP_FILE" 2>/dev/null)" != "$STAMP" ]]; then
+      echo ""
+      echo "## Harness $LATEST is available; $INSTALLED is installed. Run ~/.claude/harness-update.sh."
       mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
     fi
   fi

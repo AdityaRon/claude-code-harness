@@ -1,0 +1,255 @@
+name: Release
+
+# Tags main when anything but CHANGELOG.md changed since the last tag, after
+# doctor.sh and, if hooks/ or config/settings.json changed, the benchmark gate;
+# a decision change needs an `intended-decisions: <ids>` line in a merged PR
+# body. CHANGELOG.md follows by a PR merged here once CI passes: main is
+# protected, so github.token cannot push it.
+on:
+  # After each Upstream drift run, which lands contract bumps on main. The link
+  # is by name: renaming that workflow breaks it silently, and the cron below
+  # then covers it a day late. workflow_run fires only once this file is on main.
+  workflow_run:
+    workflows: ["Upstream drift"]
+    types: [completed]
+  schedule:
+    # A backstop for PRs merged by hand on a day the drift run did not fire.
+    - cron: '23 19 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, vX.Y.Z; empty computes the next one'
+        required: false
+        default: ''
+      bump:
+        description: 'auto, patch, minor or major; used when version is empty'
+        required: false
+        default: auto
+
+# actions: write dispatches CI on the changelog branch; issues: write keeps the
+# Release blocked issue.
+permissions:
+  actions: write
+  contents: write
+  issues: write
+  pull-requests: write
+
+# Two runs at once would pick the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: tag, notes and benchmark
+    # Every completed drift run fires workflow_run, its push and PR runs too.
+    # Its conclusion is not checked: the gates below are this workflow's own.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.head_branch == 'main' &&
+       (github.event.workflow_run.event == 'schedule' || github.event.workflow_run.event == 'workflow_dispatch'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install jq
+        # See .github/install-apt-deps.sh for why this is not a plain apt-get.
+        run: .github/install-apt-deps.sh jq
+
+      # The tag goes on the commit tested here (sha), not on $GITHUB_SHA.
+      - name: Decide the version
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IN_VERSION: ${{ inputs.version }}
+          IN_BUMP: ${{ inputs.bump }}
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          LAST=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)
+          echo "last=$LAST" >> "$GITHUB_OUTPUT"
+          # The loop guard: the CHANGELOG PR this workflow merges is no release.
+          RC=0; bash bin/release-notes.sh --since "$LAST" --changed > changed.txt || RC=$?
+          if [ "$RC" = 1 ]; then
+            echo "::notice::nothing but CHANGELOG.md changed since $LAST; nothing to release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          [ "$RC" = 0 ] || { echo "::error::release-notes.sh --changed exited $RC"; exit 1; }
+          gh pr list --state merged --base main --limit 300 --json number,title,labels,body > prs.json
+          # Only the changelog PR, or no PR at all, landed since the tag.
+          if ! bash bin/release-notes.sh --since "$LAST" --prs prs.json >/dev/null; then
+            echo "::notice::no PR merged since $LAST; nothing to release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          VERSION=${IN_VERSION:-$(bash bin/release-notes.sh --since "$LAST" --prs prs.json --next-version --bump "${IN_BUMP:-auto}")}
+          echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::not a version: $VERSION"; exit 1; }
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "::error::$VERSION already exists"; exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "intended=$(bash bin/release-notes.sh --since "$LAST" --prs prs.json --intended)" >> "$GITHUB_OUTPUT"
+          # Fails closed: only exit 1 (nothing changed) skips the benchmark.
+          RC=0; bash bin/release-notes.sh --since "$LAST" --hooks-changed >/dev/null || RC=$?
+          if [ "$RC" = 1 ]; then echo "hooks_changed=false"; else echo "hooks_changed=true"; fi >> "$GITHUB_OUTPUT"
+
+      # Always, whatever changed: a merge by github.token fires no push CI, so
+      # this is the only full-suite run on the commit that gets tagged.
+      - name: Run the hook test suite
+        id: doctor
+        if: steps.plan.outputs.skip != 'true'
+        run: bash doctor.sh
+
+      # hook-bench.py compares only hooks/ and config/settings.json of the two
+      # sides; with neither changed, both would run the same files.
+      - name: Benchmark against the previous tag
+        id: bench
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          LAST: ${{ steps.plan.outputs.last }}
+          INTENDED: ${{ steps.plan.outputs.intended }}
+          HOOKS_CHANGED: ${{ steps.plan.outputs.hooks_changed }}
+        run: |
+          if [ -z "$LAST" ]; then
+            echo "No previous tag, so no benchmark for this release." > bench.md
+            cat bench.md >> "$GITHUB_STEP_SUMMARY"; exit 0
+          fi
+          if [ "$HOOKS_CHANGED" = false ]; then
+            echo "hooks/ and config/settings.json are unchanged since $LAST; benchmark skipped (both sides would run the same files)." > bench.md
+            cat bench.md >> "$GITHUB_STEP_SUMMARY"; exit 0
+          fi
+          set +e
+          python3 bin/hook-bench.py --base "$LAST" --head HEAD --gate --intended "$INTENDED" --md bench.md --json bench.json >/dev/null
+          RC=$?
+          cat bench.md >> "$GITHUB_STEP_SUMMARY"
+          [ "$RC" = 0 ] || echo "::error::the benchmark gate failed; the release is not made. See the job summary."
+          exit $RC
+
+      # An entry already in CHANGELOG.md (v1.0.0 was written by hand) is the
+      # notes; otherwise they are generated and reach CHANGELOG.md by PR below.
+      - name: Write the notes
+        id: notes
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          LAST: ${{ steps.plan.outputs.last }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          if bash bin/release-notes.sh --entry "$VERSION" > entry.md 2>/dev/null; then
+            { cat entry.md; echo; cat bench.md; } > notes.md
+            echo "in_changelog=true" >> "$GITHUB_OUTPUT"
+          else
+            bash bin/release-notes.sh --since "$LAST" --prs prs.json --bench bench.md --version "$VERSION" > notes.md
+          fi
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      # The sync step cuts the entry back out of the Release body at the
+      # trailer's first line, so that line must start "CHANGELOG.md entry:".
+      - name: Create the tag and the release
+        id: tag
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          SHA: ${{ steps.plan.outputs.sha }}
+          IN_CHANGELOG: ${{ steps.notes.outputs.in_changelog }}
+        run: |
+          BLOB="${{ github.server_url }}/${{ github.repository }}/blob"
+          if [ "$IN_CHANGELOG" = true ]; then URL="$BLOB/$VERSION/CHANGELOG.md"; else URL="$BLOB/main/CHANGELOG.md"; fi
+          { cat notes.md; echo; echo "CHANGELOG.md entry: $URL"; echo
+            echo "Update a machine: \`~/.claude/harness-update.sh\`, or \`git checkout $VERSION && bash install.sh\` in the clone."; } > release.md
+          gh release create "$VERSION" --target "$SHA" --title "$VERSION" --notes-file release.md
+          echo "Released $VERSION: ${{ github.server_url }}/${{ github.repository }}/releases/tag/$VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      # Also on no-op days, so a changelog PR that did not land is retried. One
+      # branch, rebuilt from main each run. A PR opened with github.token fires
+      # no pull_request workflows, so CI is dispatched on the branch; whether
+      # those runs satisfy main's required checks is untested.
+      - name: Sync CHANGELOG.md by PR
+        if: always() && (steps.tag.outcome == 'success' || steps.plan.outputs.skip == 'true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # --tags: the tag above was made on GitHub, not in this clone.
+          git fetch -q --tags origin main
+          git switch -q --detach origin/main
+          MISSING=$(bash bin/release-notes.sh --missing)
+          if [ -z "$MISSING" ]; then echo "CHANGELOG.md has every tag."; exit 0; fi
+          for T in $MISSING; do
+            gh release view "$T" --json body -q .body | tr -d '\r' | sed '/^CHANGELOG.md entry:/,$d' > entry.md
+            bash bin/release-notes.sh --changelog entry.md
+          done
+          NEWEST=$(printf '%s\n' "$MISSING" | tail -1)
+          git switch -q -C changelog
+          git add CHANGELOG.md
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "changelog: $NEWEST"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" changelog
+          LIST=$(printf '%s\n' "$MISSING" | tr '\n' ' '); LIST=${LIST% }
+          echo "The CHANGELOG.md entries for $LIST, as published on their GitHub Releases. Merged by the Release workflow once CI passes; nothing else changes." > body.md
+          PR=$(gh pr list --head changelog --state open --json number -q '.[0].number // empty')
+          if [ -z "$PR" ]; then
+            PR=$(gh pr create --base main --head changelog --title "changelog: $NEWEST" --body-file body.md \
+                   --assignee "${{ github.repository_owner }}" | grep -oE '[0-9]+$' || true)
+          else
+            gh pr edit "$PR" --title "changelog: $NEWEST" --body-file body.md
+          fi
+          if [ -z "$PR" ]; then
+            echo "::warning::pushed changelog but could not open a PR: ${{ github.server_url }}/${{ github.repository }}/compare/main...changelog?expand=1"
+            exit 0
+          fi
+          gh workflow run ci.yml --ref changelog || echo "::warning::could not dispatch CI on changelog"
+          # Re-queued after every push. --auto waits for main's required checks;
+          # the direct merge is for a PR that is already clean.
+          gh pr merge "$PR" --auto --squash || gh pr merge "$PR" --squash \
+            || echo "::warning::PR #$PR is open but could not be queued to merge; merge it by hand."
+          echo "CHANGELOG.md PR: ${{ github.server_url }}/${{ github.repository }}/pull/$PR" >> "$GITHUB_STEP_SUMMARY"
+
+      # One open issue while main cannot be released, closed by the next
+      # release. The job stays red as well.
+      - name: Record a blocked release in an issue
+        if: always() && steps.plan.outcome == 'success' && steps.plan.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          DOCTOR: ${{ steps.doctor.outcome }}
+          BENCH: ${{ steps.bench.outcome }}
+          NOTES: ${{ steps.notes.outcome }}
+          TAG: ${{ steps.tag.outcome }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="Release blocked: main does not pass the release gate"
+          N=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number -q '.[0].number // empty')
+          if [ "$TAG" = success ]; then
+            if [ -n "$N" ]; then gh issue close "$N" --comment "Released $VERSION: $RUN"; fi
+            exit 0
+          fi
+          WHY="the run was cancelled or timed out"
+          if [ "$DOCTOR" = failure ]; then WHY="doctor.sh failed"
+          elif [ "$BENCH" = failure ]; then WHY="the benchmark gate failed"
+          elif [ "$NOTES" = failure ]; then WHY="writing the notes failed"
+          elif [ "$TAG" = failure ]; then WHY="creating the tag and release failed"
+          fi
+          {
+            echo "Latest run: $RUN"
+            echo
+            echo "$VERSION was not tagged: $WHY (doctor.sh $DOCTOR, benchmark $BENCH, notes $NOTES, tag $TAG)."
+            if [ "$BENCH" = failure ] && [ -f bench.md ]; then
+              echo
+              echo '````'
+              cat bench.md
+              echo '````'
+            fi
+            echo
+            echo "To unblock:"
+            echo "- A decision change that a merged PR meant: add an \`intended-decisions: <payload ids>\` line to that PR's body (\`gh pr edit N --body-file ...\`). The ids are in the table above."
+            echo "- A failing suite or a slower hook: fix it on main."
+            echo
+            echo "The next run retries after the daily Upstream drift run, or now: \`gh workflow run release.yml\`."
+          } > issue.md
+          if [ -n "$N" ]; then
+            gh issue edit "$N" --body-file issue.md
+          else
+            gh issue create --title "$TITLE" --body-file issue.md --assignee "${{ github.repository_owner }}"
+          fi

@@ -54,8 +54,27 @@ printf '%s' '{"permissions":{"deny":["Bash(rm -rf /:*)"]}}' > "$HOME/.claude/loc
 # a directory takes the same [[ -f ]] branch without risking a hung test.
 mkdir "$HOME/.claude/local-settings/odd.json"
 
+# Twelve backups from earlier installs; this run makes a thirteenth.
+for i in 00 01 02 03 04 05 06 07 08 09 10 11; do printf '{}' > "$HOME/.claude/settings.json.bak.202601010000$i"; done
+
 OUT=$(cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh 2>&1); RC=$?
 [ "$RC" -eq 0 ] && pass "installer exits 0" || fail "installer exits 0" "rc=$RC: $(printf '%s' "$OUT" | tail -3)"
+
+echo ""
+echo "=== settings.json backups are pruned to the newest ten ==="
+N=$(ls "$HOME"/.claude/settings.json.bak.* | wc -l | tr -d ' ')
+[ "$N" = 10 ] && pass "10 backups remain" || fail "10 backups remain" "$N: $(ls "$HOME"/.claude/ | grep bak)"
+[ ! -e "$HOME/.claude/settings.json.bak.20260101000002" ] && [ -e "$HOME/.claude/settings.json.bak.20260101000003" ] \
+  && pass "the three oldest went, the rest stayed" || fail "which were pruned" "$(ls "$HOME"/.claude/ | grep bak)"
+grep -qF 'backups: 3 old removed, newest 10 kept' <<<"$OUT" && pass "and the install says so" || fail "prune message" "$(grep backups <<<"$OUT")"
+
+echo ""
+echo "=== the installed version and clone are recorded for harness-update ==="
+V="$HOME/.claude/harness.version"
+grep -q "^repo=$REPO\$" "$V" 2>/dev/null && pass "repo= names this clone" || fail "repo=" "$(cat "$V" 2>/dev/null)"
+grep -qE '^version=.+' "$V" && grep -qE '^commit=[0-9a-f]{40}$' "$V" \
+  && pass "version= and commit= written" || fail "version/commit" "$(cat "$V" 2>/dev/null)"
+[ -x "$HOME/.claude/harness-update.sh" ] && pass "harness-update.sh installed executable" || fail "harness-update.sh" "missing"
 
 echo ""
 echo "=== machine-local rules survive the install byte for byte ==="
