@@ -26,8 +26,8 @@ on:
         required: false
         default: auto
 
-# actions: write dispatches CI on the changelog branch; issues: write keeps the
-# Release blocked issue.
+# actions: write approves the changelog PR's held CI run, or dispatches CI on
+# its branch; issues: write keeps the Release blocked issue.
 permissions:
   actions: write
   contents: write
@@ -163,9 +163,9 @@ jobs:
           echo "Released $VERSION: ${{ github.server_url }}/${{ github.repository }}/releases/tag/$VERSION" >> "$GITHUB_STEP_SUMMARY"
 
       # Also on no-op days, so a changelog PR that did not land is retried. One
-      # branch, rebuilt from main each run. A PR opened with github.token fires
-      # no pull_request workflows, so CI is dispatched on the branch; whether
-      # those runs satisfy main's required checks is untested.
+      # branch, rebuilt from main each run. GitHub holds the PR's own CI run for
+      # approval, and a dispatched run never counts for the PR (#99), so the
+      # held run is approved; CI is dispatched only if that fails.
       - name: Sync CHANGELOG.md by PR
         if: always() && (steps.tag.outcome == 'success' || steps.plan.outputs.skip == 'true')
         env:
@@ -199,7 +199,12 @@ jobs:
             echo "::warning::pushed changelog but could not open a PR: ${{ github.server_url }}/${{ github.repository }}/compare/main...changelog?expand=1"
             exit 0
           fi
-          gh workflow run ci.yml --ref changelog || echo "::warning::could not dispatch CI on changelog"
+          if CI_RUN=$(.github/approve-pr-ci.sh "$PR") && [ -n "$CI_RUN" ]; then
+            echo "PR #$PR runs its own CI: ${{ github.server_url }}/${{ github.repository }}/actions/runs/$CI_RUN"
+          else
+            echo "::warning::PR #$PR's CI was not approved; dispatched CI on changelog instead, which main's required checks do not count."
+            gh workflow run ci.yml --ref changelog || echo "::warning::could not dispatch CI on changelog"
+          fi
           # Re-queued after every push. --auto waits for main's required checks;
           # the direct merge is for a PR that is already clean.
           gh pr merge "$PR" --auto --squash || gh pr merge "$PR" --squash \

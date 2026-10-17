@@ -19,7 +19,11 @@ or when a payload's decision changed and no merged PR body declared it with an
 the "Release blocked" issue, and the next run retries; the next release closes
 it. A contract-only release is a patch. The CHANGELOG entry lands by a PR the
 workflow opens and merges once CI passes, and each machine's scheduled
-`harness-update.sh` installs the tag within six hours.
+`harness-update.sh` installs the tag within six hours. GitHub holds the
+`pull_request` runs on a PR `github-actions` opens, since the repo's fork PR
+approval policy is `first_time_contributors`, so the workflow approves its own
+PR's CI (`.github/approve-pr-ci.sh`): a dispatched run does not count for
+main's required checks, and is only the fallback when approval is refused.
 
 The same benchmark, on every third payload, runs on each PR against main and
 posts its table to the job summary; `.github/workflows/ci.yml` runs it with
