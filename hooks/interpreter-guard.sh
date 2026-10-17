@@ -5,9 +5,11 @@
 # every regex-based guard by writing a tiny script that reads env vars or
 # dotfiles. This hook inspects inline-code flags (-c, -e, --eval, combined
 # short flags like -ne, -r, a trailing -, and heredoc payloads) and asks
-# when the payload references env vars, dotfile paths, raw sockets, or
-# network exfil APIs. It sees through common command runners (poetry run,
-# env, timeout, nohup, …) so wrapping an interpreter doesn't evade the check.
+# when the payload references env vars, dotfile paths, raw sockets, network
+# exfil APIs, or an env-dumping command. A shell-out alone (subprocess,
+# os.system, child_process) runs. It sees through common command runners
+# (poetry run, env, timeout, nohup, …) so wrapping an interpreter doesn't
+# evade the check.
 #
 # The hook is conservative: only triggers when BOTH an interpreter is used
 # AND the payload contains a sensitive token. Running "python script.py"
@@ -24,6 +26,13 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+# Every check below names an interpreter. Normalizing drops quotes, backslashes
+# and case but never adds a letter, so a command naming none once those are
+# gone is done before ~20 ms of normalizing. `sh` counts only as its own word:
+# `push`, `x.sh` and `ssh` are not shells, `/bin/sh` and `;sh` are.
+printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qiE 'python|node|ruby|perl|php|bash|zsh|deno|bun|(^|[^a-z0-9_.-])sh([^a-z0-9_-]|$)' || exit 0
+# A commit message or a notes file is text, not a command (lib.sh).
+CMD=$(strip_inert_heredocs "$CMD")
 # `/usr/bin/python3` and `PYTHON3` run python too. ICMD adds the normalized form
 # (lib.sh) as a second line; the stream-edit exemption below keeps to CMD.
 ICMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
@@ -79,12 +88,9 @@ SENSITIVE_TOKENS=(
   'net\.Socket'
   'https?\.request'
   'fetch\s*\('
-  # subprocess that re-invokes a shell (used to chain around the guard)
-  'subprocess\.(Popen|run|call|check_output)'
-  'child_process\b[^|;&]{0,40}(exec|spawn|fork)'
-  'os\.system'
-  'Kernel\.`'
-  'IO\.popen'
+  # A shell-out whose command is an env dump. A shell-out alone is glue and
+  # runs; what it runs is still scanned.
+  '(run|call|check_output|check_call|Popen|exec|execSync|execFile|execFileSync|spawn|spawnSync|system|popen)\s*\(\s*\[?\s*\\?['"'"'"](printenv|env)(\\?['"'"'"]|\s)'
   # bare commands that leak env, even when invoked via bash/sh -c
   '\bprintenv\b'
   '\bcompgen\s+-e\b'
@@ -111,7 +117,7 @@ for T in "${SENSITIVE_TOKENS[@]}"; do
   if printf '%s\n' "$ICMD" | grep -qE "$T"; then
     # Asks rather than denies (#72): a deny had Claude rewrite routine glue as a
     # script file: 15 unique commands in the 16 days to 2026-10-15.
-    emit_ask "Inline code passed to an interpreter references env vars, dotfiles, sockets, or subprocess-spawning APIs. Review the payload before running it."
+    emit_ask "Inline code passed to an interpreter references env vars, dotfiles, sockets, or an env-dumping command. Review the payload before running it."
     exit 0
   fi
 done

@@ -74,8 +74,8 @@ check "remote add"             ask  "git remote add upstream git@evil.example:x/
 
 echo ""
 echo "=== Remote branch delete (expect: ask) ==="
-check "push --delete"          ask  "git push origin --delete feature-x"
-check "push :branch"           ask  "git push origin :feature-x"
+check "push --delete, no repo to check" ask "git push origin --delete feature-x"
+check "push :branch, no repo to check"  ask "git push origin :feature-x"
 
 echo ""
 echo "=== History rewrite (expect: deny) ==="
@@ -189,6 +189,8 @@ check "push +full refspec"       deny "git push origin +refs/heads/main:refs/hea
 check "push quoted +refspec"     deny "git push origin '+main'"
 check "push --mirror"            deny "git push --mirror origin"
 check "push --mirror after url"  deny "git push origin --mirror"
+check "push --mirr abbreviation" deny "git push --mirr origin"
+check "push --m abbreviation"    deny "git push origin --m"
 check "push -fu bundle"          deny "git push -fu origin main"
 check "push -uf bundle"          deny "git push -uf origin main"
 check "push -f with -C prefix"   deny "git -C /repo push -qf origin main"
@@ -343,6 +345,151 @@ check_wt "-D, after a cd"                    ask   "cd $M && git branch -D b-pus
 check_wt "-D, names from xargs"              ask   "git branch | xargs git branch -D" "$M"
 check_wt "-D, unknown flag"                  ask   "git branch -D -r origin/b-pushed" "$M"
 check_wt "-D, then a local-only delete"      ask   "git branch -D b-pushed && git branch -D b-local" "$M"
+check_wt "-qD bundle, tip on a remote"       allow "git branch -qD b-pushed" "$M"
+check_wt "a new branch named like a flag"    allow "git branch feature-d" "$M"
+# The gate reads the normalized line, the parser the command as typed: a second
+# delete spelled another way was never checked and the first passed the call.
+check_wt "-D, then one spelled /usr/bin/git" ask   "git branch -D b-pushed; /usr/bin/git branch -D b-local" "$M"
+check_wt "-D, then one spelled \"git\""        ask   "git branch -D b-pushed; \"git\" branch -D b-local" "$M"
+check_wt "-D, then one spelled GIT"          ask   "git branch -D b-pushed && GIT branch -D b-local" "$M"
+check_wt "-D, then one spelled \\git"         ask   "git branch -D b-pushed && \\git branch -D b-local" "$M"
+check_wt "-D, then one a function runs"      ask   "f() { \"\$@\"; }; git branch -D b-pushed; f git branch -D b-local" "$M"
+check_wt "-D, xargs adds a name"             ask   "echo b-local | xargs git branch -D b-pushed" "$M"
+check_wt "-qD bundle, commits only local"    ask   "git branch -qD b-local" "$M"
+check_wt "-Dq bundle, commits only local"    ask   "git branch -Dq b-local" "$M"
+check_wt "--del abbreviation"                ask   "git branch --del --force b-local" "$M"
+check_wt "quoted -D"                         ask   "git branch \"-D\" b-local" "$M"
+
+echo ""
+echo "=== push --delete: runs only when another ref holds the tip the remote reports ==="
+gc() { git -C "$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "$2"; }
+DEF=$(git -C "$M" symbolic-ref --short HEAD)
+git -C "$M" push -q origin "$DEF" 2>/dev/null && git -C "$R/remote.git" symbolic-ref HEAD "refs/heads/$DEF"
+# b-merged: pushed, fast-forwarded into DEF, local copy deleted
+git -C "$M" checkout -q -b b-merged && gc "$M" merged && git -C "$M" push -q origin b-merged 2>/dev/null \
+  && git -C "$M" checkout -q "$DEF" && git -C "$M" merge -q --ff-only b-merged && git -C "$M" branch -q -d b-merged
+# b-orphan: pushed, never merged, local copy gone
+git -C "$M" checkout -q -b b-orphan && gc "$M" orphan && git -C "$M" push -q origin b-orphan 2>/dev/null \
+  && git -C "$M" checkout -q "$DEF" && git -C "$M" branch -q -D b-orphan
+# b-twin1, b-twin2: one unmerged commit under two remote names, local copy gone
+git -C "$M" checkout -q -b b-twin && gc "$M" twin && git -C "$M" push -q origin b-twin:b-twin1 b-twin:b-twin2 2>/dev/null \
+  && git -C "$M" checkout -q "$DEF" && git -C "$M" branch -q -D b-twin
+# b-ahead: another clone pushed after this one last fetched
+git clone -q "$R/remote.git" "$R/other" 2>/dev/null && git -C "$R/other" checkout -q -b b-ahead "origin/$DEF" \
+  && gc "$R/other" a1 && git -C "$R/other" push -q origin b-ahead 2>/dev/null \
+  && git -C "$M" fetch -q origin && git -C "$M" branch -q b-ahead origin/b-ahead \
+  && gc "$R/other" a2 && git -C "$R/other" push -q origin b-ahead 2>/dev/null
+git -C "$M" tag v1 && git -C "$M" push -q origin v1 2>/dev/null
+# det: a remote whose HEAD names no branch. pu: pushes somewhere other than it fetches. Neither is fetched.
+git clone -q --bare "$R/remote.git" "$R/det.git" 2>/dev/null \
+  && git -C "$R/det.git" update-ref --no-deref HEAD "$(git -C "$R/det.git" rev-parse "refs/heads/$DEF")"
+git -C "$M" remote add det "$R/det.git" && git -C "$M" remote add pu "$R/remote.git" && git -C "$M" remote set-url --push pu "$R/det.git"
+check_wt "--delete, tip on a local branch"     allow "git push origin --delete b-pushed" "$M"
+check_wt "--delete before the remote"          allow "git push --delete origin b-pushed" "$M"
+check_wt "-d"                                  allow "git push -d origin b-pushed" "$M"
+check_wt ":branch"                             allow "git push origin :b-pushed" "$M"
+check_wt "--delete, merged into the default"   allow "git push origin --delete b-merged" "$M"
+check_wt "--delete refs/heads/<name>"          allow "git push origin --delete refs/heads/b-pushed" "$M"
+check_wt "--delete, mixed-case name"           allow "git push origin --delete Feature-X" "$M"
+check_wt "--delete, two held names"            allow "git push origin --delete b-pushed b-merged" "$M"
+check_wt "a push and a :branch"                allow "git push origin $DEF :b-pushed" "$M"
+check_wt "-C repo, cwd elsewhere"              allow "git -C $M push origin --delete b-pushed" "/tmp"
+check_wt "redirect after the name"             allow "git push origin --delete b-pushed 2>/dev/null" "$M"
+check_wt "-q"                                  allow "git push -q origin --delete b-pushed" "$M"
+check_wt "one twin; the other still holds it"  allow "git push origin --delete b-twin1" "$M"
+check_wt "--delete only in a later segment"    allow "git push origin $DEF; echo --delete" "$M"
+check_wt "--delete, only the remote holds it"  ask   "git push origin --delete b-orphan" "$M"
+check_wt ":branch, only the remote holds it"   ask   "git push origin :b-orphan" "$M"
+check_wt "-d, only the remote holds it"        ask   "git push -d origin b-orphan" "$M"
+check_wt "--delete, remote moved since fetch"  ask   "git push origin --delete b-ahead" "$M"
+check_wt "--delete, the remote's default"      ask   "git push origin --delete $DEF" "$M"
+check_wt "--delete, one of two only remote"    ask   "git push origin --delete b-pushed b-orphan" "$M"
+check_wt "--delete, twins hold each other"     ask   "git push origin --delete b-twin1 b-twin2" "$M"
+check_wt "--delete, twins in two segments"     ask   "git push origin --delete b-twin1 && git push origin --delete b-twin2" "$M"
+check_wt "--delete, no such remote branch"     ask   "git push origin --delete b-local" "$M"
+check_wt "--delete, a tag"                     ask   "git push origin --delete v1" "$M"
+check_wt "--delete refs/tags/"                 ask   "git push origin --delete refs/tags/v1" "$M"
+check_wt "--delete, not a configured remote"   ask   "git push nosuch --delete b-pushed" "$M"
+check_wt "--delete, a URL"                     ask   "git push $R/remote.git --delete b-pushed" "$M"
+check_wt "--delete, push URL differs"          ask   "git push pu --delete b-pushed" "$M"
+check_wt "--delete, remote HEAD names no branch" ask "git push det --delete b-pushed" "$M"
+check_wt "--delete, name in a variable"        ask   "B=b-pushed; git push origin --delete \$B" "$M"
+check_wt "--delete, quoted name"               ask   "git push origin --delete 'b-pushed'" "$M"
+check_wt "--delete, after a cd"                ask   "cd $M && git push origin --delete b-pushed" "/tmp"
+check_wt "--delete, names from xargs"          ask   "echo b-pushed | xargs git push origin --delete" "$M"
+check_wt "--delete, xargs adds a name"         ask   "echo b-orphan | xargs git push origin --delete b-pushed" "$M"
+check_wt "--delete, unknown flag"              ask   "git push --prune origin --delete b-pushed" "$M"
+check_wt "--delete, not a repo"                ask   "git push origin --delete b-pushed" "$TMP"
+check_wt "--delete, then an unheld one"        ask   "git push origin --delete b-pushed && git push origin --delete b-orphan" "$M"
+check_wt "--delete, then one spelled /usr/bin/git" ask "git push origin --delete b-pushed; /usr/bin/git push origin --delete b-orphan" "$M"
+check_wt "--delete, then one spelled \"git\""    ask   "git push origin --delete b-pushed; \"git\" push origin --delete b-orphan" "$M"
+check_wt "--delete, and the local branch"      ask   "git push origin --delete b-pushed && git branch -D b-pushed" "$M"
+check_wt "local -D, then --delete"             ask   "git branch -D b-pushed && git push origin --delete b-pushed" "$M"
+check_wt "--del abbreviation"                  ask   "git push origin --del b-orphan" "$M"
+check_wt "-qd bundle"                          ask   "git push -qd origin b-orphan" "$M"
+check_wt "quoted --delete"                     ask   "git push origin \"--delete\" b-orphan" "$M"
+check_wt "quoted :branch"                      ask   "git push origin ':b-orphan'" "$M"
+check_wt "+:branch"                            ask   "git push origin +:b-orphan" "$M"
+check_wt "-f with --delete"                    deny  "git push -f origin --delete b-pushed" "$M"
+check_wt "not a delete: src:dst"               allow "git push origin HEAD:$DEF" "$M"
+check_wt "not a delete: a name ending in -d"   allow "git push origin feature-d" "$M"
+check_wt "not a delete: -u a:a"                allow "git push -u origin b-pushed:b-pushed" "$M"
+check_wt "not a delete: --dry-run"             allow "git push --dry-run origin $DEF" "$M"
+
+echo ""
+echo "=== broad add: runs when git status lists no credential file it would stage ==="
+G="$R/addrepo"; git init -q "$G" && echo a > "$G/a.txt" && git -C "$G" add a.txt \
+  && git -C "$G" -c user.email=t@t -c user.name=t commit -q -m init && mkdir -p "$G/sub" && echo b > "$G/sub/b.txt"
+echo s > "$G/.env.example"
+check_wt "-A, ordinary untracked files"      allow "git add -A" "$G"
+check_wt ". from a subdirectory"             allow "git add ." "$G/sub"
+check_wt "-C repo, cwd elsewhere"            allow "git -C $G add --all" "/tmp"
+check_wt "-A -- ."                           allow "git add -v -A -- ." "$G"
+G2="$R/addrepo2"; git init -q "$G2" && echo s > "$G2/.env"
+check_wt "clean add, then one spelled /usr/bin/git" deny "git add -A && /usr/bin/git -C $G2 add -A" "$G"
+check_wt "clean add, then one spelled \"git\""        deny "git add -A && \"git\" -C $G2 add -A" "$G"
+# Every credential file sensitive-file-guard knows, not a shorter list of its own.
+for f in id_ecdsa id_dsa .npmrc .pypirc credentials.json service_account.json certs/client.p12 keys/app.jks \
+         prod.tfvars terraform.tfstate kubeconfig .claude.json .kube/config .ssh/deploy_key .docker/config.json; do
+  mkdir -p "$(dirname "$G/$f")" && echo x > "$G/$f"
+  check_wt "-A, an untracked $f"             deny  "git add -A" "$G"
+  rm -f "$G/$f"; rmdir "$(dirname "$G/$f")" 2>/dev/null
+done
+echo x > "$G/.NPMRC"
+check_wt "-A, upper-case .NPMRC"             deny  "git add -A" "$G"
+rm -f "$G/.NPMRC"
+check_wt "-A, after those are gone"          allow "git add -A" "$G"
+# -f adds ignored files git status never lists, in any spelling git takes.
+G3="$R/addrepo3"; git init -q "$G3" && printf '.env\n' > "$G3/.gitignore" && git -C "$G3" add .gitignore \
+  && git -C "$G3" -c user.email=t@t -c user.name=t commit -q -m init && echo s > "$G3/.env"
+check_wt "ignored .env, plain -v ."          allow "git add -v ." "$G3"
+check_wt "ignored .env, -A"                  allow "git add -A" "$G3"
+check_wt "ignored .env, -f ."                deny  "git add -f ." "$G3"
+check_wt "ignored .env, -fv ."               deny  "git add -fv ." "$G3"
+check_wt "ignored .env, . -f"                deny  "git add . -f" "$G3"
+check_wt "ignored .env, -f -- ."             deny  "git add -f -- ." "$G3"
+check_wt "ignored .env, -Af"                 deny  "git add -Af" "$G3"
+check_wt "ignored .env, -fA"                 deny  "git add -fA" "$G3"
+check_wt "ignored .env, --forc ."            deny  "git add --forc ." "$G3"
+check_wt "ignored .env, --f ."               deny  "git add --f ." "$G3"
+echo s > "$G/sub/.env"
+check_wt "-A, an untracked .env below"       deny  "git add -A" "$G"
+check_wt ". from the root, .env below"       deny  "git add ." "$G"
+check_wt "-vA bundle, .env below"            deny  "git add -vA" "$G"
+check_wt "--al abbreviation, .env below"     deny  "git add --al" "$G"
+check_wt "-C repo, .env below"               deny  "git -C $G add -A" "/tmp"
+rm "$G/sub/.env"; echo k > "$G/server.key"
+check_wt "-A, an untracked .key"             deny  "git add -A" "$G"
+rm "$G/server.key"; echo m >> "$G/a.txt"; mv "$G/a.txt" "$G/secrets.yaml"
+check_wt "-A, a modified file renamed"       deny  "git add -A" "$G"
+mv "$G/secrets.yaml" "$G/a.txt"
+check_wt "-Af, ignored files are unseen"     deny  "git add -Af ." "$G"
+check_wt "--force"                           deny  "git add --force -A" "$G"
+check_wt "after a cd"                        deny  "cd $G && git add -A" "/tmp"
+check_wt "repo in a variable"                deny  "git -C \$G add -A" "/tmp"
+check_wt "not a repo"                        deny  "git add -A" "$TMP"
+check_wt "names from xargs"                  deny  "echo x | xargs git add -A" "$G"
+check_wt "clean add, then a named .env"      deny  "git add -A && git add sub/.env" "$G"
 rm -rf "$WT_HOME"
 
 echo ""
