@@ -38,7 +38,8 @@ for reading the repo, not for the installed tree.
   net-allowlist.sh  sandbox.sh  sandbox-trial.sh
   harness-update.sh        ← moves this machine to the newest release
   harness-update.conf      ← with_cli=1 or 0, from --with-cli or --no-cli
-  harness.version          ← version, commit, the clone it came from, install time
+  harness-src/             ← harness-update.sh's own clone, made on its first run
+  harness.version          ← version, commit, the clone it came from and its origin, install time
   harness-contract.version ← last_verified_version from config/upstream-contract.json
   skills/<name>/SKILL.md   ← memory-audit, memory-archive, pr-review
   rules/*.md               ← copied from rules/; local-*.md and other files left alone

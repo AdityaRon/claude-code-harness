@@ -47,9 +47,9 @@ asks you first.
 **Turning a shipped hook off**: there is no per-hook switch. Deleting its entry
 from `~/.claude/settings.json` lasts until the next install, which writes the
 harness's hook entries back. To keep it off, remove the entry from
-`config/settings.json` in your clone and run `bash install.sh`. A clone with
-local changes or commits is one `~/.claude/harness-update.sh` refuses, so update
-that machine with `git pull && bash install.sh` instead.
+`config/settings.json` in your clone and run `bash install.sh`. An install from
+a clone with local changes or commits is one `~/.claude/harness-update.sh`
+leaves alone, so update that machine with `git pull && bash install.sh` instead.
 
 **Hosts this machine reaches often** (an internal log service, a vendor API):
 ```

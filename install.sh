@@ -70,7 +70,8 @@ cp "$REPO/bin/net-allowlist.sh" ~/.claude/net-allowlist.sh
 chmod +x ~/.claude/net-allowlist.sh
 echo "  ✓ net-allowlist.sh"
 
-# Finds this clone through harness.version below, so it runs from launchd/cron.
+# Updates from its own clone, ~/.claude/harness-src, cloned from origin= below:
+# launchd cannot read ~/Desktop or ~/Documents, where this clone may live.
 # Replaced by rename: it is the script running this install when it updates.
 cp "$REPO/bin/harness-update.sh" ~/.claude/harness-update.sh.new
 chmod +x ~/.claude/harness-update.sh.new
@@ -86,12 +87,15 @@ echo "  ✓ harness-contract.version"
 
 # ---- Installed version ------------------------------------------------
 # A plain tag only when the clone sits exactly on one, clean; session-start
-# nudges about a newer release only then. harness-update.sh reads repo=.
+# nudges about a newer release only then. harness-update.sh reads version=,
+# commit= and origin=; repo= only when there is no origin=.
 VER=$(git -C "$REPO" describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo unknown)
+ORIGIN=$(git -C "$REPO" remote get-url origin 2>/dev/null || true)
 {
   echo "version=$VER"
   echo "commit=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "repo=$REPO"
+  if [[ -n "$ORIGIN" ]]; then echo "origin=$ORIGIN"; fi
   echo "installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > ~/.claude/harness.version
 echo "  ✓ harness.version ($VER)"

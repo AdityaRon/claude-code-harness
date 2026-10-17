@@ -37,14 +37,21 @@ skips the benchmark, since both sides would run the same files.
 
 ## Updating a machine
 
-To update a machine, run `~/.claude/harness-update.sh`: it fetches tags,
-checks the newest release out of the clone `install.sh` ran from (detached;
-it refuses a clone with local changes or commits), runs `doctor.sh`, and
-installs only on green. A machine installed from a commit that already holds
-the newest tag (`v1.0.0-11-ga6197da` in `~/.claude/harness.version`) is up to
-date and is left alone. `--schedule` runs it at 01:17, 07:17, 13:17 and 19:17
-local time (launchd on macOS, a systemd user timer or crontab on Linux);
-`--unschedule` removes that. With `--with-cli`, every run, the scheduled ones
+To update a machine, run `~/.claude/harness-update.sh`: it fetches tags into
+its own clone, `~/.claude/harness-src` (or `$HARNESS_UPDATE_CLONE`; `--repo DIR`
+uses DIR), checks the newest release out there detached (it refuses that clone
+with local changes or commits), runs `doctor.sh`, and installs only on green.
+It never touches the clone `install.sh` ran from: macOS keeps scheduled jobs
+out of `~/Desktop`, `~/Documents`, `~/Downloads` and iCloud Drive. The first run
+clones from the `origin=` that `install.sh` records in
+`~/.claude/harness.version`, else from that clone's origin, else from GitHub,
+and logs which. A machine installed from a commit that already holds the
+newest tag (`v1.0.0-11-ga6197da` in `~/.claude/harness.version`) is up to date
+and is left alone. So is one installed from work the newest tag lacks: a
+commit origin does not have or the tag does not include, or uncommitted
+changes; update that one with `git pull && bash install.sh`. `--schedule`
+runs it at 01:17, 07:17, 13:17 and 19:17 local time (launchd on macOS, a
+systemd user timer or crontab on Linux); `--unschedule` removes that. With `--with-cli`, every run, the scheduled ones
 too, first upgrades Claude Code when it is a Homebrew cask; npm and native
 installs are left to their own updaters, and `--no-cli` turns it off. The
 choice is kept in `~/.claude/harness-update.conf`, since a scheduled run takes
