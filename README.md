@@ -26,6 +26,31 @@ ships neither, so they come from wherever you keep them, such as the repo that
 holds your work skills. A machine that already has its rules in
 `settings.json` keeps them, because the merge never removes an allow rule.
 
+## Releases and updating
+
+Releases are tags `vMAJOR.MINOR.PATCH`, each with a GitHub Release and a
+`CHANGELOG.md` entry: the PRs merged since the previous tag, grouped, and the
+hook benchmark against it. The Release workflow makes one weekly when main has
+moved, or on demand (`gh workflow run release.yml -f version=v1.2.0`), after
+`doctor.sh` and `bin/hook-bench.py --gate` pass: no release when a tool
+class's wait grew more than 20% and 5 ms at p50 or p95, or when a payload's
+decision changed and no merged PR body declared it with an
+`intended-decisions: <payload ids>` line. The same benchmark, on every third
+payload, runs on each PR against main and posts its table to the job summary.
+If a merged PR changed a decision without that line, the weekly release stays
+blocked until the line is added to its body (`gh pr edit N --body-file ...`)
+and the workflow is dispatched again.
+
+To update a machine, run `~/.claude/harness-update.sh`: it fetches tags,
+checks the newest release out of the clone `install.sh` ran from (detached;
+it refuses a clone with local changes or commits), runs `doctor.sh`, and
+installs only on green. `--schedule` runs it daily (launchd on macOS, a
+systemd user timer or crontab on Linux); `--unschedule` removes that.
+session-start says when a newer release has been fetched than the one
+installed. The benchmark by hand: `bin/hook-bench.py --base v1.0.0` compares
+that tag with the working tree (`--md` for the table); `--corpus audit`
+replays this machine's audit log and its output must stay on the machine.
+
 ## What it does
 
 ### Security — hard block (`deny`)

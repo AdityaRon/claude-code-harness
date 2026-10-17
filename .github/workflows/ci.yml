@@ -31,6 +31,34 @@ jobs:
       - name: Run the hook test suite
         run: bash doctor.sh
 
+  bench:
+    name: hook benchmark vs main
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install jq
+        run: .github/install-apt-deps.sh jq
+
+      # Every third payload keeps this near a minute. A decision the PR means to
+      # change is declared in its body: `intended-decisions: <payload ids>`.
+      - name: Benchmark this PR's hooks against the base branch
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          INTENDED=$(printf '%s\n' "$PR_BODY" | sed -nE 's/^intended-decisions:[[:space:]]*//p' | tr '\n' ' ')
+          set +e
+          python3 bin/hook-bench.py --base "origin/$BASE" --head HEAD --quick --gate --intended "$INTENDED" --md bench.md >/dev/null
+          RC=$?
+          cat bench.md >> "$GITHUB_STEP_SUMMARY"
+          [ "$RC" = 0 ] || echo "::error::the benchmark gate failed; see the job summary."
+          exit $RC
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest

@@ -18,6 +18,9 @@ export CLAUDE_MEMORY_PROJECTS_DIR="$TMP/projects"
 mkdir -p "$CLAUDE_MEMORY_PROJECTS_DIR"
 # Keep the real pin and CLI out of every case but the ones below.
 export CLAUDE_CONTRACT_PIN="$TMP/no-pin"
+# And the real release record, which harness-update.sh writes on this machine.
+export CLAUDE_HARNESS_LATEST="$TMP/no-latest"
+export CLAUDE_HARNESS_VERSION="$TMP/no-version"
 
 pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
@@ -202,6 +205,29 @@ check_contains "a newer CLI nudges again" "Installed 2.1.282; the harness was ve
 printf '2.1.282 2000-01-01\n' > "$CLAUDE_STATE_DIR/contract-nudge"
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.282 run_resume "sess-clean")
 check_contains "and so does a stale stamp from another day" "Installed 2.1.282" "$OUT"
+
+echo ""
+echo "=== a newer harness release was fetched → one nudge a day; otherwise silent ==="
+LATEST="$TMP/harness-latest"; VERSION="$TMP/harness.version"
+nudge() { CLAUDE_HARNESS_LATEST="$LATEST" CLAUDE_HARNESS_VERSION="$VERSION" run_resume "sess-clean"; }
+printf 'v1.0.2 2026-10-20\n' > "$LATEST"
+printf 'version=v1.0.1\nrepo=/x\n' > "$VERSION"
+OUT=$(nudge)
+check_contains "names both versions" "Harness v1.0.2 is available; v1.0.1 is installed" "$OUT"
+OUT=$(nudge)
+check_not_contains "second session the same day is silent" "is available" "$OUT"
+check_eq "stamped in the state dir" "v1.0.2 $(date +%Y-%m-%d)" "$(head -1 "$CLAUDE_STATE_DIR/release-nudge")"
+rm -f "$CLAUDE_STATE_DIR/release-nudge"
+printf 'version=v1.0.2\n' > "$VERSION"
+check_not_contains "silent at the newest release" "is available" "$(nudge)"
+printf 'version=v1.0.3\n' > "$VERSION"
+check_not_contains "silent when the install is ahead of the fetched tag" "is available" "$(nudge)"
+printf 'version=v1.0.1-3-gabc1234\n' > "$VERSION"
+check_not_contains "a clone past a tag is being worked on: silent" "is available" "$(nudge)"
+printf 'v1.0.10 2026-10-20\n' > "$LATEST"; printf 'version=v1.0.9\n' > "$VERSION"
+check_contains "versions compare numerically" "Harness v1.0.10 is available" "$(nudge)"
+rm -f "$CLAUDE_STATE_DIR/release-nudge" "$LATEST"
+check_not_contains "no fetch record: silent" "is available" "$(nudge)"
 
 echo ""
 echo "=== Resume names the mods this session wrote ==="

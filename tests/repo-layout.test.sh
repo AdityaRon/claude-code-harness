@@ -22,7 +22,7 @@ echo "=== The root holds only the documented entry points ==="
 STRAY=""
 for f in *.md *.sh; do
   [ -e "$f" ] || continue
-  case "$f" in README.md|install.sh|doctor.sh) continue ;; esac
+  case "$f" in README.md|CHANGELOG.md|install.sh|doctor.sh) continue ;; esac
   STRAY="$STRAY $f"
 done
 [ -z "$STRAY" ] \
