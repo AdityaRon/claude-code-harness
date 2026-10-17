@@ -79,7 +79,6 @@ against main.
 | `pre-compact` | PreCompact | Back up: the transcript before compaction, newest 20 kept |
 | `notify` | Notification | Notify: a desktop alert titled with the session name |
 | `plan-to-html` | ExitPlanMode | Render: the plan as HTML in your browser, without delaying the prompt |
-| `workflow-record` | Workflow | Record: the workflow script's path, linked from the status line |
 | status line | every refresh | Show: model and effort, branch, context, cost, rate limits, plan and workflow links, a cold-cache warning |
 
 A guard's deny runs before the permission system, so it holds in every
