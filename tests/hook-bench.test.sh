@@ -30,7 +30,7 @@ INPUT=$(cat); sleep 0.03
 case "$INPUT" in *danger*) echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"x"}}' ;; esac
 exit 0
 SH
-printf '#!/usr/bin/env bash\ncat >/dev/null; sleep 0.03; exit 0\n' > "$FIX/hooks/second.sh"
+printf '#!/usr/bin/env bash\ncat >/dev/null; sleep 0.15; exit 0\n' > "$FIX/hooks/second.sh"
 cat > "$FIX/hooks/file.sh" <<'SH'
 #!/usr/bin/env bash
 cat >/dev/null
@@ -60,6 +60,8 @@ echo "=== A/A: same ref on both sides passes the gate ==="
 run --base v0.1.0 --head v0.1.0 --gate --floor-ms 100000; RC=$?
 [ "$RC" = 0 ] && pass "exit 0" || fail "exit 0" "rc=$RC $(cat "$TMP/err")"
 [ "$(jqo '.classes.Bash.base.wait.n')" = 7 ] && pass "7 Bash calls counted" || fail "Bash calls" "$(jqo '.classes.Bash.base.wait.n')"
+# second.sh is 5x slower than fast.sh so the max is clearly second.sh: with equal
+# hooks, noisy medians on macOS put the median of the max at the sum (run 39076417023).
 jq -e '.classes.Bash.base.wait.p50 < (.hooks["fast.sh"].base.wall.p50 + .hooks["second.sh"].base.wall.p50 - 10)
        and .classes.Bash.base.wait.p50 >= ([.hooks["fast.sh"].base.wall.p50, .hooks["second.sh"].base.wall.p50] | max) - 5' \
   "$TMP/out.json" >/dev/null \
@@ -90,11 +92,11 @@ run --base v0.1.0 --head worktree; RC=$?
 
 echo ""
 echo "=== a slower hook fails the gate; both the limit and the floor must be crossed ==="
-# +220 ms, not +40: a loaded macOS runner took ~200 ms for the 30 ms hooks, and
+# +300 ms, not +40: a loaded macOS runner took ~200 ms for a 30 ms hook, and
 # +40 ms there was under 20% at p50 (run 39006980186).
-printf '#!/usr/bin/env bash\ncat >/dev/null; sleep 0.25; exit 0\n' > "$FIX/hooks/second.sh"
+printf '#!/usr/bin/env bash\ncat >/dev/null; sleep 0.45; exit 0\n' > "$FIX/hooks/second.sh"
 run --base v0.1.0 --head worktree --gate; RC=$?
-[ "$RC" = 1 ] && pass "exit 1 on +220 ms" || fail "slow exit" "rc=$RC"
+[ "$RC" = 1 ] && pass "exit 1 on +300 ms" || fail "slow exit" "rc=$RC"
 jqo '.gate.failures[]' | grep -q '^Bash wait p50' && pass "Bash p50 named" || fail "p50 named" "$(jqo '.gate.failures')"
 jqo '.gate.failures[]' | grep -q '^Write/Edit' && fail "Write/Edit untouched" "$(jqo '.gate.failures')" || pass "Write/Edit untouched"
 run --base v0.1.0 --head worktree --gate --floor-ms 1000; RC=$?
