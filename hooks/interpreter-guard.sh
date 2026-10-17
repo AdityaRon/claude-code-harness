@@ -18,7 +18,7 @@
 # This raises the bar but is NOT airtight: string-obfuscated payloads
 # (getattr(os, "en"+"viron"), base64/hex-encoded source) can still evade a
 # token list. The OS sandbox is the real containment for that class — see
-# README "Enable the OS sandbox".
+# docs/customization.md "OS sandbox".
 source "$(dirname "$0")/lib.sh"
 
 read_input
