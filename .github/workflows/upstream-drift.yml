@@ -334,7 +334,7 @@ jobs:
           elif gh pr merge "$PR" --auto --squash; then
             LANDED=queued
           else
-            gh pr comment "$PR" --body "Ready to land: CI passed and upstream-check exits 0, but github.token may not merge (main requires an approving review, and auto-merge is off). Merge it, or change those settings so the next one lands on its own; see README, Keeping up with Claude Code."
+            gh pr comment "$PR" --body "Ready to land: CI passed and upstream-check exits 0, but github.token may not merge (main requires an approving review, and auto-merge is off). Merge it, or change those settings so the next one lands on its own; see docs/upstream-contract.md."
           fi
           echo "landed=$LANDED" >> "$GITHUB_OUTPUT"
 
@@ -368,7 +368,7 @@ jobs:
             echo "Latest run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo
             if [ -n "$PR" ]; then
-              echo "#$PR is ready: CI passed and the check exits 0, but github.token could not merge it. Merge it, or change the settings listed in README, Keeping up with Claude Code, so the next one lands on its own."
+              echo "#$PR is ready: CI passed and the check exits 0, but github.token could not merge it. Merge it, or change the settings listed in docs/upstream-contract.md, so the next one lands on its own."
               echo
             fi
             echo '```'

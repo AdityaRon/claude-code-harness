@@ -76,3 +76,45 @@ the inverse of the harness rule "never delete, archive the line", so enabling
 `autoDreamEnabled` is a philosophy choice. The harness tools stay valid either
 way: verify checks the world, provenance checks the author, lint checks the
 write, and the session-start reorder yields to the lock.
+
+## Using the tools
+
+Moved from the README.
+
+Claude Code stores memories under `~/.claude/projects/<slug>/memory/` and now
+does most of the hygiene itself: it loads the first 200 lines / 25 KB of
+`MEMORY.md`, reminds the writer when a write leaves the index near that limit
+and returns an error when it is over it, stamps `modified` and
+`originSessionId` on what it writes, and ships a background consolidation pass
+(auto-dream) that merges, rewrites relative dates and prunes the index. That
+pass is gated on a server flag and had never run on the machine this was
+measured on.
+
+What the harness still adds is the part that needs the outside world or the
+write itself:
+
+- **`memory-verify.sh` and `/memory-audit`** check a memory's claims against
+  GitHub and Jira. *"Draft PR #4821, held"* stays internally consistent
+  forever while the PR merged two months ago; nothing in the file disagrees,
+  GitHub does. A memory becomes mechanically checkable by carrying a
+  `verify:` block (`- gh acme/api#4821 merged`, `- jira PROJ-123 Done`); the
+  skill resolves the bare references a script cannot and writes the block
+  back. Read-only by contract: it proposes, never deletes.
+
+  ```bash
+  bash ~/.claude/memory-verify.sh --store <slug>     # exit 0 fine, 1 stale, 2 triage, 3 could not run
+  ```
+
+- **`memory-lint`** checks a memory at the moment it is written, for what the
+  CLI does not check: name matches filename, a valid type, a state-free
+  description, a `verify:` block on any in-flight claim, link typos, an index
+  line in the right tier. Advisory, never blocks.
+- **`memory-provenance.sh`** answers who wrote a memory, so a session cannot
+  cite as corroboration a memory it wrote itself. `--session NAME` asks whether
+  the session telling you something also wrote the memory it cites as
+  agreement.
+- **`memory-index.sh` and `/memory-archive`** keep the index in tier order and
+  relieve one the CLI reports as over its limit, by moving lines to an archive
+  rather than deleting. `session-start` runs the reorder only when the index is
+  near its cap, has changed since the last run, and auto-dream's
+  `.consolidate-lock` is not fresh; on an ordinary store it costs nothing.
