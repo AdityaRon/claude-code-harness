@@ -400,12 +400,13 @@ matches the section 6 filter (1 of the 21 releases 2.1.280 to 2.1.302), it moves
 decide.` is opened ready and merged by the workflow once the dispatched CI run
 passes; one that starts with `Decide:` is a **draft** assigned to you, with new
 settings and anything touching deny, ask or a guard as questions, never as changes.
-Landing on its own needs a branch rule `github-actions` can satisfy; as of 2026-10-16
-`main` requires one approving review, so a ready PR waits for your merge. After any
-merge: `bash install.sh`. Without a token the same run keeps one open issue with
-section 6 instead. Locally, `session-start` says when the installed CLI is past the
-contract. On push and PR the workflow fails only on exit 1 or 3; exit 2 is the
-scheduled run's to clear.
+Landing on its own needs a branch rule `github-actions` can satisfy; as of 2026-10-17
+`main` needs no approval and requires the `doctor.sh` and `shellcheck` checks. A new
+contract PR closes the older ones `github-actions` opened, with a link, and deletes
+their branches; one you opened is left alone. After any merge: `bash install.sh`.
+Without a token the same run keeps one open issue with section 6 instead. Locally,
+`session-start` says when the installed CLI is past the contract. On push and PR
+the workflow fails only on exit 1 or 3; exit 2 is the scheduled run's to clear.
 
 Setup, once: run `/install-github-app` in Claude Code for this repo. It installs
 the Claude GitHub App, which lets the draft PR run CI, and stores

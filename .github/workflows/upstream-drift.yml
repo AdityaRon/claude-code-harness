@@ -300,11 +300,23 @@ jobs:
             echo "::warning::pushed $BRANCH but could not open a PR; the issue links it."
           fi
 
-      # Merge from here rather than with --auto alone: with no required status
-      # check on main, auto-merge has nothing to wait for and would merge before
-      # the dispatched CI run reports. Waiting on that run keeps the gate in this
-      # file, whatever the branch rules say. A merge by github.token fires no
-      # push workflow, so CI is dispatched on main afterwards for the record.
+      # Every path that opens a PR (bump, ready, draft) gets here once it exists.
+      # The script only warns; continue-on-error keeps the landing step running.
+      - name: Close the contract PRs this one supersedes
+        if: steps.open.outputs.pr != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CUR: ${{ steps.plan.outputs.cur }}
+          PR: ${{ steps.open.outputs.pr }}
+        run: |
+          .github/close-superseded.sh "$CUR" "$PR" || echo "::warning::close-superseded.sh exited $?; older contract PRs may still be open."
+
+      # Wait on the dispatched CI run, then merge, rather than --auto alone: the
+      # gate stays in this file whatever the branch rules say, and a red run gets
+      # a comment. main requires doctor.sh and shellcheck (2026-10-17); whether a
+      # workflow_dispatch run satisfies them is untested. A merge by github.token
+      # fires no push workflow, so CI is dispatched on main afterwards.
       - name: Land the PR
         id: land
         if: steps.open.outputs.land == 'true'
@@ -328,13 +340,13 @@ jobs:
           elif gh pr merge "$PR" --squash; then
             LANDED=merged
             gh workflow run ci.yml --ref main || echo "::warning::could not dispatch CI on main"
-          # A branch rule github.token cannot satisfy (main requires one approving
-          # review, 2026-10-16) refuses the merge. Auto-merge, where the repo
-          # allows it, then lands the PR on the owner's approval alone.
+          # main needs no approval but requires the three CI checks (2026-10-17).
+          # If they have not registered as passed, auto-merge waits for them.
           elif gh pr merge "$PR" --auto --squash; then
             LANDED=queued
+            gh pr comment "$PR" --body "Auto-merge is on: CI run ${{ github.server_url }}/${{ github.repository }}/actions/runs/$ID passed but the direct merge was refused, so this merges once main's required checks show as passed. If it is still open, those checks may not count that run; merge it." || true
           else
-            gh pr comment "$PR" --body "Ready to land: CI passed and upstream-check exits 0, but github.token may not merge (main requires an approving review, and auto-merge is off). Merge it, or change those settings so the next one lands on its own; see README, Keeping up with Claude Code."
+            gh pr comment "$PR" --body "Ready to land: CI passed and upstream-check exits 0, but github.token could neither merge this nor turn on auto-merge; ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} has the error. Merge it."
           fi
           echo "landed=$LANDED" >> "$GITHUB_OUTPUT"
 
@@ -368,7 +380,7 @@ jobs:
             echo "Latest run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo
             if [ -n "$PR" ]; then
-              echo "#$PR is ready: CI passed and the check exits 0, but github.token could not merge it. Merge it, or change the settings listed in README, Keeping up with Claude Code, so the next one lands on its own."
+              echo "#$PR did not land on its own; the Land the PR step of the run above says why (no CI run, a red CI run, or a refused merge)."
               echo
             fi
             echo '```'
