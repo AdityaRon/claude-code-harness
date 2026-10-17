@@ -209,13 +209,21 @@ run_resume "sess-clean" >/dev/null
 check_eq "created nothing" "0" "$(ls -1 "$CLAUDE_MEMORY_PROJECTS_DIR" | wc -l | tr -d ' ')"
 
 echo ""
-echo "=== git context: skipped on startup (the CLI's own gitStatus has it), kept on resume ==="
+echo "=== git context: skipped on startup and clear (the CLI's own gitStatus has it), kept on resume and compact ==="
 if git rev-parse --git-dir &>/dev/null 2>&1; then
   payload=$(jq -nc '{source:"startup", session_id:"sess-git", hook_event_name:"SessionStart"}')
   OUT=$(printf '%s' "$payload" | bash "$HOOK" 2>/dev/null)
   check_not_contains "startup prints no git block" "## Git context" "$OUT"
+  # After /clear the conversation carried this block and the CLI's fresh
+  # gitStatus, listing the same 5 commits.
+  payload=$(jq -nc '{source:"clear", session_id:"sess-git", hook_event_name:"SessionStart"}')
+  OUT=$(printf '%s' "$payload" | bash "$HOOK" 2>/dev/null)
+  check_not_contains "clear prints no git block"   "## Git context" "$OUT"
   OUT=$(run_resume "sess-git")
   check_contains     "resume still prints it"     "## Git context" "$OUT"
+  payload=$(jq -nc '{source:"compact", session_id:"sess-git", hook_event_name:"SessionStart"}')
+  OUT=$(printf '%s' "$payload" | bash "$HOOK" 2>/dev/null)
+  check_contains     "compact still prints it"    "## Git context" "$OUT"
 else
   echo "  SKIP: git-context test (not in a git repo)"
 fi
