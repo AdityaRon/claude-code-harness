@@ -79,7 +79,8 @@ fi
 # locally. Neither spelling appears in permissions.deny, so both were a full
 # allow. Quoted forms count; a branch name containing + (feature-c++) does not,
 # because the + has to open the token.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]['\"]?\+[A-Za-z0-9_./*-]|--mirror\b)"; then
+# git takes any prefix of --mirror down to --m.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]['\"]?\+[A-Za-z0-9_./*-]|--mirror\b|[[:space:]]['\"]?--m(i|ir|irr|irro)?\b)"; then
   emit_deny "Blocked: this push rewrites remote history without saying --force. A + on a refspec forces that ref, and --mirror force-updates every ref and deletes the ones missing locally. Push the refs you mean by name, or ask the user to run this manually."
   exit 0
 fi

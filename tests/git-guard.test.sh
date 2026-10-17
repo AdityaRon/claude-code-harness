@@ -189,6 +189,8 @@ check "push +full refspec"       deny "git push origin +refs/heads/main:refs/hea
 check "push quoted +refspec"     deny "git push origin '+main'"
 check "push --mirror"            deny "git push --mirror origin"
 check "push --mirror after url"  deny "git push origin --mirror"
+check "push --mirr abbreviation" deny "git push --mirr origin"
+check "push --m abbreviation"    deny "git push origin --m"
 check "push -fu bundle"          deny "git push -fu origin main"
 check "push -uf bundle"          deny "git push -uf origin main"
 check "push -f with -C prefix"   deny "git -C /repo push -qf origin main"
