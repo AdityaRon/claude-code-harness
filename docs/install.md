@@ -52,7 +52,6 @@ for reading the repo, not for the installed tree.
     sessions/<session_id>.json  ← per-session edit snapshot, 0600, newest 50 kept
     sessions/memory-index/      ← when session-start last reordered each memory index
     plans/<session_id>.path     ← pointer to the session's latest rendered plan (statusline link)
-    workflows/<session_id>.path ← pointer to the session's latest workflow run script (statusline link)
     harness-latest              ← newest release harness-update.sh fetched
     effort-high.migrated        ← the one-time move of an installed xhigh effortLevel to high has run
   plans-html/

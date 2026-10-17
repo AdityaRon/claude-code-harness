@@ -205,10 +205,6 @@
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
       },
       {
-        "matcher": "Workflow",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/workflow-record.sh", "async": true }]
-      },
-      {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/memory-lint.sh" }]
       },

@@ -373,6 +373,24 @@ jq -n -e 'input as $s | input as $r | [$s.permissions.deny[], $s.permissions.all
     | ($ship - ([$r.permissions.deny, $r.permissions.allow] | add)) | length == ($ship | length)' \
     config/settings.json config/retired-rules.json >/dev/null \
   && pass "nothing the repo ships is on the retired list" || fail "a shipped rule is retired" "$(jq -c '.permissions' config/retired-rules.json)"
+
+echo ""
+echo "=== a retired hook's entry leaves an installed settings.json ==="
+# Ownership is by shipped file name, so a hook dropped from hooks/ would read as
+# the user's own, and every install would keep running its stale copy.
+OLD='{"hooks":{"PostToolUse":[{"matcher":"Workflow","hooks":[{"type":"command","command":"~/.claude/hooks/workflow-record.sh","async":true}]},
+                             {"matcher":"Write","hooks":[{"type":"command","command":"'"$HOME"'/.claude/hooks/workflow-record.sh"}]},
+                             {"matcher":"","hooks":[{"type":"command","command":"~/.claude/hooks/my-own.sh"}]}]}}'
+OUT=$(merge "$OLD" "$HARNESS")
+[[ "$(printf '%s' "$OUT" | jq -r '[.. | .command? // empty | select(test("workflow-record"))] | length')" == "0" ]] \
+  && pass "both spellings of a retired hook's entry are removed" || fail "retired hook removed" "$(printf '%s' "$OUT" | jq -c .hooks)"
+[[ "$(printf '%s' "$OUT" | jq -r '[.. | .command? // empty] | index("~/.claude/hooks/my-own.sh") != null')" == "true" ]] \
+  && pass "a user's own hook beside it is kept" || fail "user hook kept" "$(printf '%s' "$OUT" | jq -c .hooks)"
+SHIPPED_RETIRED=""
+for n in $(jq -r '.hooks[]?' config/retired-rules.json); do
+  { [[ -e "hooks/$n" ]] || grep -qF "hooks/$n" config/settings.json; } && SHIPPED_RETIRED="$SHIPPED_RETIRED $n"
+done
+[[ -z "$SHIPPED_RETIRED" ]] && pass "no retired hook is still shipped" || fail "a retired hook is still shipped" "$SHIPPED_RETIRED"
 unset RETIRED
 
 echo ""
