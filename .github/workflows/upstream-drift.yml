@@ -5,7 +5,8 @@ name: Upstream drift
 # auto-updates, so those assumptions rot without a single commit landing here.
 #
 # That is why this runs on a SCHEDULE and not only on push: a push-triggered job
-# can never catch upstream moving while the repo stands still.
+# can never catch upstream moving while the repo stands still. The scheduled
+# run also lands what needs no decision; only a review with a question waits.
 on:
   schedule:
     # Daily, 06:17 UTC: Claude Code ships most weekdays. Offset off the hour,
@@ -25,9 +26,9 @@ on:
       - 'config/upstream-contract.json'
       - 'bin/upstream-check.sh'
 
-# Write scopes are for the scheduled path: the draft PR, or the issue when no
-# token is set. id-token lets claude-code-action mint the Claude GitHub App token.
-# actions: write is for dispatching CI on the draft PR's branch.
+# Write scopes are for the scheduled path: the PR and its merge, or the issue
+# when no token is set. id-token lets claude-code-action mint the Claude GitHub
+# App token. actions: write is for dispatching CI on the PR's branch.
 permissions:
   actions: write
   contents: write
@@ -39,6 +40,9 @@ jobs:
   drift:
     name: contract vs. installed CLI
     runs-on: ubuntu-latest
+    # Claude's review took 5 to 9 minutes (runs on 2026-10-15 and 2026-10-16);
+    # landing then waits for CI, about 6 minutes.
+    timeout-minutes: 40
     steps:
       # The token in .git/config would carry contents: write while npm runs
       # postinstall scripts; the push below passes its own token instead.
@@ -59,11 +63,15 @@ jobs:
 
       # A missing or broken CLI must fail the job, never skip quietly —
       # upstream-check.sh exits 0 with SKIP when `claude` is absent, which is
-      # right on a contributor's laptop and wrong here.
+      # right on a contributor's laptop and wrong here. The path is kept because
+      # claude-code-action puts its own older build first on PATH (#85 re-checked
+      # the contract against 2.1.280 and reported exit 2 for a file that was fine).
       - name: Verify the CLI runs (no auth required)
+        id: cli
         run: |
           claude --version
           claude doctor >/dev/null
+          echo "path=$(command -v claude)" >> "$GITHUB_OUTPUT"
 
       # Section 6 lists what shipped since last_verified_version. A fetch failure
       # leaves no file, and the check then warns that the CLI moved unlisted.
@@ -90,29 +98,45 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # One draft per release: a PR already open or closed for this version
+      # One PR per release: a PR already open or closed for this version
       # (state all) means the review was done or declined, so do not redo it.
-      - name: Decide whether to draft
+      - name: Decide what to do
         id: plan
         if: steps.check.outputs.status == '2' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         env:
           GH_TOKEN: ${{ github.token }}
           HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+          CLAUDE_CHANGELOG_PATH: changelog.md
         run: |
           CUR=$(claude --version | cut -d' ' -f1)
           BRANCH="claude/contract-$CUR"
           SEEN=$(gh pr list --head "$BRANCH" --state all --json number -q 'length')
           echo "cur=$CUR" >> "$GITHUB_OUTPUT"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-          if [ "$SEEN" != "0" ]; then echo "mode=seen" >> "$GITHUB_OUTPUT"
+          MODE=issue
+          if [ "$SEEN" != "0" ]; then MODE=seen
           # A pushed branch with no PR already holds a review; do not pay for
           # another one. The issue links it instead.
-          elif git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then echo "mode=issue" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then MODE=issue
           # A release can ship before its changelog heading. Claude would have
           # nothing to review, so the issue carries it until the heading lands.
-          elif ! grep -qxF "## $CUR" changelog.md 2>/dev/null; then echo "mode=issue" >> "$GITHUB_OUTPUT"
-          elif [ "$HAS_TOKEN" = "true" ]; then echo "mode=draft" >> "$GITHUB_OUTPUT"
-          else echo "mode=issue" >> "$GITHUB_OUTPUT"; fi
+          elif ! grep -qxF "## $CUR" changelog.md 2>/dev/null; then MODE=issue
+          # No entry since the pin matched section 6's filter: move the pin and
+          # re-run the check, which is what proves nothing else warned. Any other
+          # warning (a new hook event, a vanished key) restores the file and
+          # goes to Claude.
+          elif grep -qF 'no entry matched the harness filter' drift.log; then
+            jq --arg v "$CUR (Claude Code)" --arg d "$(date -u +%F)" \
+               '.last_verified_version=$v | .last_verified_date=$d' config/upstream-contract.json > contract.tmp
+            mv contract.tmp config/upstream-contract.json
+            if bash bin/upstream-check.sh > bump.log 2>&1; then MODE=bump
+            else
+              git checkout -- config/upstream-contract.json
+              if [ "$HAS_TOKEN" = "true" ]; then MODE=draft; fi
+            fi
+          elif [ "$HAS_TOKEN" = "true" ]; then MODE=draft
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       # Claude may only edit the contract and write the PR body. Changelog text is
       # upstream input, so it reaches Claude as a file, never through ${{ }}.
@@ -130,6 +154,10 @@ jobs:
           CLAUDE_CHANGELOG_PATH: changelog.md
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The CLI installed above, so Claude's own `bash bin/upstream-check.sh`
+          # probes the release under review and can reach exit 0 (see the
+          # Verify step).
+          path_to_claude_code_executable: ${{ steps.cli.outputs.path }}
           # The 2.1.283 review finished in 43 turns and the action failed it at 40;
           # the 2.1.299 one finished in 69 and was failed at 60 (2026-10-14).
           # File writes are granted by Edit rules; Write(pr-body.md) matched nothing,
@@ -165,7 +193,12 @@ jobs:
 
             When done, `bash bin/upstream-check.sh` must exit 0.
 
-            Write pr-body.md: one line per release reviewed with its verdict, then
+            Write pr-body.md. Its first line is exactly `Nothing to decide.` when no
+            question remains, or `Decide: <one sentence naming what the owner must
+            decide>` when one does. A PR that starts with `Nothing to decide.` is
+            merged without anyone reading it, so a setting the harness might adopt,
+            an overlap with a guard, or a hook event it might hook is always a
+            Decide. Then one line per release reviewed with its verdict, then the
             numbered questions for the owner, each with the fact needed to decide.
             No em dashes.
 
@@ -174,16 +207,20 @@ jobs:
       # github.token: the action revokes its App token in its own post step, which
       # failed the 2.1.282 push. A PR opened with github.token fires no
       # pull_request workflows, so CI is dispatched on the branch instead.
-      - name: Open the draft PR
+      - name: Open the PR
         id: open
-        if: steps.plan.outputs.mode == 'draft' && steps.claude.outputs.conclusion == 'success'
+        if: steps.plan.outputs.mode == 'bump' || (steps.plan.outputs.mode == 'draft' && steps.claude.outputs.conclusion == 'success')
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.plan.outputs.branch }}
           CUR: ${{ steps.plan.outputs.cur }}
+          MODE: ${{ steps.plan.outputs.mode }}
+          NPM_CLAUDE: ${{ steps.cli.outputs.path }}
           CLAUDE_CHANGELOG_PATH: changelog.md
           OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
+          # The action's own build may now sit first on PATH; see the Verify step.
+          PATH="$(dirname "$NPM_CLAUDE"):$PATH"
           # Last gate before anything Claude wrote goes public. GitHub masks
           # secrets in logs, not in PR bodies or commits.
           for f in pr-body.md config/upstream-contract.json; do
@@ -204,40 +241,130 @@ jobs:
           fi
           jq empty config/upstream-contract.json
           set +e; bash bin/upstream-check.sh > after.log 2>&1; AFTER=$?; set -e
-          # claude-code-action already set the claude[bot] commit identity.
+          # Landing without a reader takes every gate: nothing to decide, the
+          # check green afterwards, and no recorded decision gone. Section 4c
+          # cannot see a dropped acknowledged_surface entry, so compare here.
+          LAND=false
+          if [ "$MODE" = bump ] || head -n1 pr-body.md 2>/dev/null | grep -q '^Nothing to decide'; then LAND=true; fi
+          [ "$AFTER" = 0 ] || LAND=false
+          git show HEAD:config/upstream-contract.json > before.json
+          if [ "$LAND" = true ] && ! jq -e -n --slurpfile a before.json --slurpfile b config/upstream-contract.json '
+              def names: [(.acknowledged_hook_events // [])[],
+                          ((.acknowledged_surface.tools // {}) | keys[]),
+                          ((.acknowledged_surface.settings_keys // {}) | keys[]),
+                          ((.upstream_features_that_overlap_this_harness // {}) | keys[]),
+                          ((.notes_on_unused_events // {}) | keys[])];
+              (($a[0] | names) - ($b[0] | names)) == []
+              and $a[0].expected_default_mode == $b[0].expected_default_mode
+              and $a[0].memory_index_limits == $b[0].memory_index_limits' >/dev/null; then
+            echo "::warning::a recorded decision was removed; opening a draft instead of landing."
+            LAND=false
+          fi
+          if [ "$MODE" = bump ]; then
+            TITLE="contract: record Claude Code $CUR (no harness-relevant entries)"
+          else
+            TITLE="contract: review Claude Code releases up to $CUR"
+          fi
+          # claude-code-action sets the claude[bot] identity; the bump path has none.
           git switch -c "$BRANCH"
           git add config/upstream-contract.json
-          git commit -m "contract: review Claude Code releases up to $CUR"
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "$TITLE"
           git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "$BRANCH"
           {
-            cat pr-body.md 2>/dev/null || echo "(Claude wrote no summary.)"
+            if [ "$MODE" = bump ]; then
+              echo "Nothing to decide: no entry in the releases since the previous pin matched the harness filter (section 6 of bin/upstream-check.sh), so last_verified_version moves to $CUR without a review. The check that said so, as data:"
+              echo
+              echo '```'
+              cat drift.log
+              echo '```'
+            else
+              cat pr-body.md 2>/dev/null || echo "(Claude wrote no summary.)"
+            fi
             echo
-            echo "upstream-check after this change exited $AFTER. Needs you to read and approve; merge, then run \`bash install.sh\`."
+            if [ "$LAND" = true ]; then
+              echo "upstream-check after this change exited $AFTER. Lands on its own once the dispatched CI run passes; then run \`bash install.sh\`."
+            else
+              echo "upstream-check after this change exited $AFTER. Needs you to read and approve; merge, then run \`bash install.sh\`."
+            fi
           } > body.md
-          # github.token cannot open a PR unless the repo allows Actions to create
-          # pull requests, which is off on this repo. The branch is pushed either
-          # way, and the issue step links it.
-          if gh pr create --draft --base main --head "$BRANCH" \
-               --title "contract: review Claude Code releases up to $CUR" \
-               --body-file body.md --assignee "${{ github.repository_owner }}"; then
-            echo "drafted=true" >> "$GITHUB_OUTPUT"
+          # A ready PR for what lands on its own, a draft assigned to the owner
+          # for what needs a decision. (Actions may open PRs here: #81 and #85.)
+          DRAFT=(); [ "$LAND" = true ] || DRAFT=(--draft)
+          PR=$(gh pr create "${DRAFT[@]}" --base main --head "$BRANCH" --title "$TITLE" --body-file body.md \
+                 --assignee "${{ github.repository_owner }}" | grep -oE '[0-9]+$' || true)
+          if [ -n "$PR" ]; then
+            echo "pr=$PR" >> "$GITHUB_OUTPUT"
+            echo "land=$LAND" >> "$GITHUB_OUTPUT"
             gh workflow run ci.yml --ref "$BRANCH" || echo "::warning::could not dispatch CI on $BRANCH"
           else
             echo "::warning::pushed $BRANCH but could not open a PR; the issue links it."
           fi
 
-      # Without a token, or when no PR was drafted, keep one open issue current
-      # so a red run is not the only signal: three scheduled runs were red, Aug 31
-      # to Sep 14 2026, with no contract PR (gh run list --workflow upstream-drift.yml).
-      # Closed again once the contract holds.
+      # Every path that opens a PR (bump, ready, draft) gets here once it exists.
+      # The script only warns; continue-on-error keeps the landing step running.
+      - name: Close the contract PRs this one supersedes
+        if: steps.open.outputs.pr != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CUR: ${{ steps.plan.outputs.cur }}
+          PR: ${{ steps.open.outputs.pr }}
+        run: |
+          .github/close-superseded.sh "$CUR" "$PR" || echo "::warning::close-superseded.sh exited $?; older contract PRs may still be open."
+
+      # Wait on the dispatched CI run, then merge, rather than --auto alone: the
+      # gate stays in this file whatever the branch rules say, and a red run gets
+      # a comment. main requires doctor.sh and shellcheck (2026-10-17); whether a
+      # workflow_dispatch run satisfies them is untested. A merge by github.token
+      # fires no push workflow, so CI is dispatched on main afterwards.
+      - name: Land the PR
+        id: land
+        if: steps.open.outputs.land == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.plan.outputs.branch }}
+          PR: ${{ steps.open.outputs.pr }}
+        run: |
+          ID=""
+          for _ in $(seq 1 12); do
+            ID=$(gh run list --workflow ci.yml --branch "$BRANCH" --event workflow_dispatch --limit 1 --json databaseId -q '.[0].databaseId // empty')
+            [ -n "$ID" ] && break
+            sleep 5
+          done
+          LANDED=open
+          if [ -z "$ID" ]; then
+            echo "::warning::no CI run appeared on $BRANCH; PR #$PR stays open."
+          elif ! timeout 25m gh run watch "$ID" --exit-status --interval 30 >/dev/null; then
+            echo "::warning::CI run $ID did not pass; PR #$PR stays open."
+            gh pr comment "$PR" --body "Not merged: CI run ${{ github.server_url }}/${{ github.repository }}/actions/runs/$ID did not pass."
+          elif gh pr merge "$PR" --squash; then
+            LANDED=merged
+            gh workflow run ci.yml --ref main || echo "::warning::could not dispatch CI on main"
+          # main needs no approval but requires the three CI checks (2026-10-17).
+          # If they have not registered as passed, auto-merge waits for them.
+          elif gh pr merge "$PR" --auto --squash; then
+            LANDED=queued
+            gh pr comment "$PR" --body "Auto-merge is on: CI run ${{ github.server_url }}/${{ github.repository }}/actions/runs/$ID passed but the direct merge was refused, so this merges once main's required checks show as passed. If it is still open, those checks may not count that run; merge it." || true
+          else
+            gh pr comment "$PR" --body "Ready to land: CI passed and upstream-check exits 0, but github.token could neither merge this nor turn on auto-merge; ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} has the error. Merge it."
+          fi
+          echo "landed=$LANDED" >> "$GITHUB_OUTPUT"
+
+      # Without a token, or when no PR carries the result, keep one open issue
+      # current so a red run is not the only signal: three scheduled runs were
+      # red, Aug 31 to Sep 14 2026, with no contract PR (gh run list --workflow
+      # upstream-drift.yml). Closed again once the contract holds or a PR lands.
       - name: Record in an issue
         if: >-
           always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
-          steps.plan.outputs.mode != 'seen' && steps.open.outputs.drafted != 'true'
+          steps.plan.outputs.mode != 'seen' &&
+          (steps.open.outputs.pr == '' || steps.land.outputs.landed == 'open' || steps.land.outputs.landed == 'merged')
         env:
           GH_TOKEN: ${{ github.token }}
           STATUS: ${{ steps.check.outputs.status }}
           BRANCH: ${{ steps.plan.outputs.branch }}
+          PR: ${{ steps.open.outputs.pr }}
+          LANDED: ${{ steps.land.outputs.landed }}
         run: |
           TITLE="Upstream drift: the harness contract needs review"
           N=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number -q '.[0].number // empty')
@@ -245,19 +372,27 @@ jobs:
             [ -n "$N" ] && gh issue close "$N" --comment "The contract holds as of ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
             exit 0
           fi
+          if [ "$LANDED" = "merged" ]; then
+            [ -n "$N" ] && gh issue close "$N" --comment "Landed as #$PR."
+            exit 0
+          fi
           {
             echo "Latest run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo
+            if [ -n "$PR" ]; then
+              echo "#$PR did not land on its own; the Land the PR step of the run above says why (no CI run, a red CI run, or a refused merge)."
+              echo
+            fi
             echo '```'
             cat drift.log
             echo '```'
-            if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            if [ -z "$PR" ] && git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
               echo
               echo "A review is on \`$BRANCH\` with no PR yet: ${{ github.server_url }}/${{ github.repository }}/compare/main...$BRANCH?expand=1"
             fi
             # The open step wrote this for the PR; without one, the verdicts and
             # owner questions exist nowhere else once the runner is gone.
-            if [ -f body.md ]; then
+            if [ -z "$PR" ] && [ -f body.md ]; then
               echo
               echo "Review summary, as written for the PR:"
               echo
@@ -267,26 +402,26 @@ jobs:
           if [ -n "$N" ]; then gh issue edit "$N" --body-file issue.md
           else gh issue create --title "$TITLE" --body-file issue.md --assignee "${{ github.repository_owner }}"; fi
 
+      # Exit 2 belongs to the scheduled path above. The CLI moves most weekdays,
+      # so until that path lands the pin every push and PR on the watched paths
+      # was red for a release nobody had edited: three runs on 2026-10-16, 16 to
+      # 20 s each, all exit 2 against 2.1.302 with the pin at 2.1.301.
       - name: Interpret the result
         if: steps.check.outputs.status != '0'
         run: |
           case "${{ steps.check.outputs.status }}" in
             1)
               echo "::error title=Harness broken by upstream::The harness depends on something Claude Code changed. See the job summary, fix the harness, then update config/upstream-contract.json."
+              exit 1
               ;;
             2)
               # Name the field the check actually reads. upstream-check.sh
               # compares against .acknowledged_hook_events; notes_on_unused_events
-              # records WHY a decision was made and does not clear this job, so
-              # pointing there sent people to a field with no effect on the result.
-              echo "::warning title=Claude Code grew::New capabilities or unassessed releases exist. Adopt or record each in config/upstream-contract.json (acknowledged_hook_events, acknowledged_surface), then bump last_verified_version. See section 6 of the job summary."
-              # On the daily run the draft PR or the issue carries this, and a
-              # red run every day until it merges would only train people to
-              # ignore red. On a push or PR it must still fail the check.
-              case "${{ github.event_name }}" in schedule|workflow_dispatch) exit 0 ;; esac
+              # records WHY a decision was made and does not clear this job.
+              echo "::warning title=Claude Code grew::New capabilities or unassessed releases exist. The daily run records or reviews them (config/upstream-contract.json: acknowledged_hook_events, acknowledged_surface, last_verified_version). See section 6 of the job summary."
               ;;
             *)
               echo "::error title=Drift check could not run::upstream-check.sh exited ${{ steps.check.outputs.status }}."
+              exit 1
               ;;
           esac
-          exit 1
