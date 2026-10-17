@@ -19,40 +19,7 @@ TOOL=$(jq_get '.tool_name')
 
 [[ -z "$FILE" && -z "$GLOB" && "$TOOL" != Grep ]] && exit 0
 
-BLOCKED=(
-  '\.env$'                     # .env, prod.env, local.env (any *.env)
-  '(^|/)\.env\.'               # .env.local, .env.production
-  '(^|/)\.envrc$'
-  '\.pem$'
-  '\.key$'
-  '(^|/)id_(rsa|dsa|ecdsa|ed25519)'
-  # Whole folders: ~/.ssh holds keys under any name, ~/.aws keeps SSO and CLI
-  # token caches beside credentials, and gcloud and Azure keep tokens in theirs.
-  '(^|/)\.ssh/'
-  '(^|/)\.aws/'
-  '(^|/)\.gnupg/'
-  '(^|/)\.config/gcloud/'
-  '(^|/)\.azure/'
-  '(^|/)\.netrc$'
-  # Config-shaped secret files only — not secrets.py / secrets.ts (source code).
-  '(^|/)secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)$'
-  '(^|/)\.npmrc$'
-  '(^|/)\.pypirc$'
-  '(^|/)\.git-credentials$'
-  '(^|/)\.pgpass$'
-  '(^|/)\.kube/config$'
-  '(^|/)kubeconfig(\.ya?ml)?$'
-  '\.kubeconfig$'
-  '(^|/)\.docker/config\.json$'
-  '(^|/)credentials\.json$'
-  'service[_-]account.*\.json$'
-  '(^|/)\.credentials\.json$'   # ~/.claude: the Claude Code OAuth token
-  '(^|/)\.claude\.json$'        # can hold an API key and MCP server tokens
-  'terraform\.tfstate(\.backup)?$'
-  '\.tfvars$'
-  '\.(p12|pfx|jks|keystore)$'
-  '(^|/)gh/hosts\.yml$'
-)
+BLOCKED=("${CREDENTIAL_FILES[@]}")   # lib.sh; git-guard's broad add reads the same list
 
 # Directories whose whole purpose is credentials. A Read of a directory is not
 # a thing, but a Grep of one prints every file inside it, which is the same

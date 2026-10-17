@@ -18,6 +18,7 @@
       "Bash(git * branch -d:*)",
       "Bash(git branch -D:*)",
       "Bash(git branch -d:*)",
+      "Bash(kubectl delete:*)",
       "Bash(kubectl * delete:*)",
       "Bash(kubectl -n * delete:*)",
       "Bash(kubectl --context * delete:*)",

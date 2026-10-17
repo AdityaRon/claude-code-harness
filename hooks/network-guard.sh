@@ -155,6 +155,10 @@ case "$TOOL" in
   Bash)
     CMD=$(jq_get '.tool_input.command')
     [[ -z "$CMD" ]] && exit 0
+    # Every check below needs one of these words. Normalizing drops quotes,
+    # backslashes and case but never adds a letter, so a command with none of
+    # them once those are gone is done before ~25 ms of normalizing.
+    printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qiE 'curl|wget|scp|rsync|sftp|http|php|net-allowlist|local-settings' || exit 0
     CMD=$(neutralize_quoted_separators "$(strip_inert_heredocs "$CMD")")
     # `/usr/bin/curl` and `CURL` are curl too: scan the normalized form (lib.sh) as
     # a second line.
@@ -184,8 +188,9 @@ case "$TOOL" in
        printf '%s\n' "$CMD" | grep -qE "net-allowlist(\.sh)?${Q}[[:space:]]+[^|;&]*\badd\b" \
        || printf '%s\n' "$CMD" | tr '|;&`(){}' '\n' | grep -E "$RUN" | grep -qvE "$SAFE" \
        || { printf '%s\n' "$CMD" | grep -q 'local-settings' \
-            && printf '%s\n' "$CMD" | sed -E 's#[0-9]*>&[0-9-]##g; s#[0-9&]*>>?[[:space:]]*/dev/null##g' \
-               | grep -qE '>|\b(tee|cp|mv|ln|rsync|dd|install|sponge|tar|unzip|curl|wget|mkfifo|mknod|python3?|node|ruby|perl|php|ex|ed|vim?|nvim)\b|\b(sed|g?awk)[[:space:]]+-[a-zA-Z]*i'; }; }; then
+            && { printf '%s\n' "$CMD" | sed -E 's#[0-9]*>&[0-9-]##g; s#[0-9&]*>>?[[:space:]]*/dev/null##g' | grep -q '>' \
+                 || printf '%s\n' "$CMD" | tr '|;&`(){}' '\n' \
+                    | grep -qE '^[[:space:]]*((then|do|else|elif|!)[[:space:]]+)*((tee|cp|mv|ln|rsync|dd|install|sponge|tar|unzip|curl|wget|mkfifo|mknod|find|python3?|node|ruby|perl|php|ex|ed|vim?|nvim)([[:space:]]|$)|(sed|g?awk)[[:space:]]+-[a-zA-Z]*i)'; }; }; }; then
       emit_ask "This can change the machine-local network allowlist (~/.claude/local-settings); requests to a host it adds stop asking. Confirm the host."
       exit 0
     fi

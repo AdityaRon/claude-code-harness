@@ -11,7 +11,7 @@ source "$HOOKS/lib.sh"
 
 DIR=$(expand_tilde "${CLAUDE_LOCAL_SETTINGS_DIR:-$HOME/.claude/local-settings}")
 FILE="$DIR/net-allowlist.json"
-# A fragment symlinked in from another repo (README) must stay a symlink: write the target.
+# A fragment symlinked in from another repo (docs/customization.md) must stay a symlink: write the target.
 [[ -L "$FILE" ]] && FILE=$(canonical_path "$FILE")
 
 # Lower-case, no trailing dot: what network-guard compares against.

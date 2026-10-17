@@ -95,5 +95,18 @@ check "echo the text"              allow "echo 'rm -rf /'"
 check "quoted ; in a commit msg"   allow "git commit -m 'drop rm -rf; use the guard'"
 
 echo ""
+echo "=== a resumed job runs under a new session id; its state.json names it ==="
+printf '{"sessionId":"%s","resumeSessionId":"ffff0000-0000-4000-8000-000000000000"}\n' "$SID" > "$HOME/.claude/jobs/abcd1234/state.json"
+R2="ffff0000-0000-4000-8000-000000000000"
+check "resumed id, the job's scratch"    allow 'rm -rf ~/.claude/jobs/abcd1234/tmp/wt-9' "$TMP" "$R2"
+check "resumed id, \$CLAUDE_JOB_DIR/tmp" allow 'rm -rf "$CLAUDE_JOB_DIR/tmp/build"' "$TMP" "$R2"
+check "resumed id, the sandbox folder"   allow "rm -rf /tmp/claude-$(id -u)/abcd1234/x" "$TMP" "$R2"
+check "resumed id, another job"          deny  'rm -rf ~/.claude/jobs/ffffffff/tmp/x' "$TMP" "$R2"
+check "resumed id, relative in its scratch" allow 'rm -rf build' "$S" "$R2"
+check "unknown id, the job's scratch"    deny  'rm -rf ~/.claude/jobs/abcd1234/tmp/wt-9' "$TMP" "eeee0000-0000-4000-8000-000000000000"
+check "unknown id, a relative path"      deny  'rm -rf build' "$TMP" "eeee0000-0000-4000-8000-000000000000"
+rm -f "$HOME/.claude/jobs/abcd1234/state.json"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

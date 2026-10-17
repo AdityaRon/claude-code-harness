@@ -21,7 +21,8 @@ holds your work skills. A machine that already has its rules in
 
 ## File layout after install
 
-As written by `install.sh` at 1c627b2, plus what the hooks write as they run.
+As written by `install.sh` at a6197da, plus what the hooks and
+`harness-update.sh` write as they run.
 Paths inside `~/.claude` are flat: the grouping in the README's repo layout is
 for reading the repo, not for the installed tree.
 
@@ -36,6 +37,7 @@ for reading the repo, not for the installed tree.
   session-route.sh         ← which session owns this PR
   net-allowlist.sh  sandbox.sh  sandbox-trial.sh
   harness-update.sh        ← moves this machine to the newest release
+  harness-update.conf      ← with_cli=1 or 0, from --with-cli or --no-cli
   harness.version          ← version, commit, the clone it came from, install time
   harness-contract.version ← last_verified_version from config/upstream-contract.json
   skills/<name>/SKILL.md   ← memory-audit, memory-archive, pr-review
@@ -52,6 +54,7 @@ for reading the repo, not for the installed tree.
     plans/<session_id>.path     ← pointer to the session's latest rendered plan (statusline link)
     workflows/<session_id>.path ← pointer to the session's latest workflow run script (statusline link)
     harness-latest              ← newest release harness-update.sh fetched
+    effort-high.migrated        ← the one-time move of an installed xhigh effortLevel to high has run
   plans-html/
     plan-<ts>.html         ← rendered plan, opened in browser, newest 50 kept
 ```

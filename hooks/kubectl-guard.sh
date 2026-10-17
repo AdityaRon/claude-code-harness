@@ -9,7 +9,8 @@
 # misses `kubectl --context X -n vm get svc`. That cuts both ways: a
 # `Bash(kubectl delete:*)` in *deny* misses `kubectl --namespace vm delete pod`
 # just as reliably, so "allow kubectl broadly, deny the dangerous verbs" cannot
-# be expressed in settings.json at all.
+# be expressed in settings.json at all. That deny rule is retired; this hook
+# asks on every spelling.
 #
 # This hook sees the whole command string, so it finds the verb wherever it
 # sits. Policy:
@@ -39,6 +40,10 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+# Normalizing drops quotes, backslashes and case but never adds a letter, so a
+# command with no kubectl once those are gone is done before ~15 ms of it. The
+# precise bail-out below still runs on the normalized text.
+printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qi 'kubectl' || exit 0
 CMD=$(strip_inert_heredocs "$CMD")
 
 # Normalise BEFORE the bail-out, not after. The bail-out's own pattern requires
@@ -195,7 +200,10 @@ while IFS= read -r seg; do
   [[ $# -eq 0 ]] && continue
   w="${1//[\"\']/}"; w="${w##*/}"
   case "$w" in
-    grep|egrep|fgrep|rg|which|type|whereis|echo|printf|head|tail|wc|sort|uniq|cut|tr|cat|less|more|column|ls|cd|true|kubectl) ;;
+    grep|egrep|fgrep|rg|which|type|whereis|echo|printf|head|tail|wc|sort|uniq|cut|tr|cat|less|more|column|ls|cd|true|kubectl|gh) ;;
+    # A PR title or commit message names kubectl as text. Only git subcommands
+    # that never run an argument: `bisect run`, `rebase -x` and a `!` alias do.
+    git) case "${2:-}" in commit|stash|tag|notes|log|status|diff|grep|add|branch|switch|show|ls-files|fetch|pull|push|worktree) ;; *) TEXT_ONLY=0; break ;; esac ;;
     *) TEXT_ONLY=0; break ;;
   esac
 # Raw CMD, not SCAN: normalize_binaries strips a quote off a segment's first word,
@@ -207,7 +215,7 @@ while (( i < n )); do
   if is_separator "$tok"; then SEG_FIRST=""; (( i++ )); continue; fi
   if [[ -z "$SEG_FIRST" ]] && ! is_redirect "$tok"; then SEG_FIRST="${tok//[\"\']/}"; fi
   if [[ $TEXT_ONLY -eq 1 ]]; then
-    case "$SEG_FIRST" in grep|egrep|fgrep|rg|which|type|whereis|echo|printf) (( i++ )); continue ;; esac
+    case "$SEG_FIRST" in grep|egrep|fgrep|rg|which|type|whereis|echo|printf|gh|git) (( i++ )); continue ;; esac
   fi
   # A quote can still cling to the token (`'kubectl'`, `"kubectl`). Strip quote
   # characters for the binary comparison only — the verb scan below keeps using

@@ -12,6 +12,19 @@ export HOME="$TMP/home"
 mkdir -p "$HOME/.claude/state" "$HOME/.claude/logs" "$TMP/bin"
 export PATH="$TMP/bin:$PATH"
 G="git -c user.email=t@example.com -c user.name=t"
+# A stand-in brew, first on PATH before any case runs: the updater appends
+# /opt/homebrew/bin, where the real one may be. It logs its arguments and, on a
+# good upgrade, moves the fake Caskroom claude to 2.1.302.
+CASK="$TMP/Caskroom/claude-code@latest/2.1.300"
+cat > "$TMP/bin/brew" <<SH
+#!/usr/bin/env bash
+echo "\$*" >> "$TMP/brew.log"; echo brew >> "$HOME/order.log"
+RC=\$(cat "$TMP/brew.rc" 2>/dev/null || echo 0)
+[ "\$1 \$RC" = "upgrade 0" ] && printf '#!/usr/bin/env bash\necho "2.1.302 (Claude Code)"\n' > "$CASK/claude"
+exit "\$RC"
+SH
+chmod +x "$TMP/bin/brew"
+[ "$(command -v brew)" = "$TMP/bin/brew" ] || { echo "  FAIL: the stand-in brew is not first on PATH; stopping"; exit 1; }
 # The installed copy, as launchd runs it: it finds the clone through
 # harness.version. Run from a clone's bin/ it would use that clone instead.
 UPD="$HOME/.claude/harness-update.sh"
@@ -34,7 +47,7 @@ cat > "$SRC/install.sh" <<'SH'
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VER=$(git -C "$REPO" describe --tags --match 'v[0-9]*' --always --dirty)
 printf 'version=%s\nrepo=%s\n' "$VER" "$REPO" > "$HOME/.claude/harness.version"
-touch "$HOME/.claude/installed-$VER"
+touch "$HOME/.claude/installed-$VER"; echo install >> "$HOME/order.log"
 { echo "#!/usr/bin/env bash"; echo "# installed at $VER"; cat "$HOME/.claude/harness-update.sh"; } > "$HOME/.claude/harness-update.sh.new"
 chmod +x "$HOME/.claude/harness-update.sh.new"; mv -f "$HOME/.claude/harness-update.sh.new" "$HOME/.claude/harness-update.sh"
 SH
@@ -106,16 +119,89 @@ OUT=$(bash "$UPD" --repo "$CLONE" 2>&1); RC=$?
 [ "$RC" = 0 ] && [ "$(installed)" = v1.0.4 ] && pass "--repo with no record installs the tag it sits on" || fail "--repo" "rc=$RC $OUT"
 
 echo ""
-echo "=== --schedule: launchd ==="
+echo "=== --with-cli: a Homebrew-cask Claude Code is upgraded first, then the harness ==="
+fake_claude() { printf '#!/usr/bin/env bash\necho "%s (Claude Code)"\n' "$2" > "$1"; chmod +x "$1"; ln -sfn "$1" "$TMP/bin/claude"; }
+mkdir -p "$CASK"; fake_claude "$CASK/claude" 2.1.300
+CONF="$HOME/.claude/harness-update.conf"
+rm -f "$TMP/brew.log" "$HOME/order.log"; push_tag v1.0.5 0
+OUT=$(bash "$UPD" --with-cli 2>&1); RC=$?
+[ "$RC" = 0 ] && [ "$(installed)" = v1.0.5 ] && pass "exit 0, v1.0.5 installed" || fail "with-cli run" "rc=$RC $OUT"
+[ "$(cat "$TMP/brew.log" 2>/dev/null)" = "$(printf 'update --quiet\nupgrade --cask claude-code@latest')" ] \
+  && pass "brew update, then upgrade --cask claude-code@latest" || fail "brew calls" "$(cat "$TMP/brew.log" 2>/dev/null)"
+[[ "$OUT" == *"Homebrew cask claude-code@latest (2.1.300) at "*"/Caskroom/"* && "$OUT" == *"claude-code@latest 2.1.300 -> 2.1.302"* ]] \
+  && pass "names the cask, its path and both versions" || fail "cli message" "$OUT"
+[ "$(tr '\n' ' ' < "$HOME/order.log")" = "brew brew install " ] && pass "brew runs before install.sh" || fail "order" "$(cat "$HOME/order.log")"
+grep -qx 'with_cli=1' "$CONF" && pass "recorded in harness-update.conf" || fail "conf" "$(cat "$CONF" 2>/dev/null)"
+
+echo ""
+echo "=== the choice holds for argument-free runs until --no-cli ==="
+fake_claude "$CASK/claude" 2.1.300; rm -f "$TMP/brew.log"
+OUT=$(bash "$UPD" 2>&1); RC=$?
+[ "$RC" = 0 ] && grep -qx 'upgrade --cask claude-code@latest' "$TMP/brew.log" 2>/dev/null \
+  && pass "a later plain run still upgrades the CLI" || fail "plain run" "rc=$RC $OUT"
+rm -f "$TMP/brew.log"
+OUT=$(bash "$UPD" --no-cli 2>&1)
+[ ! -e "$TMP/brew.log" ] && grep -qx 'with_cli=0' "$CONF" && pass "--no-cli: brew not called, recorded" || fail "--no-cli" "$OUT"
+bash "$UPD" >/dev/null 2>&1
+[ ! -e "$TMP/brew.log" ] && pass "a plain run after --no-cli leaves brew alone" || fail "after --no-cli" "$(cat "$TMP/brew.log")"
+
+echo ""
+echo "=== a failed brew is reported and the harness update goes on ==="
+echo 1 > "$TMP/brew.rc"; rm -f "$TMP/brew.log"; push_tag v1.0.6 0
+OUT=$(bash "$UPD" --with-cli 2>&1); RC=$?
+[ "$RC" = 0 ] && [[ "$OUT" == *"claude-code@latest failed (see "* ]] && pass "exit 0 and says brew failed" || fail "brew failed" "rc=$RC $OUT"
+[ "$(installed)" = v1.0.6 ] && pass "v1.0.6 installed anyway" || fail "installed after brew failure" "$(installed)"
+rm -f "$TMP/brew.rc"
+
+echo ""
+echo "=== npm and native installs, or none, are left alone ==="
+NPM="$TMP/npm/lib/node_modules/@anthropic-ai/claude-code"; mkdir -p "$NPM"; fake_claude "$NPM/cli.js" 2.1.300
+rm -f "$TMP/brew.log"
+OUT=$(bash "$UPD" 2>&1)
+[[ "$OUT" == *"claude: npm install at "* ]] && [ ! -e "$TMP/brew.log" ] && pass "npm: named, brew not called" || fail "npm" "$OUT"
+NAT="$HOME/.local/share/claude/versions"; mkdir -p "$NAT"; fake_claude "$NAT/2.1.296" 2.1.296
+OUT=$(bash "$UPD" 2>&1)
+[[ "$OUT" == *"claude: native install at "* ]] && [ ! -e "$TMP/brew.log" ] && pass "native: named, brew not called" || fail "native" "$OUT"
+# CLAUDE_CLI_BIN: the updater's appended PATH may hold a real claude here.
+OUT=$(CLAUDE_CLI_BIN="$TMP/none/claude" bash "$UPD" 2>&1); RC=$?
+[ "$RC" = 0 ] && [[ "$OUT" == *"claude: not on PATH"* ]] && [ ! -e "$TMP/brew.log" ] && pass "no claude: says so, exit 0" || fail "no claude" "rc=$RC $OUT"
+
+echo ""
+echo "=== --check --with-cli reports the cask and changes nothing ==="
+fake_claude "$CASK/claude" 2.1.300; push_tag v1.0.7 0
+OUT=$(bash "$UPD" --check --with-cli 2>&1); RC=$?
+[ "$RC" = 0 ] && [[ "$OUT" == *"Homebrew cask claude-code@latest (2.1.300)"*"a run without --check upgrades it"* ]] \
+  && pass "names the cask" || fail "--check cli" "rc=$RC $OUT"
+[ ! -e "$TMP/brew.log" ] && [ "$(installed)" = v1.0.6 ] && [ ! -e "$HOME/.claude/installed-v1.0.7" ] \
+  && pass "brew not called, nothing installed" || fail "--check touched" "$(installed) $(cat "$TMP/brew.log" 2>/dev/null)"
+
+echo ""
+echo "=== --schedule: launchd, four slots ==="
 printf '#!/usr/bin/env bash\necho "$*" >> "%s/launchctl.log"\n' "$TMP" > "$TMP/bin/launchctl"; chmod +x "$TMP/bin/launchctl"
 PLIST="$HOME/Library/LaunchAgents/com.claude-code-harness.update.plist"
 OUT=$(HARNESS_SCHEDULER=launchd bash "$UPD" --schedule 2>&1); RC=$?
 [ "$RC" = 0 ] && [ -f "$PLIST" ] && pass "agent file written" || fail "plist" "rc=$RC $OUT"
-grep -qF "<string>$HOME/.claude/harness-update.sh</string>" "$PLIST" && pass "runs the installed copy" || fail "program" "$(cat "$PLIST")"
+grep -qF "<array><string>/bin/bash</string><string>$HOME/.claude/harness-update.sh</string></array>" "$PLIST" \
+  && pass "runs the installed copy, no arguments" || fail "program" "$(cat "$PLIST")"
+H=$(grep -oE '<key>Hour</key><integer>[0-9]+</integer><key>Minute</key><integer>17</integer>' "$PLIST" | sed -E 's/.*Hour<\/key><integer>([0-9]+).*/\1/' | tr '\n' ' ')
+[ "$H" = "1 7 13 19 " ] && pass "Hour 1, 7, 13, 19 at Minute 17" || fail "calendar" "[$H] $(cat "$PLIST")"
 if command -v plutil >/dev/null; then plutil -lint -s "$PLIST" >/dev/null && pass "plist lints" || fail "plist lints" "$(plutil -lint "$PLIST")"; fi
+[[ "$OUT" == *"at 01:17, 07:17, 13:17 and 19:17 local, with the CLI upgrade via launchd"* ]] \
+  && pass "names the four times and the CLI upgrade" || fail "schedule message" "$OUT"
 grep -q "^bootstrap gui/" "$TMP/launchctl.log" && pass "launchctl bootstrap called" || fail "bootstrap" "$(cat "$TMP/launchctl.log")"
-HARNESS_SCHEDULER=launchd bash "$UPD" --unschedule >/dev/null 2>&1
+OUT=$(HARNESS_SCHEDULER=launchd bash "$UPD" --unschedule 2>&1)
 [ ! -f "$PLIST" ] && grep -q "^bootout gui/" "$TMP/launchctl.log" && pass "--unschedule removes the agent" || fail "unschedule" ""
+[[ "$OUT" == *"the CLI upgrade stays on for runs by hand"* ]] && pass "and says the CLI choice stays" || fail "unschedule message" "$OUT"
+
+echo ""
+echo "=== --schedule: systemd timer ==="
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/systemctl.log"\n' "$TMP" > "$TMP/bin/systemctl"; chmod +x "$TMP/bin/systemctl"
+HARNESS_SCHEDULER=systemd bash "$UPD" --schedule >/dev/null 2>&1
+grep -qx 'OnCalendar=\*-\*-\* 01,07,13,19:17:00' "$HOME/.config/systemd/user/com.claude-code-harness.update.timer" 2>/dev/null \
+  && grep -qx 'Persistent=true' "$HOME/.config/systemd/user/com.claude-code-harness.update.timer" \
+  && pass "OnCalendar at 01,07,13,19:17, Persistent" || fail "timer" "$(cat "$HOME/.config/systemd/user/com.claude-code-harness.update.timer" 2>/dev/null)"
+grep -q 'enable --now com.claude-code-harness.update.timer' "$TMP/systemctl.log" && pass "timer enabled" || fail "systemctl" "$(cat "$TMP/systemctl.log")"
+HARNESS_SCHEDULER=systemd bash "$UPD" --unschedule >/dev/null 2>&1
 
 echo ""
 echo "=== --schedule: cron, idempotent, other lines kept ==="
@@ -129,7 +215,8 @@ HARNESS_SCHEDULER=cron bash "$UPD" --schedule >/dev/null 2>&1
 HARNESS_SCHEDULER=cron bash "$UPD" --schedule >/dev/null 2>&1
 [ "$(grep -c 'com.claude-code-harness.update' "$TMP/crontab.txt")" = 1 ] && pass "one line after two runs" || fail "cron lines" "$(cat "$TMP/crontab.txt")"
 grep -q '^0 0 \* \* \* /bin/true$' "$TMP/crontab.txt" && pass "the existing line survives" || fail "existing line" "$(cat "$TMP/crontab.txt")"
-grep -q "^17 9 \* \* \* /bin/bash $HOME/.claude/harness-update.sh" "$TMP/crontab.txt" && pass "daily at 09:17" || fail "cron entry" "$(cat "$TMP/crontab.txt")"
+grep -q "^17 1,7,13,19 \* \* \* /bin/bash $HOME/.claude/harness-update.sh >> " "$TMP/crontab.txt" \
+  && pass "at 17 past 1, 7, 13 and 19, no arguments" || fail "cron entry" "$(cat "$TMP/crontab.txt")"
 HARNESS_SCHEDULER=cron bash "$UPD" --unschedule >/dev/null 2>&1
 [ "$(grep -c 'com.claude-code-harness.update' "$TMP/crontab.txt")" = 0 ] && grep -q '/bin/true' "$TMP/crontab.txt" \
   && pass "--unschedule removes only its line" || fail "cron unschedule" "$(cat "$TMP/crontab.txt")"

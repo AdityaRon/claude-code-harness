@@ -42,13 +42,15 @@ says so. The 2026-08 research this supersedes is in `history/`.
   last consolidation" is read. A kill rolls the mtime back.
 - **On this machine.** No `.consolidate-lock` exists in any store
   (`find ~/.claude -maxdepth 5 -name '*consolidat*'` is empty) and
-  `autoDreamEnabled` is not set in `~/.claude/settings.json`. Auto-dream has
-  never run here. Of the six memory files across three stores, four have a
-  `modified` stamp within 2 s of their mtime; the other two were rewritten
-  16 h and 5 days after their stamp, and the harness audit log names the
-  writer: sessions appending with `cat >>` and `python3 - <<EOF` from Bash.
+  `autoDreamEnabled` was not set in `~/.claude/settings.json` on 2026-10-16.
+  Auto-dream has never run here. Of the six memory files across three stores,
+  four have a `modified` stamp within 2 s of their mtime; the other two were
+  rewritten 16 h and 5 days after their stamp, and the harness audit log names
+  the writer: sessions appending with `cat >>` and `python3 - <<EOF` from Bash.
   Neither the CLI's stamp nor memory-lint sees a shell write (both act on the
-  Write and Edit tools), which is a gap worth knowing about, and not a dream.
+  Write and Edit tools); those rewrites were sessions, not a dream. Since
+  2026-10-17 `rules/environment.md` says memory files are written with Write
+  or Edit only. There is no Bash-side check: every Bash call would pay for it.
   To check for yourself: `/memory` shows an Auto-dream row only where the flag
   allows it.
 
@@ -57,7 +59,7 @@ says so. The 2026-08 research this supersedes is in `history/`.
 | Component | Verdict | Reason |
 |---|---|---|
 | `hooks/session-start.sh` reorder of the index | **Demoted** | Runs only when the index is at or past the pressure thresholds memory-lint uses (180 lines or 20,000 bytes), only when the index changed since the last run (mtime and size stamped under `state/sessions/memory-index/`), and never while `.consolidate-lock` is under an hour old. Was 60-80 ms of a ~100 ms start here, 1.7 s on a slower machine, on stores far from the cap. |
-| `hooks/memory-lint.sh` | **Kept, trimmed** | Write-time checks the CLI does not make: name matches filename, valid type, description present and state-free, liveness claims carry a `verify:` block, link separator typos, the memory is indexed and filed under the right tier, `feedback_` past the cut. Dropped: the `modified` check (the CLI stamps it on the write) and the generic over-limit index findings (the CLI errors on them). The `originSessionId` stamp stays as a backstop: the CLI stamps it on the memories it writes through its own path, and whether every Write-tool path into a memory directory gets one is unverified. Auto-dream's `priorMtime` is the lock's, not the files', so the stamp cannot trip its rollback. |
+| `hooks/memory-lint.sh` | **Kept, trimmed** | Write-time checks the CLI does not make: name matches filename, valid type, description present and state-free, liveness claims carry a `verify:` block, link separator typos, the memory is indexed and filed under the right tier, `feedback_` past the cut. Dropped: the `modified` check (the CLI stamps it on the write) and the generic over-limit index findings (the CLI errors on them). The `originSessionId` stamp stays as a backstop (owner's decision, 2026-10-17): the CLI stamps it on the memories it writes through its own path, and whether every Write-tool path into a memory directory gets one is unverified. Auto-dream's `priorMtime` is the lock's, not the files', so the stamp cannot trip its rollback. |
 | `bin/memory-verify.sh`, `/memory-audit` | **Kept** | Checks claims against GitHub and Jira. Nothing upstream leaves the machine to do this, and auto-dream's prompt reasons only over the files and transcripts. |
 | `bin/memory-provenance.sh` | **Kept** | Who wrote a memory and whether the session citing it also wrote it. Not upstream. |
 | `bin/memory-index.sh` | **Kept, on demand** | Tier ordering and `--archive-overflow`, invoked by the gated session-start path and by `/memory-archive`. Auto-dream prunes pointers; it does not order or archive. |
@@ -69,13 +71,20 @@ Nothing the harness does writes a store while auto-dream's lock is fresh, and
 nothing re-implements consolidation: the contract entry "auto-dream memory
 consolidation" in `config/upstream-contract.json` says do not rebuild it.
 
-## If auto-dream turns on here
+## `autoDreamEnabled` is set
 
-Expect it to delete contradicted memory files and stale index lines. That is
-the inverse of the harness rule "never delete, archive the line", so enabling
-`autoDreamEnabled` is a philosophy choice. The harness tools stay valid either
-way: verify checks the world, provenance checks the author, lint checks the
-write, and the session-start reorder yields to the lock.
+Since 2026-10-17 `config/settings.json` sets `autoDreamEnabled: true`, the
+owner's decision on #88. It reaches `~/.claude/settings.json` on the next
+`bash install.sh`, and the install keeps a value you set yourself, so an
+explicit `false` stays off. It does nothing where the `tengu_onyx_plover` flag
+is off.
+
+Where it runs, expect it to delete contradicted memory files and stale index
+lines. That is the inverse of the harness rule "never delete, archive the
+line", and it is the accepted trade-off. The harness tools stay valid: verify
+and `/memory-audit` check claims against GitHub and Jira, which the dream does
+not, provenance checks the author, lint checks the write, and the
+session-start reorder yields to the lock.
 
 ## Using the tools
 
@@ -88,7 +97,9 @@ and returns an error when it is over it, stamps `modified` and
 `originSessionId` on what it writes, and ships a background consolidation pass
 (auto-dream) that merges, rewrites relative dates and prunes the index. That
 pass is gated on a server flag and had never run on the machine this was
-measured on.
+measured on. The harness sets `autoDreamEnabled: true`, so it runs wherever
+the flag allows; it may delete memory files it finds contradicted, which the
+harness's own tools never do.
 
 What the harness still adds is the part that needs the outside world or the
 write itself:

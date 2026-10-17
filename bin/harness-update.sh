@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Moves this machine to the newest harness release: fetches tags from the
 # clone's origin, checks the tag out detached, runs doctor.sh, installs on green.
-#   harness-update.sh [--repo DIR] [--check]
-#   harness-update.sh --schedule | --unschedule     daily, 09:17 local
-#   harness-update.sh --newer A B                   exit 0 when tag A is newer
-# Refuses a clone with uncommitted changes or with commits the release lacks;
-# nothing is ever reset. The clone is the one install.sh ran from
-# (repo= in ~/.claude/harness.version) unless --repo says otherwise.
+#   harness-update.sh [--repo DIR] [--check] [--with-cli | --no-cli]
+#   harness-update.sh --schedule | --unschedule   01:17, 07:17, 13:17, 19:17 local
+#   harness-update.sh --newer A B                 exit 0 when tag A is newer
+# --with-cli first upgrades a Homebrew-cask Claude Code, on later runs too, until
+# --no-cli. Refuses a clone with local changes or commits the release lacks;
+# never resets. The clone is install.sh's (repo= in ~/.claude/harness.version).
 set -uo pipefail
 # launchd and cron start with a PATH that has no Homebrew; appended, so a
 # caller's own PATH still wins.
@@ -16,11 +16,24 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 VERSION_FILE="$HOME/.claude/harness.version"
 LATEST_FILE="$HOME/.claude/state/harness-latest"
 LOG="$HOME/.claude/logs/harness-update.log"
+CONF="$HOME/.claude/harness-update.conf"
 LABEL=com.claude-code-harness.update
 RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
+# Local time, minute 17: a tag is installed within six hours.
+HOURS="1 7 13 19"
 
 usage() { sed -n '2,9s/^# \{0,1\}//p' "$0"; exit 2; }
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
+slots() {   # 01:17, 07:17, 13:17 and 19:17
+  local h s=""
+  for h in $HOURS; do s="$s, $(printf '%02d:17' "$h")"; done
+  s=${s#, }; echo "${s%, *} and ${s##*, }"
+}
+with_cli() {   # with_cli [kept]: a clause for the schedule messages
+  [[ "$CLI" == 1 ]] || return 0
+  if [[ "${1:-}" == kept ]]; then echo "; the CLI upgrade stays on for runs by hand (--no-cli turns it off)"
+  else echo ", with the CLI upgrade"; fi
+}
 
 # newer A B: is release tag A newer than B? 2 when either is not a release tag.
 newer() {
@@ -49,7 +62,38 @@ find_repo() {
 
 installed_version() { sed -n 's/^version=//p' "$VERSION_FILE" 2>/dev/null | head -1; }
 
+# Before the harness, so a release that needs a newer CLI finds it. Never
+# fails the run. CLAUDE_CLI_BIN is a testing seam, as in upstream-check.sh.
+cli_update() {
+  local bin real cask before after
+  bin=${CLAUDE_CLI_BIN:-$(command -v claude 2>/dev/null)}
+  [[ -n "$bin" && -x "$bin" ]] || { say "claude: not on PATH; nothing to upgrade"; return 0; }
+  real=$(readlink -f "$bin" 2>/dev/null || echo "$bin")
+  case "$real" in
+    */Caskroom/*/*) cask=${real#*/Caskroom/}; cask=${cask%%/*} ;;
+    */node_modules/@anthropic-ai/claude-code/*)
+      say "claude: npm install at $real; not touched (npm i -g @anthropic-ai/claude-code updates it)"; return 0 ;;
+    */.local/share/claude/versions/*) say "claude: native install at $real; Claude Code updates itself"; return 0 ;;
+    *) say "claude: unrecognised install at $real; not touched"; return 0 ;;
+  esac
+  command -v brew >/dev/null || { say "claude: Homebrew cask $cask, but no brew on PATH; not touched"; return 0; }
+  before=$("$bin" --version 2>/dev/null | cut -d' ' -f1)
+  if [[ "$CHECK" == 1 ]]; then
+    say "claude: Homebrew cask $cask ($before) at $real; a run without --check upgrades it"; return 0
+  fi
+  say "claude: Homebrew cask $cask ($before) at $real; running brew upgrade"
+  if HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew update --quiet >>"$LOG" 2>&1 \
+     && HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade --cask "$cask" >>"$LOG" 2>&1; then
+    after=$("$bin" --version 2>/dev/null | cut -d' ' -f1)
+    if [[ "$after" == "$before" ]]; then say "claude: $cask up to date ($after)"; else say "claude: $cask $before -> $after"; fi
+  else
+    # brew's lock, held by a session's own upgrade, lands here too; the next slot retries.
+    say "claude: brew update or upgrade --cask $cask failed (see $LOG); the harness update continues"
+  fi
+}
+
 update() {
+  if [[ "$CLI" == 1 ]]; then cli_update; fi
   find_repo
   if ! git -C "$REPO" fetch --tags --quiet origin 2>>"$LOG"; then
     say "fetch from origin failed (see $LOG)"; exit 1
@@ -96,9 +140,15 @@ scheduler() {
 }
 
 schedule() {
-  local target="$HOME/.claude/harness-update.sh" plist unit
+  local target="$HOME/.claude/harness-update.sh" plist unit h cal="" hh="" h2=""
   [[ -x "$target" ]] || { say "no $target: run bash install.sh first"; exit 1; }
   mkdir -p "$(dirname "$LOG")"
+  for h in $HOURS; do
+    cal="$cal<dict><key>Hour</key><integer>$h</integer><key>Minute</key><integer>17</integer></dict>"
+    hh="$hh,$h"; h2="$h2,$(printf '%02d' "$h")"
+  done
+  hh=${hh#,} h2=${h2#,}
+  # The job runs with no arguments, so a reinstall keeps --with-cli: it is in $CONF.
   case "$(scheduler)" in
     launchd)
       plist="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -110,7 +160,7 @@ schedule() {
 <dict>
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key><array><string>/bin/bash</string><string>$target</string></array>
-  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>17</integer></dict>
+  <key>StartCalendarInterval</key><array>$cal</array>
   <key>StandardOutPath</key><string>$LOG</string>
   <key>StandardErrorPath</key><string>$LOG</string>
 </dict>
@@ -118,19 +168,19 @@ schedule() {
 EOF
       launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1
       launchctl bootstrap "gui/$(id -u)" "$plist" || { say "launchctl bootstrap failed; agent file is $plist"; exit 1; }
-      say "scheduled daily at 09:17 via launchd ($plist); log: $LOG" ;;
+      say "scheduled at $(slots) local$(with_cli) via launchd ($plist); log: $LOG" ;;
     systemd)
       unit="$HOME/.config/systemd/user"; mkdir -p "$unit"
       printf '[Unit]\nDescription=Claude Code harness update\n[Service]\nType=oneshot\nExecStart=/bin/bash %s\nStandardOutput=append:%s\nStandardError=append:%s\n' \
         "$target" "$LOG" "$LOG" > "$unit/$LABEL.service"
-      printf '[Unit]\nDescription=Claude Code harness update, daily\n[Timer]\nOnCalendar=*-*-* 09:17:00\nPersistent=true\n[Install]\nWantedBy=timers.target\n' \
-        > "$unit/$LABEL.timer"
+      printf '[Unit]\nDescription=Claude Code harness update, four times a day\n[Timer]\nOnCalendar=*-*-* %s:17:00\nPersistent=true\n[Install]\nWantedBy=timers.target\n' \
+        "$h2" > "$unit/$LABEL.timer"
       systemctl --user daemon-reload && systemctl --user enable --now "$LABEL.timer" || { say "systemctl failed"; exit 1; }
-      say "scheduled daily at 09:17 via a systemd user timer; log: $LOG" ;;
+      say "scheduled at $(slots) local$(with_cli) via a systemd user timer; log: $LOG" ;;
     cron)
-      { crontab -l 2>/dev/null | grep -vF "# $LABEL"; echo "17 9 * * * /bin/bash $target >> $LOG 2>&1 # $LABEL"; } | crontab - \
+      { crontab -l 2>/dev/null | grep -vF "# $LABEL"; echo "17 $hh * * * /bin/bash $target >> $LOG 2>&1 # $LABEL"; } | crontab - \
         || { say "crontab failed"; exit 1; }
-      say "scheduled daily at 09:17 via crontab; log: $LOG" ;;
+      say "scheduled at $(slots) local$(with_cli) via crontab; log: $LOG" ;;
   esac
 }
 
@@ -138,21 +188,23 @@ unschedule() {
   case "$(scheduler)" in
     launchd)
       launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1
-      rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"; say "launchd agent removed" ;;
+      rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"; say "launchd agent removed$(with_cli kept)" ;;
     systemd)
       systemctl --user disable --now "$LABEL.timer" >/dev/null 2>&1
       rm -f "$HOME/.config/systemd/user/$LABEL.service" "$HOME/.config/systemd/user/$LABEL.timer"
-      systemctl --user daemon-reload >/dev/null 2>&1; say "systemd timer removed" ;;
+      systemctl --user daemon-reload >/dev/null 2>&1; say "systemd timer removed$(with_cli kept)" ;;
     cron)
-      crontab -l 2>/dev/null | grep -vF "# $LABEL" | crontab - ; say "crontab line removed" ;;
+      crontab -l 2>/dev/null | grep -vF "# $LABEL" | crontab - ; say "crontab line removed$(with_cli kept)" ;;
   esac
 }
 
-REPO="" CHECK=0 MODE=update
+REPO="" CHECK=0 MODE=update CLI=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO="$2"; shift 2 ;;
     --check) CHECK=1; shift ;;
+    --with-cli) CLI=1; shift ;;
+    --no-cli) CLI=0; shift ;;
     --schedule) MODE=schedule; shift ;;
     --unschedule) MODE=unschedule; shift ;;
     --newer) newer "${2:-}" "${3:-}"; exit $? ;;
@@ -161,6 +213,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 mkdir -p "$(dirname "$LOG")"
+if [[ -n "$CLI" ]]; then
+  printf 'with_cli=%s\n' "$CLI" > "$CONF"
+else
+  CLI=$(sed -n 's/^with_cli=//p' "$CONF" 2>/dev/null | tail -1)
+fi
 case "$MODE" in
   update) update ;;
   schedule) schedule ;;

@@ -32,7 +32,7 @@ mkdir -p "$HOME/.claude"
 # machine last installed before they were.
 cat > "$HOME/.claude/settings.json" <<'JSON'
 {"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"~/.config/iterm2/cc-status"}]}]},
- "env":{"MINE":"1"},
+ "env":{"MINE":"1"},"effortLevel":"xhigh",
  "permissions":{"deny":["Bash(my-danger:*)","Bash(rm -rf:*)","Bash(rm -rf /:*)"]}}
 JSON
 
@@ -137,9 +137,22 @@ grep -qF 'retired rule removed: Bash(rm -rf:*)' <<<"$OUT" && ! grep -qxF 'Bash(r
 [[ -x "$HOME/.claude/net-allowlist.sh" ]] \
   && pass "net-allowlist.sh installed" || fail "net-allowlist.sh installed" "missing"
 N1=$(jq '.permissions.allow | length' "$S")
-(cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh >/dev/null 2>&1)
+
+echo ""
+echo "=== xhigh moves to high once; the re-run keeps a later xhigh and adds no rules ==="
+MOVED='effortLevel: "xhigh" → "high"'
+[ "$(jq -r .effortLevel "$S")" = "high" ] && grep -qF "$MOVED" <<<"$OUT" \
+  && pass "xhigh moved to high, and the install says so" || fail "xhigh moved to high" "$(jq -r .effortLevel "$S"): $(grep effortLevel <<<"$OUT")"
+jq '.effortLevel = "xhigh"' "$S" > "$S.next" && mv "$S.next" "$S"
+OUT2=$(cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh 2>&1)
+[ "$(jq -r .effortLevel "$S")" = "xhigh" ] && ! grep -qF "$MOVED" <<<"$OUT2" \
+  && pass "an xhigh set after the move survives the next install" || fail "later xhigh kept" "$(jq -r .effortLevel "$S"): $(grep effortLevel <<<"$OUT2")"
 [ "$(jq '.permissions.allow | length' "$S")" = "$N1" ] \
   && pass "re-running with fragments adds nothing" || fail "re-running with fragments adds nothing" "$N1 -> $(jq '.permissions.allow | length' "$S")"
+FRESH="$TMP/fresh"; mkdir -p "$FRESH"
+(export HOME="$FRESH"; cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh >/dev/null 2>&1)
+[ "$(jq -r .effortLevel "$FRESH/.claude/settings.json" 2>/dev/null)" = "high" ] && [ -f "$FRESH/.claude/state/effort-high.migrated" ] \
+  && pass "a fresh install gets high and marks the move done" || fail "fresh install" "$(ls "$FRESH/.claude/state" 2>&1)"
 
 echo ""
 echo "=== a hook the harness did not install survives a real run ==="

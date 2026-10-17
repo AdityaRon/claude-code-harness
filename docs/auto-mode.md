@@ -9,14 +9,18 @@ the prompt; read-only work (reading files, searching code) doesn't go to the
 classifier at all. Verify the mode with `/status`, or override per session with
 `claude --permission-mode manual`.
 
-**This pins auto mode rather than enabling it.** As of Claude Code 2.1.227 auto
-*is* the product default: `--permission-mode` accepts
-`acceptEdits | auto | bypassPermissions | manual | dontAsk | plan` with no
-`default` in the list, and a settings value of `"default"` means "whatever the
-product default is", which is now auto. So a machine sitting on `"default"`
-already gets the classifier; setting `"auto"` explicitly just states the intent
-and stops it drifting if that default changes again. The real opt-out is
-`"manual"`.
+**This pins auto mode rather than enabling it.** Claude Code's
+[permission-modes doc](https://code.claude.com/docs/en/permission-modes), read
+2026-10-17, says auto mode is the built-in starting mode for interactive
+terminal and VS Code sessions from v2.1.283 (earlier, only on Pro, Max and Team
+plans). Setting `"auto"` explicitly states the intent and keeps it if that
+built-in default changes again. A settings value of `"default"` does not mean
+the product default: the same doc calls Manual mode's config value `default`
+("Its config value is `default`, which is what hooks and SDK integrations
+use") and accepts `manual` as an alias. So a machine sitting on `"default"`
+starts in Manual, and either value is the opt-out. `claude --help` on 2.1.300
+lists `acceptEdits | auto | bypassPermissions | manual | dontAsk | plan`, the
+alias rather than `default`.
 
 **It only works in user settings.** Claude Code will not let a repo-level
 `.claude/settings.json` grant `defaultMode: auto`, and the ignored value

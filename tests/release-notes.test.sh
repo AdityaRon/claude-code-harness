@@ -66,6 +66,10 @@ V=$(bash "$RN" --repo "$FIX" --prs "$TMP/feat.json" --since v1.0.0 --next-versio
 [ "$(rn --since v1.0.0 --next-version --bump patch)" = v1.0.1 ] && pass "--bump patch overrides the label" || fail "patch override" ""
 [ "$(rn --since '' --next-version)" = v1.0.0 ] && pass "first release is v1.0.0" || fail "first" "$(rn --since '' --next-version)"
 rn --since v1.0.0 --next-version --bump nope >/dev/null 2>&1; [ $? = 2 ] && pass "bad bump exits 2" || fail "bad bump" ""
+# What the drift workflow lands on its own: a contract PR, no label.
+jq 'map(select(.number == 6))' "$TMP/prs.json" > "$TMP/contract.json"
+V=$(bash "$RN" --repo "$FIX" --prs "$TMP/contract.json" --since v1.0.0 --next-version)
+[ "$V" = v1.0.1 ] && pass "a contract-only release is a patch" || fail "contract-only" "$V"
 
 echo ""
 echo "=== --intended: ids from the merged PR bodies ==="
@@ -91,6 +95,47 @@ printf '# Changelog\n\nIntro.\n' > "$TMP/empty.md"
 bash "$RN" --changelog "$TMP/notes.md" --file "$TMP/empty.md"
 [ "$(tail -1 "$TMP/empty.md")" = new ] && pass "no entry yet: appended" || fail "append" "$(cat "$TMP/empty.md")"
 grep -q '^## v1\.0\.0 (' "$PWD/CHANGELOG.md" && pass "the shipped CHANGELOG starts at v1.0.0" || fail "shipped changelog" ""
+# A Release body cut at its `CHANGELOG.md entry:` trailer ends in blank lines.
+printf '# Changelog\n\n## v1.0.0 (2026-10-16)\n\nold\n' > "$TMP/cut.md"
+printf '## v1.0.1 (2026-10-20)\n\nnew\n\n\n' > "$TMP/cut-notes.md"
+bash "$RN" --changelog "$TMP/cut-notes.md" --file "$TMP/cut.md"
+[ "$(cat "$TMP/cut.md")" = "$(printf '# Changelog\n\n## v1.0.1 (2026-10-20)\n\nnew\n\n## v1.0.0 (2026-10-16)\n\nold')" ] \
+  && pass "trailing blank lines of the notes dropped" || fail "trailing blanks" "$(cat "$TMP/cut.md")"
+
+echo ""
+echo "=== --changed / --hooks-changed: what the release loop guard sees ==="
+ch() { bash "$RN" --repo "$FIX" "$@" 2>/dev/null; }
+OUT=$(ch --since v1.0.0 --changed); RC=$?
+[ "$RC" = 0 ] && [ "$OUT" = f ] && pass "--changed lists f since v1.0.0" || fail "--changed" "rc=$RC [$OUT]"
+( cd "$FIX" && git tag v1.0.1 && echo entry > CHANGELOG.md && $G add CHANGELOG.md && $G commit -qm "changelog: v1.0.1" )
+ch --since v1.0.1 --changed >/dev/null; RC=$?
+[ "$RC" = 1 ] && pass "only CHANGELOG.md since the tag: --changed exits 1" || fail "CHANGELOG only" "rc=$RC $(ch --since v1.0.1 --changed)"
+ch --since v1.0.1 --hooks-changed >/dev/null; RC=$?
+[ "$RC" = 1 ] && pass "and --hooks-changed exits 1" || fail "hooks unchanged" "rc=$RC"
+( cd "$FIX" && mkdir -p hooks && echo x > hooks/x.sh && $G add hooks/x.sh && $G commit -qm "hooks: x" )
+OUT=$(ch --since v1.0.1 --changed); RC=$?
+[ "$RC" = 0 ] && [ "$OUT" = hooks/x.sh ] && pass "a hook commit: --changed exits 0, CHANGELOG.md not listed" || fail "--changed hook" "rc=$RC [$OUT]"
+OUT=$(ch --since v1.0.1 --hooks-changed); RC=$?
+[ "$RC" = 0 ] && [ "$OUT" = hooks/x.sh ] && pass "and --hooks-changed exits 0" || fail "--hooks-changed" "rc=$RC [$OUT]"
+ch --since '' --changed >/dev/null; RC=$?
+[ "$RC" = 0 ] && pass "no previous tag: exit 0" || fail "first release" "rc=$RC"
+ch --since v9.9.9 --hooks-changed >/dev/null; RC=$?
+[ "$RC" = 2 ] && pass "an unknown tag exits 2, not 1" || fail "bad tag" "rc=$RC"
+
+echo ""
+echo "=== --missing: tags newer than the newest CHANGELOG entry ==="
+MF="$TMP/mfix"; mkdir -p "$MF"
+( cd "$MF" && git init -q && echo a > a && $G add a && $G commit -qm a && git tag v1.0.0 && git tag v1.0.1 && git tag nightly ) \
+  || { echo "fixture failed"; exit 1; }
+mis() { bash "$RN" --repo "$MF" --missing --file "$TMP/m.md" | tr '\n' ' '; }
+printf '# Changelog\n\n## v1.0.0 (2026-10-16)\n\nold\n' > "$TMP/m.md"
+[ "$(mis)" = "v1.0.1 " ] && pass "entry v1.0.0, tags v1.0.0 v1.0.1: v1.0.1" || fail "one missing" "[$(mis)]"
+printf '# Changelog\n\nIntro.\n' > "$TMP/m.md"
+[ "$(mis)" = "v1.0.0 v1.0.1 " ] && pass "no entry: every release tag, oldest first" || fail "none written" "[$(mis)]"
+printf '# Changelog\n\n## v1.0.1 (2026-10-20)\n\nnew\n\n## v1.0.0 (2026-10-16)\n\nold\n' > "$TMP/m.md"
+[ "$(mis)" = "" ] && pass "every tag written: empty" || fail "all present" "[$(mis)]"
+( cd "$MF" && git tag v1.0.9 && git tag v1.0.10 )
+[ "$(mis)" = "v1.0.9 v1.0.10 " ] && pass "v1.0.10 sorts after v1.0.9" || fail "version sort" "[$(mis)]"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

@@ -40,11 +40,14 @@ files in place first; this public repo ships neither. More in
 
 **Updating.** `~/.claude/harness-update.sh` checks the newest release tag out
 of your clone, runs `doctor.sh`, and installs only on green; `--schedule` runs
-it daily and `--unschedule` stops that. session-start tells you when a newer
-release has been fetched. It refuses a clone with local changes or commits, so
-update that one with `git pull && bash install.sh`. Releases are
-`vMAJOR.MINOR.PATCH` tags, each with a GitHub Release and a `CHANGELOG.md`
-entry, gated on `doctor.sh` and the hook benchmark: [docs/releases.md](docs/releases.md).
+it at 01:17, 07:17, 13:17 and 19:17 local time and `--unschedule` stops that.
+`--with-cli` also upgrades a Homebrew-cask Claude Code on each run. It refuses
+a clone with local changes or commits, so update that one with
+`git pull && bash install.sh`. Releases are `vMAJOR.MINOR.PATCH` tags, each
+with a GitHub Release and a `CHANGELOG.md` entry. The Release workflow tags
+main after each daily Upstream drift run when anything but `CHANGELOG.md`
+changed, gated on `doctor.sh` and, when `hooks/` or `config/settings.json`
+changed, the hook benchmark: [docs/releases.md](docs/releases.md).
 
 **Keeping up with Claude Code.** Claude Code auto-updates, so the facts the
 harness relies on are pinned in `config/upstream-contract.json` and checked daily
@@ -61,11 +64,11 @@ against main.
 | `env-guard` | Bash | Deny: reading, dumping, copying or sending env values and dotfiles (`cat .env`, `printenv`, `nc`) |
 | `sensitive-file-guard` | Read, Grep, file writes | Deny: `.env`, keys, SSH and cloud credentials, credential folders. Ask: a Grep at or above your home folder |
 | `secret-scanner` | file writes | Deny: high-confidence token shapes (AWS, GitHub, Slack, Stripe, Google, Anthropic, OpenAI, PEM) in written content |
-| `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, broad `git add`. Ask: deleting a branch no remote holds, remote and identity changes |
+| `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, a broad `git add` that would stage a credential file or that it cannot check. Ask: deleting a local or remote branch whose tip no other ref holds, remote and identity changes |
 | `rm-guard` | Bash | Deny: recursive `rm` of home, root or a top-level folder, and `rm -rf` outside the session's scratch folder |
 | `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, shell startup files, `~/.gitconfig`, LaunchAgents. Deny: moving or emptying `~/.claude` |
 | `network-guard` | Bash, WebFetch | Deny: file uploads and pipe-to-shell. Ask: request bodies, `DELETE`, hosts off the allowlist, `scp`/`rsync`, local servers |
-| `interpreter-guard` | Bash | Ask: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or subprocesses, and long inline scripts |
+| `interpreter-guard` | Bash | Ask: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts |
 | `kubectl-guard` | Bash | Ask: every mutating verb wherever it sits, secret reads, and any subcommand it cannot classify |
 | `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review, or one that runs code outside the guards |
 | `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
@@ -99,7 +102,8 @@ What `install.sh` does with a value you set, from `config/merge-settings.jq`:
 | `statusLine` | `~/.claude/statusline.sh` | No: rewritten on every install |
 | `sandbox` | off, with a domain allowlist | Yes, per key; a list you set replaces the shipped list |
 | `env` | audit log, transcript folder, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Yes, per key |
-| `effortLevel` | `xhigh` | Yes |
+| `effortLevel` | `high` | Yes, after one move of an installed `xhigh` to `high` (marker `~/.claude/state/effort-high.migrated`) |
+| `autoDreamEnabled` | `true` | Yes: `false` keeps auto-dream off ([docs/memory.md](docs/memory.md)) |
 | `syncClaudeAiSkills`, `syncClaudeAiPlugins` | `false` | Yes |
 | `remoteControlAtStartup` and the other top-level switches ([docs/permissions.md](docs/permissions.md)) | `true` | Yes |
 

@@ -225,6 +225,7 @@ echo "=== CLI past the contract pin → one nudge; same version or no pin → si
 printf '2.1.280\n' > "$TMP/pin"
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
 check_contains "nudge names both versions" "Installed 2.1.281; the harness was verified at 2.1.280" "$OUT"
+check_contains "and says the release chain installs it" "the scheduled harness-update installs it" "$OUT"
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.280 run_resume "sess-clean")
 check_not_contains "silent at the pinned version" "past the harness contract" "$OUT"
 OUT=$(CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")

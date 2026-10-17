@@ -8,7 +8,7 @@ installed machine to the newest tag.
 
 ## v1.0.0 (2026-10-16)
 
-The harness as it stands after 86 merged PRs: machine-level hooks, settings,
+The harness as it stands at PR #89: machine-level hooks, settings,
 rules and skills for Claude Code, installed once per machine with
 `bash install.sh`.
 
@@ -52,9 +52,10 @@ rules and skills for Claude Code, installed once per machine with
 - `config/upstream-contract.json` records the Claude Code release the harness
   was verified against; `bin/upstream-check.sh` asks the installed CLI which
   hook events and modes it accepts and lists unreviewed changelog entries.
-  The daily Upstream drift workflow has Claude draft the contract review as a
-  PR, one per release. session-start says when the CLI is ahead of or behind
-  the contract.
+  The daily Upstream drift workflow lands a contract review that needs no
+  decision and drafts a PR for one that does. The Release workflow tags main
+  after it, and `bin/harness-update.sh` installs each tag on a schedule.
+  session-start says when the CLI is ahead of or behind the contract.
 - install.sh merges into an existing settings.json (user keys and allow rules
   kept, hooks and deny owned by the harness), folds in machine-local rules
   from `~/.claude/local-settings/*.json`, keeps `local-*.md` rules, and runs
@@ -75,6 +76,6 @@ rules and skills for Claude Code, installed once per machine with
   live effort, fast mode and context use; comment-budget on edits.
 - Rules installed to `~/.claude/rules` (prose, collaboration, working
   agreement, environment) and a pr-review skill.
-- Tests: 37 suites under `tests/`, run by `doctor.sh`; CI runs them on Linux
+- Tests: one suite per hook and script under `tests/`, run by `doctor.sh`; CI runs them on Linux
   and macOS, lints every script with shellcheck, and benchmarks every PR's
   hooks against main.
