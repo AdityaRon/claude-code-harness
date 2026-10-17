@@ -15,8 +15,9 @@ SESSION_ID=$(jq_get '.session_id')
 
 # Skipped on startup: the CLI's own system prompt already carries branch,
 # main branch, status and `git log --oneline -n 5` (its gitStatus block), so
-# this was a second copy. On resume/compact/clear that snapshot may be stale.
-if [[ "$SOURCE" != "startup" ]] && git rev-parse --git-dir &>/dev/null 2>&1; then
+# this was a second copy. A cleared conversation gets a fresh gitStatus too.
+# On resume/compact/fork that snapshot may be stale.
+if [[ "$SOURCE" != "startup" && "$SOURCE" != "clear" ]] && git rev-parse --git-dir &>/dev/null 2>&1; then
   BRANCH=$(git branch --show-current 2>/dev/null || echo "detached HEAD")
   DIRTY=$(git status --short 2>/dev/null | head -10)
   COMMITS=$(git log --oneline -5 2>/dev/null)
