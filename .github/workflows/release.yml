@@ -199,7 +199,7 @@ jobs:
             echo "::warning::pushed changelog but could not open a PR: ${{ github.server_url }}/${{ github.repository }}/compare/main...changelog?expand=1"
             exit 0
           fi
-          if CI_RUN=$(.github/approve-pr-ci.sh "$PR") && [ -n "$CI_RUN" ]; then
+          if CI_RUN=$(.github/approve-pr-ci.sh "$PR" "$(git rev-parse HEAD)") && [ -n "$CI_RUN" ]; then
             echo "PR #$PR runs its own CI: ${{ github.server_url }}/${{ github.repository }}/actions/runs/$CI_RUN"
           else
             echo "::warning::PR #$PR's CI was not approved; dispatched CI on changelog instead, which main's required checks do not count."

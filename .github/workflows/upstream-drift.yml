@@ -297,7 +297,7 @@ jobs:
           if [ -n "$PR" ]; then
             echo "pr=$PR" >> "$GITHUB_OUTPUT"
             echo "land=$LAND" >> "$GITHUB_OUTPUT"
-            if CI_RUN=$(.github/approve-pr-ci.sh "$PR") && [ -n "$CI_RUN" ]; then
+            if CI_RUN=$(.github/approve-pr-ci.sh "$PR" "$(git rev-parse HEAD)") && [ -n "$CI_RUN" ]; then
               echo "ci_run=$CI_RUN" >> "$GITHUB_OUTPUT"
               echo "PR #$PR runs its own CI: ${{ github.server_url }}/${{ github.repository }}/actions/runs/$CI_RUN"
             else

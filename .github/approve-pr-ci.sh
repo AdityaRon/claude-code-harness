@@ -2,11 +2,12 @@
 # Approve the pull_request runs GitHub holds on a PR github-actions opened (fork
 # PR approval policy first_time_contributors), so its own CI meets main's
 # required checks; a dispatched run's checks never reach the PR (#99).
-# Usage: .github/approve-pr-ci.sh <PR>. Prints the PR's ci.yml run id once it is
-# not held, else nothing, and the caller dispatches. Logs on stderr; exits 0.
+# Usage: .github/approve-pr-ci.sh <PR> [<head SHA just pushed>]. Prints the PR's
+# ci.yml run id once it is not held, else nothing, and the caller dispatches.
+# Logs on stderr; exits 0.
 set -u
 
-PR=${1:-}
+PR=${1:-} SHA=${2:-}
 TRIES=10 CI_PATH=.github/workflows/ci.yml
 warn(){ echo "::warning::approve-pr-ci: $*" >&2; }
 if ! printf '%s' "$PR" | grep -qE '^[0-9]+$'; then
@@ -14,10 +15,11 @@ if ! printf '%s' "$PR" | grep -qE '^[0-9]+$'; then
   exit 0
 fi
 REPO=${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)}
-# head_sha must be the full SHA: a short one matched no runs.
-SHA=$(gh pr view "$PR" --json headRefOid 2>/dev/null | jq -r '.headRefOid // empty' 2>/dev/null)
+# head_sha must be the full SHA: a short one matched no runs. The caller's SHA
+# wins: just after a force-push the PR head can still read as the old commit.
+[ -n "$SHA" ] || SHA=$(gh pr view "$PR" --json headRefOid 2>/dev/null | jq -r '.headRefOid // empty' 2>/dev/null)
 if [ -z "$REPO" ] || ! printf '%s' "$SHA" | grep -qE '^[0-9a-f]{40}$'; then
-  warn "could not read the head of #$PR; nothing approved."
+  warn "no full head SHA for #$PR [$SHA]; nothing approved."
   exit 0
 fi
 

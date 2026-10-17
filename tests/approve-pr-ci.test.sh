@@ -122,6 +122,15 @@ check_eq "one approval in 10 lookups" "601 10" "$(approved)$(gets)"
 check_contains "warns" "run 601 ($CI) for #99 is still held after approval." "$ERR"
 
 echo ""
+echo "=== the SHA the caller pushed wins over a stale PR head ==="
+reset
+runs runs.json "$(held 90 $CI $OLD)" "$(held 701 $CI)"
+FAKE_SHA=$OLD run 99 "$SHA"
+check_eq "prints the new head's CI run id" "701" "$OUT"
+check_eq "approves only the new head's run" "701 " "$(approved)"
+check_contains "asks for the passed SHA's runs" "head_sha=$SHA&" "$(cat "$TMP/calls.log")"
+
+echo ""
 echo "=== bad input warns and exits 0 ==="
 reset
 run latest
@@ -129,8 +138,11 @@ check_eq "exit 0 on a bad PR number" "0 " "$RC $OUT"
 check_contains "warns" "bad PR number [latest]" "$ERR"
 FAKE_VIEW_FAIL=1 run 99
 check_eq "exit 0 when the PR cannot be read" "0 " "$RC $OUT"
-check_contains "warns" "could not read the head of #99" "$ERR"
-check_eq "no lookup in either case" "0" "$(gets)"
+check_contains "warns" "no full head SHA for #99 []" "$ERR"
+run 99 d1b2287
+check_eq "exit 0 on a short SHA" "0 " "$RC $OUT"
+check_contains "warns" "no full head SHA for #99 [d1b2287]" "$ERR"
+check_eq "no lookup in any case" "0" "$(gets)"
 
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
