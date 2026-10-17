@@ -8,12 +8,12 @@ disk), ask you about a short list (cluster writes, request bodies to unknown
 hosts, inline code that reads the environment), and let everything else run
 under auto mode. Every deny and ask is a line in `~/.claude/logs/audit.log`.
 
-What the guards cost: `python3 bin/hook-bench.py --base origin/main --head HEAD`
-at 1c627b2, on an Apple M2 with macOS 26.6.2 on 2026-10-17 UTC, measured a Bash
-call waiting 85.9 ms at p50 and 111.3 ms at p95 over the 321 Bash payloads in
-`tests/bench-corpus.jsonl`. Other machines will differ; from v1.0.1 on, each
-release's `CHANGELOG.md` entry carries a same-run table against the previous tag
-(`.github/workflows/release.yml`).
+What the guards cost: `python3 bin/hook-bench.py --base v1.0.0 --head HEAD`, run
+at 4f4dae0 on an Apple M2 with macOS 26.6.2 on 2026-10-17 UTC, measured a Bash
+call waiting 54.5 ms at p50 and 108.7 ms at p95 over the 321 Bash payloads in
+`tests/bench-corpus.jsonl` (83.4 and 124.1 ms at v1.0.0 in the same run). Other
+machines will differ; from v1.0.1 on, each release's `CHANGELOG.md` entry carries
+a same-run table against the previous tag (`.github/workflows/release.yml`).
 Asks cost more time: in 49 days of one machine's transcripts
 (`docs/permission-friction.md`), 849 of 872 guard asks were approved, and the
 median approved ask held its call 133 s, against 5 s for a Bash call with no prompt.

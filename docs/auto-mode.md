@@ -19,8 +19,9 @@ the product default: the same doc calls Manual mode's config value `default`
 ("Its config value is `default`, which is what hooks and SDK integrations
 use") and accepts `manual` as an alias. So a machine sitting on `"default"`
 starts in Manual, and either value is the opt-out. `claude --help` on 2.1.300
-lists `acceptEdits | auto | bypassPermissions | manual | dontAsk | plan`, the
-alias rather than `default`.
+lists the `--permission-mode` choices as
+`acceptEdits | auto | bypassPermissions | manual | dontAsk | plan`, the alias
+rather than `default`.
 
 **It only works in user settings.** Claude Code will not let a repo-level
 `.claude/settings.json` grant `defaultMode: auto`, and the ignored value
