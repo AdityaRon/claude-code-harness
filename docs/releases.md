@@ -40,7 +40,9 @@ skips the benchmark, since both sides would run the same files.
 To update a machine, run `~/.claude/harness-update.sh`: it fetches tags,
 checks the newest release out of the clone `install.sh` ran from (detached;
 it refuses a clone with local changes or commits), runs `doctor.sh`, and
-installs only on green. `--schedule` runs it at 01:17, 07:17, 13:17 and 19:17
+installs only on green. A machine installed from a commit that already holds
+the newest tag (`v1.0.0-11-ga6197da` in `~/.claude/harness.version`) is up to
+date and is left alone. `--schedule` runs it at 01:17, 07:17, 13:17 and 19:17
 local time (launchd on macOS, a systemd user timer or crontab on Linux);
 `--unschedule` removes that. With `--with-cli`, every run, the scheduled ones
 too, first upgrades Claude Code when it is a Homebrew cask; npm and native

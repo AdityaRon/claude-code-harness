@@ -105,6 +105,13 @@ update() {
   if [[ "$INSTALLED" =~ $RE ]] && ! newer "$LATEST" "$INSTALLED"; then
     say "up to date: $INSTALLED"; exit 0
   fi
+  # A clone installed from a branch past the tag (v1.0.0-11-gabc1234) is not a
+  # release tag, but already holds LATEST; moving it to LATEST would go back.
+  INSTALLED_COMMIT=$(sed -n 's/^commit=//p' "$VERSION_FILE" 2>/dev/null | head -1)
+  [[ -n "$INSTALLED_COMMIT" ]] || INSTALLED_COMMIT=$(sed -nE 's/^v[0-9.]+-[0-9]+-g([0-9a-f]+)(-dirty)?$/\1/p' <<< "$INSTALLED")
+  if [[ -n "$INSTALLED_COMMIT" ]] && git -C "$REPO" merge-base --is-ancestor "$LATEST" "$INSTALLED_COMMIT" 2>/dev/null; then
+    say "up to date: $INSTALLED already includes $LATEST"; exit 0
+  fi
   if [[ "$CHECK" == 1 ]]; then
     say "$LATEST is available (installed: ${INSTALLED:-none}); run $0 to install it"; exit 0
   fi

@@ -63,7 +63,7 @@ for reading the repo, not for the installed tree.
 
 Rules go to `~/.claude/rules/` and load in every session in every project:
 
-- `prose-and-comments.md`: length, voice, and where justification belongs.
+- `prose-and-comments.md`: length, voice, and the reader.
 - `collaboration.md`: before replying, and handing work back.
 - `working-agreement.md`: keep going, evidence, cost, finishing the loop.
 - `environment.md`: git and Claude Code facts that hold on this machine.

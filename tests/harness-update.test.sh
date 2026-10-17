@@ -222,5 +222,21 @@ HARNESS_SCHEDULER=cron bash "$UPD" --unschedule >/dev/null 2>&1
   && pass "--unschedule removes only its line" || fail "cron unschedule" "$(cat "$TMP/crontab.txt")"
 
 echo ""
+echo "=== a clone installed past the newest tag is up to date, not moved back ==="
+git -C "$CLONE" fetch -q --tags origin
+TOP=$(git -C "$CLONE" tag -l 'v*' | sort -V | tail -1)
+git -C "$CLONE" checkout -q --detach "$TOP" && $G -C "$CLONE" commit -q --allow-empty -m past
+PAST=$(git -C "$CLONE" rev-parse HEAD)
+printf 'version=%s-1-g%s\ncommit=%s\nrepo=%s\n' "$TOP" "${PAST:0:7}" "$PAST" "$CLONE" > "$HOME/.claude/harness.version"
+OUT=$(bash "$UPD" --no-cli --check 2>&1); RC=$?
+[ "$RC" = 0 ] && [[ "$OUT" == *"already includes $TOP"* ]] && [[ "$OUT" != *"is available"* ]] \
+  && pass "--check: up to date, $TOP not offered" || fail "past-tag check" "rc=$RC $OUT"
+OUT=$(bash "$UPD" --no-cli 2>&1); RC=$?
+[ "$RC" = 0 ] && [ "$(git -C "$CLONE" rev-parse HEAD)" = "$PAST" ] && pass "a run leaves the clone where it is" || fail "past-tag run" "rc=$RC $OUT"
+printf 'version=%s-1-g%s\nrepo=%s\n' "$TOP" "${PAST:0:7}" "$CLONE" > "$HOME/.claude/harness.version"
+OUT=$(bash "$UPD" --no-cli --check 2>&1); RC=$?
+[[ "$OUT" == *"already includes $TOP"* ]] && pass "no commit= line: the describe suffix is enough" || fail "describe fallback" "rc=$RC $OUT"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
