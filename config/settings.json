@@ -139,7 +139,6 @@
       "Bash(sudo:*)",
       "Bash(chmod -R 777:*)",
 
-      "Bash(kubectl delete:*)",
       "Edit(~/.claude/plugins/**)",
       "Edit(~/.claude/local-settings/**)",
       "Bash(claude plugin install:*)",

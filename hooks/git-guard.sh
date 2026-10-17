@@ -6,8 +6,8 @@
 #         .git/hooks, history rewrites, reset --hard, clean -f, branch -d/-D,
 #         and checkout or restore of the whole tree
 #   ask:  glob staging, stash drop/clear, worktree remove --force outside this
-#         session's scratch, remote branch deletion, remote set-url/add, any
-#         other alias, identity and signing config
+#         session's scratch, remote branch deletion whose tip no other ref
+#         holds, remote set-url/add, any other alias, identity and signing config
 # Most patterns start at a command boundary, but matching is textual: the same
 # words in a commit message or heredoc can still match.
 source "$(dirname "$0")/lib.sh"
@@ -102,12 +102,22 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}clean\s+[^|;&]*-[a-zA-Z]*f"; then
   exit 0
 fi
 
+# The gates read the normalized line, where `/usr/bin/git`, `"git"`, `GIT`, `\git`
+# and a function's "$@" all become git; the parsers read the command as typed. A
+# segment only the gate saw went unchecked while the one beside it passed the
+# call. Prints how many segments of subcommand $1 match $2 in the gate's view.
+gate_segments() {
+  normalize_command "$(strip_inert_heredocs "$(jq_get '.tool_input.command')")" | tr -d '"'\''\\' \
+    | grep -oE "${A}${GIT}$1\s+[^|;&]*" | grep -cE "$2"
+}
+
 # --- Branch deletion ----------------------------------------------------
 # A branch whose tip a remote-tracking ref contains loses nothing when deleted,
 # so it runs. Sessions make a branch per worktree and could never remove one:
 # 398 piled up in one repo. Anything this cannot prove asks: a name in a
 # variable, xargs, a cd first, an unknown flag, a tip only this branch holds.
 # The raw command, not $CMD: its second line is lower-cased, and refs are not.
+BRANCH_DEL='(-[A-Za-z]*[dD][A-Za-z]*|--de(l|le|let|lete)?)\b'   # -qD bundles; git takes --del
 branch_on_remote() {
   local tip
   [[ "$2" =~ ^[A-Za-z0-9._/@+-]+$ && "$2" != -* ]] || return 1
@@ -117,11 +127,14 @@ branch_on_remote() {
 branch_delete_safe() {
   local raw segs seg t i b repo cwd n=0 names
   cwd=$(jq_get '.cwd')
-  raw=$(normalize_wrappers "$(separate_groups "$(strip_inert_heredocs "$(jq_get '.tool_input.command')")")")
+  raw=$(separate_groups "$(strip_inert_heredocs "$(jq_get '.tool_input.command')")")
+  # xargs appends names the command does not show; normalize_wrappers hides it.
+  printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
+  raw=$(normalize_wrappers "$raw")
   printf '%s\n' "$raw" | grep -qE "${A}(cd|pushd)\b" && return 1
   segs=$(printf '%s\n' "$raw" | grep -oE "${A}${GIT}branch\s+[^|;&]*" | sed -E 's/^[|&;`$( ]*//')
   while IFS= read -r seg; do
-    printf '%s\n' "$seg" | grep -qE "\s(-[a-zA-Z]*[dD][a-zA-Z]*|--delete)\b" || continue
+    printf '%s\n' "$seg" | grep -qE "\s${BRANCH_DEL}" || continue
     read -ra t <<<"$seg"
     [[ "${t[0]}" == git ]] || return 1
     repo="$cwd"; i=1
@@ -153,9 +166,9 @@ branch_delete_safe() {
     for b in "${names[@]}"; do branch_on_remote "$repo" "$b" || return 1; done
     n=$((n + 1))
   done <<<"$segs"
-  [[ $n -gt 0 ]]
+  [[ $n -gt 0 && $n -eq $(gate_segments branch "\s${BRANCH_DEL}") ]]
 }
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}branch\s+[^|;&]*(-D\b|-d\b|--delete\b)" && ! branch_delete_safe; then
+if printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}branch\s([^|;&]*\s)?${BRANCH_DEL}" && ! branch_delete_safe; then
   emit_ask "This deletes a branch whose commits no remote-tracking ref holds, or one this guard could not check. Confirm the work is merged or no longer needed."
   exit 0
 fi
@@ -210,9 +223,99 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}worktree\s+remove\s[^|;&]*(--force
   fi
 fi
 
-# --- Remote branch deletion (push --delete OR push <remote> :branch) ----
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\s.*(--delete\b|\s:[A-Za-z0-9._/-]+)"; then
-  emit_ask "Deleting a remote branch with git push. Confirm the branch name is correct before proceeding."
+# --- Remote branch deletion (push --delete, -d, <remote> :branch) -------
+# Runs when a ref this push leaves in place holds the tip the remote reports.
+# ls-remote, not the tracking ref: that is stale once someone else pushes.
+# git accepts --del and -qd, so the gate does.
+PUSH_DEL='(--de(l|le|let|lete)?\b|-[A-Za-z0-9]*d[A-Za-z0-9]*\b|\+?:[^[:space:]|;&])'
+remote_tips_held() {   # $1 repo  $2 remote  $3 refs to leave out, one per line  $4.. names
+  local repo="$1" remote="$2" out def sha held b x
+  local -a pats=() skip=()
+  while IFS= read -r x; do skip+=(-e "$x"); done <<<"$3"
+  shift 3
+  for b in "$@"; do pats+=("refs/heads/$b"); done
+  # Capped: past Claude Code's hook timeout, onFailure: block would deny.
+  out=$(run_bounded 10 env GIT_TERMINAL_PROMPT=0 git -C "$repo" ls-remote --symref "$remote" HEAD "${pats[@]}" 2>/dev/null </dev/null) || return 1
+  def=$(printf '%s\n' "$out" | awk '$1=="ref:" && $3=="HEAD" {print $2}')
+  [[ -n "$def" ]] || return 1
+  for b in "$@"; do
+    [[ "refs/heads/$b" != "$def" ]] || return 1
+    sha=$(printf '%s\n' "$out" | awk -v r="refs/heads/$b" '$1!="ref:" && $2==r {print $1}')
+    [[ "$sha" =~ ^[0-9a-f]{40,64}$ ]] || return 1
+    held=$(git -C "$repo" for-each-ref --contains "$sha" --format='%(refname)' refs/heads refs/tags refs/remotes 2>/dev/null) || return 1
+    printf '%s\n' "$held" | grep -vxF "${skip[@]}" | grep -q . || return 1
+  done
+}
+push_delete_safe() {
+  local cmd raw segs seg t i k r repo cwd n=0 del b fu pu gone=""
+  local -a refs names s_repo=() s_remote=() s_names=()
+  cwd=$(jq_get '.cwd')
+  cmd=$(strip_inert_heredocs "$(jq_get '.tool_input.command')")
+  raw=$(separate_groups "$cmd")
+  printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
+  raw=$(normalize_wrappers "$raw")
+  printf '%s\n' "$raw" | grep -qE "${A}(cd|pushd)\b" && return 1
+  # A local delete in the same call: each check would count the ref the other removes.
+  [[ $(gate_segments branch "\s${BRANCH_DEL}") -eq 0 ]] || return 1
+  segs=$(printf '%s\n' "$raw" | grep -oE "${A}${GIT}push\s+[^|;&]*" | sed -E 's/^[|&;`$( ]*//')
+  while IFS= read -r seg; do
+    printf '%s\n' "$seg" | grep -qE "\s${PUSH_DEL}" || continue
+    read -ra t <<<"$seg"
+    [[ "${t[0]}" == git ]] || return 1
+    repo="$cwd"; i=1
+    while [[ "${t[i]:-}" != push ]]; do
+      case "${t[i]:-}" in
+        -C) repo="${t[i+1]:-}"; i=$((i + 2)) ;;
+        -C?*) repo="${t[i]#-C}"; i=$((i + 1)) ;;
+        --no-pager) i=$((i + 1)) ;;
+        *) return 1 ;;
+      esac
+    done
+    # shellcheck disable=SC2088  # '~/' is the tilde as typed; it is expanded here
+    case "$repo" in
+      ''|*'$'*|*'`'*) return 1 ;;
+      '~/'*) repo="$HOME/${repo#\~/}" ;;
+      /*) ;;
+      *) [[ -n "$cwd" ]] || return 1; repo="$cwd/$repo" ;;
+    esac
+    del=0; refs=()
+    for ((i = i + 1; i < ${#t[@]}; i++)); do
+      case "${t[i]}" in
+        [0-9]\>*|\>*|[0-9]\<*|\<*) break ;;
+        -d|--delete) del=1 ;;
+        -q|--quiet|-v|--verbose|-n|--dry-run|--no-verify|--porcelain) ;;
+        -*) return 1 ;;
+        *) refs+=("${t[i]}") ;;
+      esac
+    done
+    r="${refs[0]:-}"
+    [[ "$r" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+    # The delete goes to the push URL; ls-remote reads the fetch URL.
+    fu=$(git -C "$repo" remote get-url --all "$r" 2>/dev/null) || return 1
+    pu=$(git -C "$repo" remote get-url --push --all "$r" 2>/dev/null) || return 1
+    [[ -n "$fu" && "$fu" == "$pu" && "$fu" != *$'\n'* ]] || return 1
+    names=()
+    for b in "${refs[@]:1}"; do
+      if [[ $del -eq 0 ]]; then [[ "$b" == :?* ]] || continue; b="${b#:}"; fi
+      b="${b#refs/heads/}"
+      [[ "$b" =~ ^[A-Za-z0-9._/@+-]+$ && "$b" != -* && "$b" != refs/* ]] || return 1
+      names+=("$b"); gone+="refs/remotes/$r/$b"$'\n'
+    done
+    [[ ${#names[@]} -gt 0 ]] || return 1
+    gone+="refs/remotes/$r/HEAD"$'\n'
+    s_repo+=("$repo"); s_remote+=("$r"); s_names+=("${names[*]}")
+    n=$((n + 1))
+  done <<<"$segs"
+  [[ $n -gt 0 && $n -eq $(gate_segments push "\s${PUSH_DEL}") ]] || return 1
+  # Every name in the call is left out of every check, or two branches at one
+  # commit would each count the other's tracking ref.
+  for ((k = 0; k < n; k++)); do
+    read -ra names <<<"${s_names[k]}"
+    remote_tips_held "${s_repo[k]}" "${s_remote[k]}" "${gone%$'\n'}" "${names[@]}" || return 1
+  done
+}
+if printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}push\s([^|;&]*\s)?${PUSH_DEL}" && ! push_delete_safe; then
+  emit_ask "This deletes a remote branch whose tip no other ref holds (a local branch, a tag, or another remote-tracking ref), or one this guard could not check. Confirm the work is merged or no longer needed."
   exit 0
 fi
 
@@ -279,7 +382,7 @@ broad_add_safe() {
     done <<<"$out"
     n=$((n + 1))
   done <<<"$segs"
-  [[ $n -gt 0 ]]
+  [[ $n -gt 0 && $n -eq $(gate_segments add "\s(--\s+)?${BROAD}([[:space:]]|$)") ]]
 }
 if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||$)" && ! broad_add_safe; then
   if [[ -n "$FOUND" ]]; then

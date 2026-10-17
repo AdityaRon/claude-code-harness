@@ -9,7 +9,8 @@
 # misses `kubectl --context X -n vm get svc`. That cuts both ways: a
 # `Bash(kubectl delete:*)` in *deny* misses `kubectl --namespace vm delete pod`
 # just as reliably, so "allow kubectl broadly, deny the dangerous verbs" cannot
-# be expressed in settings.json at all.
+# be expressed in settings.json at all. That deny rule is retired; this hook
+# asks on every spelling.
 #
 # This hook sees the whole command string, so it finds the verb wherever it
 # sits. Policy:

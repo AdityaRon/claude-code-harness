@@ -238,6 +238,14 @@ session_scratch() {
   return 0
 }
 
+# Run a command under a wall-clock cap. perl's alarm is on every macOS and Linux
+# this runs on (tests/guard-latency.test.sh relies on it); without perl the
+# command runs uncapped and Claude Code's own hook timeout applies.
+run_bounded() {
+  local secs="$1"; shift
+  if command -v perl >/dev/null 2>&1; then perl -e 'alarm shift; exec @ARGV or exit 127' "$secs" "$@"; else "$@"; fi
+}
+
 # Is path $1, as typed, inside scratch folder $2 (or strictly inside TMPDIR)?
 # Understands quotes, ~, $HOME, $CLAUDE_JOB_DIR and $TMPDIR; any other
 # expansion or a `..` is never inside. $3 resolves a relative path; empty, never.

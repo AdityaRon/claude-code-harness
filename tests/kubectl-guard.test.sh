@@ -58,6 +58,7 @@ check "upper case read"          allow 'KUBECTL get pods'
 
 echo "=== the bypasses that permission rules cannot express (expect: ask) ==="
 check "plain delete"               ask  'kubectl delete pod foo -n vm'
+check "verb-first delete, the spelling the retired deny rule covered" ask 'kubectl delete pod foo'
 check "--namespace, not -n"        ask  'kubectl --namespace vm delete pod foo'
 check "--context= equals form"     ask  'kubectl --context=example-prod delete pod foo'
 check "--kubeconfig first"         ask  'kubectl --kubeconfig /tmp/kc delete pod foo'
