@@ -70,12 +70,31 @@ cp "$REPO/bin/net-allowlist.sh" ~/.claude/net-allowlist.sh
 chmod +x ~/.claude/net-allowlist.sh
 echo "  ✓ net-allowlist.sh"
 
+# Finds this clone through harness.version below, so it runs from launchd/cron.
+# Replaced by rename: it is the script running this install when it updates.
+cp "$REPO/bin/harness-update.sh" ~/.claude/harness-update.sh.new
+chmod +x ~/.claude/harness-update.sh.new
+mv -f ~/.claude/harness-update.sh.new ~/.claude/harness-update.sh
+echo "  ✓ harness-update.sh"
+
 # ---- Contract pin -----------------------------------------------------
 # session-start.sh compares this with `claude --version`, so a session says when
 # the CLI has moved past the release the harness was checked against.
 sed -n 's/.*"last_verified_version": *"\([^ "]*\).*/\1/p' "$REPO/config/upstream-contract.json" \
   > ~/.claude/harness-contract.version
 echo "  ✓ harness-contract.version"
+
+# ---- Installed version ------------------------------------------------
+# A plain tag only when the clone sits exactly on one, clean; session-start
+# nudges about a newer release only then. harness-update.sh reads repo=.
+VER=$(git -C "$REPO" describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo unknown)
+{
+  echo "version=$VER"
+  echo "commit=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "repo=$REPO"
+  echo "installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > ~/.claude/harness.version
+echo "  ✓ harness.version ($VER)"
 
 for skill in "$REPO"/skills/*/; do
   [[ -d "$skill" ]] || continue
@@ -200,6 +219,15 @@ else
   echo "  ✓ settings.json (merged; backup: $BACKUP)"
 fi
 [[ -n "${COMBINED:-}" ]] && rm -f "$COMBINED"
+
+# One backup per run and nothing removed them: 45 on one machine by 2026-10-16.
+KEEP=${CCH_KEEP_BACKUPS:-10}
+PRUNED=0
+while IFS= read -r old; do
+  [[ -n "$old" ]] || continue
+  rm -f "$old" && PRUNED=$((PRUNED + 1))
+done < <(ls -1 "$TARGET".bak.* 2>/dev/null | sort -r | tail -n +"$((KEEP + 1))")
+[[ "$PRUNED" -gt 0 ]] && echo "  ✓ settings.json backups: $PRUNED old removed, newest $KEEP kept"
 
 # ---- Sanity checks ----------------------------------------------------
 echo ""
