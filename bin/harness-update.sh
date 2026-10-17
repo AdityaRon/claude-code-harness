@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Moves this machine to the newest harness release: fetches tags from the
-# clone's origin, checks the tag out detached, runs doctor.sh, installs on green.
+# Moves this machine to the newest harness release: fetches tags into its own
+# clone, checks the tag out detached, runs doctor.sh, installs on green.
 #   harness-update.sh [--repo DIR] [--check] [--with-cli | --no-cli]
 #   harness-update.sh --schedule | --unschedule   01:17, 07:17, 13:17, 19:17 local
 #   harness-update.sh --newer A B                 exit 0 when tag A is newer
 # --with-cli first upgrades a Homebrew-cask Claude Code, on later runs too, until
-# --no-cli. Refuses a clone with local changes or commits the release lacks;
-# never resets. The clone is install.sh's (repo= in ~/.claude/harness.version).
+# --no-cli. Uses --repo DIR, else $HARNESS_UPDATE_CLONE or ~/.claude/harness-src.
+# Refuses local changes or commits; never resets or replaces work the tag lacks.
 set -uo pipefail
 # launchd and cron start with a PATH that has no Homebrew; appended, so a
 # caller's own PATH still wins.
 export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
-HERE=$(cd "$(dirname "$0")" && pwd)
 VERSION_FILE="$HOME/.claude/harness.version"
 LATEST_FILE="$HOME/.claude/state/harness-latest"
 LOG="$HOME/.claude/logs/harness-update.log"
 CONF="$HOME/.claude/harness-update.conf"
 LABEL=com.claude-code-harness.update
 RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
+DEFAULT_URL=https://github.com/AdityaRon/claude-code-harness.git
 # Local time, minute 17: a tag is installed within six hours.
 HOURS="1 7 13 19"
 
@@ -51,16 +51,33 @@ latest_tag() {   # newest release tag the clone knows
   git -C "$1" tag -l 'v*' | grep -E "$RE" | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 | sed 's/^/v/'
 }
 
+recorded() { sed -n "s/^$1=//p" "$VERSION_FILE" 2>/dev/null | head -1; }
+
+# Not the clone install.sh ran from: macOS denies launchd jobs ~/Desktop,
+# ~/Documents, ~/Downloads and iCloud Drive, and that clone is someone's work.
 find_repo() {
-  if [[ -n "$REPO" ]]; then :
-  elif [[ -f "$HERE/../install.sh" ]]; then REPO=$(cd "$HERE/.." && pwd)
-  elif [[ -f "$VERSION_FILE" ]]; then REPO=$(sed -n 's/^repo=//p' "$VERSION_FILE" | head -1)
+  if [[ -z "$REPO" ]]; then
+    OWN=1; REPO=${HARNESS_UPDATE_CLONE:-$HOME/.claude/harness-src}
+    [[ -e "$REPO" ]] || make_clone
   fi
-  [[ -n "$REPO" && -f "$REPO/install.sh" ]] || { say "no harness clone found; pass --repo DIR"; exit 1; }
+  [[ -f "$REPO/install.sh" ]] || { say "no install.sh in $REPO; pass --repo DIR"; exit 1; }
   git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { say "$REPO is not a git clone"; exit 1; }
 }
 
-installed_version() { sed -n 's/^version=//p' "$VERSION_FILE" 2>/dev/null | head -1; }
+make_clone() {
+  local url from dev
+  url=$(recorded origin); from="origin= in $VERSION_FILE"
+  dev=$(recorded repo)
+  if [[ -z "$url" && -n "$dev" ]]; then
+    url=$(git -C "$dev" remote get-url origin 2>/dev/null); from="the origin of $dev"
+  fi
+  [[ -n "$url" ]] || { url=$DEFAULT_URL; from="the default: no origin recorded or readable"; }
+  say "cloning $url into $REPO ($from)"
+  mkdir -p "$(dirname "$REPO")"
+  git clone --quiet "$url" "$REPO" 2>>"$LOG" || { say "git clone of $url failed (see $LOG)"; exit 1; }
+}
+
+installed_version() { recorded version; }
 
 # Before the harness, so a release that needs a newer CLI finds it. Never
 # fails the run. CLAUDE_CLI_BIN is a testing seam, as in upstream-check.sh.
@@ -105,12 +122,26 @@ update() {
   if [[ "$INSTALLED" =~ $RE ]] && ! newer "$LATEST" "$INSTALLED"; then
     say "up to date: $INSTALLED"; exit 0
   fi
-  # A clone installed from a branch past the tag (v1.0.0-11-gabc1234) is not a
-  # release tag, but already holds LATEST; moving it to LATEST would go back.
-  INSTALLED_COMMIT=$(sed -n 's/^commit=//p' "$VERSION_FILE" 2>/dev/null | head -1)
+  # An install past the tag (v1.0.0-11-gabc1234) already holds LATEST. One from
+  # another clone may hold what LATEST lacks: unpushed or unmerged commits, or
+  # uncommitted changes. Neither is replaced.
+  INSTALLED_COMMIT=$(recorded commit)
   [[ -n "$INSTALLED_COMMIT" ]] || INSTALLED_COMMIT=$(sed -nE 's/^v[0-9.]+-[0-9]+-g([0-9a-f]+)(-dirty)?$/\1/p' <<< "$INSTALLED")
-  if [[ -n "$INSTALLED_COMMIT" ]] && git -C "$REPO" merge-base --is-ancestor "$LATEST" "$INSTALLED_COMMIT" 2>/dev/null; then
-    say "up to date: $INSTALLED already includes $LATEST"; exit 0
+  [[ "$INSTALLED_COMMIT" =~ ^[0-9a-f]{7,40}$ ]] || INSTALLED_COMMIT=""   # install.sh may write "unknown"
+  SHORT=${INSTALLED_COMMIT:0:12}
+  if [[ -n "$INSTALLED_COMMIT" ]]; then
+    if ! git -C "$REPO" cat-file -e "$INSTALLED_COMMIT^{commit}" 2>/dev/null; then
+      say "installed from $SHORT, which origin does not have; not changing it"; exit 0
+    fi
+    if git -C "$REPO" merge-base --is-ancestor "$LATEST" "$INSTALLED_COMMIT" 2>/dev/null; then
+      say "up to date: $INSTALLED already includes $LATEST"; exit 0
+    fi
+    if ! git -C "$REPO" merge-base --is-ancestor "$INSTALLED_COMMIT" "$LATEST" 2>/dev/null; then
+      say "installed from $SHORT, which $LATEST does not include; not changing it"; exit 0
+    fi
+  fi
+  if [[ "$INSTALLED" == *-dirty ]]; then
+    say "installed from ${SHORT:-$INSTALLED} with uncommitted changes; not changing it"; exit 0
   fi
   if [[ "$CHECK" == 1 ]]; then
     say "$LATEST is available (installed: ${INSTALLED:-none}); run $0 to install it"; exit 0
@@ -118,8 +149,10 @@ update() {
   if [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]]; then
     say "refusing: $REPO has uncommitted changes; commit or stash them first"; exit 1
   fi
-  if ! git -C "$REPO" merge-base --is-ancestor HEAD "$LATEST"; then
-    say "refusing: $REPO has commits $LATEST does not ($(git -C "$REPO" rev-parse --short HEAD)); check the tag out yourself"; exit 1
+  # Commits origin lacks, not commits LATEST lacks: a fresh clone sits on the
+  # default branch, usually past the newest tag.
+  if [[ -n "$(git -C "$REPO" rev-list -n1 HEAD --not --remotes=origin --tags)" ]]; then
+    say "refusing: $REPO has commits origin does not ($(git -C "$REPO" rev-parse --short HEAD)); check the tag out yourself"; exit 1
   fi
   PREV=$(git -C "$REPO" symbolic-ref --short -q HEAD || git -C "$REPO" rev-parse HEAD)
   if [[ "$(git -C "$REPO" rev-parse HEAD)" != "$(git -C "$REPO" rev-parse "$LATEST^{commit}")" ]]; then
@@ -136,7 +169,8 @@ update() {
   if ! CCH_SKIP_SELFTEST=1 bash "$REPO/install.sh"; then
     say "install.sh failed on $LATEST; the clone stays at $LATEST, ~/.claude may hold a mix"; exit 1
   fi
-  say "installed $LATEST (was ${INSTALLED:-none}); to work on the clone again: git -C $REPO checkout $PREV"
+  if [[ "$OWN" == 1 ]]; then say "installed $LATEST (was ${INSTALLED:-none}) from $REPO"
+  else say "installed $LATEST (was ${INSTALLED:-none}); to work on the clone again: git -C $REPO checkout $PREV"; fi
 }
 
 scheduler() {
@@ -205,7 +239,7 @@ unschedule() {
   esac
 }
 
-REPO="" CHECK=0 MODE=update CLI=""
+REPO="" OWN=0 CHECK=0 MODE=update CLI=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO="$2"; shift 2 ;;

@@ -72,6 +72,11 @@ echo ""
 echo "=== the installed version and clone are recorded for harness-update ==="
 V="$HOME/.claude/harness.version"
 grep -q "^repo=$REPO\$" "$V" 2>/dev/null && pass "repo= names this clone" || fail "repo=" "$(cat "$V" 2>/dev/null)"
+if ORIGIN=$(git -C "$REPO" remote get-url origin 2>/dev/null); then
+  grep -qxF "origin=$ORIGIN" "$V" && pass "origin= names its origin, for the updater's own clone" || fail "origin=" "$(cat "$V")"
+else
+  ! grep -q '^origin=' "$V" && pass "no origin remote: no origin= line" || fail "origin=" "$(cat "$V")"
+fi
 grep -qE '^version=.+' "$V" && grep -qE '^commit=[0-9a-f]{40}$' "$V" \
   && pass "version= and commit= written" || fail "version/commit" "$(cat "$V" 2>/dev/null)"
 [ -x "$HOME/.claude/harness-update.sh" ] && pass "harness-update.sh installed executable" || fail "harness-update.sh" "missing"

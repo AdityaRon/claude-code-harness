@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Tests for bin/harness-update.sh against a bare repo standing in for origin:
-# it moves a clean clone to the newest release tag, installs only when doctor
-# is green, refuses local changes and local commits, and schedules through
-# stand-in launchctl and crontab binaries.
+# it clones its own copy, moves it to the newest release tag, installs only when
+# doctor is green, refuses local changes and commits, leaves an install the tag
+# lacks alone, and schedules through stand-in launchctl and crontab binaries.
 set -u
 PASS=0; FAIL=0
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
 fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
-TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
+# chmod first: a case makes a directory unreadable, which rm cannot recurse into.
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'chmod -R u+rwx "$TMP"; rm -rf "$TMP"' EXIT
+TMP=$(cd "$TMP" && pwd)   # macOS TMPDIR ends in /; install.sh records repo= without the //
 export HOME="$TMP/home"
 mkdir -p "$HOME/.claude/state" "$HOME/.claude/logs" "$TMP/bin"
 export PATH="$TMP/bin:$PATH"
@@ -25,8 +27,7 @@ exit "\$RC"
 SH
 chmod +x "$TMP/bin/brew"
 [ "$(command -v brew)" = "$TMP/bin/brew" ] || { echo "  FAIL: the stand-in brew is not first on PATH; stopping"; exit 1; }
-# The installed copy, as launchd runs it: it finds the clone through
-# harness.version. Run from a clone's bin/ it would use that clone instead.
+# The installed copy, as launchd runs it.
 UPD="$HOME/.claude/harness-update.sh"
 cp "$PWD/bin/harness-update.sh" "$UPD"; chmod +x "$UPD"
 
@@ -46,77 +47,93 @@ cat > "$SRC/install.sh" <<'SH'
 #!/usr/bin/env bash
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VER=$(git -C "$REPO" describe --tags --match 'v[0-9]*' --always --dirty)
-printf 'version=%s\nrepo=%s\n' "$VER" "$REPO" > "$HOME/.claude/harness.version"
+printf 'version=%s\ncommit=%s\nrepo=%s\norigin=%s\n' "$VER" "$(git -C "$REPO" rev-parse HEAD)" "$REPO" \
+  "$(git -C "$REPO" remote get-url origin)" > "$HOME/.claude/harness.version"
 touch "$HOME/.claude/installed-$VER"; echo install >> "$HOME/order.log"
 { echo "#!/usr/bin/env bash"; echo "# installed at $VER"; cat "$HOME/.claude/harness-update.sh"; } > "$HOME/.claude/harness-update.sh.new"
 chmod +x "$HOME/.claude/harness-update.sh.new"; mv -f "$HOME/.claude/harness-update.sh.new" "$HOME/.claude/harness-update.sh"
 SH
 printf '#!/usr/bin/env bash\necho "SUMMARY: stub"; exit "$(cat "$(dirname "$0")/DOCTOR_RC")"\n' > "$SRC/doctor.sh"
 echo 0 > "$SRC/DOCTOR_RC"; echo one > "$SRC/README"
+# main ends past the newest tag, as the release workflow's CHANGELOG PR leaves it.
 ( cd "$SRC" && git init -q && $G add -A && $G commit -qm v1.0.0 && git tag v1.0.0 \
-  && echo two > README && $G commit -qam v1.0.1 && git tag v1.0.1 && git tag nightly ) || { echo "fixture failed"; exit 1; }
+  && echo two > README && $G commit -qam v1.0.1 && git tag v1.0.1 && git tag nightly \
+  && echo changelog >> README && $G commit -qam changelog ) || { echo "fixture failed"; exit 1; }
 git clone -q --bare "$SRC" "$TMP/origin.git"
 git -C "$SRC" remote add origin "$TMP/origin.git"
-CLONE="$TMP/clone"
+# The updater's default URL reaches the stand-in origin in every case, never GitHub.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$TMP/origin.git.insteadOf" \
+  GIT_CONFIG_VALUE_0=https://github.com/AdityaRon/claude-code-harness.git
+# CLONE is the clone install.sh ran from; U is the updater's own.
+CLONE="$TMP/clone" U="$HOME/.claude/harness-src" HV="$HOME/.claude/harness.version"
 git clone -q "$TMP/origin.git" "$CLONE" && ( cd "$CLONE" && git checkout -q --detach v1.0.0 )
-printf 'version=v1.0.0\nrepo=%s\n' "$CLONE" > "$HOME/.claude/harness.version"
-head_is() { [ "$(git -C "$CLONE" rev-parse HEAD)" = "$(git -C "$CLONE" rev-parse "$1^{commit}")" ]; }
-installed() { sed -n 's/^version=//p' "$HOME/.claude/harness.version"; }
+printf 'version=v1.0.0\ncommit=%s\nrepo=%s\norigin=%s\n' "$(git -C "$CLONE" rev-parse HEAD)" "$CLONE" "$TMP/origin.git" > "$HV"
+head_is() { [ "$(git -C "$U" rev-parse HEAD)" = "$(git -C "$U" rev-parse "$1^{commit}")" ]; }
+sha() { git -C "$TMP/origin.git" rev-parse "$1^{commit}"; }
+installed() { sed -n 's/^version=//p' "$HV"; }
 push_tag() {   # push_tag TAG DOCTOR_RC
   ( cd "$SRC" && echo "$2" > DOCTOR_RC && echo "$1" >> README && $G commit -qam "$1" && git tag "$1" && git push -q origin HEAD "$1" )
 }
 
 echo ""
-echo "=== --check reports and installs nothing ==="
-OUT=$(bash "$UPD" --check 2>&1); RC=$?
-[ "$RC" = 0 ] && [[ "$OUT" == *"v1.0.1 is available"* ]] && pass "names the newer tag" || fail "--check" "rc=$RC $OUT"
-head_is v1.0.0 && [ ! -e "$HOME/.claude/installed-v1.0.1" ] && pass "clone and install untouched" || fail "--check touched" ""
-[ "$(cut -d' ' -f1 "$HOME/.claude/state/harness-latest")" = v1.0.1 ] && pass "harness-latest written for session-start" \
-  || fail "harness-latest" "$(cat "$HOME/.claude/state/harness-latest" 2>/dev/null)"
-
-echo ""
-echo "=== a clean clone moves to the newest tag and installs on green ==="
+echo "=== first run: clones its own copy from origin= and installs the newest tag ==="
 OUT=$(bash "$UPD" 2>&1); RC=$?
 [ "$RC" = 0 ] && pass "exit 0" || fail "exit 0" "rc=$RC $OUT"
-head_is v1.0.1 && pass "clone at v1.0.1" || fail "clone at v1.0.1" "$(git -C "$CLONE" describe --tags)"
+[ "$(git -C "$U" remote get-url origin 2>/dev/null)" = "$TMP/origin.git" ] && [[ "$OUT" == *"cloning $TMP/origin.git into $U (origin= in "* ]] \
+  && pass "cloned ~/.claude/harness-src from origin=, and says so" || fail "clone" "$OUT"
+head_is v1.0.1 && pass "update clone at v1.0.1, though origin's main is past it" || fail "at v1.0.1" "$(git -C "$U" describe --tags 2>&1)"
 [ "$(installed)" = v1.0.1 ] && [ -e "$HOME/.claude/installed-v1.0.1" ] && pass "install.sh ran and recorded v1.0.1" || fail "install" "$(installed)"
-[[ "$OUT" == *"installed v1.0.1 (was v1.0.0)"* ]] && pass "says what changed" || fail "message" "$OUT"
+[[ "$OUT" == *"installed v1.0.1 (was v1.0.0) from $U"* ]] && pass "says what changed" || fail "message" "$OUT"
 [ "$(sed -n 2p "$UPD")" = "# installed at v1.0.1" ] && pass "the updater replaced itself mid-run and finished" || fail "self-replace" "$(sed -n 2p "$UPD")"
-[ -z "$(git -C "$CLONE" symbolic-ref -q HEAD)" ] && pass "detached, no branch moved" || fail "detached" "$(git -C "$CLONE" symbolic-ref HEAD)"
+[ -z "$(git -C "$U" symbolic-ref -q HEAD)" ] && pass "detached, no branch moved" || fail "detached" "$(git -C "$U" symbolic-ref HEAD)"
+[ "$(git -C "$CLONE" rev-parse HEAD)" = "$(sha v1.0.0)" ] && [ -z "$(git -C "$CLONE" status --porcelain)" ] \
+  && pass "the clone install.sh ran from is untouched" || fail "dev clone moved" "$(git -C "$CLONE" describe --tags)"
+grep -qx "repo=$U" "$HV" && pass "harness.version now names the update clone" || fail "repo=" "$(cat "$HV")"
 OUT=$(bash "$UPD" 2>&1); RC=$?
 [ "$RC" = 0 ] && [[ "$OUT" == *"up to date: v1.0.1"* ]] && pass "a second run is a no-op" || fail "no-op" "rc=$RC $OUT"
 [ "$(ls "$HOME/.claude" | grep -c '^installed-')" = 1 ] && pass "install.sh not run again" || fail "reinstalled" ""
 
 echo ""
+echo "=== --check reports and installs nothing ==="
+push_tag v1.0.2 1   # doctor goes red on it, for the next case
+OUT=$(bash "$UPD" --check 2>&1); RC=$?
+[ "$RC" = 0 ] && [[ "$OUT" == *"v1.0.2 is available"* ]] && pass "names the newer tag" || fail "--check" "rc=$RC $OUT"
+head_is v1.0.1 && [ ! -e "$HOME/.claude/installed-v1.0.2" ] && pass "clone and install untouched" || fail "--check touched" ""
+[ "$(cut -d' ' -f1 "$HOME/.claude/state/harness-latest")" = v1.0.2 ] && pass "harness-latest written for session-start" \
+  || fail "harness-latest" "$(cat "$HOME/.claude/state/harness-latest" 2>/dev/null)"
+
+echo ""
 echo "=== red doctor: nothing installed, clone back where it was ==="
-push_tag v1.0.2 1
 OUT=$(bash "$UPD" 2>&1); RC=$?
 [ "$RC" = 1 ] && [[ "$OUT" == *"doctor.sh failed on v1.0.2"* ]] && pass "exit 1 and says why" || fail "red doctor" "rc=$RC $OUT"
-head_is v1.0.1 && pass "back at v1.0.1" || fail "back at v1.0.1" "$(git -C "$CLONE" describe --tags)"
+head_is v1.0.1 && pass "back at v1.0.1" || fail "back at v1.0.1" "$(git -C "$U" describe --tags)"
 [ "$(installed)" = v1.0.1 ] && [ ! -e "$HOME/.claude/installed-v1.0.2" ] && pass "v1.0.1 still installed" || fail "installed" "$(installed)"
 [ "$(cut -d' ' -f1 "$HOME/.claude/state/harness-latest")" = v1.0.2 ] && pass "harness-latest still names v1.0.2" || fail "latest" ""
 push_tag v1.0.3 0
 bash "$UPD" >/dev/null 2>&1; head_is v1.0.3 && [ "$(installed)" = v1.0.3 ] && pass "the next green tag installs" || fail "v1.0.3" "$(installed)"
 
 echo ""
-echo "=== refusals: uncommitted changes, local commits ==="
+echo "=== refusals: uncommitted changes, local commits in the update clone ==="
 push_tag v1.0.4 0
-echo dirty >> "$CLONE/README"
+echo dirty >> "$U/README"
 OUT=$(bash "$UPD" 2>&1); RC=$?
 [ "$RC" = 1 ] && [[ "$OUT" == *"uncommitted changes"* ]] && head_is v1.0.3 && pass "dirty clone refused, untouched" || fail "dirty" "rc=$RC $OUT"
 [ "$(installed)" = v1.0.3 ] && pass "nothing installed" || fail "installed" "$(installed)"
-( cd "$CLONE" && git checkout -q -- README && git checkout -q -b local && echo mine > mine && $G add mine && $G commit -qm mine )
+( cd "$U" && git checkout -q -- README && git checkout -q -b local && echo mine > mine && $G add mine && $G commit -qm mine )
 OUT=$(bash "$UPD" 2>&1); RC=$?
-[ "$RC" = 1 ] && [[ "$OUT" == *"commits v1.0.4 does not"* ]] && pass "local commits refused" || fail "local commits" "rc=$RC $OUT"
-[ "$(git -C "$CLONE" symbolic-ref --short HEAD)" = local ] && pass "branch left alone" || fail "branch" ""
-( cd "$CLONE" && git checkout -q --detach v1.0.3 )
+[ "$RC" = 1 ] && [[ "$OUT" == *"commits origin does not"* ]] && pass "local commits refused" || fail "local commits" "rc=$RC $OUT"
+[ "$(git -C "$U" symbolic-ref --short HEAD)" = local ] && pass "branch left alone" || fail "branch" ""
+( cd "$U" && git checkout -q --detach v1.0.3 )
 OUT=$(bash "$UPD" 2>&1); RC=$?
 [ "$RC" = 0 ] && head_is v1.0.4 && pass "clean again: v1.0.4 installs" || fail "v1.0.4" "rc=$RC $OUT"
-rm "$HOME/.claude/harness.version"
+rm "$HV"
 OUT=$(bash "$UPD" 2>&1); RC=$?
-[ "$RC" = 1 ] && [[ "$OUT" == *"no harness clone found"* ]] && pass "no record, no --repo: says so" || fail "no record" "rc=$RC $OUT"
-OUT=$(bash "$UPD" --repo "$CLONE" 2>&1); RC=$?
-[ "$RC" = 0 ] && [ "$(installed)" = v1.0.4 ] && pass "--repo with no record installs the tag it sits on" || fail "--repo" "rc=$RC $OUT"
+[ "$RC" = 0 ] && [[ "$OUT" == *"installed v1.0.4 (was none) from $U"* ]] && pass "no record: installs from the update clone" || fail "no record" "rc=$RC $OUT"
+rm "$HV"; BYHAND="$TMP/byhand"
+git clone -q "$TMP/origin.git" "$BYHAND" && git -C "$BYHAND" checkout -q --detach v1.0.3
+OUT=$(bash "$UPD" --repo "$BYHAND" 2>&1); RC=$?
+[ "$RC" = 0 ] && [ "$(installed)" = v1.0.4 ] && grep -qx "repo=$BYHAND" "$HV" && [[ "$OUT" == *"git -C $BYHAND checkout"* ]] \
+  && pass "--repo DIR updates DIR instead" || fail "--repo" "rc=$RC $OUT"
 
 echo ""
 echo "=== --with-cli: a Homebrew-cask Claude Code is upgraded first, then the harness ==="
@@ -226,16 +243,70 @@ echo "=== a clone installed past the newest tag is up to date, not moved back ==
 git -C "$CLONE" fetch -q --tags origin
 TOP=$(git -C "$CLONE" tag -l 'v*' | sort -V | tail -1)
 git -C "$CLONE" checkout -q --detach "$TOP" && $G -C "$CLONE" commit -q --allow-empty -m past
-PAST=$(git -C "$CLONE" rev-parse HEAD)
-printf 'version=%s-1-g%s\ncommit=%s\nrepo=%s\n' "$TOP" "${PAST:0:7}" "$PAST" "$CLONE" > "$HOME/.claude/harness.version"
+PAST=$(git -C "$CLONE" rev-parse HEAD) UHEAD=$(git -C "$U" rev-parse HEAD)
+git -C "$CLONE" push -q origin "$PAST:refs/heads/past"   # so the update clone can tell it holds TOP
+printf 'version=%s-1-g%s\ncommit=%s\nrepo=%s\n' "$TOP" "${PAST:0:7}" "$PAST" "$CLONE" > "$HV"
 OUT=$(bash "$UPD" --no-cli --check 2>&1); RC=$?
 [ "$RC" = 0 ] && [[ "$OUT" == *"already includes $TOP"* ]] && [[ "$OUT" != *"is available"* ]] \
   && pass "--check: up to date, $TOP not offered" || fail "past-tag check" "rc=$RC $OUT"
 OUT=$(bash "$UPD" --no-cli 2>&1); RC=$?
-[ "$RC" = 0 ] && [ "$(git -C "$CLONE" rev-parse HEAD)" = "$PAST" ] && pass "a run leaves the clone where it is" || fail "past-tag run" "rc=$RC $OUT"
-printf 'version=%s-1-g%s\nrepo=%s\n' "$TOP" "${PAST:0:7}" "$CLONE" > "$HOME/.claude/harness.version"
+[ "$RC" = 0 ] && [ "$(git -C "$U" rev-parse HEAD)" = "$UHEAD" ] && [ ! -e "$HOME/.claude/installed-$TOP" ] \
+  && pass "a run installs nothing and leaves the update clone where it is" || fail "past-tag run" "rc=$RC $OUT"
+printf 'version=%s-1-g%s\nrepo=%s\n' "$TOP" "${PAST:0:7}" "$CLONE" > "$HV"
 OUT=$(bash "$UPD" --no-cli --check 2>&1); RC=$?
 [[ "$OUT" == *"already includes $TOP"* ]] && pass "no commit= line: the describe suffix is enough" || fail "describe fallback" "rc=$RC $OUT"
+
+# Each case below has v1.0.8 to offer; only the guard under test keeps it out.
+push_tag v1.0.8 0
+unchanged() {   # unchanged RC: exit 0, harness.version as written, v1.0.8 not installed
+  [ "$1" = 0 ] && [ "$(cat "$HV")" = "$REC" ] && [ ! -e "$HOME/.claude/installed-v1.0.8" ]
+}
+
+echo ""
+echo "=== an install from a commit origin does not have is left alone ==="
+$G -C "$CLONE" commit -q --allow-empty -m unpushed
+LOCAL=$(git -C "$CLONE" rev-parse HEAD)
+REC=$(printf 'version=%s-2-g%s\ncommit=%s\nrepo=%s' "$TOP" "${LOCAL:0:7}" "$LOCAL" "$CLONE"); echo "$REC" > "$HV"
+OUT=$(bash "$UPD" --no-cli 2>&1); RC=$?
+unchanged "$RC" && [[ "$OUT" == *"installed from ${LOCAL:0:12}, which origin does not have; not changing it"* ]] \
+  && pass "says so, exit 0, nothing installed" || fail "unpushed" "rc=$RC $OUT"
+OUT=$(bash "$UPD" --no-cli --check 2>&1); RC=$?
+unchanged "$RC" && [[ "$OUT" == *"not changing it"* && "$OUT" != *"is available"* ]] \
+  && pass "--check says the same" || fail "unpushed --check" "rc=$RC $OUT"
+
+echo ""
+echo "=== an install from a pushed commit the newest tag lacks is left alone ==="
+REC=$(printf 'version=%s-1-g%s\ncommit=%s\nrepo=%s' "$TOP" "${PAST:0:7}" "$PAST" "$CLONE"); echo "$REC" > "$HV"
+OUT=$(bash "$UPD" --no-cli 2>&1); RC=$?
+unchanged "$RC" && [[ "$OUT" == *"installed from ${PAST:0:12}, which v1.0.8 does not include; not changing it"* ]] \
+  && pass "says so, exit 0, nothing installed" || fail "diverged" "rc=$RC $OUT"
+
+echo ""
+echo "=== an install with uncommitted changes is left alone ==="
+REC=$(printf 'version=v1.0.6-dirty\ncommit=%s\nrepo=%s' "$(sha v1.0.6)" "$CLONE"); echo "$REC" > "$HV"
+OUT=$(bash "$UPD" --no-cli 2>&1); RC=$?
+unchanged "$RC" && [[ "$OUT" == *"with uncommitted changes; not changing it"* ]] \
+  && pass "says so, exit 0, nothing installed" || fail "dirty install" "rc=$RC $OUT"
+
+echo ""
+echo "=== an unreadable repo= does not stop the update (macOS denies launchd ~/Desktop) ==="
+old_record() { printf 'version=v1.0.6\ncommit=%s\nrepo=%s\n' "$(sha v1.0.6)" "$CLONE" > "$HV"; }
+old_record; echo "origin=$TMP/origin.git" >> "$HV"
+chmod 000 "$CLONE"
+if git -C "$CLONE" rev-parse HEAD >/dev/null 2>&1; then fail "chmod 000 still lets git read the clone; the cases below prove nothing" ""; fi
+OUT=$(bash "$UPD" --no-cli 2>&1); RC=$?
+chmod 755 "$CLONE"
+[ "$RC" = 0 ] && [ "$(installed)" = v1.0.8 ] && pass "update clone present: v1.0.8 installs" || fail "unreadable repo=" "rc=$RC $OUT"
+old_record   # no origin=, as written before this change
+OUT=$(HARNESS_UPDATE_CLONE="$TMP/middle-src" bash "$UPD" --no-cli --check 2>&1); RC=$?
+[ "$RC" = 0 ] && [[ "$OUT" == *"cloning $TMP/origin.git into $TMP/middle-src (the origin of $CLONE)"* && "$OUT" == *"v1.0.8 is available"* ]] \
+  && pass "no origin=, readable repo=: clones from that clone's origin" || fail "repo= origin" "rc=$RC $OUT"
+chmod 000 "$CLONE"
+OUT=$(HARNESS_UPDATE_CLONE="$TMP/fallback-src" bash "$UPD" --no-cli 2>&1); RC=$?
+chmod 755 "$CLONE"
+[ "$RC" = 0 ] && [[ "$OUT" == *"cloning https://github.com/AdityaRon/claude-code-harness.git into $TMP/fallback-src (the default"* ]] \
+  && [ "$(installed)" = v1.0.8 ] && grep -qx "repo=$TMP/fallback-src" "$HV" \
+  && pass "no origin=, unreadable repo=: clones the default URL and installs" || fail "default URL" "rc=$RC $OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

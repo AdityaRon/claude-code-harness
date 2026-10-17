@@ -39,11 +39,11 @@ files in place first; this public repo ships neither. More in
 [docs/install.md](docs/install.md), including what lands in `~/.claude`.
 
 **Updating.** `~/.claude/harness-update.sh` checks the newest release tag out
-of your clone, runs `doctor.sh`, and installs only on green; `--schedule` runs
+of its own clone, runs `doctor.sh`, and installs only on green; `--schedule` runs
 it at 01:17, 07:17, 13:17 and 19:17 local time and `--unschedule` stops that.
-`--with-cli` also upgrades a Homebrew-cask Claude Code on each run. It refuses
-a clone with local changes or commits, so update that one with
-`git pull && bash install.sh`. Releases are `vMAJOR.MINOR.PATCH` tags, each
+`--with-cli` also upgrades a Homebrew-cask Claude Code on each run. It leaves
+alone an install from a clone with local changes or commits, so update that
+one with `git pull && bash install.sh`. Releases are `vMAJOR.MINOR.PATCH` tags, each
 with a GitHub Release and a `CHANGELOG.md` entry. The Release workflow tags
 main after each daily Upstream drift run when anything but `CHANGELOG.md`
 changed, gated on `doctor.sh` and, when `hooks/` or `config/settings.json`
@@ -107,7 +107,7 @@ What `install.sh` does with a value you set, from `config/merge-settings.jq`:
 | `syncClaudeAiSkills`, `syncClaudeAiPlugins` | `false` | Yes |
 | `remoteControlAtStartup` and the other top-level switches ([docs/permissions.md](docs/permissions.md)) | `true` | Yes |
 
-- **A hook off:** there is no per-hook switch. Deleting its entry from `~/.claude/settings.json` lasts until the next install. To keep it off, remove it from `config/settings.json` in your clone; `harness-update.sh` refuses a changed clone, so update with `git pull && bash install.sh`.
+- **A hook off:** there is no per-hook switch. Deleting its entry from `~/.claude/settings.json` lasts until the next install. To keep it off, remove it from `config/settings.json` in your clone; `harness-update.sh` leaves an install from a changed clone alone, so update with `git pull && bash install.sh`.
 - **Auto mode off:** `claude --permission-mode manual` for one session. Every install rewrites `permissions.defaultMode`, so to keep it off set `"manual"` in your clone's `config/settings.json`, as for a hook.
 - **Your own hooks:** a script in `~/.claude/hooks` under a name this repo does not use, plus its entry in `~/.claude/settings.json`. Installs keep both.
 - **Allow rules for work tools:** `~/.claude/local-settings/<name>.json`; only its `permissions.allow` and `permissions.deny` are read.
