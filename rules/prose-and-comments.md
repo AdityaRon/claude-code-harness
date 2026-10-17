@@ -6,16 +6,11 @@ comments, reports.
 ## Length
 
 - Write the terse version FIRST. Do not draft long and trim.
-- A code comment states what the code cannot: the trap, the constraint, the
-  reason. Five lines is a lot.
-- Justification goes in the PR body, not the file: *"trim the comments and update
-  the PR body instead."*
 - One consolidated message, never a series.
 
 ## Voice
 
-- No em dashes, no tidy aphorisms; they are what read as machine-written. At most
-  one emoji.
+- No em dashes, no tidy aphorisms; they are what read as machine-written.
 - Humble and kind, and more respectful than a terse draft defaults to. Ask rather
   than assert where the reader may know better.
 - Never characterise the reader or their workload.
