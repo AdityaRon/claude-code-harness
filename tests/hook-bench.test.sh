@@ -90,9 +90,11 @@ run --base v0.1.0 --head worktree; RC=$?
 
 echo ""
 echo "=== a slower hook fails the gate; both the limit and the floor must be crossed ==="
-printf '#!/usr/bin/env bash\ncat >/dev/null; sleep 0.07; exit 0\n' > "$FIX/hooks/second.sh"
+# +220 ms, not +40: a loaded macOS runner took ~200 ms for the 30 ms hooks, and
+# +40 ms there was under 20% at p50 (run 39006980186).
+printf '#!/usr/bin/env bash\ncat >/dev/null; sleep 0.25; exit 0\n' > "$FIX/hooks/second.sh"
 run --base v0.1.0 --head worktree --gate; RC=$?
-[ "$RC" = 1 ] && pass "exit 1 on +40 ms" || fail "slow exit" "rc=$RC"
+[ "$RC" = 1 ] && pass "exit 1 on +220 ms" || fail "slow exit" "rc=$RC"
 jqo '.gate.failures[]' | grep -q '^Bash wait p50' && pass "Bash p50 named" || fail "p50 named" "$(jqo '.gate.failures')"
 jqo '.gate.failures[]' | grep -q '^Write/Edit' && fail "Write/Edit untouched" "$(jqo '.gate.failures')" || pass "Write/Edit untouched"
 run --base v0.1.0 --head worktree --gate --floor-ms 1000; RC=$?

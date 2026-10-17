@@ -29,23 +29,29 @@ holds your work skills. A machine that already has its rules in
 ## Releases and updating
 
 Releases are tags `vMAJOR.MINOR.PATCH`, each with a GitHub Release and a
-`CHANGELOG.md` entry: the PRs merged since the previous tag, grouped, and the
-hook benchmark against it. The Release workflow makes one weekly when main has
-moved, or on demand (`gh workflow run release.yml -f version=v1.2.0`), after
-`doctor.sh` and `bin/hook-bench.py --gate` pass: no release when a tool
-class's wait grew more than 20% and 5 ms at p50 or p95, or when a payload's
-decision changed and no merged PR body declared it with an
-`intended-decisions: <payload ids>` line. The same benchmark, on every third
-payload, runs on each PR against main and posts its table to the job summary.
-If a merged PR changed a decision without that line, the weekly release stays
-blocked until the line is added to its body (`gh pr edit N --body-file ...`)
-and the workflow is dispatched again.
+`CHANGELOG.md` entry, and they follow Claude Code with no manual step. When
+Claude Code ships, the daily Upstream drift run lands the contract bump. The
+Release workflow runs when that run completes (and on
+`gh workflow run release.yml`) and tags main whenever anything but
+`CHANGELOG.md` changed since the previous tag, after `doctor.sh` and, when
+`hooks/` or `config/settings.json` changed, `bin/hook-bench.py --gate` against
+that tag: no release when a tool class's wait grew more than 20% and 5 ms at
+p50 or p95, or when a payload's decision changed and no merged PR body
+declared it with an `intended-decisions: <payload ids>` line. A blocked
+release opens or updates the "Release blocked" issue, and the next run
+retries. A contract-only release is a patch. The CHANGELOG entry lands by a PR
+the workflow opens and merges once CI passes, and each machine's scheduled
+`harness-update.sh` installs the tag within six hours. The same benchmark, on
+every third payload, runs on each PR against main.
 
 To update a machine, run `~/.claude/harness-update.sh`: it fetches tags,
 checks the newest release out of the clone `install.sh` ran from (detached;
 it refuses a clone with local changes or commits), runs `doctor.sh`, and
-installs only on green. `--schedule` runs it daily (launchd on macOS, a
-systemd user timer or crontab on Linux); `--unschedule` removes that.
+installs only on green. `--schedule` runs it at 01:17, 07:17, 13:17 and 19:17
+local time (launchd on macOS, a systemd user timer or crontab on Linux);
+`--unschedule` removes that. With `--with-cli`, every run, the scheduled ones
+too, first upgrades Claude Code when it is a Homebrew cask; npm and native
+installs are left to their own updaters, and `--no-cli` turns it off.
 session-start says when a newer release has been fetched than the one
 installed. The benchmark by hand: `bin/hook-bench.py --base v1.0.0` compares
 that tag with the working tree (`--md` for the table); `--corpus audit`

@@ -115,7 +115,7 @@ if [[ -f "$PIN_FILE" ]]; then
         echo "Installed $CLI; the harness was verified at $PIN, so settings added since may be ignored. Update Claude Code."
       else
         echo "## Claude Code is past the harness contract"
-        echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift workflow drafts the review PR. After it merges, run bash install.sh."
+        echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift run lands the review and the release that follows; the scheduled harness-update installs it. If this persists for more than a day, see the Release blocked issue."
       fi
       mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
     fi

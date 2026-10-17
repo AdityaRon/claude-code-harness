@@ -6,6 +6,9 @@
 #   release-notes.sh --since TAG [--prs FILE] --intended     ids from `intended-decisions:` lines
 #   release-notes.sh --changelog NOTES.md [--file CHANGELOG.md]
 #   release-notes.sh --entry VERSION [--file CHANGELOG.md]    an entry already written
+#   release-notes.sh --missing [--file CHANGELOG.md]  tags newer than the newest entry, oldest first
+#   release-notes.sh --since TAG --changed        paths changed since TAG but CHANGELOG.md; exit 1 if none
+#   release-notes.sh --since TAG --hooks-changed  the same for hooks/ and config/settings.json
 # PRs group as Security / Speed / Compatibility / Memory / Other by label, else
 # by title. The bump is patch, or minor on the label enhancement or feature or a
 # `feat` title; major only when asked. --prs is `gh pr list --json
@@ -13,7 +16,7 @@
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-usage() { sed -n '2,12s/^# \{0,1\}//p' "$0"; exit 2; }
+usage() { sed -n '2,15s/^# \{0,1\}//p' "$0"; exit 2; }
 
 SINCE="" PRS="" BENCH="" VERSION="" DATE="" BUMP=auto MODE=notes NOTES="" FILE=""
 SINCE_SET=0
@@ -30,6 +33,9 @@ while [[ $# -gt 0 ]]; do
     --intended) MODE=intended; shift ;;
     --changelog) MODE=changelog; NOTES="$2"; shift 2 ;;
     --entry) MODE=entry; VERSION="$2"; shift 2 ;;
+    --missing) MODE=missing; shift ;;
+    --changed) MODE=changed; shift ;;
+    --hooks-changed) MODE=hooks; shift ;;
     --file) FILE="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown option: $1" >&2; usage ;;
@@ -46,19 +52,39 @@ if [[ "$MODE" == entry ]]; then
   [[ -n "$ENTRY" ]] || { echo "no $VERSION entry in $FILE" >&2; exit 3; }
   printf '%s\n' "$ENTRY"; exit 0
 fi
+if [[ "$MODE" == missing ]]; then
+  [[ -f "$FILE" ]] || { echo "no such file: $FILE" >&2; exit 2; }
+  # The tags after the top entry's, by version; with no entry, every tag.
+  TOP=$(sed -nE 's/^## (v[0-9]+\.[0-9]+\.[0-9]+)( .*)?$/\1/p' "$FILE" | head -1)
+  { echo "$TOP"; git -C "$REPO" tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$'; } \
+    | sort -uV | awk -v top="$TOP" '$0 == top { seen = 1; next } seen'
+  exit 0
+fi
 if [[ "$MODE" == changelog ]]; then
   [[ -f "$NOTES" ]] || { echo "no such file: $NOTES" >&2; exit 2; }
   [[ -f "$FILE" ]] || { echo "no such file: $FILE" >&2; exit 2; }
-  # Above the first entry; the header and its paragraph stay on top.
+  # Above the first entry; the header and its paragraph stay on top. Trailing
+  # blank lines dropped: a Release body cut at its trailer ends with one.
   awk -v notes="$NOTES" '
-    !done && /^## / { while ((getline l < notes) > 0) print l; print ""; done = 1 }
+    BEGIN { while ((getline l < notes) > 0) L[++n] = l; while (n > 0 && L[n] ~ /^[ \t]*$/) n-- }
+    !done && /^## / { for (i = 1; i <= n; i++) print L[i]; print ""; done = 1 }
     { print }
-    END { if (!done) { print ""; while ((getline l < notes) > 0) print l } }' "$FILE" > "$FILE.next" \
+    END { if (!done) { print ""; for (i = 1; i <= n; i++) print L[i] } }' "$FILE" > "$FILE.next" \
     && mv "$FILE.next" "$FILE"
   exit $?
 fi
 
 [[ "$SINCE_SET" == 1 ]] || { echo "--since TAG is required ('' for the first release)" >&2; usage; }
+
+# The release workflow's loop guard: a merged CHANGELOG PR alone is no release.
+# hook-bench.py reads only hooks/ and config/settings.json of each side.
+if [[ "$MODE" == changed || "$MODE" == hooks ]]; then
+  [[ -n "$SINCE" ]] || exit 0
+  if [[ "$MODE" == hooks ]]; then PATHS=(hooks config/settings.json); else PATHS=(. ':!CHANGELOG.md'); fi
+  CH=$(git -C "$REPO" diff --name-only "$SINCE" HEAD -- "${PATHS[@]}") || { echo "git diff from $SINCE failed" >&2; exit 2; }
+  [[ -n "$CH" ]] || exit 1
+  printf '%s\n' "$CH"; exit 0
+fi
 
 # PR numbers from the merge commits since the tag: GitHub's merge subject, and
 # the `(#N)` a squash merge leaves at the end of its subject.

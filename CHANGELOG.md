@@ -52,9 +52,10 @@ rules and skills for Claude Code, installed once per machine with
 - `config/upstream-contract.json` records the Claude Code release the harness
   was verified against; `bin/upstream-check.sh` asks the installed CLI which
   hook events and modes it accepts and lists unreviewed changelog entries.
-  The daily Upstream drift workflow has Claude draft the contract review as a
-  PR, one per release. session-start says when the CLI is ahead of or behind
-  the contract.
+  The daily Upstream drift workflow lands a contract review that needs no
+  decision and drafts a PR for one that does. The Release workflow tags main
+  after it, and `bin/harness-update.sh` installs each tag on a schedule.
+  session-start says when the CLI is ahead of or behind the contract.
 - install.sh merges into an existing settings.json (user keys and allow rules
   kept, hooks and deny owned by the harness), folds in machine-local rules
   from `~/.claude/local-settings/*.json`, keeps `local-*.md` rules, and runs
