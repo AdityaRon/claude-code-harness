@@ -216,6 +216,8 @@ echo "=== A commit message or notes file is text ==="
 check "commit message names python -c" allow $'git commit -q -F - <<\'EOF\'\nDrop the startup probe:\npython3 -c "import os; os.environ" is gone\nEOF'
 check "notes file names node -e"       allow $'cat > notes.md <<\'EOF\'\nnode -e "process.env"\nEOF'
 check "message, then real inline code" ask   $'git commit -q -F - <<\'EOF\'\nmsg\nEOF\npython3 -c "import os; print(os.environ)"'
+check "unquoted message runs inline code" ask $'git commit -q -F - <<EOF\n$(python3 -c "import os; print(os.environ)")\nEOF'
+check "unquoted notes file runs inline code" ask $'cat > notes.md <<EOF\n$(python3 -c "import os; print(os.environ)")\nEOF'
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

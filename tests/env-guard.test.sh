@@ -381,6 +381,11 @@ check "notes file names cat .env"     allow $'cat > notes.md <<\'EOF\'\ncat .env
 check "a script file is not notes"    deny  $'cat > run.sh <<\'EOF\'\ncat .env\nEOF'
 check "heredoc fed to bash"           deny  $'bash <<\'EOF\'\ncat .env\nEOF'
 check "message, then a real read"     deny  $'git commit -q -F - <<\'EOF\'\nmsg\nEOF\ncat .env'
+# An unquoted delimiter makes the shell run $(...) and backticks in the body.
+check "unquoted message runs \$(cat creds)" deny $'git commit -q -F - <<EOF\nnote $(cat ~/.aws/credentials)\nEOF'
+check "unquoted notes file runs \$(cat .env)" deny $'cat > notes.md <<EOF\n$(cat .env)\nEOF'
+check "quoted message quoting \$(cat creds)" allow $'git commit -q -F - <<\'EOF\'\nnote $(cat ~/.aws/credentials)\nEOF'
+check "unquoted message, plain text"  allow $'git commit -q -F - <<EOF\nfix: stop reading secrets\n\ncat .env was how the old code read them\nEOF'
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

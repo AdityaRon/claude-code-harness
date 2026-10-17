@@ -205,7 +205,7 @@ clean_worktree() {
   [[ -d "$p" ]] && s=$(git -C "$p" status --porcelain 2>/dev/null) && [[ -z "$s" ]]
 }
 if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}worktree\s+remove\s[^|;&]*(--force|-f)\b"; then
-  SCRATCH=$(session_scratch)
+  SCRATCH=$(session_scratch "$(jq_get '.tool_input.command')"$'\n'"$(jq_get '.cwd')")
   # The raw command: normalizing strips the `CLAUDE_JOB_DIR=/x` prefix this looks for.
   jq_get '.tool_input.command' | grep -qE '(^|[^A-Za-z0-9_])(CLAUDE_JOB_DIR|HOME|TMPDIR)[[:space:]]*=' && SCRATCH=""
   BASE=$(in_scratch "$(jq_get '.cwd')" "$SCRATCH" "") || BASE=""
@@ -330,13 +330,13 @@ fi
 # Quoting does not narrow a pathspec, and `..` or `$(pwd)` name a tree at least
 # as wide as `.`; each of those was a silent allow. normalize_wrappers pads
 # `$(` to ` $( `, hence the spaces inside the $(pwd) form.
-BROAD="['\"]?(-A|--all|\.{1,2}/?|:/|\\$\(\s*pwd\s*\)|\\$\{?PWD\}?)['\"]?"
+BROAD="['\"]?(-[A-Za-z]*A[A-Za-z]*|--a(l|ll)?|\.{1,2}/?|:/|\\$\(\s*pwd\s*\)|\\$\{?PWD\}?)['\"]?"   # -vA bundles; git takes --al
 # What a broad add would stage, git status lists (porcelain paths are always
 # repo-relative, so a subdirectory's `.` is covered by a superset). Deny only
 # when one of those paths is a credential file; a clean broad add runs. -f adds
 # ignored files status does not list, and a cd, xargs, or a path in a variable
 # hides the repo: each keeps the deny. Named paths are not checked here.
-SENSITIVE_PATH='\.env$|\.env\.|(^|/)\.envrc$|\.pem$|\.key$|id_rsa|id_ed25519|\.aws/credentials|(^|/)\.netrc$|(^|/)\.git-credentials$|(^|/)\.pgpass$|secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)$'
+SENSITIVE_PATH="$(IFS='|'; printf '%s' "${CREDENTIAL_FILES[*]}")|\.env[.-]|id_rsa|id_ed25519|\.aws/credentials"
 FOUND=""
 broad_add_safe() {
   local raw segs seg t i repo cwd n=0 p out
@@ -369,7 +369,10 @@ broad_add_safe() {
     esac
     for ((i = i + 1; i < ${#t[@]}; i++)); do
       case "${t[i]}" in
-        --force|-[A-Za-z]*f*) return 1 ;;
+        # -f, -fA, -vf and --f through --force, all of which git takes as force.
+        --f|--fo|--for|--forc|--force) return 1 ;;
+        --*) ;;
+        -*f*) return 1 ;;
         [0-9]\>*|\>*|\<*) break ;;
       esac
     done
@@ -377,7 +380,7 @@ broad_add_safe() {
     while IFS= read -r p; do
       [[ -n "$p" ]] || continue
       p=${p:3}; p=${p#* -> }; p=${p%\"}; p=${p#\"}
-      if printf '%s\n' "$p" | grep -qE "$SENSITIVE_PATH" && ! printf '%s\n' "$p" | grep -qE '\.(example|sample|template|dist|tpl)$'; then
+      if printf '%s\n' "$p" | grep -qiE "$SENSITIVE_PATH" && ! printf '%s\n' "$p" | grep -qE '\.(example|sample|template|dist|tpl)$'; then
         FOUND=$p; return 1
       fi
     done <<<"$out"

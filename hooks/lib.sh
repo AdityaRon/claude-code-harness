@@ -150,20 +150,24 @@ normalize_command() {
 # A heredoc fed to `git commit -F -` or `gh pr|issue … --body-file -` is a
 # commit message or PR body: nothing runs it, whatever else the line does. The
 # body goes; the opener and terminator stay, so the command itself is scanned
-# and a later pass still sees a balanced heredoc.
+# and a later pass still sees a balanced heredoc. An unquoted delimiter has the
+# shell run $(...) and backticks in the body, so such a body holding $ or ` stays.
 strip_message_heredocs() {
   case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
   printf '%s\n' "$1" | awk '
     body { t = $0; if (dash) sub(/^\t+/, "", t)
-           if (t == term) { body = 0; print }
+           if (t == term) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = ""; print }
+           else if (!lit) buf = buf $0 "\n"
            next }
     { print
-      if (match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/)) {
+      if (match($0, /<<-?[ \t]*["\047\\]?[A-Za-z_][A-Za-z0-9_]*/)) {
         pre = substr($0, 1, RSTART - 1); n = split(pre, seg, /\|\||&&|[|;&]/); last = seg[n]
         if (last ~ /^[ \t]*(git[ \t]+(-[^ \t]+[ \t]+)*commit|gh[ \t]+(pr|issue))[ \t]/ \
             && last ~ /(^|[ \t])(-F|--file|--body-file)[ \t]*=?[ \t]*-([ \t]|$)/) {
           term = substr($0, RSTART + 2, RLENGTH - 2); dash = (term ~ /^-/)
-          sub(/^-?[ \t]*["\047]?/, "", term); body = 1 } } }'
+          lit = (term ~ /^-?[ \t]*["\047\\]/); buf = ""
+          sub(/^-?[ \t]*["\047\\]?/, "", term); body = 1 } } }
+    END { if (body && buf ~ /[$`]/) printf "%s", buf }'
 }
 
 # Text written to a notes file is not a command. Drop heredoc bodies from the
@@ -175,11 +179,16 @@ strip_inert_heredocs() {
   local s="$1" rest
   case "$s" in *'<<'*) ;; *) printf '%s' "$s"; return ;; esac
   s=$(strip_message_heredocs "$s")
+  # An unquoted body holding $ or ` is expanded by the shell, so it stays (lib.sh above).
   rest=$(printf '%s\n' "$s" | awk '
-    body { if ($0 ~ ("^[ \t]*" term "[ \t]*$")) body = 0; next }
-    match($0, /<<-?[ \t]*["'"'"']?[A-Za-z_][A-Za-z0-9_]*/) {
-      term = substr($0, RSTART, RLENGTH); sub(/^<<-?[ \t]*["'"'"']?/, "", term); body = 1 }
-    { print }')
+    body { if ($0 ~ ("^[ \t]*" term "[ \t]*$")) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = "" }
+           else if (!lit) buf = buf $0 "\n"
+           next }
+    match($0, /<<-?[ \t]*["'"'"'\\]?[A-Za-z_][A-Za-z0-9_]*/) {
+      term = substr($0, RSTART, RLENGTH); lit = (term ~ /^<<-?[ \t]*["'"'"'\\]/); buf = ""
+      sub(/^<<-?[ \t]*["'"'"'\\]?/, "", term); body = 1 }
+    { print }
+    END { if (body && buf ~ /[$`]/) printf "%s", buf }')
   if printf '%s\n' "$rest" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g' | sed -E 's/^[[:space:]]+//' \
        | grep -vE '^[[:space:]]*$' \
        | grep -qvE '^(cat|tee|cd|mkdir|echo|printf|true|[A-Za-z_][A-Za-z0-9_]*=[^$`]*)([[:space:]]|$)'; then
@@ -222,14 +231,16 @@ neutralize_quoted_separators() {
 # This session's scratch folder. A background session gets ~/.claude/jobs/<the
 # first 8 characters of its session id>/tmp, and a hook's environment has no
 # CLAUDE_JOB_DIR, so it is derived. Empty for an interactive session.
-session_scratch() {
-  local sid d
+session_scratch() {   # $1: the command and cwd, when the caller has them
+  local sid d re='jobs/|CLAUDE_JOB_DIR|claude-[0-9]'
   sid=$(jq_get '.session_id')
   [[ "$sid" =~ ^[0-9a-f]{8}- ]] || return 0
   [[ -d "$HOME/.claude/jobs/${sid:0:8}" ]] && { printf '%s\n' "$HOME/.claude/jobs/${sid:0:8}/tmp"; return 0; }
   # A resumed job keeps its folder under the first session's id and runs under
   # a new one; its state.json names the new id. Measured: every rm-guard deny
   # on one Mac (2026-09-24 to 2026-10-15) was a resumed job's own scratch.
+  # Only a path naming a job folder can land in one, so skip the scan otherwise.
+  [[ $# -eq 0 || "$1" =~ $re ]] || return 0
   for d in "$HOME"/.claude/jobs/*/; do
     [[ -f "$d/state.json" ]] || continue
     grep -qE "\"(sessionId|resumeSessionId)\":[[:space:]]*\"$sid\"" "$d/state.json" 2>/dev/null \
@@ -417,6 +428,44 @@ sha256_file() {
     sha256sum "$p" 2>/dev/null | awk '{print $1}'
   fi
 }
+
+# Credential file paths, as extended regexes matched without case. One list for
+# sensitive-file-guard and git-guard's broad add, so the two cannot drift.
+# shellcheck disable=SC2034  # read by the hooks that source this file
+CREDENTIAL_FILES=(
+  '\.env$'                     # .env, prod.env, local.env (any *.env)
+  '(^|/)\.env\.'               # .env.local, .env.production
+  '(^|/)\.envrc$'
+  '\.pem$'
+  '\.key$'
+  '(^|/)id_(rsa|dsa|ecdsa|ed25519)'
+  # Whole folders: ~/.ssh holds keys under any name, ~/.aws keeps SSO and CLI
+  # token caches beside credentials, and gcloud and Azure keep tokens in theirs.
+  '(^|/)\.ssh/'
+  '(^|/)\.aws/'
+  '(^|/)\.gnupg/'
+  '(^|/)\.config/gcloud/'
+  '(^|/)\.azure/'
+  '(^|/)\.netrc$'
+  # Config-shaped secret files only, not secrets.py / secrets.ts (source code).
+  '(^|/)secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)$'
+  '(^|/)\.npmrc$'
+  '(^|/)\.pypirc$'
+  '(^|/)\.git-credentials$'
+  '(^|/)\.pgpass$'
+  '(^|/)\.kube/config$'
+  '(^|/)kubeconfig(\.ya?ml)?$'
+  '\.kubeconfig$'
+  '(^|/)\.docker/config\.json$'
+  '(^|/)credentials\.json$'
+  'service[_-]account.*\.json$'
+  '(^|/)\.credentials\.json$'   # ~/.claude: the Claude Code OAuth token
+  '(^|/)\.claude\.json$'        # can hold an API key and MCP server tokens
+  'terraform\.tfstate(\.backup)?$'
+  '\.tfvars$'
+  '\.(p12|pfx|jks|keystore)$'
+  '(^|/)gh/hosts\.yml$'
+)
 
 # Resolve a path to its canonical form (symlinks, /private/var aliases).
 # Falls back gracefully when the path does not exist.

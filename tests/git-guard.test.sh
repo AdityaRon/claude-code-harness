@@ -448,9 +448,35 @@ check_wt "-A -- ."                           allow "git add -v -A -- ." "$G"
 G2="$R/addrepo2"; git init -q "$G2" && echo s > "$G2/.env"
 check_wt "clean add, then one spelled /usr/bin/git" deny "git add -A && /usr/bin/git -C $G2 add -A" "$G"
 check_wt "clean add, then one spelled \"git\""        deny "git add -A && \"git\" -C $G2 add -A" "$G"
+# Every credential file sensitive-file-guard knows, not a shorter list of its own.
+for f in id_ecdsa id_dsa .npmrc .pypirc credentials.json service_account.json certs/client.p12 keys/app.jks \
+         prod.tfvars terraform.tfstate kubeconfig .claude.json .kube/config .ssh/deploy_key .docker/config.json; do
+  mkdir -p "$(dirname "$G/$f")" && echo x > "$G/$f"
+  check_wt "-A, an untracked $f"             deny  "git add -A" "$G"
+  rm -f "$G/$f"; rmdir "$(dirname "$G/$f")" 2>/dev/null
+done
+echo x > "$G/.NPMRC"
+check_wt "-A, upper-case .NPMRC"             deny  "git add -A" "$G"
+rm -f "$G/.NPMRC"
+check_wt "-A, after those are gone"          allow "git add -A" "$G"
+# -f adds ignored files git status never lists, in any spelling git takes.
+G3="$R/addrepo3"; git init -q "$G3" && printf '.env\n' > "$G3/.gitignore" && git -C "$G3" add .gitignore \
+  && git -C "$G3" -c user.email=t@t -c user.name=t commit -q -m init && echo s > "$G3/.env"
+check_wt "ignored .env, plain -v ."          allow "git add -v ." "$G3"
+check_wt "ignored .env, -A"                  allow "git add -A" "$G3"
+check_wt "ignored .env, -f ."                deny  "git add -f ." "$G3"
+check_wt "ignored .env, -fv ."               deny  "git add -fv ." "$G3"
+check_wt "ignored .env, . -f"                deny  "git add . -f" "$G3"
+check_wt "ignored .env, -f -- ."             deny  "git add -f -- ." "$G3"
+check_wt "ignored .env, -Af"                 deny  "git add -Af" "$G3"
+check_wt "ignored .env, -fA"                 deny  "git add -fA" "$G3"
+check_wt "ignored .env, --forc ."            deny  "git add --forc ." "$G3"
+check_wt "ignored .env, --f ."               deny  "git add --f ." "$G3"
 echo s > "$G/sub/.env"
 check_wt "-A, an untracked .env below"       deny  "git add -A" "$G"
 check_wt ". from the root, .env below"       deny  "git add ." "$G"
+check_wt "-vA bundle, .env below"            deny  "git add -vA" "$G"
+check_wt "--al abbreviation, .env below"     deny  "git add --al" "$G"
 check_wt "-C repo, .env below"               deny  "git -C $G add -A" "/tmp"
 rm "$G/sub/.env"; echo k > "$G/server.key"
 check_wt "-A, an untracked .key"             deny  "git add -A" "$G"

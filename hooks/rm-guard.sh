@@ -11,7 +11,7 @@ CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
 [[ "$CMD" =~ (^|[^[:alnum:]_.-])rm([[:space:]]|$) ]] || exit 0
 
-SCRATCH=$(session_scratch)
+SCRATCH=$(session_scratch "$CMD"$'\n'"$(jq_get '.cwd')")
 # A command that sets the variables in_scratch trusts gets no scratch allowance.
 if printf '%s\n' "$CMD" | grep -qE '(^|[^A-Za-z0-9_])(CLAUDE_JOB_DIR|HOME|TMPDIR)[[:space:]]*='; then
   SCRATCH=""; TMPDIR=""
