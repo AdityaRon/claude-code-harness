@@ -59,11 +59,15 @@ When the daily run finds a new release it triages first: if no entry since the p
 matches the section 6 filter (1 of the 21 releases 2.1.280 to 2.1.302), it moves
 `last_verified_version` itself. Otherwise Claude reviews the releases and edits only
 `upstream-contract.json`, once per release. A PR whose body starts with `Nothing to
-decide.` is opened ready and merged by the workflow once the dispatched CI run
-passes; one that starts with `Decide:` is a **draft** assigned to you, with new
+decide.` is opened ready and merged by the workflow once its CI passes; one that
+starts with `Decide:` is a **draft** assigned to you, with new
 settings and anything touching deny, ask or a guard as questions, never as changes.
 Landing on its own needs a branch rule `github-actions` can satisfy; as of 2026-10-17
-`main` needs no approval and requires the `doctor.sh` and `shellcheck` checks. A new
+`main` needs no approval and requires the `doctor.sh` and `shellcheck` checks.
+GitHub holds the `pull_request` runs on a PR `github-actions` opens, since the
+repo's fork PR approval policy is `first_time_contributors`, so the workflow
+approves its own PR's CI; a dispatched run does not count for those checks and is
+only the fallback when approval is refused. A new
 contract PR closes the older ones `github-actions` opened, with a link, and deletes
 their branches; one you opened is left alone. After any merge: `bash install.sh`.
 Without a token the same run keeps one open issue with section 6 instead. Locally,
