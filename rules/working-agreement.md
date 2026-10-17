@@ -5,7 +5,6 @@
 - Do not stop between steps to report and wait. Finish the chain, report once.
 - Ask only where the answer changes what gets built and no sane default exists.
   Otherwise state the assumption and continue.
-- Prefer the smallest change to what exists over a new mechanism.
 
 ## Evidence
 
