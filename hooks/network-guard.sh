@@ -43,8 +43,8 @@ DEFAULT_ALLOW=(
   'proxy.golang.org'
   'sum.golang.org'
   'docs.anthropic.com'
-  'docs.claude.com'
-  'code.claude.com'
+  # Anthropic's own: claude.com and its docs, support and platform hosts.
+  'claude.com'
   'api.anthropic.com'
   'stackoverflow.com'
   'developer.mozilla.org'
@@ -60,8 +60,6 @@ DEFAULT_ALLOW=(
   'kubernetes.io'
   'docs.docker.com'
   'www.anthropic.com'
-  'support.claude.com'
-  'platform.claude.com'
 )
 
 # This machine. A GET here never leaves it; a local dev server is most of what
