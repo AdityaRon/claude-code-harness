@@ -323,5 +323,25 @@ check "printf -v, then run"              ask   "printf -v c 'kubectl delete pod 
 check "heredoc apostrophe, then a ;"     ask   $'cat <<\'EOF\' > notes.txt\necho don\'t\nEOF\ngrep x y; kubectl delete pod x'
 
 echo ""
+echo "=== A text command that stores text for a later command keeps it scanned ==="
+# uniq takes [INPUT [OUTPUT]]; the writer check knew only >, -o and printf -v.
+check "uniq OUTPUT operand, then sh"     ask   "echo 'kubectl delete pod y' | uniq - out.sh; sh out.sh"
+check "uniq OUTPUT operand, && bash"     ask   "echo 'kubectl delete pod y' | uniq - out.sh && bash out.sh"
+check "grep | uniq OUTPUT, then bash"    ask   'grep kubectl in.txt | uniq - out.sh; bash out.sh'
+check "uniq -u, OUTPUT operand"          ask   'grep kubectl in | uniq -u - out.sh; sh out.sh'
+check "uniq -f value, OUTPUT operand"    ask   "echo 'kubectl delete pod x' | uniq -f 1 - out.sh; sh out.sh"
+check "sort -uo, bundled"                ask   "echo 'kubectl delete pod x' | sort -uo x.sh; bash x.sh"
+check "sort --out=, abbreviated"         ask   "echo 'kubectl delete pod x' | sort --out=x.sh; bash x.sh"
+check "less -O log file"                 ask   "echo 'kubectl delete pod x' | less -O x.sh; bash x.sh"
+check "less --log-file"                  ask   "echo 'kubectl delete pod x' | less --log-file=x.sh; bash x.sh"
+check "commit message read back"         ask   "git commit -qm 'kubectl delete pod x'; git log -1 --format=%s | bash"
+check "git note read back"               ask   "git notes add -m 'kubectl delete pod x'; git notes show | sh"
+check "gh comment read back"             ask   "gh pr comment 1 --body 'kubectl delete pod x'; gh pr view 1 --json comments -q '.comments[0].body' | bash"
+check "uniq, INPUT only"                 allow "grep -h 'kubectl delete' x | uniq a.txt; make"
+check "grep | uniq, no operand"          allow "grep -h 'kubectl delete' a.txt | uniq; make"
+check "uniq -f value is not an operand"  allow "grep -h 'kubectl delete' a.txt | uniq -f 1 -; make"
+check "grep -o is not an output file"    allow "grep -o 'kubectl delete' a.txt; make"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

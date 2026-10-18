@@ -175,6 +175,35 @@ text_cmd() {
   return 1
 }
 
+# Does text command $1 (arguments after it) store text a later command can read
+# back: a file (sort -o, uniq's OUTPUT operand, less's log, git --output), a
+# variable (printf -v), the repository (git commit, tag, notes…) or GitHub (gh)?
+writes_to() {
+  local c="$1" a n=0 val=0 opts=1
+  local sort_re='^(-[A-Za-z]*o|--o)' less_re='^(-[A-Za-z]*[oO]|--(log|LOG))'
+  shift
+  case "$c" in
+    gh) return 0 ;;
+    git) case "${1:-}" in log|status|diff|grep|show|ls-files) ;; *) return 0 ;; esac ;;
+  esac
+  for a in "$@"; do
+    a="${a//[\"\']/}"
+    case "$c" in
+      sort) [[ "$a" =~ $sort_re ]] && return 0 ;;
+      less|more) [[ "$a" =~ $less_re ]] && return 0 ;;
+      printf) [[ "$a" == -v* ]] && return 0 ;;
+      git) [[ "$a" == --output* ]] && return 0 ;;
+      uniq)   # [OPTION]... [INPUT [OUTPUT]]; -f, -s and -w take a value
+        if (( val )); then val=0
+        elif (( opts )) && [[ "$a" == -- ]]; then opts=0
+        elif (( opts )) && [[ "$a" == -[fsw] ]]; then val=1
+        elif (( opts )) && [[ "$a" == -?* ]]; then :
+        elif (( ++n > 1 )); then return 0; fi ;;
+    esac
+  done
+  return 1
+}
+
 # A pipeline of text commands runs no kubectl, even beside one that runs something
 # else (`make; grep -n "kubectl" x`), so it leaves CMD. Split where the shell does
 # (lib.sh), and only where that split is sound: one line (no heredoc, `|` or `\`
@@ -185,25 +214,25 @@ if [[ "$CMD" != *$'\n'* && "$CMD" == *[\;\&\|]* && "$CMD" != *[\(\)\{\}\`]* ]] \
   # A literal %7C must not come back as a `|`, so % is escaped first.
   PCMD=$CMD; [[ "$CMD" == *%* ]] && PCMD=$(printf '%s' "$CMD" | sed 's/%/%25/g')
   IFS=';' read -ra PIPES < <(neutralize_quoted_separators "$PCMD" | sed -E 's/\|&/|/g; s/\|\||&&/;/g; s/&([[:space:]]|$)/;\1/g')
-  TEXT=(); ANY_O=0
+  TEXT=(); WR=(); ANY_O=0
   for p in "${PIPES[@]}"; do
-    t=1; IFS='|' read -ra segs <<<"$p"
+    t=1; wr=0; IFS='|' read -ra segs <<<"$p"
     for seg in "${segs[@]}"; do
       set -f; set -- $seg; set +f
       while [[ $# -gt 0 ]] && is_redirect "$1"; do shift; done
       [[ $# -eq 0 ]] && continue
       w="${1//[\"\']/}"; w="${w##*/}"
-      text_cmd "$w" "${2:-}" || { t=0; ANY_O=1; }
+      text_cmd "$w" "${2:-}" || { t=0; ANY_O=1; continue; }
+      writes_to "$w" "${@:2}" && wr=1
     done
-    TEXT+=("$t")
+    TEXT+=("$t"); WR+=("$wr")
   done
-  WRITES='>|(^|[[:space:]])(-o|--output|printf[[:space:]]+-v)'   # sort -o, git --output, a variable
   KEPT=""; DROPPED=0
   for k in "${!PIPES[@]}"; do
     p="${PIPES[$k]}"
     if [[ ${TEXT[$k]} -eq 1 ]]; then
       w=$p; [[ $ANY_O -eq 1 && "$p" == *'>'* ]] && w=$(printf '%s\n' "$p" | sed -E 's/[0-9]*>&[0-9-]*//g; s#&?[0-9]*>>?[[:space:]]*/dev/null##g')
-      if [[ $ANY_O -eq 0 ]] || ! [[ "$w" =~ $WRITES ]]; then DROPPED=1; continue; fi
+      if [[ $ANY_O -eq 0 ]] || [[ ${WR[$k]} -eq 0 && "$w" != *'>'* ]]; then DROPPED=1; continue; fi
     fi
     KEPT+="$p"$'\n'
   done
