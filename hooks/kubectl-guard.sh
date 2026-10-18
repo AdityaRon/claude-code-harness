@@ -46,19 +46,6 @@ CMD=$(jq_get '.tool_input.command')
 printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qi 'kubectl' || exit 0
 CMD=$(strip_inert_heredocs "$CMD")
 
-# Normalise BEFORE the bail-out, not after. The bail-out's own pattern requires
-# whitespace or a slash in front of `kubectl`, and `$(` is neither — so
-# `echo "$(kubectl delete pod foo)"` exited here and was allowed silently, no
-# matter what the scan below did. See the tokenizer note further down.
-SCAN=$(normalize_command "$CMD" | tr '\n' ';' | sed -E 's/\$\(/ ; /g; s/`/ ; /g; s/\|\||&&|[|;]/ & /g; s/&([[:space:]]|$)/ & \1/g')
-
-# Cheap bail-out: no kubectl anywhere, nothing to do.
-# Both sides use "not a word character" rather than "whitespace": a quote can
-# sit on either side (`'kubectl' delete …`), and requiring whitespace after the
-# binary let that form skip the scan. `.` and `-` stay in the word class so
-# this does not fire on `kubectl-guard.sh` or a `kubectl.exe`-style name.
-printf '%s\n' "$SCAN" | grep -qE '(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)' || exit 0
-
 # Global flags that consume the NEXT token as their value. Without this,
 # `kubectl --context delete-me get pods` would read "delete-me" as the verb.
 # Flags in --flag=value form are self-contained and need no entry here.
@@ -176,6 +163,120 @@ is_secret_target() {
   return 1
 }
 
+# A command whose arguments are only text: it searches, prints or lists them and
+# runs none. `grep "kubectl delete"` and `which kubectl` name kubectl as text.
+text_cmd() {
+  case "$1" in
+    grep|egrep|fgrep|rg|which|type|whereis|echo|printf|head|tail|wc|sort|uniq|cut|tr|cat|less|more|column|ls|cd|true|gh) return 0 ;;
+    # A PR title or commit message names kubectl as text. Only git subcommands
+    # that never run an argument: `bisect run`, `rebase -x` and a `!` alias do.
+    git) case "${2:-}" in commit|stash|tag|notes|log|status|diff|grep|add|branch|switch|show|ls-files|fetch|pull|push|worktree) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
+# Does text command $1 (arguments after it) store text a later command can read
+# back: a file (sort -o, uniq's OUTPUT operand, less's log, git --output), a
+# variable (printf -v), the repository (git commit, tag, notes…) or GitHub (gh)?
+writes_to() {
+  local c="$1" a n=0 val=0 opts=1
+  local sort_re='^(-[A-Za-z]*o|--o)' less_re='^(-[A-Za-z]*[oO]|--(log|LOG))'
+  shift
+  case "$c" in
+    gh) return 0 ;;
+    git) case "${1:-}" in log|status|diff|grep|show|ls-files) ;; *) return 0 ;; esac ;;
+  esac
+  for a in "$@"; do
+    a="${a//[\"\']/}"
+    case "$c" in
+      sort) [[ "$a" =~ $sort_re ]] && return 0 ;;
+      less|more) [[ "$a" =~ $less_re ]] && return 0 ;;
+      printf) [[ "$a" == -v* ]] && return 0 ;;
+      git) [[ "$a" == --output* ]] && return 0 ;;
+      uniq)   # [OPTION]... [INPUT [OUTPUT]]; -f, -s and -w take a value
+        if (( val )); then val=0
+        elif (( opts )) && [[ "$a" == -- ]]; then opts=0
+        elif (( opts )) && [[ "$a" == -[fsw] ]]; then val=1
+        elif (( opts )) && [[ "$a" == -?* ]]; then :
+        elif (( ++n > 1 )); then return 0; fi ;;
+    esac
+  done
+  return 1
+}
+
+# A pipeline of text commands runs no kubectl, even beside one that runs something
+# else (`make; grep -n "kubectl" x`), so it leaves CMD. Split where the shell does
+# (lib.sh), and only where that split is sound: one line (no heredoc, `|` or `\`
+# continuing onto the next), no group, substitution or compound command.
+# A text pipeline that writes stays when something else here could run it.
+if [[ "$CMD" != *$'\n'* && "$CMD" == *[\;\&\|]* && "$CMD" != *[\(\)\{\}\`]* ]] \
+   && ! printf '%s\n' "$CMD" | grep -qE '(^|[^[:alnum:]_])(fi|done|esac)([^[:alnum:]_]|$)'; then
+  # A literal %7C must not come back as a `|`, so % is escaped first.
+  PCMD=$CMD; [[ "$CMD" == *%* ]] && PCMD=$(printf '%s' "$CMD" | sed 's/%/%25/g')
+  IFS=';' read -ra PIPES < <(neutralize_quoted_separators "$PCMD" | sed -E 's/\|&/|/g; s/\|\||&&/;/g; s/&([[:space:]]|$)/;\1/g')
+  TEXT=(); WR=(); ANY_O=0
+  for p in "${PIPES[@]}"; do
+    t=1; wr=0; IFS='|' read -ra segs <<<"$p"
+    for seg in "${segs[@]}"; do
+      set -f; set -- $seg; set +f
+      while [[ $# -gt 0 ]] && is_redirect "$1"; do shift; done
+      [[ $# -eq 0 ]] && continue
+      w="${1//[\"\']/}"; w="${w##*/}"
+      text_cmd "$w" "${2:-}" || { t=0; ANY_O=1; continue; }
+      writes_to "$w" "${@:2}" && wr=1
+    done
+    TEXT+=("$t"); WR+=("$wr")
+  done
+  KEPT=""; DROPPED=0
+  for k in "${!PIPES[@]}"; do
+    p="${PIPES[$k]}"
+    if [[ ${TEXT[$k]} -eq 1 ]]; then
+      w=$p; [[ $ANY_O -eq 1 && "$p" == *'>'* ]] && w=$(printf '%s\n' "$p" | sed -E 's/[0-9]*>&[0-9-]*//g; s#&?[0-9]*>>?[[:space:]]*/dev/null##g')
+      if [[ $ANY_O -eq 0 ]] || [[ ${WR[$k]} -eq 0 && "$w" != *'>'* ]]; then DROPPED=1; continue; fi
+    fi
+    KEPT+="$p"$'\n'
+  done
+  [[ -z "$KEPT" ]] && exit 0
+  if [[ $DROPPED -eq 1 ]]; then
+    CMD=$KEPT; [[ "$KEPT" == *%* ]] && CMD=$(printf '%s' "$KEPT" | sed -E 's/%7C/|/g; s/%3B/;/g; s/%26/\&/g; s/%25/%/g')
+  fi
+fi
+
+# The exemption below holds only when EVERY segment's command is a text command
+# or kubectl, so `echo 'kubectl delete' | $SHELL` (or `| bash`, `| . /dev/stdin`,
+# `| awk system`) is read as a command. Quoted spans are blanked for this
+# structural check only.
+TEXT_ONLY=1
+while IFS= read -r seg; do
+  set -f; set -- $seg; set +f
+  while [[ $# -gt 0 ]] && is_redirect "$1"; do shift; done
+  [[ $# -eq 0 ]] && continue
+  w="${1//[\"\']/}"; w="${w##*/}"
+  [[ "$w" == kubectl ]] || text_cmd "$w" "${2:-}" || { TEXT_ONLY=0; break; }
+# Raw CMD, not SCAN: normalize_binaries strips a quote off a segment's first word,
+# which unbalances the quote blanking. A wrapper first word just loses the exemption.
+done < <(printf '%s\n' "$CMD" | tr '\n' ';' | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g" | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;]/\n/g; s/&([[:space:]]|$)/\n/g')
+
+# When only text commands and kubectl run, a quoted `|` or `;` is text (lib.sh).
+# Not with a substitution: the `;` in "$(a; b)" is real.
+SRC=$CMD
+if [[ $TEXT_ONLY -eq 1 && "$CMD" == *[\"\']* && "$CMD" != *'$('* && "$CMD" != *'`'* ]]; then
+  SRC=$(neutralize_quoted_separators "$CMD")
+fi
+
+# Normalise BEFORE the bail-out, not after. The bail-out's own pattern requires
+# whitespace or a slash in front of `kubectl`, and `$(` is neither — so
+# `echo "$(kubectl delete pod foo)"` exited here and was allowed silently, no
+# matter what the scan below did. See the tokenizer note further down.
+SCAN=$(normalize_command "$SRC" | tr '\n' ';' | sed -E 's/\$\(/ ; /g; s/`/ ; /g; s/\|\||&&|[|;]/ & /g; s/&([[:space:]]|$)/ & \1/g')
+
+# Cheap bail-out: no kubectl anywhere, nothing to do.
+# Both sides use "not a word character" rather than "whitespace": a quote can
+# sit on either side (`'kubectl' delete …`), and requiring whitespace after the
+# binary let that form skip the scan. `.` and `-` stay in the word class so
+# this does not fire on `kubectl-guard.sh` or a `kubectl.exe`-style name.
+printf '%s\n' "$SCAN" | grep -qE '(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)' || exit 0
+
 # Tokenize on whitespace. Quoting is not honoured, deliberately: a quoted flag
 # value that splits into several tokens yields an unrecognised verb, which
 # escalates. Failing closed on ambiguity is the intended behaviour.
@@ -189,34 +290,14 @@ read -ra TOKENS <<<"$SCAN"
 
 i=0
 n=${#TOKENS[@]}
-# `grep "kubectl delete"` / `which kubectl` name kubectl without running it. The
-# exemption holds only when EVERY segment's command is on this text-only list, so
-# `echo 'kubectl delete' | $SHELL` (or `| bash`, `| . /dev/stdin`, `| awk system`)
-# is read as a command. Quoted spans are blanked for this structural check only.
-TEXT_ONLY=1
-while IFS= read -r seg; do
-  set -f; set -- $seg; set +f
-  while [[ $# -gt 0 ]] && is_redirect "$1"; do shift; done
-  [[ $# -eq 0 ]] && continue
-  w="${1//[\"\']/}"; w="${w##*/}"
-  case "$w" in
-    grep|egrep|fgrep|rg|which|type|whereis|echo|printf|head|tail|wc|sort|uniq|cut|tr|cat|less|more|column|ls|cd|true|kubectl|gh) ;;
-    # A PR title or commit message names kubectl as text. Only git subcommands
-    # that never run an argument: `bisect run`, `rebase -x` and a `!` alias do.
-    git) case "${2:-}" in commit|stash|tag|notes|log|status|diff|grep|add|branch|switch|show|ls-files|fetch|pull|push|worktree) ;; *) TEXT_ONLY=0; break ;; esac ;;
-    *) TEXT_ONLY=0; break ;;
-  esac
-# Raw CMD, not SCAN: normalize_binaries strips a quote off a segment's first word,
-# which unbalances the quote blanking. A wrapper first word just loses the exemption.
-done < <(printf '%s\n' "$CMD" | tr '\n' ';' | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g" | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;]/\n/g; s/&([[:space:]]|$)/\n/g')
-SEG_FIRST=""
+SEG_FIRST=""; SEG_SECOND=""
 while (( i < n )); do
   tok="${TOKENS[$i]}"
   if is_separator "$tok"; then SEG_FIRST=""; (( i++ )); continue; fi
-  if [[ -z "$SEG_FIRST" ]] && ! is_redirect "$tok"; then SEG_FIRST="${tok//[\"\']/}"; fi
-  if [[ $TEXT_ONLY -eq 1 ]]; then
-    case "$SEG_FIRST" in grep|egrep|fgrep|rg|which|type|whereis|echo|printf|gh|git) (( i++ )); continue ;; esac
+  if [[ -z "$SEG_FIRST" ]] && ! is_redirect "$tok"; then
+    SEG_FIRST="${tok//[\"\']/}"; SEG_SECOND="${TOKENS[$((i + 1))]:-}"; SEG_SECOND="${SEG_SECOND//[\"\']/}"
   fi
+  if [[ $TEXT_ONLY -eq 1 ]] && text_cmd "$SEG_FIRST" "$SEG_SECOND"; then (( i++ )); continue; fi
   # A quote can still cling to the token (`'kubectl'`, `"kubectl`). Strip quote
   # characters for the binary comparison only — the verb scan below keeps using
   # raw tokens, so flag parsing is unchanged.

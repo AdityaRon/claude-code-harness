@@ -268,5 +268,80 @@ check "backslash in the word"    ask   '\kubectl delete pod x'
 check "nothing it guards"        allow 'ls -la && npm test'
 
 echo ""
+echo "=== Text and paths name kubectl without running it (expect: allow) ==="
+# A quoted `|` split the grep pattern into a segment headed by kubectl, and one
+# non-text command anywhere in the line made every grep pattern a command.
+check "alternation names kubectl delete" allow "git show origin/some-branch:README.md | grep -nE 'git-guard|kubectl-guard|kubectl delete|subprocess' | head -60"
+check "git grep alternation after echo"  allow "echo \"--- tests ---\" && git grep -nE 'kubectl delete:|kubectl \\* delete|retired-rules' origin/some-branch -- tests/ install.sh"
+check "alternation piped to cut"         allow "git show origin/some-branch:README.md | grep -nE 'permissions\\.deny|kubectl delete|retired' | cut -c1-400"
+check "sed, then a grep pattern"         allow 'sed -n 1,60p tests/kubectl-guard.test.sh; grep -n "kubectl" config/settings.json; head -30 hooks/kubectl-guard.sh'
+check "make, then a grep pattern"        allow 'make test; grep -n "kubectl" config/settings.json'
+check "npm test, then rg"                allow "npm test && rg 'kubectl delete' docs/"
+check "rg pattern"                       allow "rg 'kubectl delete' docs/"
+check "grep -rn pattern"                 allow 'grep -rn "kubectl apply" .'
+check "cat the guard"                    allow 'cat hooks/kubectl-guard.sh'
+check "cat a path ending in kubectl"     allow 'cat ./kubectl ./other'
+check "alternation inside parentheses"   allow "grep -E '(a|kubectl delete)' x"
+check "kubectl get piped to a pattern"   allow "kubectl get pods | grep -E 'Running|kubectl delete'"
+check "commit message with a ;"          allow "git commit -m 'note; kubectl delete pod x'"
+check "text written to a notes file"     allow "grep -rn 'kubectl delete' . > hits.txt"
+check "echo to /dev/null, then make"     allow 'echo kubectl delete pod x >/dev/null 2>&1; make'
+
+echo ""
+echo "=== ...but kubectl run any other way still asks (expect: ask) ==="
+check "absolute path"                    ask   '/usr/bin/kubectl delete pod x'
+check "double-quoted binary"             ask   '"kubectl" delete pod x'
+check "a quoted | in a flag value"       ask   "kubectl --context 'a|b' delete pod x"
+check "echo piped to bash"               ask   'echo kubectl delete pod x | bash'
+check "quoted | piped to bash"           ask   "echo 'a|kubectl delete pod x' | bash"
+check "piped to bash with |&"            ask   'echo kubectl delete pod x |& bash'
+check "bash -c"                          ask   "bash -c 'kubectl delete pod x'"
+check "sh -c"                            ask   'sh -c "kubectl delete pod x"'
+check "bash -c, a ; inside"              ask   "bash -c 'kubectl get pods; kubectl delete pod x'"
+check "bash -c, \\kubectl after ;"       ask   "bash -c 'true;\\kubectl delete pod x'"
+check "bash -c, KUBECTL after ;"         ask   "bash -c 'true;KUBECTL delete pod x'"
+check "xargs, no target"                 ask   'xargs kubectl delete'
+check "find -exec"                       ask   'find . -exec kubectl delete {} \;'
+check "watch"                            ask   'watch kubectl delete pod x'
+check "git rebase -x, single quotes"     ask   "git rebase -x 'kubectl delete'"
+check "sed, then a real delete"          ask   "sed 's/x/y/' f; kubectl delete pod x"
+check "make, then a real delete"         ask   'make test; kubectl delete pod x'
+check "substitution, bash -c inside"     ask   "echo \"\$(bash -c 'kubectl delete pod x')\""
+check "substitution, ; inside quotes"    ask   'echo "$(echo hi; kubectl delete pod foo)"'
+check "eval of a substitution"           ask   'eval $(echo; echo kubectl delete pod x)'
+check "brace group piped to bash"        ask   '{ echo kubectl delete pod x; } | bash'
+check "subshell piped to bash"           ask   '(echo kubectl delete pod x) | bash'
+check "if piped to bash"                 ask   'if true; then echo kubectl delete pod x; fi | bash'
+check "if body, second command"          ask   'if true; then echo a; echo kubectl delete pod x; fi | bash'
+check "loop body piped to bash"          ask   'for i in 1; do echo a; echo kubectl delete pod x; done | bash'
+check "multi-line if piped to bash"      ask   $'if true; then\necho kubectl delete pod x\nfi | bash'
+check "| continues on the next line"     ask   $'echo kubectl delete pod x |\nbash'
+check "\\ continues the line"            ask   $'echo kubectl delete pod x \\\n| bash'
+check "written to a script, then run"    ask   "echo 'kubectl delete pod x' > x.sh; bash x.sh"
+check "sort -o a script, then run"       ask   "echo 'kubectl delete pod x' | sort -o x.sh; bash x.sh"
+check "printf -v, then run"              ask   "printf -v c 'kubectl delete pod x'; \$c"
+check "heredoc apostrophe, then a ;"     ask   $'cat <<\'EOF\' > notes.txt\necho don\'t\nEOF\ngrep x y; kubectl delete pod x'
+
+echo ""
+echo "=== A text command that stores text for a later command keeps it scanned ==="
+# uniq takes [INPUT [OUTPUT]]; the writer check knew only >, -o and printf -v.
+check "uniq OUTPUT operand, then sh"     ask   "echo 'kubectl delete pod y' | uniq - out.sh; sh out.sh"
+check "uniq OUTPUT operand, && bash"     ask   "echo 'kubectl delete pod y' | uniq - out.sh && bash out.sh"
+check "grep | uniq OUTPUT, then bash"    ask   'grep kubectl in.txt | uniq - out.sh; bash out.sh'
+check "uniq -u, OUTPUT operand"          ask   'grep kubectl in | uniq -u - out.sh; sh out.sh'
+check "uniq -f value, OUTPUT operand"    ask   "echo 'kubectl delete pod x' | uniq -f 1 - out.sh; sh out.sh"
+check "sort -uo, bundled"                ask   "echo 'kubectl delete pod x' | sort -uo x.sh; bash x.sh"
+check "sort --out=, abbreviated"         ask   "echo 'kubectl delete pod x' | sort --out=x.sh; bash x.sh"
+check "less -O log file"                 ask   "echo 'kubectl delete pod x' | less -O x.sh; bash x.sh"
+check "less --log-file"                  ask   "echo 'kubectl delete pod x' | less --log-file=x.sh; bash x.sh"
+check "commit message read back"         ask   "git commit -qm 'kubectl delete pod x'; git log -1 --format=%s | bash"
+check "git note read back"               ask   "git notes add -m 'kubectl delete pod x'; git notes show | sh"
+check "gh comment read back"             ask   "gh pr comment 1 --body 'kubectl delete pod x'; gh pr view 1 --json comments -q '.comments[0].body' | bash"
+check "uniq, INPUT only"                 allow "grep -h 'kubectl delete' x | uniq a.txt; make"
+check "grep | uniq, no operand"          allow "grep -h 'kubectl delete' a.txt | uniq; make"
+check "uniq -f value is not an operand"  allow "grep -h 'kubectl delete' a.txt | uniq -f 1 -; make"
+check "grep -o is not an output file"    allow "grep -o 'kubectl delete' a.txt; make"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
