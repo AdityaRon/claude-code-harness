@@ -32,7 +32,7 @@ mkdir -p "$HOME/.claude"
 # machine last installed before they were.
 cat > "$HOME/.claude/settings.json" <<'JSON'
 {"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"~/.config/iterm2/cc-status"}]}]},
- "env":{"MINE":"1"},
+ "env":{"MINE":"1"},"effortLevel":"xhigh",
  "permissions":{"deny":["Bash(my-danger:*)","Bash(rm -rf:*)","Bash(rm -rf /:*)"]}}
 JSON
 
@@ -54,8 +54,32 @@ printf '%s' '{"permissions":{"deny":["Bash(rm -rf /:*)"]}}' > "$HOME/.claude/loc
 # a directory takes the same [[ -f ]] branch without risking a hung test.
 mkdir "$HOME/.claude/local-settings/odd.json"
 
+# Twelve backups from earlier installs; this run makes a thirteenth.
+for i in 00 01 02 03 04 05 06 07 08 09 10 11; do printf '{}' > "$HOME/.claude/settings.json.bak.202601010000$i"; done
+
 OUT=$(cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh 2>&1); RC=$?
 [ "$RC" -eq 0 ] && pass "installer exits 0" || fail "installer exits 0" "rc=$RC: $(printf '%s' "$OUT" | tail -3)"
+
+echo ""
+echo "=== settings.json backups are pruned to the newest ten ==="
+N=$(ls "$HOME"/.claude/settings.json.bak.* | wc -l | tr -d ' ')
+[ "$N" = 10 ] && pass "10 backups remain" || fail "10 backups remain" "$N: $(ls "$HOME"/.claude/ | grep bak)"
+[ ! -e "$HOME/.claude/settings.json.bak.20260101000002" ] && [ -e "$HOME/.claude/settings.json.bak.20260101000003" ] \
+  && pass "the three oldest went, the rest stayed" || fail "which were pruned" "$(ls "$HOME"/.claude/ | grep bak)"
+grep -qF 'backups: 3 old removed, newest 10 kept' <<<"$OUT" && pass "and the install says so" || fail "prune message" "$(grep backups <<<"$OUT")"
+
+echo ""
+echo "=== the installed version and clone are recorded for harness-update ==="
+V="$HOME/.claude/harness.version"
+grep -q "^repo=$REPO\$" "$V" 2>/dev/null && pass "repo= names this clone" || fail "repo=" "$(cat "$V" 2>/dev/null)"
+if ORIGIN=$(git -C "$REPO" remote get-url origin 2>/dev/null); then
+  grep -qxF "origin=$ORIGIN" "$V" && pass "origin= names its origin, for the updater's own clone" || fail "origin=" "$(cat "$V")"
+else
+  ! grep -q '^origin=' "$V" && pass "no origin remote: no origin= line" || fail "origin=" "$(cat "$V")"
+fi
+grep -qE '^version=.+' "$V" && grep -qE '^commit=[0-9a-f]{40}$' "$V" \
+  && pass "version= and commit= written" || fail "version/commit" "$(cat "$V" 2>/dev/null)"
+[ -x "$HOME/.claude/harness-update.sh" ] && pass "harness-update.sh installed executable" || fail "harness-update.sh" "missing"
 
 echo ""
 echo "=== machine-local rules survive the install byte for byte ==="
@@ -118,9 +142,22 @@ grep -qF 'retired rule removed: Bash(rm -rf:*)' <<<"$OUT" && ! grep -qxF 'Bash(r
 [[ -x "$HOME/.claude/net-allowlist.sh" ]] \
   && pass "net-allowlist.sh installed" || fail "net-allowlist.sh installed" "missing"
 N1=$(jq '.permissions.allow | length' "$S")
-(cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh >/dev/null 2>&1)
+
+echo ""
+echo "=== xhigh moves to high once; the re-run keeps a later xhigh and adds no rules ==="
+MOVED='effortLevel: "xhigh" → "high"'
+[ "$(jq -r .effortLevel "$S")" = "high" ] && grep -qF "$MOVED" <<<"$OUT" \
+  && pass "xhigh moved to high, and the install says so" || fail "xhigh moved to high" "$(jq -r .effortLevel "$S"): $(grep effortLevel <<<"$OUT")"
+jq '.effortLevel = "xhigh"' "$S" > "$S.next" && mv "$S.next" "$S"
+OUT2=$(cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh 2>&1)
+[ "$(jq -r .effortLevel "$S")" = "xhigh" ] && ! grep -qF "$MOVED" <<<"$OUT2" \
+  && pass "an xhigh set after the move survives the next install" || fail "later xhigh kept" "$(jq -r .effortLevel "$S"): $(grep effortLevel <<<"$OUT2")"
 [ "$(jq '.permissions.allow | length' "$S")" = "$N1" ] \
   && pass "re-running with fragments adds nothing" || fail "re-running with fragments adds nothing" "$N1 -> $(jq '.permissions.allow | length' "$S")"
+FRESH="$TMP/fresh"; mkdir -p "$FRESH"
+(export HOME="$FRESH"; cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh >/dev/null 2>&1)
+[ "$(jq -r .effortLevel "$FRESH/.claude/settings.json" 2>/dev/null)" = "high" ] && [ -f "$FRESH/.claude/state/effort-high.migrated" ] \
+  && pass "a fresh install gets high and marks the move done" || fail "fresh install" "$(ls "$FRESH/.claude/state" 2>&1)"
 
 echo ""
 echo "=== a hook the harness did not install survives a real run ==="

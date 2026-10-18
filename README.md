@@ -1,9 +1,27 @@
 # Claude Code Harness
 
-Machine-level security, audit, and context hooks for Claude Code.
-Install once per developer machine — works across all projects without touching repo files.
+Hooks, settings, rules and skills for Claude Code, installed into `~/.claude`
+once per machine, so they apply in every project without touching repo files.
+PreToolUse guards stop actions that are hard to undo or that leak secrets
+(force pushes, `rm -rf` outside scratch, reading `.env`, writing a token to
+disk), ask you about a short list (cluster writes, request bodies to unknown
+hosts, inline code that reads the environment), and let everything else run
+under auto mode. Every deny and ask is a line in `~/.claude/logs/audit.log`.
 
-## Install
+What the guards cost: `python3 bin/hook-bench.py --base v1.0.0 --head HEAD`, run
+at 4f4dae0 on an Apple M2 with macOS 26.6.2 on 2026-10-17 UTC, measured a Bash
+call waiting 54.5 ms at p50 and 108.7 ms at p95 over the 321 Bash payloads in
+`tests/bench-corpus.jsonl` (83.4 and 124.1 ms at v1.0.0 in the same run). Other
+machines will differ; from v1.0.1 on, each release's `CHANGELOG.md` entry carries
+a same-run table against the previous tag (`.github/workflows/release.yml`).
+Asks cost more time: in 49 days of one machine's transcripts
+(`docs/permission-friction.md`), 849 of 872 guard asks were approved, and the
+median approved ask held its call 133 s, against 5 s for a Bash call with no prompt.
+
+## Install and update
+
+Needs macOS or Linux with bash, `jq` (the guards fail closed without it), `gh`,
+`python3` (for `bin/hook-bench.py` and `bin/permission-friction.py`) and `claude`.
 
 ```bash
 git clone https://github.com/AdityaRon/claude-code-harness.git
@@ -11,602 +29,148 @@ cd claude-code-harness
 bash install.sh
 ```
 
-The installer:
-- Merges into any existing `~/.claude/settings.json` (user keys preserved, allow/deny lists unioned, hooks owned by harness).
-- Backs up the previous file as `settings.json.bak.<timestamp>`.
-- Folds in machine-local allow/deny rules from `~/.claude/local-settings/*.json` (see [Customization](#customization)).
-- Runs `doctor.sh` to verify every hook after install.
+- Merges into your `~/.claude/settings.json`: your keys kept, allow and deny lists unioned, the harness's hook entries owned by the harness.
+- Backs the previous file up as `settings.json.bak.<timestamp>` and folds in `~/.claude/local-settings/*.json`.
+- Runs `doctor.sh` to verify every hook.
 
-Then open Claude Code and run `/hooks` to confirm everything is registered.
+Then run `/hooks` in Claude Code to confirm everything is registered. On a new
+machine, put your `~/.claude/rules/local-*.md` and `~/.claude/local-settings/`
+files in place first; this public repo ships neither. More in
+[docs/install.md](docs/install.md), including what lands in `~/.claude`.
 
-**On a new machine**, put the machine-local files in place before
-`bash install.sh`: rules in `~/.claude/rules/local-*.md`, and allow rules for
-work tools and hosts in `~/.claude/local-settings/<name>.json`. This repo is public and
-ships neither, so they come from wherever you keep them, such as the repo that
-holds your work skills. A machine that already has its rules in
-`settings.json` keeps them, because the merge never removes an allow rule.
+**Updating.** `~/.claude/harness-update.sh` checks the newest release tag out
+of its own clone, runs `doctor.sh`, and installs only on green; `--schedule` runs
+it at 01:17, 07:17, 13:17 and 19:17 local time and `--unschedule` stops that.
+`--with-cli` also upgrades a Homebrew-cask Claude Code on each run. It leaves
+alone an install from a clone with local changes or commits, so update that
+one with `git pull && bash install.sh`. Releases are `vMAJOR.MINOR.PATCH` tags, each
+with a GitHub Release and a `CHANGELOG.md` entry. The Release workflow tags
+main after each daily Upstream drift run when anything but `CHANGELOG.md`
+changed, gated on `doctor.sh` and, when `hooks/` or `config/settings.json`
+changed, the hook benchmark: [docs/releases.md](docs/releases.md).
 
-## What it does
+**Keeping up with Claude Code.** Claude Code auto-updates, so the facts the
+harness relies on are pinned in `config/upstream-contract.json` and checked daily
+by `bin/upstream-check.sh`: [docs/upstream-contract.md](docs/upstream-contract.md).
 
-### Security — hard block (`deny`)
+**Testing.** `bash doctor.sh` runs every suite in `tests/`. CI runs it on Linux
+and macOS, lints the scripts with shellcheck, and benchmarks each PR's hooks
+against main.
 
-| Hook | Event | Behaviour |
+## What it blocks, asks and logs
+
+| Hook | Runs on | Behaviour |
 |---|---|---|
-| `env-guard` | PreToolUse → Bash | Blocks commands that read, dump, copy, or exfiltrate env values or dotfiles (`cat .env`, `printenv`, `echo $API_KEY`, `cp .env /tmp/x`, `dd if=.env`, `… < .env`, `curl --data @creds`, `nc`, `eval $(env)`, etc.). A jq filter or a grep/rg pattern is text, not a file: `grep -rn '\.env' src/` is a search. |
-| `sensitive-file-guard` | PreToolUse → Read/Edit/Write/MultiEdit/NotebookEdit/**Grep** | Blocks access to `*.env`, `*.pem`, `*.key`, SSH keys, AWS creds, `.npmrc`, `.git-credentials`, `.pgpass`, `.kube/config`, `.ssh/config`, `.docker/config.json`, `credentials.json`, service-account JSON. Resolves symlinks so a symlinked path can't bypass. **Grep** prints file content like `Read` does, so it is guarded on the same list: its `path` is checked as a file *and* as a credentials directory (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, which a content search would dump wholesale), and its `glob` is checked in de-globbed form, so `*.env`, `**/.env*` and `*.{env,ts}` are all denied. Grep's `pattern` is the text being searched *for*, never a target — grepping source for `process.env.API_KEY` stays an ordinary read. |
-| `git-guard` | PreToolUse → Bash | Denies force-push in every spelling (`--force`, `--force-with-lease`, a bundled short flag like `-fu`/`-qf`, a `+` refspec, `--mirror`), `reset --hard`, `clean -f`, writes into `.git/hooks` (the directory, so `cd .git/hooks && cat > pre-commit` counts), `core.hooksPath` tampering (including via `-c`), shell-body (`!`) aliases, `filter-branch`, broad `git add` (`.`, `./`, `:/`, `-A`, `--all`, including behind a flag like `git add -v .`). Asks before `branch -d/-D` unless a remote-tracking ref holds every named branch's tip. Normalizes `git -c k=v` / `-C dir` global-option prefixes, and (via `normalize_wrappers`) leading env assignments and wrapper commands, so neither can break the match. |
-| `rm-guard` | PreToolUse → Bash | Denies recursive `rm` of `/`, `~`, `$HOME`, `.`, `..`, `*` or a top-level folder, `-f` or not, and any `rm -rf` (every spelling: `-fr`, `-r -f`, `--recursive --force`) outside this session's scratch folder. Inside `$CLAUDE_JOB_DIR/tmp`, or the sandbox's `/tmp/claude-<uid>/<job id>`, it runs: the folder comes from the hook's session id, a `..` or a command that sets `CLAUDE_JOB_DIR`, `HOME` or `TMPDIR` gets no allowance, and `cd` into scratch or `T=<scratch path>` earlier in the same command counts, unless the command holds a `(`: a cd inside a subshell does not last. Replaces the `Bash(rm -rf:*)` deny rules, which matched one spelling and refused the scratch folder 197 times in 49 days on one machine. |
-| `config-guard` | PreToolUse → Bash/Write/Edit/MultiEdit/NotebookEdit | Asks before a write into `~/.claude/hooks` or to the scripts directly in `~/.claude` (`statusline.sh` runs outside the sandbox): `cp`/`mv`/`rm`/`ln`/`chmod`/`tee`/`sed -i`/`curl -o`/`>` from Bash, and the file tools. Denies moving or emptying `~/.claude` itself. Also asks before a write to a Claude Code settings file, a shell startup file (`~/.zshrc`, `~/.bashrc`, `~/.profile`, …), `~/.gitconfig` (including `git config --global`) or `~/Library/LaunchAgents`. Reads pass, and a write made from inside an interpreter is not seen. |
-| `interpreter-guard` | PreToolUse → Bash | Asks before `python -c` / `node -e` / `ruby -e` / `perl -ne` / `php -r` / `bash -c` and heredocs when the payload references env vars, dotfiles, sockets, or subprocess APIs — including when wrapped in a command runner (`poetry run`, `env`, `timeout`, `nohup`, …). Raises the bar on the interpreter-bypass route — but string-obfuscated payloads can still evade a regex; the OS sandbox is the real containment. |
-| `network-guard` | PreToolUse → Bash, WebFetch | Denies file-body uploads via `curl -d @…` / `-d@…` / `--data=@…`, `-F @…`, `-T`, **and pipe-to-shell remote code execution** (piping curl/wget into a shell or interpreter, process substitution, or command substitution). An interpreter running a local script file, or `python3 -m json.tool`, reads the download as data and is allowed. Prompts on `scp`/`rsync`/`sftp` to a remote host and on local HTTP servers. |
-| `secret-scanner` | PreToolUse → Write/Edit/MultiEdit/NotebookEdit | Scans the payload before it hits disk; denies AWS keys, JWTs, PEM blocks, GitHub/Slack(token+webhook)/Stripe/Google/Anthropic/OpenAI(incl. `sk-proj-`) tokens and GCP service-account keys |
-| `mod-gate` | PreToolUse → Write/Edit/MultiEdit | On a Claude Code mod's files, runs `claude plugin validate` on the mod as it will be after the write. Denies hooks that replace permission decisions (`tool.check`, `classic.PreToolUse`, `classic.PermissionRequest`, `plugin.register`, `engine.create`); otherwise tells you what the mod hooks and calls. Any other file exits in ~5 ms. See [Known limitations](#known-limitations). |
+| `env-guard` | Bash | Deny: reading, dumping, copying or sending env values and dotfiles (`cat .env`, `printenv`, `nc`) |
+| `sensitive-file-guard` | Read, Grep, file writes | Deny: `.env`, keys, SSH and cloud credentials, credential folders. Ask: a Grep at or above your home folder |
+| `secret-scanner` | file writes | Deny: high-confidence token shapes (AWS, GitHub, Slack, Stripe, Google, Anthropic, OpenAI, PEM) in written content |
+| `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, a broad `git add` that would stage a credential file or that it cannot check. Ask: deleting a local or remote branch whose tip no other ref holds, remote and identity changes |
+| `rm-guard` | Bash | Deny: recursive `rm` of home, root or a top-level folder, and `rm -rf` outside the session's scratch folder |
+| `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, shell startup files, `~/.gitconfig`, LaunchAgents. Deny: moving or emptying `~/.claude` |
+| `network-guard` | Bash, WebFetch | Deny: file uploads and pipe-to-shell. Ask: request bodies, `DELETE`, hosts off the allowlist, `scp`/`rsync`, local servers |
+| `interpreter-guard` | Bash | Ask: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts |
+| `kubectl-guard` | Bash | Ask: every mutating verb wherever it sits, secret reads, and any subcommand it cannot classify |
+| `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review, or one that runs code outside the guards |
+| `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
+| `memory-lint` | file writes | Advise: name, type, description, `verify:` block and index tier of a memory file |
+| `comment-budget` | file writes | Advise: a comment block an edit grew past 6 lines |
+| `session-start` | SessionStart | Inject: branch, status and recent commits; on resume, files that drifted since the last session |
+| `session-snapshot` | Stop, SessionEnd | Record: hashes of the files the session edited, for the resume drift check |
+| `pre-compact` | PreCompact | Back up: the transcript before compaction, newest 20 kept |
+| `notify` | Notification | Notify: a desktop alert titled with the session name |
+| `plan-to-html` | ExitPlanMode | Render: the plan as HTML in your browser, without delaying the prompt |
+| status line | every refresh | Show: model and effort, branch, context, cost, rate limits, plan and workflow links, a cold-cache warning |
 
-### Security — prompt user (`ask`)
+A guard's deny runs before the permission system, so it holds in every
+permission mode (a loaded mod is the exception). A guard's ask still comes to
+you in auto mode: Claude Code's [permission-modes doc](https://code.claude.com/docs/en/permission-modes)
+says auto mode "still shows you those prompts". The auto-mode classifier
+decides only what no guard or rule names. Every row in full:
+[docs/guards.md](docs/guards.md), [docs/hooks.md](docs/hooks.md),
+[docs/auto-mode.md](docs/auto-mode.md).
 
-> Under the shipped `defaultMode: auto`, these prompts are resolved by the auto-mode
-> classifier rather than by you. See [Auto mode](#auto-mode).
+## Turning things off and customizing
 
-| Hook | Triggers |
-|---|---|
-| `git-guard` | `git branch -D` of a branch whose tip no remote-tracking ref holds, or one it cannot check (a name in a variable, xargs, a `cd` first), `git push --delete`, `git push origin :branch`, `git remote set-url`, `git config user.email`, non-shell `git config alias.*`, glob staging (`git add '*.ts'`) |
-| `interpreter-guard` | Long inline scripts with no obvious sensitive token |
-| `kubectl-guard` | Every mutating `kubectl` verb (`delete`, `apply`, `patch`, `replace`, `edit`, `scale`, `drain`, `cordon`, `taint`, `exec` (except a non-interactive `exec … --` running `ls`, `id`, `df`, `hostname` and similar, or any command asked only for `--version`/`--help`; `cat`, `env`, `printenv` and `ps` still ask), `cp`, `run`, `debug`, `proxy`, `rollout undo/restart`, `auth reconcile`, `config use-context`, …) wherever the verb sits in the command, plus `get secret` in every spelling that returns the data — `secret/db-creds`, `pods,secrets`, `Secret`, `secrets.v1.`, and the `--raw /api/v1/…/secrets` path (credential materialisation) — and any subcommand on neither list (fails closed). Only the resource *kind* is compared, so a CRD that merely starts with the word (`secretproviderclass`, `sealedsecrets`) stays a silent read. Exists because `kubectl` takes its global flags **before** the verb, so a prefix-matched rule like `Bash(kubectl delete:*)` misses `kubectl --namespace vm delete pod foo` — no allow/deny pair in `settings.json` can express this. Escalates rather than blocks: auto mode ships ~10 kubectl-specific `soft_deny` rules that clear when you name the target, and a hook `deny` would preempt all of them. Read-only verbs (`get`, `describe`, `logs`, `top`, `port-forward`, `rollout status`, `auth can-i`, `config view`, …) pass silently; flag *values* are skipped so `--context delete-me get pods` is still a read. |
-| `network-guard` | `curl -X DELETE` (any host), a request body (`-X POST/PUT/PATCH`, `-d`, `--json`, `-F`, a bundled `-sXPOST` or `--request=`) to any host except this machine and hosts added with `net-allowlist.sh add --body` (a loopback body still asks for an admin API, or while a port-forward, `ssh -L`, socat, cloudflared or ngrok runs or appears in the command), `curl`/`wget`/`WebFetch` to a non-allowlisted domain. A GET to this machine (`127.x`, `localhost`, `::1`) is allowed, except a local admin API (ports 8001 `kubectl proxy`, 2375/2376 Docker, 8200 Vault, or Kubernetes API paths on any port), which asks; every URL in the command is checked, by the host curl actually connects to. Adding a host to this machine's allowlist (`net-allowlist.sh add`, or a write into `~/.claude/local-settings`) asks too |
+What `install.sh` does with a value you set, from `config/merge-settings.jq`:
 
-### Audit (async, non-blocking)
-
-| Hook | Event | Behaviour |
+| Setting | Shipped | Install keeps yours? |
 |---|---|---|
-| `audit` | PostToolUse → Edit/Write | Logs every file Claude touches |
-| `audit` | PostToolUse → Bash | Logs every Bash command Claude runs (sanitized to one line) |
-| `audit` | PostToolUseFailure | Logs failed tool calls with error summary |
-| guards | PreToolUse deny / ask | Every guard decision is one line, `GUARD \| deny\|ask \| <hook> \| <command, path or URL>`, never file content. A denied call never reaches PostToolUse, so without it the harness's own blocks left no record: `grep ' | GUARD | ' ~/.claude/logs/audit.log`. A call a [mod](#known-limitations) answers itself reaches neither the guards nor PostToolUse, so it leaves no line at all. |
-| `audit` | ConfigChange | Logs any settings file modified mid-session |
-| `audit` | PostToolUse → `mcp__.*` | Logs every MCP tool call: the tool name and the *names* of the fields it was called with, never their values (a `send_message` payload carries the message body). No PreToolUse guard inspects MCP calls, so this line is the only record one happened. It is a census, not a control: read it with `grep ' | mcp__' ~/.claude/logs/audit.log` to see which connectors actually get used before deciding what to guard. |
-| `audit` | PostToolUse → Agent/SendMessage | Logs each subagent spawn (`type`, `model` or `inherit`, `isolation`) and each peer message (`to`, character count, `notify_when_idle`). Never the prompt, description, summary or message body. Evidence for subagent model choices and a sender-side trail for work handed between sessions: `grep -E ' \| (Agent|SendMessage) \| ' ~/.claude/logs/audit.log`. |
-| `audit` | PostToolUse → Artifact/ArtifactData/ArtifactComments | Logs each publish, database write and comment action: `action`, `url`, the published file's path, `collection`/`doc_id`, `thread_id`. Never page content, `data`, or comment text. Since 2.1.268 `WebFetch` rules no longer cover these tools, so this is the only record of what went to claude.ai. |
-| `audit` | SessionEnd | Logs a session-end line **once per session** — turn count (derived from the transcript; cost isn't exposed to hooks), session id, and why the session ended (`clear` / `logout` / `exit`). Previously wired to `Stop`, which fires at *every* turn end and so wrote a mislabelled `session_end` line per turn. The hook still accepts `Stop` if you rewire it. |
+| `permissions.defaultMode` | `auto` | No: replaced on every install, with a notice |
+| `permissions.allow`, `permissions.deny` | scoped lists | Yes: unioned with the shipped lists, minus `config/retired-rules.json` |
+| `hooks` | the harness's entries | Yours kept; the harness's own entries rewritten |
+| `statusLine` | `~/.claude/statusline.sh` | No: rewritten on every install |
+| `sandbox` | off, with a domain allowlist | Yes, per key; a list you set replaces the shipped list |
+| `env` | audit log, transcript folder, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Yes, per key |
+| `effortLevel` | `high` | Yes, after one move of an installed `xhigh` to `high` (marker `~/.claude/state/effort-high.migrated`) |
+| `autoDreamEnabled` | `true` | Yes: `false` keeps auto-dream off ([docs/memory.md](docs/memory.md)) |
+| `syncClaudeAiSkills`, `syncClaudeAiPlugins` | `false` | Yes |
+| `remoteControlAtStartup` and the other top-level switches ([docs/permissions.md](docs/permissions.md)) | `true` | Yes |
 
-All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 backups retained).
+- **A hook off:** there is no per-hook switch. Deleting its entry from `~/.claude/settings.json` lasts until the next install. To keep it off, remove it from `config/settings.json` in your clone; `harness-update.sh` leaves an install from a changed clone alone, so update with `git pull && bash install.sh`.
+- **Auto mode off:** `claude --permission-mode manual` for one session. Every install rewrites `permissions.defaultMode`, so to keep it off set `"manual"` in your clone's `config/settings.json`, as for a hook.
+- **Your own hooks:** a script in `~/.claude/hooks` under a name this repo does not use, plus its entry in `~/.claude/settings.json`. Installs keep both.
+- **Allow rules for work tools:** `~/.claude/local-settings/<name>.json`; only its `permissions.allow` and `permissions.deny` are read.
+- **Hosts:** `~/.claude/net-allowlist.sh candidates 30` lists, from the audit log, hosts network-guard asked about in 30 days; `add <host>` allows GETs to it, `add --body <host>` request bodies too; `list` and `remove` show and drop entries.
+- **Environment knobs**, under `env` in settings unless noted:
+  - `CLAUDE_AUDIT_LOG`: where the audit log goes.
+  - `CLAUDE_PLANS_HTML_DIR`, `CLAUDE_PLAN_HTML_NO_OPEN=1`: where plans render, and whether a browser opens.
+  - `CLAUDE_EDITOR_URI`: the editor the status line's `wf` link opens.
+  - `CLAUDE_NET_ALLOWLIST`: extra hosts for network-guard, per project.
+  - `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: when auto-compact fires; a bare integer.
+  - `CCH_KEEP_BACKUPS`, in the shell that runs `install.sh`: how many `settings.json` backups it keeps (default 10).
+- **Sandbox:** run `~/.claude/sandbox.sh on`, `off` or `status` yourself (a `!` message or a terminal), then ask Claude to run `~/.claude/sandbox-trial.sh`.
 
-### Context & continuity
+Each of these in full: [docs/customization.md](docs/customization.md).
 
-| Hook | Event | Behaviour |
-|---|---|---|
-| `session-start` | SessionStart | On resume, compact, clear and fork, injects git branch, status and last 5 commits (the CLI's own gitStatus covers startup). On `source=resume`, also diffs each file the prior session edited against a content-hash snapshot and surfaces any drift (file reverted, missing, or HEAD moved) so Claude re-verifies before trusting the prior transcript's narrative. |
-| `session-snapshot` | Stop (async), SessionEnd | Records the hashes of every file the session edited, plus `git HEAD`, to `~/.claude/state/sessions/<session_id>.json` (0600, keeps newest 50). Feeds the resume-drift check above. Async on Stop because it reads the whole transcript (2.2 s on a 40 MB one); the SessionEnd run catches the last turn if you quit right after it. |
-| `pre-compact` | PreCompact | Backs up the full session transcript before compaction. Keeps last 20. |
-| `notify` | Notification | Desktop alert when Claude needs input, titled with the session name (`/rename`, else the generated title, else the folder) and carrying Claude Code's own message (async) |
+## Design choices
 
-### Readability
-
-| Hook | Event | Behaviour |
-|---|---|---|
-| `workflow-record` | PostToolUse → Workflow | Logs each workflow run's persisted `.js` script path to the audit log and records a per-session pointer the status line links to. Clicking the `wf` link opens the script in your editor (auto-detects VS Code / Cursor / Zed; override with `CLAUDE_EDITOR_URI`). Discoverability only — no rendering. |
-| `plan-to-html` | PreToolUse → ExitPlanMode | Renders the proposed plan as a styled HTML file and opens it in your browser, so long plans are comfortable to read before you approve/reject in the terminal. (The page loads `marked`/`highlight.js` from a CDN for rendering and gracefully falls back to readable raw markdown when offline — it is not fully self-contained.) Runs `async` — never blocks or delays the approval prompt. Markdown is base64-embedded (no escaping can break the page) and decoded as UTF-8 client-side via [marked](https://marked.js.org/) and rendered with a GitHub-dark theme plus [highlight.js](https://highlightjs.org/) syntax highlighting for fenced code; falls back to readable raw markdown when offline. Plans authored as a **full HTML document** are served verbatim (no double-wrap). Output lands in `~/.claude/plans-html/` (newest 50 kept), and the session's latest plan is linked from the **status line** as a clickable OSC-8 hyperlink. The status line also warns `cold: next msg re-caches Nk` when upstream's `prompt_cache.expires_at` has passed and `recache_tokens_if_cold` is at least 100k: the first message after the cache goes cold re-sends everything at write price. It re-runs every 300 s (`refreshInterval`) so a terminal left open overnight shows it before you type. The model is followed by the live effort level (yellow at `low` or `medium`), plus `fast` and `no-think` when those apply, because 2.1.280 started new models at their default effort without saying so. |
-
-### Settings shipped
-
-| Setting | Value | Effect |
-|---|---|---|
-| `permissions.defaultMode` | `auto` | Every session starts in **auto mode** — a model classifier adjudicates permission prompts instead of stopping for a keystroke. See [Auto mode](#auto-mode) for what this changes about the guards. |
-| `fileCheckpointingEnabled` | `true` | Snapshots files before edits so `/rewind` can restore them |
-| `effortLevel` | `xhigh` | Default reasoning effort (portable across machines) |
-| `skipAutoPermissionPrompt` | `true` | Pre-accepts the auto-mode opt-in dialog, so auto mode is live on first launch rather than waiting behind a dialog |
-| `sandbox` | off by default | OS sandbox (Seatbelt on macOS, bubblewrap on Linux) around each command Claude runs: writes only to the project and TMPDIR (Claude Code keeps `~/.claude` read-only to commands, the session scratch folder included), no reads of `~/.ssh`, network only to listed domains, and listening on localhost allowed for dev and test servers (`allowLocalBinding`; Claude Code then serves no device tools from this machine to cloud sessions). `~/.claude/sandbox.sh on`/`off`/`status` flips it per machine and every install keeps your choice; `~/.claude/sandbox-trial.sh` reports what works under it. docker, gh, kubectl, tsh, gcloud and terraform are in `excludedCommands` (incompatible or failing TLS under it), so they run as today, guards included, but only when the command is that tool alone: `docker ps | head` runs sandboxed. |
-| `includeCoAuthoredBy` | `true` | Adds `Co-authored-by: Claude` to commits |
-| `syncClaudeAiSkills` / `syncClaudeAiPlugins` | `false` | Keeps the skills and plugins enabled on your claude.ai account out of terminal sessions. Each synced skill adds its description to every session, and a synced plugin can run hooks or inline shell under this machine's allow rules. They still work on claude.ai. Set either to `true` in `~/.claude/settings.json` to opt back in; the install keeps your value. |
-| `remoteControlAtStartup` | `true` | Every interactive session connects to [Remote Control](https://code.claude.com/docs/en/remote-control), so you can pick it up from claude.ai or the Claude app. Needs a claude.ai login. Anyone signed in to your account can then steer the session; turn on **Require trusted devices** in your claude.ai account settings to tie that to known devices. Set `false` to opt out; the install keeps your value. |
-| `isolatePeerMachines` | `true` | With Remote Control on, a `SendMessage` to a session on another machine waits for your approval. Sessions on this machine are unaffected. |
-| `permissions.allow` | Scoped allowlist | Covers common safe ops: `npm test/run lint/build`, `pytest`, `python3`, `poetry run/install/lock`, `gh run/search`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. Read-only verbs added from the audit-log census: `git grep/rev-parse/ls-tree/ls-files/show-ref/cat-file/blame/describe/merge-base/shortlog`, `git remote -v`, `git worktree list`, and read-only `docker` subcommands (`run`/`exec`/`rm`/`cp` deliberately excluded). Interpreter wildcards (`python3`, `poetry run`) are allowed because a permission `allow` only skips the *prompt* — the PreToolUse guards still run, and `interpreter-guard` inspects inline `-c`/`-e`/heredoc code even when wrapped in a runner (`poetry run python -c …`). `gh api` and `kubectl` are both allowlisted, but they are not equally safe. `kubectl` is covered by `kubectl-guard`, which denies every mutating verb wherever it sits in the command. `gh api` has **no** equivalent coverage — it can POST/DELETE through the GitHub API and `network-guard` never inspects it, so that entry is a deliberate convenience trade rather than a guarded one. With the OS sandbox off, an auto-approved `python3 script.py` runs the script's contents unscanned — enable the sandbox for containment. |
-| `permissions.deny` | `git push --force`, `git reset --hard`, `sudo`, `gh auth token`, … (`rm -rf` moved to `rm-guard`) | Deny always wins over allow. Over a loaded mod it wins only on a machine with managed settings or a Team/Enterprise login; see [Known limitations](#known-limitations). The deny list also covers writes into the installed-plugin cache `~/.claude/plugins`, `claude plugin install`/`enable`/`update`/`marketplace add`, and `--plugin-url` |
-
-### How Bash rules actually match
-
-Verified against CLI 2.1.266 on 2026-09-09, after a friction census over 40,346
-logged Bash calls found 31% of them landing on the classifier rather than a
-rule. Getting these wrong produces two opposite failures: a rule that looks
-permissive and still prompts, and a deny rule that reads as protection and
-never fires. Both were present here.
-
-- **Compound commands are split and matched per segment.** Separators are
-  `&&`, `||`, `;`, `|`, `|&`, `&`, and newlines; every subcommand must match
-  independently. Deny and ask rules additionally apply to commands nested in a
-  subshell, a command substitution, or a control-flow body.
-- **A fixed wrapper set is stripped before matching**: `timeout`, `time`,
-  `nice`, `nohup`, `stdbuf`, plus the builtins `command` and `builtin`, and
-  zsh's `noglob`. So `Bash(npm test *)` already covers `timeout 30 npm test`,
-  and a `timeout`-prefixed command was never the friction it looked like.
-  Not stripped: `env`, `xargs` with flags, `watch`, `setsid`, `flock`,
-  `direnv exec`, `devbox run`, `mise exec`, `npx`, `docker exec`.
-- **Leading env assignments are asymmetric.** A deny or ask rule matches past
-  them (`Bash(rm *)` in deny catches `FOO=bar rm -rf tmp/`), but an allow rule
-  does **not** — so `VAR=x cmd` fails closed and falls to the classifier. This
-  is the single largest source of friction here (7,171 of 40,346 commands) and
-  **no rule can fix it**: the first token contains a machine-specific value.
-  Put the binary first instead.
-- **`git -C <path>` is not a wrapper and is not stripped.** A rule written
-  `Bash(git reset --hard:*)` therefore never matches `git -C /tmp/x reset
-  --hard`; `git-guard` denies that form instead.
-- **A `*` may appear anywhere in a rule, but not beside a trailing `:*`.**
-  2.1.292 reads `Bash(git * push --force:*)` as a literal prefix, so its `*`
-  matches only a literal `*`, and it warns about the rule at every launch.
-  Write the wildcard form without `:*`, as in `Bash(claude * --plugin-url*)`.
-- **Whether `~` is expanded is undocumented.** Rather than guess,
-  `merge-settings.jq` emits a `$HOME`-expanded twin for every rule containing
-  `~/`, so both spellings are present whichever way the CLI compares them.
-- **The installer only widens, except for retired rules.** `merge-settings.jq`
-  unions the allow and deny lists, so dropping a rule from `config/settings.json`
-  does not remove it from a machine that already has it, unless the rule is also
-  listed in `config/retired-rules.json`: every install takes those out of
-  `~/.claude/settings.json` and says so. A local-settings fragment that lists a
-  retired rule keeps it. Narrowing a rule without retiring it (say `Bash(kubectl:*)`
-  down to `Bash(kubectl get:*)`) still means editing `~/.claude/settings.json` by
-  hand.
-
-- **Allowlisting a wrapper script bypasses every guard.** A PreToolUse hook
-  sees only the top-level Bash command, never the `kubectl` or `git` calls a
-  script makes internally. The `~/.claude/skills/*` entries shipped here are
-  read-only probes for exactly that reason, and a probe that creates and
-  deletes cluster resources is deliberately left off the list — allowlisting it
-  would launder `kubectl-guard`, which would never see inside it.
-
-The practical consequence: **a hook sees the whole command string, a permission
-rule sees only a prefix.** Enforcement that must not be evadable belongs in a
-guard, with the deny list as a backstop — not the other way round. A Claude Code
-mod (2.1.287+) runs above both; see [Known limitations](#known-limitations).
-
-## Auto mode
-
-The harness ships `permissions.defaultMode: "auto"`. Instead of stopping for a
-keystroke on every unrecognised action, a model classifier approves or denies
-the prompt; read-only work (reading files, searching code) doesn't go to the
-classifier at all. Verify the mode with `/status`, or override per session with
-`claude --permission-mode manual`.
-
-**This pins auto mode rather than enabling it.** As of Claude Code 2.1.227 auto
-*is* the product default: `--permission-mode` accepts
-`acceptEdits | auto | bypassPermissions | manual | dontAsk | plan` with no
-`default` in the list, and a settings value of `"default"` means "whatever the
-product default is" — which is now auto. So a machine sitting on `"default"`
-already gets the classifier; setting `"auto"` explicitly just states the intent
-and stops it drifting if that default changes again. The real opt-out is
-`"manual"`.
-
-**It only works in user settings.** Claude Code will not let a repo-level
-`.claude/settings.json` grant `defaultMode: auto`, and the ignored value
-*shadows* your user-level mode — so don't copy this harness's `settings.json`
-into a project. The installer writes `~/.claude/settings.json`, which is the
-right place. `install.sh` owns this key: an existing `defaultMode` is replaced
-(with a notice) rather than winning the merge, so re-running the installer
-actually flips an older install onto auto.
-
-**What this changes about the guards:**
-
-- **The `deny` tier is unaffected.** PreToolUse hooks run before the permission
-  system, so a guard that denies still blocks the call in any permission mode.
-  A loaded mod is the exception; see [Known limitations](#known-limitations).
-- **The `ask` tier still asks you.** A prompt a guard forces stays a question
-  to you in auto mode: the permission-modes doc says auto mode "still shows you
-  those prompts". What the classifier decides is everything the guards *don't*
-  ask about, such as a `curl` to this machine or a command no guard
-  inspects. So a guard's ask is the way to be asked explicitly; anything you want
-  stopped unconditionally belongs in `permissions.deny` or `autoMode.hard_deny`.
-- **Some `permissions.allow` entries are disregarded.** Auto mode ignores allow
-  entries it classes as classifier-bypassing, so a broad wildcard may not buy
-  you the silence it used to. Run `/doctor` inside a session to list which of
-  your entries it's ignoring.
-
-**Tuning the classifier.** Auto mode reads its rules from a top-level
-`autoMode` key — `{environment, allow, soft_deny, hard_deny}`:
-
-```bash
-claude auto-mode defaults   # the shipped rules (17 allow, 65 soft_deny, 1 hard_deny, 20 environment)
-claude auto-mode config     # the effective rules: yours where set, defaults otherwise
-claude auto-mode critique   # AI review of your custom rules
-claude auto-mode reset      # drop your autoMode section, back to shipped defaults
-```
-
-**The harness deliberately ships no `autoMode` block.** `auto-mode config`
-describes the resolution as *"your settings where set, defaults otherwise"* —
-i.e. setting a category looks like it **replaces** the shipped rules for that
-category, not adds to them. Shipping a handful of `soft_deny` rules could
-therefore silently drop the 65 that come with Claude Code, which is a bad trade
-for a security harness. Write your own rules if you want them, then confirm
-what survived with `claude auto-mode config` before trusting it.
-
-## Repo layout
-
-Two entry points sit at the root; everything else is grouped by what it is.
-
-```
-install.sh               ← run once per machine
-doctor.sh                ← run every suite in tests/
-bin/                     ← executables the harness installs or you invoke
-  statusline.sh
-  memory-verify.sh       ← memory staleness check (see Memory staleness)
-  upstream-check.sh      ← scheduled drift guard (see Upstream drift)
-  session-route.sh       ← which session owns this PR? (see docs/session-routing.md)
-  net-allowlist.sh       ← this machine's network allowlist: list, candidates from
-                           the audit log, add, remove
-  memory-provenance.sh   ← who wrote this memory, and when? --session NAME answers
-                           "did the session telling me this also write the memory
-                           I am about to cite as agreement?"
-  permission-friction.py ← which guard asks and denies cost the most, from local
-                           transcripts; --replay hooks/ re-runs them through a
-                           branch's guards to measure a fix
-config/
-  settings.json          ← the settings the installer merges in. Portable
-                           only, like rules/: an allow for a work tool or an
-                           internal CLI goes in ~/.claude/local-settings/,
-                           folded in on every install (see Customization)
-  merge-settings.jq      ← how that merge is performed
-  retired-rules.json     ← rules the repo stopped shipping; each install removes
-                           them from ~/.claude/settings.json
-  upstream-contract.json ← the upstream facts the harness relies on
-hooks/                   ← one file per hook, plus shared lib.sh
-rules/                   ← personal rules, installed to ~/.claude/rules/ and
-                           loaded in every session in every project. Portable
-                           only: nothing naming a person, ticket, cluster or
-                           customer, because this repo is PUBLIC. Machine-local
-                           rules go straight into ~/.claude/rules as local-*.md,
-                           a name nothing here may ship, and the install never
-                           deletes what it did not put there
-  prose-and-comments.md  ← length, voice, and where justification belongs
-  collaboration.md       ← before replying, and handing work back
-  working-agreement.md   ← keep going, evidence, cost, finishing the loop
-  environment.md         ← git and Claude Code facts that hold on this machine
-  python-tests.md        ← path-scoped: loads only when Claude opens Python
-skills/                  ← agent skills, one directory each
-  memory-audit/          ← check memories against external truth
-  memory-archive/        ← relieve an over-limit index; proposes, never writes
-  pr-review/             ← writing, answering and requesting a review; loads
-                           only when a review is in play
-tests/                   ← one <name>.test.sh per hook or script
-docs/                    ← research notes and working documents
-  session-routing.md     ← routing a PR to the session that owns it; read the
-                           precondition — it only holds in single-author repos
-  memory-hygiene-brief.md
-                         ← the original audit: what is wrong with file-based
-                           memory, and why nothing collects it
-  memory-hygiene-research.md
-                         ← what Claude Code already ships; read the Errata
-                           first — two claims in the body did not hold
-  memory-hygiene-problems.md
-                         ← measured problems and the rules learned; the
-                           memory skills cite this one
-  permission-friction.md ← which guard asks and denies cost the most, and why;
-                           bugs vs policy vs machine-local
-  permission-friction-cases.jsonl
-                         ← sanitized cases with observed and wanted decisions;
-                           run with bin/permission-friction.py --cases
-```
-
-Paths inside `~/.claude` after install are flat — the grouping above is for
-reading the repo, not for the installed tree.
-
-## File layout after install
-
-```
-~/.claude/
-  settings.json          ← merged with harness defaults (user keys preserved)
-  hooks/
-    lib.sh               ← shared helpers (emit_deny, emit_ask, log_audit, …)
-    env-guard.sh
-    sensitive-file-guard.sh
-    git-guard.sh
-    interpreter-guard.sh
-    kubectl-guard.sh
-    network-guard.sh
-    secret-scanner.sh
-    mod-gate.sh
-    audit.sh
-    notify.sh
-    session-start.sh
-    session-snapshot.sh
-    pre-compact.sh
-    plan-to-html.sh
-    workflow-record.sh
-  statusline.sh          ← model | repo:branch | context | tokens | cost | [rate limits] | plan + workflow links
-  memory-verify.sh       ← checks memories against GitHub; run on demand, not a hook
-  skills/
-    memory-audit/
-      SKILL.md           ← /memory-audit — resolves the claims a script cannot
-  logs/
-    audit.log            ← append-only audit trail, 0600, rotated
-  transcripts/
-    transcript_auto_20260415_143022.jsonl
-    ...
-  state/
-    sessions/
-      <session_id>.json  ← per-session edit snapshot, 0600, newest 50 kept
-    plans/
-      <session_id>.path  ← pointer to the session's latest rendered plan (statusline link)
-    workflows/
-      <session_id>.path  ← pointer to the session's latest workflow run script (statusline link)
-  plans-html/
-    plan-20260528-143022.html  ← rendered plan, opened in browser, newest 50 kept
-```
-
-## Testing the harness
-
-```bash
-bash doctor.sh
-```
-
-Runs every test in `tests/*.test.sh` and prints a summary. The suite covers known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap), and the settings merge (`config/merge-settings.jq` — that a stale `defaultMode` is replaced, allow/deny lists are unioned, user keys survive, and re-running the installer is a no-op).
-
-CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS and lints every hook with `shellcheck` on each push and PR.
-
-## Keeping up with Claude Code
-
-This harness hard-codes facts about Claude Code — which hook events exist, which
-permission modes are valid, what `settings.json` may contain. Claude Code
-**auto-updates**, so those facts rot with no commit landing here. That has already
-happened twice: auto mode became the product default, and `SessionEnd` appeared
-while the session summary was still wired to `Stop`.
-
-A push-triggered CI run can never catch this, because upstream changes when the
-repo stands still. So:
-
-```bash
-bash bin/upstream-check.sh
-```
-
-`bin/upstream-check.sh` compares the harness against the **installed** CLI, using only
-auth-free commands (`claude doctor`, `claude --version`) so CI needs no credentials.
-It checks that the shipped `settings.json` still validates, that every hook event
-the harness registers still exists, and that the shipped `defaultMode` is still
-accepted — then reports events upstream has that nobody here has assessed.
-
-It works by asking the CLI an impossible question: `claude doctor` prints the full
-list of valid hook events *only* inside the warning for an unknown one, so the
-check registers a sentinel event to make it enumerate them. Note that doctor
-**exits 0 even when it rejects your settings**, so the output is parsed rather than
-trusted.
-
-| Exit | Meaning | Action |
-|---|---|---|
-| 0 | contract holds | none |
-| 1 | **breakage** — the harness relies on something upstream changed | fix the harness |
-| 2 | upstream grew — new capability nobody has assessed | adopt it, or record the decision |
-| 3 | the check itself could not run | install `jq` / the CLI |
-
-`upstream-contract.json` holds the assumptions. `acknowledged_hook_events` is *not*
-"events we use" — it is "events a human has looked at and decided about", and
-`notes_on_unused_events` records why each unused one was skipped. When upstream adds
-an event the check fails with exit 2 until someone either hooks it or writes down
-why not. **That deliberate nag is the mechanism that keeps this harness current
-instead of quietly stale.**
-
-`.github/workflows/upstream-drift.yml` runs it **daily on a schedule** plus on
-demand, and on any push touching the assumptions. It installs the CLI via npm
-rather than `curl … | bash` — piping a remote script into a shell is exactly what
-this harness's own `network-guard` denies.
-
-Sections 1 to 4 only see what `doctor` and the binary enumerate, so a new tool or
-settings key arrives silently. Section 6 closes that: it reads the changelog
-(`~/.claude/cache/changelog.md` locally; CI downloads it and passes
-`CLAUDE_CHANGELOG_PATH`), lists the harness-relevant entries for every release after
-`last_verified_version`, and exits 2 until someone assesses them and bumps that
-field. Entries naming something the contract already has a decision for are
-included, because that decision may now be stale.
-
-When the daily run finds a new release it triages first: if no entry since the pin
-matches the section 6 filter (1 of the 21 releases 2.1.280 to 2.1.302), it moves
-`last_verified_version` itself. Otherwise Claude reviews the releases and edits only
-`upstream-contract.json`, once per release. A PR whose body starts with `Nothing to
-decide.` is opened ready and merged by the workflow once the dispatched CI run
-passes; one that starts with `Decide:` is a **draft** assigned to you, with new
-settings and anything touching deny, ask or a guard as questions, never as changes.
-Landing on its own needs a branch rule `github-actions` can satisfy; as of 2026-10-17
-`main` needs no approval and requires the `doctor.sh` and `shellcheck` checks. A new
-contract PR closes the older ones `github-actions` opened, with a link, and deletes
-their branches; one you opened is left alone. After any merge: `bash install.sh`.
-Without a token the same run keeps one open issue with section 6 instead. Locally,
-`session-start` says when the installed CLI is past the contract. On push and PR
-the workflow fails only on exit 1 or 3; exit 2 is the scheduled run's to clear.
-
-Setup, once: run `/install-github-app` in Claude Code for this repo. It installs
-the Claude GitHub App, which lets the draft PR run CI, and stores
-`CLAUDE_CODE_OAUTH_TOKEN`; confirm with `gh secret list`. The reviews use your
-plan's usage.
-
-**`/insights` is a local, monthly input, not a CI step.** It needs a login and a
-model, and it reads your session history, so its report can quote prompts, paths
-and anything a session printed. Keep the report on your machine. Turn what it
-suggests into settings by hand, in a PR, and prefer the harness's own evidence:
-`grep ' | mcp__' ~/.claude/logs/audit.log` for which connectors you use, and the
-`/fewer-permission-prompts` skill for allow rules. Use it only to add `allow` rules; never
-loosen `deny` or `ask` from it. `secret-scanner` still gates whatever lands in `settings.json`.
-
-## Customization
-
-**Allow rules for tools this public repo cannot name** (work skills, internal
-CLIs): put them in `~/.claude/local-settings/<name>.json`. Every install folds
-each file's `permissions.allow` and `permissions.deny` into the merge and reads
-nothing else from it, so a fragment cannot change the mode, hooks or status line.
-A repo that ships your work skills can keep its fragment and symlink it in:
-```json
-{ "permissions": { "allow": ["Bash(~/.claude/skills/my-tool/run.sh:*)", "Bash(tsh status:*)"] } }
-```
-An allow rule only skips the prompt; the guards still run first. They read
-the command Claude runs, not what a script runs: a `kubectl create` Claude
-types is still escalated by `kubectl-guard`, one inside an allowed script is
-seen by no guard at all.
-
-**Your own hooks**: put the script in `~/.claude/hooks` under a name this repo
-does not use, and add its entry to `hooks` in `~/.claude/settings.json`. Every
-install keeps both and says how many entries it preserved. A file named like a
-shipped hook is overwritten on the next install, so change those here and run
-`bash install.sh`. When Claude writes into `~/.claude/hooks`, `config-guard`
-asks you first.
-
-**Hosts this machine reaches often** (an internal log service, a vendor API):
-```
-~/.claude/net-allowlist.sh candidates 30   # hosts network-guard asked about, most first
-~/.claude/net-allowlist.sh add logs.internal.example
-```
-`add` writes `netAllowlist` in `~/.claude/local-settings/net-allowlist.json`
-(any fragment there may carry one). `network-guard` reads it on every call, so
-it applies at once and survives every install. An entry covers the host and its
-subdomains, for GETs only: a request with a body still asks, unless the host was
-added with `add --body` (POST, PUT and PATCH then run; DELETE still asks; same
-refusals). Entries that would
-allow too much are refused: a name with no dot, a public suffix (`co.uk`), an IP
-address, shared hosting (`github.io`), and tunnel or request-capture services
-(`ngrok`, `webhook.site`). When Claude runs the script with anything but `list`,
-`candidates` or `remove`, or writes into that folder, the guard asks you first;
-the Edit and Write tools are denied there. An allow rule never silenced
-`network-guard`: a `WebFetch(domain:logs.internal.example)` or
-`Bash(curl -s https://logs.internal.example*)` entry in `permissions.allow` skips
-the prompt, and a guard's ask comes before it is consulted. After
-`git pull && bash install.sh`, move such hosts here with `add`. `candidates`
-prints your hosts, so keep its output local.
-A new machine has no history for `candidates`, so carry the list instead: keep
-`net-allowlist.json` beside your work skills and symlink it in, as with allow
-rules above (`add` writes through the link), and seed it once on the machine
-that has the history. After that, an ask about an unlisted host names the `add`
-command for that host, so each new one costs one prompt and one confirm.
-
-**Extend the network allowlist per-project** (same refusals apply):
-```json
-{ "env": { "CLAUDE_NET_ALLOWLIST": "internal.example.com api.myservice.io" } }
-```
-
-**Point the audit log elsewhere:**
-```json
-{ "env": { "CLAUDE_AUDIT_LOG": "~/logs/claude.log" } }
-```
-
-**Change where rendered plans are written:**
-```json
-{ "env": { "CLAUDE_PLANS_HTML_DIR": "~/Desktop/claude-plans" } }
-```
-
-**Render plans without auto-opening a browser** (e.g. headless / remote sessions):
-```json
-{ "env": { "CLAUDE_PLAN_HTML_NO_OPEN": "1" } }
-```
-
-**Open workflow scripts in a specific editor** (the status-line `wf` link). Auto-detects VS Code/Cursor/Zed; override the URI scheme:
-```json
-{ "env": { "CLAUDE_EDITOR_URI": "cursor://file" } }
-```
-
-**Pull auto-compact in, so long sessions stop running at near-full context.**
-Auto-compact does not fire at a percentage. It fires at
-`assumed_window − min(max_output_tokens, 20000) − 13000`, so on a 1M-token model
-the default trigger is **967k** — you spend the back half of every session paying
-for a near-full context on every turn. Shrinking the *assumed* window pulls the
-trigger in:
-```json
-{ "env": { "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "600000" } }
-```
-600000 → effective 580k → **compacts at 567k**, with the summary precomputed at
-≈464k (at the default 0.2 buffer) so the swap is still instant. The CLI takes `min(real_window, configured)`,
-so this is a **no-op on any model with a ≤600k window** and only bites on 1M
-sessions. Blocking ("context limit reached") still uses the real window.
-
-Use a **bare decimal integer**. The value is parsed with `parseInt` as a
-fallback, and anything unparseable silently falls back to the 100000 *floor* —
-so `"600k"` reads as `600`, floors to `100000`, and would compact a 1M session at
-67k. Accepted range is 100000–1000000; outside it the value is floored or capped
-without any error. `tests/install-merge.test.sh` asserts all of this.
-
-For true percentage semantics instead, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` takes
-1–100 as a percent of the effective window and is clamped so it can only ever
-*lower* the trigger. It collapses the precompute head start onto the trigger
-itself, so compaction stalls while it summarises rather than swapping in.
-
-**Try the OS sandbox** (off by default). Run these yourself, with `!` as the first character of a message, or in a terminal. Once it is on, Claude cannot switch it off: a sandboxed command cannot write settings.
-```
-~/.claude/sandbox.sh on        # sandbox.enabled = true in ~/.claude/settings.json (backup kept)
-~/.claude/sandbox.sh status    # also shows managed settings, whose sandbox values win over yours
-~/.claude/sandbox.sh off       # back to how it was
-```
-Running sessions use the change from their next command. Ask Claude to run
-`~/.claude/sandbox-trial.sh` and the four direct checks it prints. Each probe says
-PASS, FAIL or INFO; a FAIL on a tool you use is the cue to switch it off and adjust
-`sandbox` in `config/settings.json` first.
-
-To enable it by hand instead, set it globally in `~/.claude/settings.json`, or per-project in `.claude/settings.json`:
-```json
-{ "sandbox": { "enabled": true } }
-```
-Extend its allowlist under `sandbox.network.allowedDomains`.
+- A hook sees the whole command and a permission rule sees only a prefix, so enforcement lives in the guards and the deny list is a backstop ([docs/permissions.md](docs/permissions.md)).
+- Guards fail closed: no jq or unparsable input denies (`tests/fail-closed.test.sh`), and a crash or timeout blocks through `"onFailure": "block"` (Claude Code 2.1.295 and later).
+- No `autoMode` block ships: setting a category appears to replace Claude Code's own rules for it, 65 `soft_deny` rules by the `claude auto-mode defaults` count in [docs/auto-mode.md](docs/auto-mode.md).
+- Every deny and ask is an audit line; MCP calls are logged, not guarded ([docs/hooks.md](docs/hooks.md)).
+- The memory tools propose and never delete ([docs/memory.md](docs/memory.md)), and the upstream facts are a contract checked daily ([docs/upstream-contract.md](docs/upstream-contract.md)).
 
 ## Known limitations
 
-These guards are defense-in-depth, not a security boundary. Be clear-eyed about what they do **not** cover:
+- Regex guards can be evaded by a determined agent; the OS sandbox is the real containment.
+- A Claude Code mod (2.1.287+) can override the guards; `mod-gate` reviews only mods written through the file tools.
+- MCP connectors are logged, not guarded.
+- In auto mode the classifier, by judgment, decides everything no guard or rule names.
 
-- **Regex guards have a ceiling.** Command-string matching can always be evaded by a determined agent (string-obfuscated interpreter payloads, novel tool invocations, multi-step stage-then-exfil across separate commands). The guards raise the bar and catch the obvious/accidental cases; the **OS sandbox** is the only real containment for the evasion class — see *Enable the OS sandbox*.
-- **Auto mode hands the unasked middle to a model.** Guard asks still come to you, but everything no guard or rule names is approved or blocked by the classifier, by judgment rather than by rule. See [Auto mode](#auto-mode). Set `defaultMode` to `manual` to see every one of those yourself.
-- **MCP connectors are logged, not guarded.** `network-guard` sees Bash `curl`/`wget` and the `WebFetch` tool, but MCP tools (Gmail, Google Drive, Slack, Atlassian, browser automation, …) can read files and send data outbound with no guard in the middle. Since the `mcp__.*` audit row above, every such call leaves a line naming the tool and its field names, which is a record after the fact rather than a stop before it. Control the surface by only connecting MCP servers you trust, and use the log to decide which of them deserve a real guard.
-- **A Claude Code mod can override the guards.** Mods (2.1.287+) are plugin code that runs inside Claude Code. Per the [permissions docs](https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks), a mod can approve a call a guard here blocked, or answer a call itself so the guards never run. Unless the machine has managed settings or a Team/Enterprise login, it can also approve a call a `deny` rule refuses. `syncClaudeAiPlugins: false` closes the synced route only. What the harness does instead:
-  - **Claude can write you mods, reviewed.** `mod-gate` runs `claude plugin validate` (the static analysis Claude Code loads mods by) on each mod file Claude writes, as the mod will be after the write. It denies the hooks that replace permission decisions (`tool.check`, `classic.PreToolUse`, `classic.PermissionRequest`, `plugin.register`, `engine.create`) and shows you everything else the mod hooks and calls, flagging `tool.call` and calls that run outside the guards (`$.process`, `$.http`, `$.fs.write`, …). In auto mode the write itself goes to the classifier and the hot-reload prompt comes at the first save, so that notice is where you see what the mod does. On resume, `session-start` names any mod the session wrote, since one declined with "Not now" loads then.
-  - **Third-party plugins stay yours to install.** Deny rules stop Claude running `claude plugin install`/`enable`/`update`/`marketplace add` or `--plugin-url`, and writing into the installed-plugin cache `~/.claude/plugins`. `/plugin install` from your own prompt is unaffected.
-  - **Not covered:** a mod written by a shell redirect rather than the file tools, a `CLAUDE_CODE_PLUGIN_DIRS` prefix, and a `tool.call` hook that answers calls (shown, not blocked: static analysis can't tell it from a counter). The harness ships no managed settings on purpose: they would collide with a work machine's own, and the setting that blocks sideloading also blocks `--agents` and `--mcp-config`.
-- **Guards fail *closed* without jq**, so a missing-jq machine blocks all Bash/file tool calls rather than allowing them unchecked. Keep `jq` installed (the installer checks for it). They fail closed on input jq cannot parse too: a truncated or non-JSON payload is denied rather than read as an empty command. An absent or empty *field* on parseable input is a different case and still passes, since every guard is registered on tools it does not inspect.
-- **A guard that crashes or times out blocks the call.** Each one carries `"onFailure": "block"` (Claude Code 2.1.295 and later); without it Claude Code runs the call unchecked. 2.1.292 ignores the key and the guard still works. The timeout stays at Claude Code's default of ten minutes, where the guards take well under a second.
+More, including what fails closed: [docs/known-limitations.md](docs/known-limitations.md).
 
-## Per-project additions (not in this harness)
+## Repo layout
 
-Each repo manages its own:
-- `CLAUDE.md` — PR format, reviewer names, workflow rules
-- `.claude/settings.json` — project-specific deny rules, auto-formatter, test runner
-- Slack notifications — via MCP connector, instructed through CLAUDE.md
+The install and test entry points and the changelog sit at the root; everything
+else is grouped by what it is.
 
-## Memory staleness
-
-Claude Code stores memories under `~/.claude/projects/<slug>/memory/`, and ships
-its own hygiene pass (auto-dream) that merges duplicates, resolves
-contradictions, and rewrites relative dates. That pass reasons over memory
-content and session logs — it never leaves the machine.
-
-So one failure mode survives it: a memory whose claim was overtaken by the
-outside world. *"Draft PR #4821, held, land only if…"* stays internally
-consistent forever, while the PR merged two months ago. Nothing in the file
-disagrees; GitHub does.
-
-`memory-verify.sh` closes that gap, and `/memory-audit` handles the half that
-needs judgment.
-
-```bash
-bash ~/.claude/memory-verify.sh                    # every store
-bash ~/.claude/memory-verify.sh --store <slug>     # one store
-bash ~/.claude/memory-verify.sh --json             # for the skill
+```
+install.sh  doctor.sh    ← install once per machine; run every suite in tests/
+CHANGELOG.md             ← one entry per release
+bin/                     ← installed to ~/.claude, or run from the clone
+  statusline.sh  harness-update.sh  net-allowlist.sh  sandbox.sh  sandbox-trial.sh
+  memory-verify.sh  memory-fix.sh  memory-index.sh  memory-provenance.sh
+  session-route.sh       ← which session owns this PR (docs/session-routing.md)
+  upstream-check.sh      ← the daily drift check
+  hook-bench.py  release-notes.sh  ← the release benchmark and notes
+  permission-friction.py ← which guard asks and denies cost the most, from local transcripts
+config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json
+hooks/                   ← one file per hook, plus shared lib.sh
+rules/                   ← installed to ~/.claude/rules, loaded in every session
+  prose-and-comments.md  collaboration.md  working-agreement.md  environment.md
+  python-tests.md        ← path-scoped: loads only when Claude opens Python
+skills/                  ← memory-audit/, memory-archive/, pr-review/
+tests/                   ← one <name>.test.sh per hook or script, plus bench-corpus.jsonl
+docs/
+  install.md  releases.md  upstream-contract.md  guards.md  hooks.md
+  permissions.md  auto-mode.md  customization.md  known-limitations.md
+  memory.md              ← what Claude Code's memory does now, and each harness tool's verdict
+  session-routing.md     ← routing a PR to its session; holds only in single-author repos
+  permission-friction.md ← which guard asks and denies cost the most, and why
+  permission-friction-cases.jsonl  ← cases bin/permission-friction.py --cases replays
+  history/               ← superseded memory research the skills still cite
 ```
 
-Exit codes: `0` nothing to do · `1` something is provably stale · `2` needs
-triage · `3` could not run.
-
-A memory becomes mechanically checkable by carrying a `verify:` block:
-
-```yaml
-verify:
-  - gh acme/api#4821 merged
-  - jira PROJ-123 Done
-```
-
-Anything with a block is resolved directly against GitHub. Anything without one
-is reported as `TRIAGE` — because real memories cite bare `#4821` rather than
-`owner/repo#4821`, and often cite twenty of them, so choosing *which* reference
-is the claim under test needs a model. That is `/memory-audit`: it resolves the
-ambiguous ones, proposes corrections, and writes a `verify:` block back, so each
-audited memory is mechanical from then on.
-
-`MEMORY.md` itself is checked too, reported as `MEMORY.md:<line>` and aged by
-the memory each line links to. The index is skipped as a *memory* — it is a list
-of links, so it gets no `verify:` resolution — but its one-liners are prose that
-goes stale like any other, and the index is the part loaded into context every
-session. A stale hook there is read far more often than the memory behind it.
-
-The script is read-only by contract — it never edits, moves, or deletes a
-memory, and `/memory-audit` proposes rather than deletes. Deleting on a
-heuristic destroys knowledge silently, which is worse than staleness.
-
-**Note:** auto-dream is gated behind a server-side rollout flag
-(`tengu_onyx_plover`). Where it is off, the built-in hygiene described above is
-not running at all — check `/memory` to see whether it is available to you.
+Everything here is portable because the repo is public; machine-local rules and
+allow rules live in `~/.claude/rules/local-*.md` and `~/.claude/local-settings/`
+([docs/customization.md](docs/customization.md)).

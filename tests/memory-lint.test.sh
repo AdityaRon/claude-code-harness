@@ -73,7 +73,9 @@ echo "- [T](bare.md) — hook" > "$STORE/MEMORY.md"
 OUT=$(lint "$STORE/bare.md")
 check_contains "missing description" "no \`description:\`"     "$OUT"
 check_contains "missing type"        "no \`metadata.type\`"    "$OUT"
-check_contains "missing modified"    "no \`metadata.modified\`" "$OUT"
+# Claude Code stamps `modified` itself on every memory write (2.1.214), so
+# flagging its absence here would be a second report of the CLI's own field.
+check_absent   "modified is the CLI's" "metadata.modified"      "$OUT"
 
 : > "$STORE/MEMORY.md"
 write_mem badtype "a description" "body"
@@ -263,7 +265,9 @@ check_eq "and exits 0"               "0" "$(lint_rc "$STORE/MEMORY.md")"
 OUT=$(lint "$STORE/MEMORY.md")
 check_contains "a feedback_ entry past the cut is flagged" "past line 200" "$OUT"
 check_contains "says it will not load"                     "will not load"  "$OUT"
-check_contains "over-length index is flagged"              "over the 200-line limit" "$OUT"
+# The size itself is the CLI's finding: since 2.1.210 a write that leaves the
+# index over its limit gets an error from Claude Code, so saying it twice is noise.
+check_absent   "the over-limit size is not repeated"       "over the 200-line limit" "$OUT"
 check_eq       "and exits 2"                               "2" "$(lint_rc "$STORE/MEMORY.md")"
 
 # The cut is a setting shared with memory-verify, not a constant baked into the
@@ -282,12 +286,11 @@ check_contains "a fused line is flagged"     "neither an entry nor a tier marker
 check_contains "names the likely cause"      "no trailing newline" "$OUT"
 check_absent   "a tier marker is not a stray" "2 line(s) are neither" "$OUT"
 
-# Size is measured in BYTES. Em-dashes are multi-byte, so a character count can
-# read as compliant while the byte count is over and the tail is truncated.
+# An index that is merely over its byte limit, with nothing stranded past the
+# cut, is the CLI's finding to make (it errors on that write), not this hook's.
 DASHY=$(printf -- '— %.0s' $(seq 1 400))
 { echo "- [T](reference_ok.md) — $DASHY"; } > "$STORE/MEMORY.md"
-OUT=$(MEMORY_INDEX_MAX_CHARS=500 lint "$STORE/MEMORY.md")
-check_contains "over-size index reports BYTES" "bytes" "$OUT"
+check_eq "size alone is left to the CLI" "0" "$(MEMORY_INDEX_MAX_CHARS=500 lint_rc "$STORE/MEMORY.md")"
 
 # The archive index is not the loaded index and has no such limits.
 echo "- [T](x.md) — hook" > "$STORE/MEMORY_ARCHIVE.md"

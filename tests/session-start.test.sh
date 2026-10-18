@@ -18,6 +18,9 @@ export CLAUDE_MEMORY_PROJECTS_DIR="$TMP/projects"
 mkdir -p "$CLAUDE_MEMORY_PROJECTS_DIR"
 # Keep the real pin and CLI out of every case but the ones below.
 export CLAUDE_CONTRACT_PIN="$TMP/no-pin"
+# And the real release record, which harness-update.sh writes on this machine.
+export CLAUDE_HARNESS_LATEST="$TMP/no-latest"
+export CLAUDE_HARNESS_VERSION="$TMP/no-version"
 
 pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
@@ -112,33 +115,76 @@ else
 fi
 
 echo ""
-echo "=== memory index: out of tier order → reordered, silently ==="
-# The store slug is the launch directory with every non-alphanumeric a dash.
-STORE="$CLAUDE_MEMORY_PROJECTS_DIR/$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')/memory"
+echo "=== memory index: far from the cap → left alone, even out of order ==="
+# The reorder only matters near the 200-line cut, and it was most of session
+# start on a small store. The store slug is the launch directory with every
+# non-alphanumeric a dash.
+SLUG=$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')
+STORE="$CLAUDE_MEMORY_PROJECTS_DIR/$SLUG/memory"
 mkdir -p "$STORE"
 mkmem() {  # mkmem <stem> <type>
   { echo "---"; echo "name: $1"; echo "description: d"
     echo "metadata:"; echo "  type: $2"; echo "  modified: 2026-01-01"; echo "---"
     echo ""; echo "body"; } > "$STORE/$1.md"
 }
+inverted_index() {  # tier order is feedback → reference → project; this is backwards
+  { echo "- [P](project_old.md) — hook"
+    echo "- [F](feedback_one.md) — hook"; } > "$STORE/MEMORY.md"
+}
+first_entry() { grep -o 'feedback_one\|project_old' "$STORE/MEMORY.md" | head -1; }
 mkmem project_old  project
 mkmem feedback_one feedback
-# Tier order is feedback → reference → project, so this file is inverted.
-{ echo "- [P](project_old.md) — hook"
-  echo "- [F](feedback_one.md) — hook"; } > "$STORE/MEMORY.md"
+inverted_index
+BEFORE=$(shasum "$STORE/MEMORY.md")
+run_resume "sess-clean" >/dev/null
+check_eq "a small index is not rewritten" "$BEFORE" "$(shasum "$STORE/MEMORY.md")"
+check_eq "and no stamp is written" "0" "$(ls -1 "$CLAUDE_STATE_DIR/memory-index" 2>/dev/null | wc -l | tr -d ' ')"
+
+echo ""
+echo "=== memory index: under pressure and out of order → reordered, silently ==="
+# Pressure starts where memory-lint says it does; the same variable moves both.
+export MEMORY_INDEX_PRESSURE_LINES=1
 OUT=$(run_resume "sess-clean")
 check_not_contains "nothing in context" "eordered" "$OUT"
 # The tool also writes tier markers, so assert the ORDER of the entries rather
 # than which line is first.
-check_eq "feedback sorts above project" "feedback_one" \
-  "$(grep -o 'feedback_one\|project_old' "$STORE/MEMORY.md" | head -1)"
+check_eq "feedback sorts above project" "feedback_one" "$(first_entry)"
 check_eq "entry count unchanged" "2" "$(grep -c '^- \[' "$STORE/MEMORY.md")"
+check_eq "stamped with the index's mtime and size" \
+  "$(date -r "$STORE/MEMORY.md" +%s) $(wc -c < "$STORE/MEMORY.md" | tr -d ' ')" \
+  "$(cat "$CLAUDE_STATE_DIR/memory-index/$SLUG")"
 
 echo ""
-echo "=== memory index: already ordered → untouched ==="
-BEFORE=$(shasum "$STORE/MEMORY.md")
+echo "=== memory index: unchanged since the stamp → the tool does not run ==="
+# Same mtime and size as the stamp, but two entries swapped: a run would reorder
+# it, so a still-swapped index proves the run was skipped.
+cp -p "$STORE/MEMORY.md" "$TMP/stamped-index"
+awk '/^- \[/ { held[++n] = $0; next } { print } END { for (i = n; i >= 1; i--) print held[i] }' \
+  "$TMP/stamped-index" > "$STORE/MEMORY.md"
+touch -r "$TMP/stamped-index" "$STORE/MEMORY.md"
+check_eq "fixture is out of order" "project_old" "$(first_entry)"
 run_resume "sess-clean" >/dev/null
-check_eq "index unchanged" "$BEFORE" "$(shasum "$STORE/MEMORY.md")"
+check_eq "skipped: still out of order" "project_old" "$(first_entry)"
+# A new write to the index changes its mtime, so the next start runs again.
+# (An explicit time: the stamp has one-second resolution and a bare touch can
+# land in the same second it was written.)
+touch -t 202601020000 "$STORE/MEMORY.md"
+run_resume "sess-clean" >/dev/null
+check_eq "a changed index is reordered" "feedback_one" "$(first_entry)"
+
+echo ""
+echo "=== memory index: auto-dream's lock is fresh → not touched ==="
+# The CLI holds .consolidate-lock for up to an hour while it consolidates a
+# store; a harness rewrite under it would race the CLI's own.
+inverted_index
+touch "$STORE/.consolidate-lock"
+run_resume "sess-clean" >/dev/null
+check_eq "fresh lock: left out of order" "project_old" "$(first_entry)"
+# The lock stays on disk after a run as the last-consolidated stamp; once past
+# its TTL it no longer means held.
+touch -t 202601010000 "$STORE/.consolidate-lock"
+run_resume "sess-clean" >/dev/null
+check_eq "stale lock: reordered" "feedback_one" "$(first_entry)"
 
 echo ""
 echo "=== a worktree path: every non-alphanumeric becomes a dash (issue #2, G) ==="
@@ -149,12 +195,11 @@ STORE="$CLAUDE_MEMORY_PROJECTS_DIR/-tmp-prep-lanes--claude-worktrees-v0-build/me
 mkdir -p "$STORE"
 mkmem project_old  project
 mkmem feedback_one feedback
-{ echo "- [P](project_old.md) — hook"
-  echo "- [F](feedback_one.md) — hook"; } > "$STORE/MEMORY.md"
+inverted_index
 OUT=$(jq -nc --arg d "$WT" '{source:"resume", session_id:"sess-wt", hook_event_name:"SessionStart", cwd:$d}' \
   | bash "$HOOK" 2>/dev/null)
-check_eq "worktree store reordered" "feedback_one" \
-  "$(grep -o 'feedback_one\|project_old' "$STORE/MEMORY.md" | head -1)"
+check_eq "worktree store reordered" "feedback_one" "$(first_entry)"
+unset MEMORY_INDEX_PRESSURE_LINES
 
 echo ""
 echo "=== no store for this launch directory → silent, and nothing created ==="
@@ -164,13 +209,21 @@ run_resume "sess-clean" >/dev/null
 check_eq "created nothing" "0" "$(ls -1 "$CLAUDE_MEMORY_PROJECTS_DIR" | wc -l | tr -d ' ')"
 
 echo ""
-echo "=== git context: skipped on startup (the CLI's own gitStatus has it), kept on resume ==="
+echo "=== git context: skipped on startup and clear (the CLI's own gitStatus has it), kept on resume and compact ==="
 if git rev-parse --git-dir &>/dev/null 2>&1; then
   payload=$(jq -nc '{source:"startup", session_id:"sess-git", hook_event_name:"SessionStart"}')
   OUT=$(printf '%s' "$payload" | bash "$HOOK" 2>/dev/null)
   check_not_contains "startup prints no git block" "## Git context" "$OUT"
+  # After /clear the conversation carried this block and the CLI's fresh
+  # gitStatus, listing the same 5 commits.
+  payload=$(jq -nc '{source:"clear", session_id:"sess-git", hook_event_name:"SessionStart"}')
+  OUT=$(printf '%s' "$payload" | bash "$HOOK" 2>/dev/null)
+  check_not_contains "clear prints no git block"   "## Git context" "$OUT"
   OUT=$(run_resume "sess-git")
   check_contains     "resume still prints it"     "## Git context" "$OUT"
+  payload=$(jq -nc '{source:"compact", session_id:"sess-git", hook_event_name:"SessionStart"}')
+  OUT=$(printf '%s' "$payload" | bash "$HOOK" 2>/dev/null)
+  check_contains     "compact still prints it"    "## Git context" "$OUT"
 else
   echo "  SKIP: git-context test (not in a git repo)"
 fi
@@ -180,6 +233,7 @@ echo "=== CLI past the contract pin → one nudge; same version or no pin → si
 printf '2.1.280\n' > "$TMP/pin"
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
 check_contains "nudge names both versions" "Installed 2.1.281; the harness was verified at 2.1.280" "$OUT"
+check_contains "and says the release chain installs it" "the scheduled harness-update installs it" "$OUT"
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.280 run_resume "sess-clean")
 check_not_contains "silent at the pinned version" "past the harness contract" "$OUT"
 OUT=$(CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
@@ -202,6 +256,29 @@ check_contains "a newer CLI nudges again" "Installed 2.1.282; the harness was ve
 printf '2.1.282 2000-01-01\n' > "$CLAUDE_STATE_DIR/contract-nudge"
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.282 run_resume "sess-clean")
 check_contains "and so does a stale stamp from another day" "Installed 2.1.282" "$OUT"
+
+echo ""
+echo "=== a newer harness release was fetched → one nudge a day; otherwise silent ==="
+LATEST="$TMP/harness-latest"; VERSION="$TMP/harness.version"
+nudge() { CLAUDE_HARNESS_LATEST="$LATEST" CLAUDE_HARNESS_VERSION="$VERSION" run_resume "sess-clean"; }
+printf 'v1.0.2 2026-10-20\n' > "$LATEST"
+printf 'version=v1.0.1\nrepo=/x\n' > "$VERSION"
+OUT=$(nudge)
+check_contains "names both versions" "Harness v1.0.2 is available; v1.0.1 is installed" "$OUT"
+OUT=$(nudge)
+check_not_contains "second session the same day is silent" "is available" "$OUT"
+check_eq "stamped in the state dir" "v1.0.2 $(date +%Y-%m-%d)" "$(head -1 "$CLAUDE_STATE_DIR/release-nudge")"
+rm -f "$CLAUDE_STATE_DIR/release-nudge"
+printf 'version=v1.0.2\n' > "$VERSION"
+check_not_contains "silent at the newest release" "is available" "$(nudge)"
+printf 'version=v1.0.3\n' > "$VERSION"
+check_not_contains "silent when the install is ahead of the fetched tag" "is available" "$(nudge)"
+printf 'version=v1.0.1-3-gabc1234\n' > "$VERSION"
+check_not_contains "a clone past a tag is being worked on: silent" "is available" "$(nudge)"
+printf 'v1.0.10 2026-10-20\n' > "$LATEST"; printf 'version=v1.0.9\n' > "$VERSION"
+check_contains "versions compare numerically" "Harness v1.0.10 is available" "$(nudge)"
+rm -f "$CLAUDE_STATE_DIR/release-nudge" "$LATEST"
+check_not_contains "no fetch record: silent" "is available" "$(nudge)"
 
 echo ""
 echo "=== Resume names the mods this session wrote ==="

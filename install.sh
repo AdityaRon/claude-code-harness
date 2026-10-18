@@ -62,7 +62,7 @@ chmod +x ~/.claude/session-route.sh
 echo "  ✓ session-route.sh"
 
 # Hosts network-guard allows on this machine only, read from local-settings at
-# every call; see the README's Customization section.
+# every call; see docs/customization.md.
 for t in sandbox sandbox-trial; do
   cp "$REPO/bin/$t.sh" ~/.claude/"$t.sh"; chmod +x ~/.claude/"$t.sh"; echo "  ✓ $t.sh"
 done
@@ -70,12 +70,35 @@ cp "$REPO/bin/net-allowlist.sh" ~/.claude/net-allowlist.sh
 chmod +x ~/.claude/net-allowlist.sh
 echo "  ✓ net-allowlist.sh"
 
+# Updates from its own clone, ~/.claude/harness-src, cloned from origin= below:
+# launchd cannot read ~/Desktop or ~/Documents, where this clone may live.
+# Replaced by rename: it is the script running this install when it updates.
+cp "$REPO/bin/harness-update.sh" ~/.claude/harness-update.sh.new
+chmod +x ~/.claude/harness-update.sh.new
+mv -f ~/.claude/harness-update.sh.new ~/.claude/harness-update.sh
+echo "  ✓ harness-update.sh"
+
 # ---- Contract pin -----------------------------------------------------
 # session-start.sh compares this with `claude --version`, so a session says when
 # the CLI has moved past the release the harness was checked against.
 sed -n 's/.*"last_verified_version": *"\([^ "]*\).*/\1/p' "$REPO/config/upstream-contract.json" \
   > ~/.claude/harness-contract.version
 echo "  ✓ harness-contract.version"
+
+# ---- Installed version ------------------------------------------------
+# A plain tag only when the clone sits exactly on one, clean; session-start
+# nudges about a newer release only then. harness-update.sh reads version=,
+# commit= and origin=; repo= only when there is no origin=.
+VER=$(git -C "$REPO" describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo unknown)
+ORIGIN=$(git -C "$REPO" remote get-url origin 2>/dev/null || true)
+{
+  echo "version=$VER"
+  echo "commit=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "repo=$REPO"
+  if [[ -n "$ORIGIN" ]]; then echo "origin=$ORIGIN"; fi
+  echo "installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > ~/.claude/harness.version
+echo "  ✓ harness.version ($VER)"
 
 for skill in "$REPO"/skills/*/; do
   [[ -d "$skill" ]] || continue
@@ -136,6 +159,11 @@ if compgen -G "$LOCAL_SETTINGS/*.json" >/dev/null && command -v jq &>/dev/null; 
   SOURCE="$COMBINED"
 fi
 
+# effortLevel shipped as xhigh until 2026-10-17. Until this marker exists the
+# merge moves an installed xhigh to the shipped value. Every install writes it,
+# so that happens once per machine and an xhigh chosen later is kept.
+EFFORT_MARK=~/.claude/state/effort-high.migrated
+
 if [[ ! -f "$TARGET" ]]; then
   cp "$SOURCE" "$TARGET"
   echo "  ✓ settings.json (installed fresh)"
@@ -179,6 +207,14 @@ else
     exit 1
   fi
 
+  EFFORT_WAS=""
+  if [[ ! -f "$EFFORT_MARK" ]]; then
+    EFFORT_WAS=xhigh
+    if [[ "$(jq -r '.effortLevel // empty' "$TARGET" 2>/dev/null)" == "$EFFORT_WAS" ]]; then
+      echo "  ✓ effortLevel: \"$EFFORT_WAS\" → \"$(jq -r '.effortLevel' "$SOURCE")\" (the old shipped default, moved once; set it again and later installs keep it)."
+    fi
+  fi
+
   RETIRED=$(jq -c . "$REPO/config/retired-rules.json" 2>/dev/null || echo '{}')
   # Only a message, so a failure here must not stop the install; a rule a
   # fragment lists is kept by the merge, so it is not named.
@@ -191,7 +227,8 @@ else
     || echo "  ⚠ could not list retired rules; the merge below still removes them."
 
   TMP=$(mktemp)
-  if ! jq -s --arg home "$HOME" --argjson owned "$OWNED" --argjson retired "$RETIRED" -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
+  if ! jq -s --arg home "$HOME" --argjson owned "$OWNED" --argjson retired "$RETIRED" --arg effort_was "$EFFORT_WAS" \
+          -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
     rm -f "$TMP"
     echo "  ✗ settings.json merge failed — left untouched (backup: $BACKUP)"
     exit 1
@@ -199,7 +236,17 @@ else
   mv "$TMP" "$TARGET"
   echo "  ✓ settings.json (merged; backup: $BACKUP)"
 fi
+touch "$EFFORT_MARK"
 [[ -n "${COMBINED:-}" ]] && rm -f "$COMBINED"
+
+# One backup per run and nothing removed them: 45 on one machine by 2026-10-16.
+KEEP=${CCH_KEEP_BACKUPS:-10}
+PRUNED=0
+while IFS= read -r old; do
+  [[ -n "$old" ]] || continue
+  rm -f "$old" && PRUNED=$((PRUNED + 1))
+done < <(ls -1 "$TARGET".bak.* 2>/dev/null | sort -r | tail -n +"$((KEEP + 1))")
+[[ "$PRUNED" -gt 0 ]] && echo "  ✓ settings.json backups: $PRUNED old removed, newest $KEEP kept"
 
 # ---- Sanity checks ----------------------------------------------------
 echo ""

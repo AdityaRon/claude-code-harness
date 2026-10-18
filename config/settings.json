@@ -1,12 +1,13 @@
 {
   "fileCheckpointingEnabled": true,
-  "effortLevel": "xhigh",
+  "effortLevel": "high",
   "skipAutoPermissionPrompt": true,
   "includeCoAuthoredBy": true,
   "syncClaudeAiSkills": false,
   "syncClaudeAiPlugins": false,
   "remoteControlAtStartup": true,
   "isolatePeerMachines": true,
+  "autoDreamEnabled": true,
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh",
@@ -139,7 +140,6 @@
       "Bash(sudo:*)",
       "Bash(chmod -R 777:*)",
 
-      "Bash(kubectl delete:*)",
       "Edit(~/.claude/plugins/**)",
       "Edit(~/.claude/local-settings/**)",
       "Bash(claude plugin install:*)",
@@ -203,10 +203,6 @@
       {
         "matcher": "Agent|SendMessage|Artifact|ArtifactData|ArtifactComments",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
-      },
-      {
-        "matcher": "Workflow",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/workflow-record.sh", "async": true }]
       },
       {
         "matcher": "Write|Edit|MultiEdit",

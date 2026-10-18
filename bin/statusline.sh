@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Single-jq statusline: one jq pass formats everything except the git branch
-# (resolved subprocess-free from .git/HEAD, worktree-aware) and the plan/wf
-# links (from session pointer files). No git subprocess, no external tools
-# beyond jq. Degrades gracefully when fields — or jq — are missing.
+# (resolved subprocess-free from .git/HEAD, worktree-aware), the plan link
+# (from a session pointer file) and the wf link (from the session's folder).
+# No git subprocess, no external tools beyond jq. Degrades gracefully when
+# fields, or jq, are missing.
 # model effort │ repo:branch │ context bar+% │ tokens │ $cost·dur │ +/-lines │ [style] │ [rate] │ plan │ wf
 export PATH="/opt/homebrew/bin:$PATH"
 # Silence stderr in normal use; set CLAUDE_STATUSLINE_DEBUG=1 to see errors.
@@ -68,8 +69,9 @@ _JQOUT=$(printf '%s' "$INPUT" | jq -r '
   + "" + (.session_id // "") + "" + (.workspace.current_dir // .cwd // "")
   + "" + "\(.prompt_cache.expires_at // "")"
   + "" + "\(.prompt_cache.recache_tokens_if_cold // "")"
+  + "" + (.transcript_path // "")
 ')
-IFS=$'\x1f' read -r LINE SID CDIR EXPIRES RECACHE <<< "$_JQOUT"
+IFS=$'\x1f' read -r LINE SID CDIR EXPIRES RECACHE TP <<< "$_JQOUT"
 
 # jq missing or unparseable input -> fail visible-but-calm, never blank.
 [[ -n "$LINE" ]] || { printf 'Claude Code\n'; exit 0; }
@@ -109,25 +111,26 @@ if [[ -n "$SID" ]]; then
   fi
 fi
 
-# Workflow link (OSC-8) to this session's latest run script, if a pointer exists.
-WF_SEG=""
-if [[ -n "$SID" ]]; then
-  WPTR="${CLAUDE_WORKFLOW_STATE_DIR:-$HOME/.claude/state/workflows}/$SID.path"
-  if [[ -f "$WPTR" ]]; then
-    read -r WF < "$WPTR"
-    if [[ -n "$WF" && -f "$WF" ]]; then
-      # Open workflow scripts (code) in a text editor, not the .js default app.
-      # Honor CLAUDE_EDITOR_URI, else auto-detect an installed GUI editor.
-      ed="${CLAUDE_EDITOR_URI:-}"
-      if [[ -z "$ed" ]]; then
-        if [[ -d "/Applications/Visual Studio Code.app" ]]; then ed="vscode://file"
-        elif [[ -d "/Applications/Cursor.app" ]]; then ed="cursor://file"
-        elif [[ -d "/Applications/Zed.app" ]]; then ed="zed://file"
-        else ed="file://"; fi
-      fi
-      WF_SEG=$(printf ' │ \033]8;;%s%s\033\\\342\224\200 \342\232\231 wf\033]8;;\033\\' "$ed" "$(uri_escape "$WF")")
-    fi
+# Workflow link (OSC-8) to the newest script this session's Workflow runs saved.
+# Claude Code writes them beside the transcript, in <session>/workflows/scripts
+# (2.1.302). A glob and -nt, so nothing forks on each refresh.
+WF_SEG=""; WF=""
+if [[ "$TP" == *.jsonl ]]; then
+  for f in "${TP%.jsonl}"/workflows/scripts/*.js; do
+    [[ -f "$f" && "$f" -nt "$WF" ]] && WF="$f"
+  done
+fi
+if [[ -n "$WF" ]]; then
+  # Open workflow scripts (code) in a text editor, not the .js default app.
+  # Honor CLAUDE_EDITOR_URI, else auto-detect an installed GUI editor.
+  ed="${CLAUDE_EDITOR_URI:-}"
+  if [[ -z "$ed" ]]; then
+    if [[ -d "/Applications/Visual Studio Code.app" ]]; then ed="vscode://file"
+    elif [[ -d "/Applications/Cursor.app" ]]; then ed="cursor://file"
+    elif [[ -d "/Applications/Zed.app" ]]; then ed="zed://file"
+    else ed="file://"; fi
   fi
+  WF_SEG=$(printf ' │ \033]8;;%s%s\033\\\342\224\200 \342\232\231 wf\033]8;;\033\\' "$ed" "$(uri_escape "$WF")")
 fi
 
 # Cold cache: the first message after expires_at re-sends the whole context at

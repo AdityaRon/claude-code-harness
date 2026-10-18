@@ -1,7 +1,5 @@
 # Replying, handing work back
 
-How to write, answer and request a review lives in the pr-review skill.
-
 ## Before replying to anyone
 
 - Read the whole thread and PR conversation, not just the diff or last message.
@@ -14,6 +12,6 @@ How to write, answer and request a review lives in the pr-review skill.
   must do. Separate "approved, needs a merge" from "needs you to read and approve".
 - Give facts and evidence; present the call, do not take it.
 - Never say tests or builds passed unless you ran them.
-- Approval is the user's, always.
+- Approval is the user's unless the task grants it.
 - Never hand over a path to a file I created. Give the command that produces it.
 - Never cite a session-local task id in shared text.

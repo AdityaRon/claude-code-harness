@@ -28,7 +28,8 @@ on:
 
 # Write scopes are for the scheduled path: the PR and its merge, or the issue
 # when no token is set. id-token lets claude-code-action mint the Claude GitHub
-# App token. actions: write is for dispatching CI on the PR's branch.
+# App token. actions: write approves the PR's held CI run, or dispatches CI on
+# its branch.
 permissions:
   actions: write
   contents: write
@@ -205,8 +206,9 @@ jobs:
       # The commit and PR happen here rather than inside Claude, so the only path
       # that reaches the repo is the one file this step checks. It uses
       # github.token: the action revokes its App token in its own post step, which
-      # failed the 2.1.282 push. A PR opened with github.token fires no
-      # pull_request workflows, so CI is dispatched on the branch instead.
+      # failed the 2.1.282 push. GitHub holds that PR's CI run for approval, and
+      # a dispatched run never counts for the PR (#99), so the held run is
+      # approved; CI is dispatched only if that fails.
       - name: Open the PR
         id: open
         if: steps.plan.outputs.mode == 'bump' || (steps.plan.outputs.mode == 'draft' && steps.claude.outputs.conclusion == 'success')
@@ -282,7 +284,7 @@ jobs:
             fi
             echo
             if [ "$LAND" = true ]; then
-              echo "upstream-check after this change exited $AFTER. Lands on its own once the dispatched CI run passes; then run \`bash install.sh\`."
+              echo "upstream-check after this change exited $AFTER. Lands on its own once CI passes; then run \`bash install.sh\`."
             else
               echo "upstream-check after this change exited $AFTER. Needs you to read and approve; merge, then run \`bash install.sh\`."
             fi
@@ -295,7 +297,13 @@ jobs:
           if [ -n "$PR" ]; then
             echo "pr=$PR" >> "$GITHUB_OUTPUT"
             echo "land=$LAND" >> "$GITHUB_OUTPUT"
-            gh workflow run ci.yml --ref "$BRANCH" || echo "::warning::could not dispatch CI on $BRANCH"
+            if CI_RUN=$(.github/approve-pr-ci.sh "$PR" "$(git rev-parse HEAD)") && [ -n "$CI_RUN" ]; then
+              echo "ci_run=$CI_RUN" >> "$GITHUB_OUTPUT"
+              echo "PR #$PR runs its own CI: ${{ github.server_url }}/${{ github.repository }}/actions/runs/$CI_RUN"
+            else
+              echo "::warning::PR #$PR's CI was not approved; dispatched CI on $BRANCH instead, which main's required checks do not count."
+              gh workflow run ci.yml --ref "$BRANCH" || echo "::warning::could not dispatch CI on $BRANCH"
+            fi
           else
             echo "::warning::pushed $BRANCH but could not open a PR; the issue links it."
           fi
@@ -312,11 +320,11 @@ jobs:
         run: |
           .github/close-superseded.sh "$CUR" "$PR" || echo "::warning::close-superseded.sh exited $?; older contract PRs may still be open."
 
-      # Wait on the dispatched CI run, then merge, rather than --auto alone: the
-      # gate stays in this file whatever the branch rules say, and a red run gets
-      # a comment. main requires doctor.sh and shellcheck (2026-10-17); whether a
-      # workflow_dispatch run satisfies them is untested. A merge by github.token
-      # fires no push workflow, so CI is dispatched on main afterwards.
+      # Wait on the PR's own CI run (else the dispatched one), then merge, rather
+      # than --auto alone: the gate stays in this file whatever the branch rules
+      # say, and a red run gets a comment. main requires doctor.sh and shellcheck
+      # (2026-10-17), which a dispatched run does not satisfy. A merge by
+      # github.token fires no push workflow, so CI is dispatched on main after.
       - name: Land the PR
         id: land
         if: steps.open.outputs.land == 'true'
@@ -324,9 +332,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.plan.outputs.branch }}
           PR: ${{ steps.open.outputs.pr }}
+          CI_RUN: ${{ steps.open.outputs.ci_run }}
         run: |
-          ID=""
+          ID=$CI_RUN
           for _ in $(seq 1 12); do
+            [ -n "$ID" ] && break
             ID=$(gh run list --workflow ci.yml --branch "$BRANCH" --event workflow_dispatch --limit 1 --json databaseId -q '.[0].databaseId // empty')
             [ -n "$ID" ] && break
             sleep 5
@@ -344,7 +354,9 @@ jobs:
           # If they have not registered as passed, auto-merge waits for them.
           elif gh pr merge "$PR" --auto --squash; then
             LANDED=queued
-            gh pr comment "$PR" --body "Auto-merge is on: CI run ${{ github.server_url }}/${{ github.repository }}/actions/runs/$ID passed but the direct merge was refused, so this merges once main's required checks show as passed. If it is still open, those checks may not count that run; merge it." || true
+            NEXT="If it is still open, merge it."
+            [ -n "$CI_RUN" ] || NEXT="That run was dispatched, and main's required checks do not count it (#99): approve this PR's held CI run in the Actions tab, or merge it."
+            gh pr comment "$PR" --body "Auto-merge is on: CI run ${{ github.server_url }}/${{ github.repository }}/actions/runs/$ID passed but the direct merge was refused, so this merges once main's required checks show as passed. $NEXT" || true
           else
             gh pr comment "$PR" --body "Ready to land: CI passed and upstream-check exits 0, but github.token could neither merge this nor turn on auto-merge; ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} has the error. Merge it."
           fi

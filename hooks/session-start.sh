@@ -15,8 +15,9 @@ SESSION_ID=$(jq_get '.session_id')
 
 # Skipped on startup: the CLI's own system prompt already carries branch,
 # main branch, status and `git log --oneline -n 5` (its gitStatus block), so
-# this was a second copy. On resume/compact/clear that snapshot may be stale.
-if [[ "$SOURCE" != "startup" ]] && git rev-parse --git-dir &>/dev/null 2>&1; then
+# this was a second copy. A cleared conversation gets a fresh gitStatus too.
+# On resume/compact/fork that snapshot may be stale.
+if [[ "$SOURCE" != "startup" && "$SOURCE" != "clear" ]] && git rev-parse --git-dir &>/dev/null 2>&1; then
   BRANCH=$(git branch --show-current 2>/dev/null || echo "detached HEAD")
   DIRTY=$(git status --short 2>/dev/null | head -10)
   COMMITS=$(git log --oneline -5 2>/dev/null)
@@ -42,37 +43,47 @@ if [[ "$SOURCE" != "startup" ]] && git rev-parse --git-dir &>/dev/null 2>&1; the
   fi
 fi
 
-# --- keep the memory index in tier order ------------------------------------
-# MEMORY.md is truncated tail-first at its line cap, and the memory writer
-# appends every new entry at the END of the file regardless of type. So ordering
-# decays on ordinary use, and what decays off the bottom is whatever was written
-# most recently -- including `feedback_` entries, which do nothing unless they
-# are loaded. Measured on a live store: it fell out of tier order twice in
-# twenty hours, purely from other sessions appending.
-#
-# memory-lint.sh already REPORTS this, but only when a session happens to write
-# a memory, and only to the session that wrote it. Session start is the one
-# moment the ordering matters to everybody, and the fix is a pure permutation --
-# memory-index.sh refuses to write at all unless the set of entry lines is
-# unchanged -- so doing it rather than reporting it is safe here. No
-# --archive-overflow: dropping entries is a judgement call and stays manual.
+STATE_DIR=$(expand_tilde "${CLAUDE_STATE_DIR:-$HOME/.claude/state/sessions}")
+
+# --- keep the memory index in tier order, when that can matter --------------
+# MEMORY.md is cut tail-first at 200 lines and the memory writer appends at the
+# end, so a feedback_ entry can land past the cut, where it never loads.
+# memory-index.sh restores tier order as a pure permutation. It was most of
+# session start, so it runs only when all three hold:
+#   - the index is under pressure (memory-lint.sh's thresholds);
+#   - the index changed since the last run (mtime and size, stamped below);
+#   - auto-dream's .consolidate-lock is older than its 1 h TTL: a younger one
+#     means the CLI's own consolidation may be rewriting this store.
+# Only THIS session's store: the others are not being loaded here.
 PROJECTS_DIR=$(expand_tilde "${CLAUDE_MEMORY_PROJECTS_DIR:-$HOME/.claude/projects}")
 LAUNCH_DIR=$(jq_get '.cwd')
 [[ -z "$LAUNCH_DIR" ]] && LAUNCH_DIR="$PWD"
-# Memory is siloed per launch directory, and the store slug is that path with
-# every non-alphanumeric turned into a dash, as the CLI does. A path over 200
-# characters also gets a hash suffix; that store is not found and is skipped.
-# Reorder only THIS session's store: the others are not being loaded here, and
-# touching them would surprise whichever session owns them.
+# The store slug is the launch path with every non-alphanumeric a dash, as the
+# CLI does it. A path over 200 characters also gets a hash suffix; not found, skipped.
 STORE_SLUG=$(printf '%s' "$LAUNCH_DIR" | sed 's/[^A-Za-z0-9]/-/g')
-INDEX_TOOL=""
-for cand in "$(dirname "$0")/../memory-index.sh" "$(dirname "$0")/../bin/memory-index.sh"; do
-  [[ -f "$cand" ]] && INDEX_TOOL="$cand" && break
-done
-# Silent: a pure permutation leaves the model nothing to act on.
-if [[ -n "$INDEX_TOOL" && -f "$PROJECTS_DIR/$STORE_SLUG/memory/MEMORY.md" ]]; then
-  CLAUDE_MEMORY_PROJECTS_DIR="$PROJECTS_DIR" \
-    bash "$INDEX_TOOL" --store "$STORE_SLUG" --write >/dev/null 2>&1 || true
+MEM_DIR="$PROJECTS_DIR/$STORE_SLUG/memory"
+if [[ -f "$MEM_DIR/MEMORY.md" ]]; then
+  IDX_LINES=$(wc -l < "$MEM_DIR/MEMORY.md" | tr -d ' ')
+  IDX_BYTES=$(wc -c < "$MEM_DIR/MEMORY.md" | tr -d ' ')
+  STAMP_FILE="$STATE_DIR/memory-index/$STORE_SLUG"
+  STAMP="$(date -r "$MEM_DIR/MEMORY.md" +%s 2>/dev/null) $IDX_BYTES"
+  LOCK_FRESH=""
+  [[ -f "$MEM_DIR/.consolidate-lock" ]] && LOCK_FRESH=$(find "$MEM_DIR/.consolidate-lock" -mmin -60 2>/dev/null)
+  if { [[ "$IDX_LINES" -ge "${MEMORY_INDEX_PRESSURE_LINES:-180}" ]] || [[ "$IDX_BYTES" -ge "${MEMORY_INDEX_PRESSURE_CHARS:-20000}" ]]; } \
+     && [[ "$(head -1 "$STAMP_FILE" 2>/dev/null)" != "$STAMP" ]] && [[ -z "$LOCK_FRESH" ]]; then
+    INDEX_TOOL=""
+    for cand in "$(dirname "$0")/../memory-index.sh" "$(dirname "$0")/../bin/memory-index.sh"; do
+      [[ -f "$cand" ]] && INDEX_TOOL="$cand" && break
+    done
+    # Silent: a pure permutation leaves the model nothing to act on. Stamped
+    # after the write so the stamp records the index as it is now.
+    if [[ -n "$INDEX_TOOL" ]]; then
+      CLAUDE_MEMORY_PROJECTS_DIR="$PROJECTS_DIR" \
+        bash "$INDEX_TOOL" --store "$STORE_SLUG" --write >/dev/null 2>&1 || true
+      mkdir -p "$STATE_DIR/memory-index" 2>/dev/null \
+        && printf '%s %s\n' "$(date -r "$MEM_DIR/MEMORY.md" +%s 2>/dev/null)" "$(wc -c < "$MEM_DIR/MEMORY.md" | tr -d ' ')" > "$STAMP_FILE" 2>/dev/null
+    fi
+  fi
 fi
 
 # --- worktree records whose folder is gone ------------------------------------
@@ -91,8 +102,6 @@ for g in "$LAUNCH_DIR/.git" "$LAUNCH_DIR"/*/.git; do
     fi
   done
 done
-
-STATE_DIR=$(expand_tilde "${CLAUDE_STATE_DIR:-$HOME/.claude/state/sessions}")
 
 # --- CLI ahead of the harness contract --------------------------------------
 # install.sh records the release the contract was verified at. `claude --version`
@@ -115,8 +124,30 @@ if [[ -f "$PIN_FILE" ]]; then
         echo "Installed $CLI; the harness was verified at $PIN, so settings added since may be ignored. Update Claude Code."
       else
         echo "## Claude Code is past the harness contract"
-        echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift workflow drafts the review PR. After it merges, run bash install.sh."
+        echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift run lands the review and the release that follows; the scheduled harness-update installs it. If this persists for more than a day, see the Release blocked issue."
       fi
+      mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
+    fi
+  fi
+fi
+
+# --- a newer harness release ------------------------------------------------
+# harness-update.sh writes the newest tag it fetched; nothing here touches the
+# network. Only a machine installed from a plain tag is nudged: a clone past
+# the tag is being worked on.
+LATEST_FILE=$(expand_tilde "${CLAUDE_HARNESS_LATEST:-$HOME/.claude/state/harness-latest}")
+VERSION_FILE=$(expand_tilde "${CLAUDE_HARNESS_VERSION:-$HOME/.claude/harness.version}")
+if [[ -f "$LATEST_FILE" && -f "$VERSION_FILE" ]]; then
+  LATEST=$(head -1 "$LATEST_FILE" | cut -d' ' -f1)
+  INSTALLED=$(sed -n 's/^version=//p' "$VERSION_FILE" | head -1)
+  SEMVER='^v[0-9]+\.[0-9]+\.[0-9]+$'
+  if [[ "$LATEST" =~ $SEMVER && "$INSTALLED" =~ $SEMVER && "$LATEST" != "$INSTALLED" \
+        && "$(printf '%s\n%s\n' "$LATEST" "$INSTALLED" | sort -V | tail -1)" == "$LATEST" ]]; then
+    STAMP_FILE="$STATE_DIR/release-nudge"
+    STAMP="$LATEST $(date +%Y-%m-%d)"
+    if [[ ! -f "$STAMP_FILE" || "$(head -1 "$STAMP_FILE" 2>/dev/null)" != "$STAMP" ]]; then
+      echo ""
+      echo "## Harness $LATEST is available; $INSTALLED is installed. Run ~/.claude/harness-update.sh."
       mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
     fi
   fi

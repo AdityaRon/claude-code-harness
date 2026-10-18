@@ -40,14 +40,23 @@ printf '%s' "$OUT" | grep -qF "$PLAN" && pass "links to plan path" || fail "link
 printf '%s' "$OUT" | grep -qF "8;;file://" && pass "uses OSC-8 hyperlink" || fail "uses OSC-8 hyperlink" "$OUT"
 
 echo ""
-echo "=== Workflow link appears when a workflow pointer exists ==="
-export CLAUDE_WORKFLOW_STATE_DIR="$TMP/wf"; mkdir -p "$CLAUDE_WORKFLOW_STATE_DIR"
+echo "=== Workflow link: the newest script in this session's workflows/scripts ==="
+# Claude Code saves each run's script beside the transcript, in
+# <session>/workflows/scripts; the status line reads that folder itself.
 export CLAUDE_EDITOR_URI="testeditor://file"
-WF="$TMP/run.js"; echo "// wf" > "$WF"
-echo "$WF" > "$CLAUDE_WORKFLOW_STATE_DIR/sess-1.path"
-OUT=$(run '{"session_id":"sess-1","model":{"display_name":"Opus"},"context_window":{"used_percentage":5}}')
+WDIR="$TMP/proj/sess-1/workflows/scripts"; mkdir -p "$WDIR"
+echo "// old" > "$WDIR/old-1.js"; touch -t 202601010000 "$WDIR/old-1.js"
+echo "// new" > "$WDIR/new-2.js"; touch -t 202601020000 "$WDIR/new-2.js"
+mkdir -p "$TMP/proj/sess-9/workflows/scripts"; echo "// other" > "$TMP/proj/sess-9/workflows/scripts/other.js"
+wf_input(){ jq -nc --arg t "$1" '{session_id:"sess-1",transcript_path:$t,model:{display_name:"Opus"},context_window:{used_percentage:5}}'; }
+OUT=$(run "$(wf_input "$TMP/proj/sess-1.jsonl")")
 printf '%s' "$OUT" | grep -q "wf" && pass "wf segment present" || fail "wf segment present" "$OUT"
-printf '%s' "$OUT" | grep -qF "testeditor://file$WF" && pass "wf opens via editor URI" || fail "wf opens via editor URI" "$OUT"
+printf '%s' "$OUT" | grep -qF "testeditor://file$WDIR/new-2.js" && pass "wf opens the newest script via editor URI" || fail "wf opens the newest script via editor URI" "$OUT"
+printf '%s' "$OUT" | grep -qF "other.js" && fail "another session's script is not linked" "$OUT" || pass "another session's script is not linked"
+OUT=$(run "$(wf_input "$TMP/proj/sess-none.jsonl")")
+printf '%s' "$OUT" | grep -q " wf" && fail "no wf segment without a scripts folder" "$OUT" || pass "no wf segment without a scripts folder"
+OUT=$(run '{"session_id":"sess-1","model":{"display_name":"Opus"},"context_window":{"used_percentage":5}}')
+printf '%s' "$OUT" | grep -q " wf" && fail "no wf segment without transcript_path" "$OUT" || pass "no wf segment without transcript_path"
 
 echo ""
 echo "=== No plan segment without a pointer ==="
