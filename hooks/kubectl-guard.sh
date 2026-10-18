@@ -251,13 +251,13 @@ writes_to() {
 # eval "$x"` or `$(which kubectl) delete`, so values set in this command go in
 # place first, as the shell would put them.
 SQ="'[^']*'"
-ASSIGN_RE='(^|[[:space:];&|(`])((export|local|readonly|declare|typeset)([[:space:]]+-[A-Za-z]+)*[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(\$\([^()]*\)|\([^()]*\)|\$?'"$SQ"'|"[^"]*"|[^[:space:];&|]*)'
-FOR_RE='(^|[[:space:];&|(`])for[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]+in[[:space:]]+([^;&|'$'\n'']*)'
+ASSIGN_RE='(^|[[:space:];&|(`])((export|local|readonly|declare|typeset)([[:space:]]+-[A-Za-z]+)*[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)(\+?)=(\$\([^()]*\)|\$\{[^{}]*\}|\([^()]*\)|\$?'"$SQ"'|"[^"]*"|[^[:space:];&|]*)'
+FOR_RE='(^|[[:space:];&|(`])for[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]+in[[:space:]]+((\$\([^()]*\)|[^;&|'$'\n''])*)'
 WORD_RE='^[[:space:]]*(\$\([^()]*\)|'"$SQ"'|"[^"]*"|[^[:space:]]+)'
 BRACE_PART_RE='^\{([A-Za-z_][A-Za-z0-9_]*)([^{}]*)\}'
 DEFAULT_RE='^:?[-=+](.*)$'
 IDENT_RE='^[A-Za-z_][A-Za-z0-9_]*'
-SUBST_RE='\$\(([^()`]*)\)'
+SUBST_PART_RE='^\(([^()`]*)\)'
 TICK_RE='`([^`]*)`'
 PRINTER_RE='(\$\(|`)[[:space:]]*["'"'"']?([^[:space:]]*/)?(echo|printf|print|which|command|type|whereis)["'"'"']?([[:space:]]|\)|`)'
 KUBECTL_RE='(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)'
@@ -267,12 +267,20 @@ US=$'\x1f'
 # array's words, each word of `for NAME in …`), kept in VV_<name> joined by US:
 # bash 3.2 has no associative arrays. Order does not matter; see value_of.
 add_value() { local r="VV_$1"; printf -v "$r" '%s' "${!r:-}$US$2"; }
+# NAME+=: onto the last value, with a space for an array's words.
+append_value() {
+  local r="VV_$1" cur
+  cur=${!r:-}
+  [[ -z "$cur" ]] && { add_value "$1" "$2"; return; }
+  printf -v "$r" '%s' "${cur%"$US"*}$US${cur##*"$US"}$3$2"
+}
 collect_values() {
-  local s=$CMD name list v
+  local s=$CMD name list v plus sep
   while [[ "$s" =~ $ASSIGN_RE ]]; do
-    name=${BASH_REMATCH[5]}; v=${BASH_REMATCH[6]}; s=${s#*"${BASH_REMATCH[0]}"}
+    name=${BASH_REMATCH[5]}; plus=${BASH_REMATCH[6]}; v=${BASH_REMATCH[7]}; s=${s#*"${BASH_REMATCH[0]}"}
     [[ "$v" == "\$'"* ]] && v=${v#\$}
-    add_value "$name" "${v//[\"\']/}"
+    sep=""; [[ "$v" == '('*')' ]] && { v=${v:1:${#v}-2}; sep=" "; }
+    if [[ -n "$plus" ]]; then append_value "$name" "${v//[\"\']/}" "$sep"; else add_value "$name" "${v//[\"\']/}"; fi
   done
   s=$CMD
   while [[ "$s" =~ $FOR_RE ]]; do
@@ -370,10 +378,27 @@ printed_by() {
   OUT="${words[*]:$i}"; OUT=${OUT//[\"\']/}
 }
 
-# Replace each substitution matching $1 (body in group 1) that only prints.
+# Replace each innermost $(…) that only prints, in one walk over the text split
+# at `$` (a rescan per substitution took 1.5 s on a 100-substitution heredoc).
 resolve_printers() {
+  local parts=() p x out
+  IFS='$' read -r -d '' -a parts <<<"$CMD"
+  out=${parts[0]}
+  for (( x = 1; x < ${#parts[@]}; x++ )); do
+    p=${parts[$x]}
+    if [[ "$p" =~ $SUBST_PART_RE ]] && printed_by "${BASH_REMATCH[1]}"; then
+      out+=$OUT${p:${#BASH_REMATCH[0]}}
+    else
+      out+=\$$p
+    fi
+  done
+  CMD=${out%$'\n'}
+}
+
+# Backticks do not nest, and are rare enough to scan as before.
+resolve_ticks() {
   local s=$CMD out="" m
-  while [[ "$s" =~ $1 ]]; do
+  while [[ "$s" =~ $TICK_RE ]]; do
     m=${BASH_REMATCH[0]}
     out+=${s%%"$m"*}; s=${s#*"$m"}
     if printed_by "${BASH_REMATCH[1]}"; then out+=$OUT; else out+=$m; fi
@@ -387,27 +412,36 @@ if [[ "$CMD" == *[\$\`]* ]]; then
   resolve_values; resolve_values
   if [[ "$CMD" =~ $PRINTER_RE ]]; then
     for _ in 1 2; do
-      [[ "$CMD" == *'$('* ]] && resolve_printers "$SUBST_RE"
-      [[ "$CMD" == *'`'* ]] && resolve_printers "$TICK_RE"
+      [[ "$CMD" == *'$('* ]] && resolve_printers
+      [[ "$CMD" == *'`'* ]] && resolve_ticks
     done
   fi
 fi
 
 # Set NK to KIND when tokens $1 up to $2 are `kubectl … get KIND … -o name`, whose
-# output names that kind only (pod/api-0), so a get it feeds reads that kind.
+# output names that kind only (pod/api-0), so a get it feeds reads that kind. Line
+# filters may follow (`| grep web | head -3`); anything that rewrites lines may not.
 name_kind() {
-  local i=$1 end=$2 t w named=0 all=$n
+  local i=$1 end=$2 t w named=0 all=$n first=$2
   NK=""
   w=${TOKENS[$i]:-}; w=${w//[\"\']/}
   [[ "$w" == kubectl || "$w" == */kubectl ]] || return 1
   for (( t = i; t < end; t++ )); do
+    case "${TOKENS[$t]}" in
+      ';') break ;;
+      '|') (( t < first )) && first=$t
+           w=${TOKENS[$((t + 1))]:-}; w=${w//[\"\']/}
+           case "${w##*/}" in grep|egrep|fgrep|head|tail|sort|uniq) continue ;; *) return 1 ;; esac ;;
+      '&&'|'||'|'&'|'|&') return 1 ;;
+    esac
+    (( t > first )) && continue
     case "${TOKENS[$t]//[\"\']/}" in
       -oname*|-o=name*|--output=name*) named=1 ;;
       -o|--output) [[ "${TOKENS[$((t + 1))]//[\"\']/}" == name* ]] && named=1 ;;
     esac
   done
   (( named )) || return 1
-  n=$end; next_bare_token $((i + 1))
+  n=$first; next_bare_token $((i + 1))
   if [[ "${NB//[\"\']/}" == get ]]; then next_bare_token $((NB_IDX + 1)) get; NK=${NB//[\"\']/}; NK=${NK%%)*}; fi
   n=$all
   [[ -n "$NK" && "$NK" != [\$\`]* ]]
@@ -444,7 +478,7 @@ if [[ "$CMD" == *xargs* || "$CMD" == *parallel* ]]; then
     next_bare_token $((NB_IDX + 1)) get; kind=${NB%%/*}
     [[ -n "$kind" && "$kind" != *"$rep"* ]] && continue
     # Fed by `kubectl get pods -o name`, the input names pods only.
-    s0=$((j - 2)); while (( s0 > 0 )) && ! is_separator "${TOKENS[$((s0 - 1))]}"; do (( s0-- )); done
+    s0=$((j - 2)); while (( s0 > 0 )) && { [[ "${TOKENS[$((s0 - 1))]}" == '|' ]] || ! is_separator "${TOKENS[$((s0 - 1))]}"; }; do (( s0-- )); done
     if [[ "${TOKENS[$((j - 1))]:-}" == '|' ]] && (( s0 >= 0 )) && name_kind "$s0" $((j - 1)) && ! is_secret_target "$NK"; then continue; fi
     emit_ask "${TOKENS[$j]##*/} hands kubectl get its resource kind from its input, which this guard cannot read, and a Secret's data would land in the transcript. Put the kind on the command line."
     exit 0

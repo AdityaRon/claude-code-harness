@@ -420,6 +420,14 @@ check "xargs fed by get secrets -o name" ask   'kubectl get secrets -o name | xa
 check "loop over get secrets -o name"    ask   'for s in $(kubectl get secrets -o name); do kubectl get $s -o yaml; done'
 check "loop over api-resources"          ask   'for r in $(kubectl api-resources -o name); do kubectl get $r -A; done'
 check "while read, kind unknown"         ask   'kubectl get pods -o name | while read p; do kubectl get $p -o yaml; done'
+# Second review.
+check "K=\${K:-\$(which kubectl)}, delete" ask  'KUBECTL=${KUBECTL:-$(which kubectl)}; $KUBECTL delete pod x'
+check "array grown with +="              ask   'cmd=(kubectl); cmd+=(delete pod x); "${cmd[@]}"'
+check "array grown with +=, a read"      allow 'cmd=(kubectl); cmd+=(get pods); "${cmd[@]}"'
+check "piped list, loop var before verb" allow 'for ns in $(kubectl get ns -o name | cut -d/ -f2); do kubectl -n $ns get pods; done'
+check "grep between -o name and xargs"   allow 'kubectl get pods -o name | grep web | xargs -I{} kubectl get {} -o yaml'
+check "grep inside the loop's list"      allow 'for p in $(kubectl get pods -o name | grep web); do kubectl get $p -o yaml; done'
+check "sed rewrites the names"           ask   'kubectl get pods -o name | sed s/pod/secret/ | xargs -I{} kubectl get {} -o yaml'
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
