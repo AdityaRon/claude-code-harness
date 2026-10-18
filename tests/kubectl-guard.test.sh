@@ -396,5 +396,31 @@ check "logs of a substituted pod"         allow 'kubectl logs $(kubectl get pods
 check "-n from the environment"           allow 'kubectl get pods -n $NS'
 
 echo ""
+echo "=== Review of the above: flag values, get's flags, arrays, loops, xargs sources ==="
+# An unquoted `)` reaches the scan as `;` (lib.sh's separate_groups).
+check "unquoted -n \$(…), then delete"    ask   'kubectl -n $(cat ns) delete pod x'
+check "unquoted --context=\$(…), delete"  ask   'kubectl --context=$(cat ctx) delete pod x'
+check "unquoted -n \$(…), get secrets"    ask   'kubectl -n $(cat ns) get secrets'
+check "unquoted -n \$(…), a read"         allow 'kubectl -n $(cat ns) get pods'
+check "xargs get, -o yaml before kind"   ask   'cat names | xargs -n1 kubectl get -o yaml'
+check "get -o yaml \$KIND"                ask   'kubectl get -o yaml $KIND'
+check "assignment then ; with no space"  ask   'X=1;kubectl delete pod x'
+check "k=kubectl;\$k, no space"           ask   'k=kubectl;$k delete pod x'
+check "array run as a command"           ask   'cmd=(kubectl delete pod x); "${cmd[@]}"'
+check "array of kinds"                   ask   'kinds=(pods secrets); kubectl get "${kinds[@]}"'
+check "K=\${K:-kubectl}, then delete"     ask   'KUBECTL=${KUBECTL:-kubectl}; $KUBECTL delete pod x'
+check "K=\${K:-kubectl}, a read"          allow 'KUBECTL=${KUBECTL:-kubectl}; $KUBECTL get pods'
+check "loop over a piped \$(…) list"      allow 'for ns in $(kubectl get ns -o name | cut -d/ -f2); do kubectl get pods -n $ns; done'
+check "loop values only echoed"          allow 'for p in $(kubectl get pods -n a -o name); do echo "$p"; done; for p in $(kubectl get pods -n b -o name); do echo "$p"; done'
+check "| xargs kubectl in a message"     allow 'git commit -m "fix: pipe pod names | xargs kubectl"'
+check "xargs fed by get pods -o name"    allow 'kubectl get pods -o name | xargs -I{} kubectl get {} -o yaml'
+check "xargs, pod/{}"                    allow 'kubectl get pods -o name | xargs -I{} kubectl get pod/{} -o wide'
+check "loop over get pods -o name"       allow 'for p in $(kubectl get pods -o name); do kubectl get $p -o yaml; done'
+check "xargs fed by get secrets -o name" ask   'kubectl get secrets -o name | xargs -I{} kubectl get {} -o yaml'
+check "loop over get secrets -o name"    ask   'for s in $(kubectl get secrets -o name); do kubectl get $s -o yaml; done'
+check "loop over api-resources"          ask   'for r in $(kubectl api-resources -o name); do kubectl get $r -A; done'
+check "while read, kind unknown"         ask   'kubectl get pods -o name | while read p; do kubectl get $p -o yaml; done'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

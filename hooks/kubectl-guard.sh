@@ -129,6 +129,8 @@ skip_value() {
       while (( K < n )); do
         t="${TOKENS[$K]}"; (( K++ ))
         if [[ "$t" == '$(' ]]; then (( depth++ )); continue; fi
+        # lib.sh's separate_groups turned an unquoted `)` into `;`.
+        if [[ "$t" == ';' ]]; then (( depth-- )); (( depth <= 0 )) && return 0; continue; fi
         t="${t//[\"\']/}"
         while [[ "$t" == *')' ]]; do (( depth-- )); t="${t%)}"; done
         (( depth <= 0 )) && return 0
@@ -136,6 +138,10 @@ skip_value() {
     *) (( K++ )) ;;
   esac
 }
+
+# get's own flags that take a value: with $2 = get, `get -o yaml secret` finds
+# the kind, not "yaml".
+GET_VALUE_FLAGS=(-o --output -l --selector -L --label-columns --field-selector --sort-by --template -f --filename -k --kustomize)
 
 # Set NB to the next bare (non-flag) token at or after index $1 and NB_IDX to its
 # index, skipping global flags and the values they consume. NB is empty if the
@@ -151,7 +157,7 @@ next_bare_token() {
       (( K++ ))
     elif [[ "$t" == -* ]]; then
       (( K++ ))
-      if [[ "$t" != *=* ]] && is_value_flag "$t"; then skip_value
+      if [[ "$t" != *=* ]] && { is_value_flag "$t" || { [[ "${2:-}" == get ]] && in_list "$t" "${GET_VALUE_FLAGS[@]}"; }; }; then skip_value
       # `--context="$(…)"`: SCAN split the value off at the marker.
       elif [[ "${t//[\"\']/}" == *= ]]; then skip_value subst; fi
     else
@@ -174,27 +180,31 @@ next_bare_token() {
 # Only the KIND is compared, never a prefix of it, so a CRD that merely starts
 # with the word (secretproviderclass, sealedsecrets) stays a silent read.
 is_secret_target() {
-  local raw="$1" part kind
+  local raw="$1" part kind rest hit=1 nocase=0
   # A quoted substitution keeps its `)` on the last word: "$(kubectl get secrets)".
-  raw=$(printf '%s' "$raw" | tr -d "\"')" | tr '[:upper:]' '[:lower:]')
+  raw=${raw//[\"\')]/}
   [[ -z "$raw" ]] && return 1
+  # Kinds are case-insensitive. nocasematch, not tr: a fork per word cost 1.8 s on
+  # a script with 300 gets, and bash 3.2 has no ${raw,,}.
+  shopt -q nocasematch && nocase=1; shopt -s nocasematch
 
   # A --raw value is an API path, not a kind: /api/v1/namespaces/vm/secrets,
   # optionally with a name or query string after it.
   if [[ "$raw" = /* ]]; then
-    printf '%s' "$raw" | grep -qE '(^|/)secrets?(/|\?|$)'
-    return
+    [[ "$raw" =~ $SECRET_PATH_RE ]] && hit=0
+  else
+    rest=$raw,
+    while [[ -n "$rest" ]]; do
+      part=${rest%%,*}; rest=${rest#*,}
+      kind="${part%%/*}"   # drop /name
+      kind="${kind%%.*}"   # drop .version.group
+      [[ "$kind" = "secret" || "$kind" = "secrets" ]] && { hit=0; break; }
+    done
   fi
-
-  local parts=()
-  IFS=',' read -ra parts <<<"$raw"
-  for part in "${parts[@]}"; do
-    kind="${part%%/*}"   # drop /name
-    kind="${kind%%.*}"   # drop .version.group
-    [[ "$kind" = "secret" || "$kind" = "secrets" ]] && return 0
-  done
-  return 1
+  (( nocase )) || shopt -u nocasematch
+  return $hit
 }
+SECRET_PATH_RE='(^|/)secrets?(/|\?|$)'
 
 # A command whose arguments are only text: it searches, prints or lists them and
 # runs none. `grep "kubectl delete"` and `which kubectl` name kubectl as text.
@@ -241,30 +251,34 @@ writes_to() {
 # eval "$x"` or `$(which kubectl) delete`, so values set in this command go in
 # place first, as the shell would put them.
 SQ="'[^']*'"
-ASSIGN_RE='(^|[[:space:];&|(`])((export|local|readonly|declare|typeset)([[:space:]]+-[A-Za-z]+)*[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(\$\([^()]*\)|\$?'"$SQ"'|"[^"]*"|[^[:space:];&|]*)'
+ASSIGN_RE='(^|[[:space:];&|(`])((export|local|readonly|declare|typeset)([[:space:]]+-[A-Za-z]+)*[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(\$\([^()]*\)|\([^()]*\)|\$?'"$SQ"'|"[^"]*"|[^[:space:];&|]*)'
 FOR_RE='(^|[[:space:];&|(`])for[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]+in[[:space:]]+([^;&|'$'\n'']*)'
 WORD_RE='^[[:space:]]*(\$\([^()]*\)|'"$SQ"'|"[^"]*"|[^[:space:]]+)'
-PARAM_RE='\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-=+])([^{}]*)\}'
+BRACE_PART_RE='^\{([A-Za-z_][A-Za-z0-9_]*)([^{}]*)\}'
+DEFAULT_RE='^:?[-=+](.*)$'
+IDENT_RE='^[A-Za-z_][A-Za-z0-9_]*'
 SUBST_RE='\$\(([^()`]*)\)'
 TICK_RE='`([^`]*)`'
+PRINTER_RE='(\$\(|`)[[:space:]]*["'"'"']?([^[:space:]]*/)?(echo|printf|print|which|command|type|whereis)["'"'"']?([[:space:]]|\)|`)'
 KUBECTL_RE='(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)'
+US=$'\x1f'
 
-# Every value this command gives a name: NAME=…, export/local/declare NAME=…,
-# and each word of `for NAME in …`. Order does not matter; see value_of.
-VNAMES=(); VVALS=()
+# Every value this command gives a name (NAME=…, export/local/declare NAME=…, an
+# array's words, each word of `for NAME in …`), kept in VV_<name> joined by US:
+# bash 3.2 has no associative arrays. Order does not matter; see value_of.
+add_value() { local r="VV_$1"; printf -v "$r" '%s' "${!r:-}$US$2"; }
 collect_values() {
   local s=$CMD name list v
   while [[ "$s" =~ $ASSIGN_RE ]]; do
-    v=${BASH_REMATCH[6]}; [[ "$v" == "\$'"* ]] && v=${v#\$}   # $'…'
-    VNAMES+=("${BASH_REMATCH[5]}"); VVALS+=("${v//[\"\']/}")
-    s=${s#*"${BASH_REMATCH[0]}"}
+    name=${BASH_REMATCH[5]}; v=${BASH_REMATCH[6]}; s=${s#*"${BASH_REMATCH[0]}"}
+    [[ "$v" == "\$'"* ]] && v=${v#\$}
+    add_value "$name" "${v//[\"\']/}"
   done
   s=$CMD
   while [[ "$s" =~ $FOR_RE ]]; do
-    name=${BASH_REMATCH[2]}; list=${BASH_REMATCH[3]}
-    s=${s#*"${BASH_REMATCH[0]}"}
+    name=${BASH_REMATCH[2]}; list=${BASH_REMATCH[3]}; s=${s#*"${BASH_REMATCH[0]}"}
     while [[ "$list" =~ $WORD_RE ]]; do
-      VNAMES+=("$name"); VVALS+=("${BASH_REMATCH[1]//[\"\']/}")
+      add_value "$name" "${BASH_REMATCH[1]//[\"\']/}"
       list=${list:${#BASH_REMATCH[0]}}
     done
   done
@@ -273,61 +287,73 @@ collect_values() {
 # Set VAL to the text $1 stands for ($2: a ${…:-word}'s word). Several single
 # words join with a comma, keeping one token (`-n $ns`) and every kind (`get
 # pods,secrets`). 2: several values, one naming kubectl, so ask. 1: leave it.
+# `K=${K:-kubectl}` gives K one value, kubectl, not two.
 value_of() {
-  local k v vals=() uniq=() spaced=0 named=0
-  for k in "${!VNAMES[@]}"; do [[ "${VNAMES[$k]}" == "$1" ]] && vals+=("${VVALS[$k]}"); done
-  [[ $# -gt 1 ]] && vals+=("$2")
-  [[ ${#vals[@]} -eq 0 ]] && return 1
-  for v in "${vals[@]}"; do
-    for k in "${uniq[@]}"; do [[ "$k" == "$v" ]] && continue 2; done
-    uniq+=("$v")
+  local r="VV_$1" rest v seen=$US cnt=0 spaced=0 named=0
+  rest=${!r:-}; [[ $# -gt 1 ]] && rest+=$US$2
+  VAL=""
+  [[ -z "$rest" ]] && return 1
+  rest=${rest#"$US"}$US
+  while [[ -n "$rest" ]]; do
+    v=${rest%%"$US"*}; rest=${rest#*"$US"}
+    case "$v" in
+      "\${$1:-"*"}"|"\${$1-"*"}"|"\${$1:="*"}"|"\${$1="*"}") v=${v#*[-=]}; v=${v%\}} ;;
+      "\$$1"|"\${$1}") continue ;;
+    esac
+    [[ "$seen" == *"$US$v$US"* ]] && continue
+    seen+=$v$US; cnt=$((cnt + 1)); VAL+=${VAL:+,}$v
     [[ "$v" == *[[:space:]]* ]] && spaced=1
-    [[ "${v//[\\]/}" =~ $KUBECTL_RE ]] && named=1
+    # A `$(kubectl get …)` value is that command's output, not a kubectl to run.
+    [[ "$v" != '$('* && "$v" != '`'* && "${v//[\\]/}" =~ $KUBECTL_RE ]] && named=1
   done
-  VAL=""; for v in "${uniq[@]}"; do VAL+=${VAL:+,}$v; done
-  [[ ${#uniq[@]} -eq 1 ]] && return 0
+  (( cnt == 0 )) && return 1
+  (( cnt == 1 )) && return 0
   (( named )) && return 2
   (( spaced )) && return 1
   return 0
 }
 
-# CMD with every $1 replaced by $2. ${CMD//…/…} treats quotes in the replacement
-# differently before bash 4.3, and macOS ships 3.2.
-replace_all() {
-  local s=$CMD out=""
-  while [[ "$s" == *"$1"* ]]; do out+=${s%%"$1"*}$2; s=${s#*"$1"}; done
-  CMD=$out$s
-}
-
-# Replace `$1`'s expansions with VAL: ${NAME:-word} and the other default forms
-# (also for a NAME this command never sets), ${NAME…}, and $NAME before a
-# non-name character.
-resolve_name() {
-  local s=$CMD occ rc t out="" brace="\\\$\\{$1([^A-Za-z0-9_}][^{}]*)?\\}"
-  while [[ "$s" =~ $PARAM_RE ]]; do
-    occ=${BASH_REMATCH[0]}; s=${s#*"$occ"}
-    [[ "${BASH_REMATCH[1]}" == "$1" ]] || continue
-    value_of "$1" "${BASH_REMATCH[3]//[\"\']/}"; rc=$?
-    (( rc == 2 )) && ask_ambiguous "$1"
-    (( rc == 0 )) && replace_all "$occ" "$VAL"
-  done
-  [[ "$CMD" == *"\$$1"* || "$CMD" == *"\${$1"* ]] || return 0
-  value_of "$1"; rc=$?
-  (( rc == 2 )) && ask_ambiguous "$1"
-  (( rc == 0 )) || return 0
-  s=$CMD
-  while [[ "$s" =~ $brace ]]; do occ=${BASH_REMATCH[0]}; s=${s#*"$occ"}; replace_all "$occ" "$VAL"; done
-  s=$CMD; t="\$$1"
-  while [[ "$s" == *"$t"* ]]; do
-    out+=${s%%"$t"*}; s=${s#*"$t"}
-    if [[ "$s" == [A-Za-z0-9_]* ]]; then out+=$t; else out+=$VAL; fi
-  done
-  CMD=$out$s
+# value_of NAME once per name (VC_/VR_<name>): a script expands the same names often.
+cached_value() {
+  local r="VR_$1" c="VC_$1" rc
+  if [[ -z "${!r:-}" ]]; then
+    value_of "$1"; rc=$?
+    printf -v "$r" '%s' "$rc"; printf -v "$c" '%s' "$VAL"
+  fi
+  VAL=${!c}; return "${!r}"
 }
 
 ask_ambiguous() {
   emit_ask "kubectl is reached through \$$1, which this command sets to more than one value, so the guard cannot tell which runs. Run kubectl by name."
   exit 0
+}
+
+# Put each expansion's value in place, in one walk over the text split at `$`: a
+# part that starts `{NAME…}` is ${NAME…} (a default's word counts as a value, also
+# for a NAME this command never sets), one that starts NAME is $NAME. A pass per
+# name made a 160-line script take 108 s.
+resolve_values() {
+  local parts=() p name rest x rc out
+  IFS='$' read -r -d '' -a parts <<<"$CMD"
+  out=${parts[0]}
+  for (( x = 1; x < ${#parts[@]}; x++ )); do
+    p=${parts[$x]}
+    if [[ "$p" =~ $BRACE_PART_RE ]]; then
+      name=${BASH_REMATCH[1]}; rest=${BASH_REMATCH[2]}
+      if [[ "$rest" =~ $DEFAULT_RE ]]; then value_of "$name" "${BASH_REMATCH[1]//[\"\']/}"; rc=$?
+      elif [[ -z "$rest" || "$rest" == [!A-Za-z0-9_]* ]]; then cached_value "$name"; rc=$?
+      else rc=1; fi
+      (( rc == 2 )) && ask_ambiguous "$name"
+      if (( rc == 0 )); then out+=$VAL${p:${#name}+${#rest}+2}; continue; fi
+    elif [[ "$p" =~ $IDENT_RE ]]; then
+      name=${BASH_REMATCH[0]}
+      cached_value "$name"; rc=$?
+      (( rc == 2 )) && ask_ambiguous "$name"
+      if (( rc == 0 )); then out+=$VAL${p:${#name}}; continue; fi
+    fi
+    out+=\$$p
+  done
+  CMD=${out%$'\n'}
 }
 
 # Set OUT to what a substitution body prints when it only prints: `which kubectl`,
@@ -358,30 +384,42 @@ resolve_printers() {
 if [[ "$CMD" == *[\$\`]* ]]; then
   collect_values
   # Twice: a value can name another (`a=kubectl; b="$a delete"; $b pod x`).
-  for _ in 1 2; do
-    seen=" "
-    for name in "${VNAMES[@]}"; do
-      [[ "$seen" == *" $name "* ]] && continue
-      seen+="$name "; resolve_name "$name"
+  resolve_values; resolve_values
+  if [[ "$CMD" =~ $PRINTER_RE ]]; then
+    for _ in 1 2; do
+      [[ "$CMD" == *'$('* ]] && resolve_printers "$SUBST_RE"
+      [[ "$CMD" == *'`'* ]] && resolve_printers "$TICK_RE"
     done
-    s=$CMD
-    while [[ "$s" =~ $PARAM_RE ]]; do
-      s=${s#*"${BASH_REMATCH[0]}"}; name=${BASH_REMATCH[1]}
-      [[ "$seen" == *" $name "* ]] || { seen+="$name "; resolve_name "$name"; }
-    done
-  done
-  for _ in 1 2; do
-    [[ "$CMD" == *'$('* ]] && resolve_printers "$SUBST_RE"
-    [[ "$CMD" == *'`'* ]] && resolve_printers "$TICK_RE"
-  done
+  fi
 fi
+
+# Set NK to KIND when tokens $1 up to $2 are `kubectl … get KIND … -o name`, whose
+# output names that kind only (pod/api-0), so a get it feeds reads that kind.
+name_kind() {
+  local i=$1 end=$2 t w named=0 all=$n
+  NK=""
+  w=${TOKENS[$i]:-}; w=${w//[\"\']/}
+  [[ "$w" == kubectl || "$w" == */kubectl ]] || return 1
+  for (( t = i; t < end; t++ )); do
+    case "${TOKENS[$t]//[\"\']/}" in
+      -oname*|-o=name*|--output=name*) named=1 ;;
+      -o|--output) [[ "${TOKENS[$((t + 1))]//[\"\']/}" == name* ]] && named=1 ;;
+    esac
+  done
+  (( named )) || return 1
+  n=$end; next_bare_token $((i + 1))
+  if [[ "${NB//[\"\']/}" == get ]]; then next_bare_token $((NB_IDX + 1)) get; NK=${NB//[\"\']/}; NK=${NK%%)*}; fi
+  n=$all
+  [[ -n "$NK" && "$NK" != [\$\`]* ]]
+}
 
 # `… | xargs kubectl` takes kubectl's verb from its input, and normalize_wrappers
 # drops xargs, so the scan below would see a bare `kubectl`. Ask when kubectl is
 # the command xargs or parallel runs and its verb, or the kind it gets, is not on
-# the line. kubectl as an argument (`xargs grep -l kubectl`) is not that command.
+# the line. kubectl as an argument (`xargs grep -l kubectl`) is not that command,
+# and neither is `| xargs kubectl` inside a quoted commit message.
 if [[ "$CMD" == *xargs* || "$CMD" == *parallel* ]]; then
-  read -ra TOKENS <<<"$(printf '%s\n' "$CMD" | tr '\n' ';' | sed -E 's/\|\||&&|\|&|[|;]/ & /g')"
+  read -ra TOKENS <<<"$(neutralize_quoted_separators "$CMD" | tr '\n' ';' | sed -E 's/\|\||&&|\|&|[|;]/ & /g')"
   n=${#TOKENS[@]}
   for (( j = 0; j < n; j++ )); do
     [[ "${TOKENS[$j]##*/}" == xargs || "${TOKENS[$j]##*/}" == parallel ]] || continue
@@ -402,13 +440,14 @@ if [[ "$CMD" == *xargs* || "$CMD" == *parallel* ]]; then
       emit_ask "${TOKENS[$j]##*/} hands kubectl its subcommand from its input, which this guard cannot read. Put the subcommand on the command line."
       exit 0
     fi
-    if [[ "$verb" == get ]]; then
-      next_bare_token $((NB_IDX + 1))
-      if [[ -z "$NB" || "$NB" == *"$rep"* ]]; then
-        emit_ask "${TOKENS[$j]##*/} hands kubectl get its resource kind from its input, which this guard cannot read, and a Secret's data would land in the transcript. Put the kind on the command line."
-        exit 0
-      fi
-    fi
+    [[ "$verb" == get ]] || continue
+    next_bare_token $((NB_IDX + 1)) get; kind=${NB%%/*}
+    [[ -n "$kind" && "$kind" != *"$rep"* ]] && continue
+    # Fed by `kubectl get pods -o name`, the input names pods only.
+    s0=$((j - 2)); while (( s0 > 0 )) && ! is_separator "${TOKENS[$((s0 - 1))]}"; do (( s0-- )); done
+    if [[ "${TOKENS[$((j - 1))]:-}" == '|' ]] && (( s0 >= 0 )) && name_kind "$s0" $((j - 1)) && ! is_secret_target "$NK"; then continue; fi
+    emit_ask "${TOKENS[$j]##*/} hands kubectl get its resource kind from its input, which this guard cannot read, and a Secret's data would land in the transcript. Put the kind on the command line."
+    exit 0
   done
 fi
 
@@ -537,10 +576,15 @@ while (( i < n )); do
         # `kubectl get secret -o yaml` materialises live credentials into the
         # transcript and debug logs. `describe secret` prints key names and
         # annotations, not values. Every other `get` or `describe` is a read.
-        next_bare_token "$a"; sub=$NB
+        next_bare_token "$a" get; sub=$NB; si=$NB_IDX
         if [[ "$verb" == get && "${sub//[\"\']/}" == [\$\`]* ]]; then
-          emit_ask "kubectl get's resource kind comes from a variable or a substitution (${sub//[\"\']/} …), which this guard cannot read, and a Secret's data would land in the transcript. Put the kind on the command line."
-          exit 0
+          # `get $(kubectl get pods -o name)` reads pods.
+          ok=0
+          if [[ "$sub" == '$(' ]]; then K=$si; skip_value; name_kind $((si + 1)) "$K" && ! is_secret_target "$NK" && ok=1; fi
+          if (( ok == 0 )); then
+            emit_ask "kubectl get's resource kind comes from a variable or a substitution (${sub//[\"\']/} …), which this guard cannot read, and a Secret's data would land in the transcript. Put the kind on the command line."
+            exit 0
+          fi
         fi
         if is_secret_target "$sub"; then
           emit_ask "kubectl $verb $sub puts Secret data into the transcript (values for get; key names and annotations for describe). Confirm this is intended and scoped to the secret you need."
