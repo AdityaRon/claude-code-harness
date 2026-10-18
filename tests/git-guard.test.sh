@@ -61,6 +61,16 @@ check "set core.hooksPath"     deny "git config core.hooksPath /dev/null"
 check "set user.email (ask)"   ask  "git config user.email attacker@evil.example"
 check "set user.name (ask)"    ask  "git config user.name 'Someone Else'"
 check "set signingkey (ask)"   ask  "git config gpg.signingkey BAD"
+check "--unset user.email (ask)" ask "git config --unset user.email"
+check "git config set (ask)"   ask  "git config set user.name x"
+check "write after a read (ask)" ask "git config user.name; git config user.email x@y.z"
+check "-C repo, a write (ask)" ask  "git -C repo config user.email x@y.z"
+# Reads: the identity check used `.*`, which ran past the `;` after a read.
+check "read, then ls"          allow "git config --global user.name; git config --global user.email; ls -lt | head -8"
+check "read with --get"        allow "git config --get user.name"
+check "read in a substitution" allow 'NAME=$(git config user.name)'
+check "read, stderr dropped"   allow "git config user.email 2>/dev/null || echo unset"
+check "git config get"         allow "git config get user.name"
 
 echo ""
 echo "=== .git/hooks writes (expect: deny) ==="
