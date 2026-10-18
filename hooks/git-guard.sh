@@ -442,10 +442,20 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}config\s+[^|;&]*alias\."; then
   emit_ask "git config is defining an alias. Confirm the alias body is safe (a leading '!' would run a shell command)."
   exit 0
 fi
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}config\s+.*(user\.(name|email|signingkey)|gpg\.signingkey|commit\.gpgsign|tag\.gpgsign)"; then
+# Identity and signing keys: setting one asks, reading one does not (`git config
+# --global user.name`, `--get`, `--list`, `git config get …`). Judged one command at
+# a time: a `.*` here once spanned the `;` in `git config user.name; ls`.
+ID_KEY='(user\.(name|email|signingkey)|gpg\.signingkey|commit\.gpgsign|tag\.gpgsign)'
+while IFS= read -r seg; do
+  printf '%s\n' "$seg" | grep -qE "$ID_KEY" || continue
+  if ! printf '%s\n' "$seg" | grep -qE -- "\s(--(unset|unset-all|replace-all|add|edit|rename-section|remove-section)|-e|set|unset|edit)(\s|=|$)"; then
+    printf '%s\n' "$seg" | grep -qE -- "\s(--(get|get-all|get-regexp|get-urlmatch|list)|-l|get|list)(\s|$)" && continue
+    rest=$(printf '%s\n' "$seg" | sed -E "s/^.*${ID_KEY}[\"']?//"); read -r first _ <<<"$rest"
+    [[ -z "$first" || "$first" =~ ^([0-9]*[\<\>]|[\)\&]) ]] && continue
+  fi
   emit_ask "git config is changing identity or signing settings. Confirm this is intended."
   exit 0
-fi
+done < <(printf '%s\n' "$CMD" | grep -oE "${A}${GIT}config\s+[^|;&]*")
 
 # --- Writes into .git/hooks/* ------------------------------------------
 # The directory counts, not just a path through it: `cd .git/hooks && cat >
