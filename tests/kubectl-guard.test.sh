@@ -430,5 +430,21 @@ check "grep inside the loop's list"      allow 'for p in $(kubectl get pods -o n
 check "sed rewrites the names"           ask   'kubectl get pods -o name | sed s/pod/secret/ | xargs -I{} kubectl get {} -o yaml'
 
 echo ""
+echo "=== A & glued to a word is a separator; 2>&1, &> and |& are not ==="
+check "true&kubectl delete"              ask   'true&kubectl delete pod x'
+check "X=a&kubectl delete"               ask   'X=a&kubectl delete pod x'
+check "a&b&kubectl delete"               ask   'a&b&kubectl delete pod x'
+check "true &kubectl delete"             ask   'true &kubectl delete pod x'
+check "glued & before xargs kubectl"     ask   'echo delete pod x | true&xargs kubectl'
+check "glued & before a text pipeline"   ask   'make&kubectl delete pod x; grep -n kubectl a.txt'
+check "2>&1 after a read"                allow 'kubectl get pods 2>&1 | head'
+check "&> after a read"                  allow 'kubectl get pods &>/dev/null'
+check ">&2 after a read"                 allow 'kubectl get pods >&2'
+check "|& into a read"                   allow 'kubectl get pods |& grep web'
+check "&> stores text, then run"         ask   "echo 'kubectl delete pod y' &>out.sh; sh out.sh"
+check "glued & before sh -c, two lines"  ask   $'grep x a.txt&sh -c \'true;kubectl delete pod x\'\necho done'
+check "escaped & stays in the word"      allow $'echo a\\&kubectl delete pod x\necho done'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

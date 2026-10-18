@@ -453,7 +453,7 @@ name_kind() {
 # the line. kubectl as an argument (`xargs grep -l kubectl`) is not that command,
 # and neither is `| xargs kubectl` inside a quoted commit message.
 if [[ "$CMD" == *xargs* || "$CMD" == *parallel* ]]; then
-  read -ra TOKENS <<<"$(neutralize_quoted_separators "$CMD" | tr '\n' ';' | sed -E 's/\|\||&&|\|&|[|;]/ & /g')"
+  read -ra TOKENS <<<"$(neutralize_quoted_separators "$CMD" | tr '\n' ';' | sed -E 's/\|\||&&|\|&|[|;]/ & /g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g')"
   n=${#TOKENS[@]}
   for (( j = 0; j < n; j++ )); do
     [[ "${TOKENS[$j]##*/}" == xargs || "${TOKENS[$j]##*/}" == parallel ]] || continue
@@ -494,7 +494,7 @@ if [[ "$CMD" != *$'\n'* && "$CMD" == *[\;\&\|]* && "$CMD" != *[\(\)\{\}\`]* ]] \
    && ! printf '%s\n' "$CMD" | grep -qE '(^|[^[:alnum:]_])(fi|done|esac)([^[:alnum:]_]|$)'; then
   # A literal %7C must not come back as a `|`, so % is escaped first.
   PCMD=$CMD; [[ "$CMD" == *%* ]] && PCMD=$(printf '%s' "$CMD" | sed 's/%/%25/g')
-  IFS=';' read -ra PIPES < <(neutralize_quoted_separators "$PCMD" | sed -E 's/\|&/|/g; s/\|\||&&/;/g; s/&([[:space:]]|$)/;\1/g')
+  IFS=';' read -ra PIPES < <(neutralize_quoted_separators "$PCMD" | sed -E 's/\|&/|/g; s/\|\||&&/;/g; s/&([[:space:]]|$)/;\1/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1;\2/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1;\2/g')
   TEXT=(); WR=(); ANY_O=0
   for p in "${PIPES[@]}"; do
     t=1; wr=0; IFS='|' read -ra segs <<<"$p"
@@ -536,7 +536,7 @@ while IFS= read -r seg; do
   [[ "$w" == kubectl ]] || text_cmd "$w" "${2:-}" || { TEXT_ONLY=0; break; }
 # Raw CMD, not SCAN: normalize_binaries strips a quote off a segment's first word,
 # which unbalances the quote blanking. A wrapper first word just loses the exemption.
-done < <(printf '%s\n' "$CMD" | tr '\n' ';' | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g" | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;]/\n/g; s/&([[:space:]]|$)/\n/g')
+done < <(printf '%s\n' "$CMD" | tr '\n' ';' | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g" | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;]/\n/g; s/&([[:space:]]|$)/\n/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1\n\2/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1\n\2/g')
 
 # When only text commands and kubectl run, a quoted `|` or `;` is text (lib.sh).
 # Not with a substitution: the `;` in "$(a; b)" is real.
@@ -549,7 +549,8 @@ fi
 # whitespace or a slash in front of `kubectl`, and `$(` is neither — so
 # `echo "$(kubectl delete pod foo)"` exited here and was allowed silently, no
 # matter what the scan below did. See the tokenizer note further down.
-SCAN=$(normalize_command "$SRC" | tr '\n' ';' | sed -E 's/\$\(/ $( /g; s/`/ ` /g; s/\|\||&&|[|;]/ & /g; s/&([[:space:]]|$)/ & \1/g')
+# A `&` glued to a word (`true&kubectl`) splits too; `2>&1`, `&>` and `|&` do not.
+SCAN=$(normalize_command "$SRC" | tr '\n' ';' | sed -E 's/\$\(/ $( /g; s/`/ ` /g; s/\|\||&&|[|;]/ & /g; s/&([[:space:]]|$)/ & \1/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g')
 
 # Cheap bail-out: no kubectl anywhere, nothing to do.
 # Both sides use "not a word character" rather than "whitespace": a quote can
