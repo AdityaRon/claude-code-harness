@@ -343,5 +343,58 @@ check "uniq -f value is not an operand"  allow "grep -h 'kubectl delete' a.txt |
 check "grep -o is not an output file"    allow "grep -o 'kubectl delete' a.txt; make"
 
 echo ""
+echo "=== kubectl, its verb or its kind through a variable, a substitution or xargs ==="
+# Each allowed on main: the scan knew kubectl only as a word on the line.
+check "k=kubectl; \"\$k\" delete"         ask   'k=kubectl; "$k" delete pod x'
+check "KUBECTL=kubectl; \$KUBECTL"        ask   'KUBECTL=kubectl; $KUBECTL delete pod x'
+check "export, \${K}"                     ask   'export K=kubectl; ${K} delete pod x'
+check "\$(echo kubectl) delete"           ask   '$(echo kubectl) delete pod x'
+check "backtick which kubectl"            ask   '`which kubectl` delete pod x'
+check "value via \$(which), then run"     ask   'K=$(which kubectl); $K delete pod x'
+check "eval of a variable"                ask   "x='kubectl delete pod x'; eval \"\$x\""
+check "eval of an ANSI-C value"           ask   "x=\$'kubectl delete pod x'; eval \"\$x\""
+check "variable run bare"                 ask   'x="kubectl delete pod x"; $x'
+check "variable to bash -c"               ask   "x='kubectl delete pod x'; bash -c \"\$x\""
+check "variable naming a variable"        ask   'a=kubectl; b="$a delete"; $b pod x'
+check "\${KUBECTL:-kubectl} delete"       ask   '${KUBECTL:-kubectl} delete pod x'
+check "for k in kubectl"                  ask   'for k in kubectl; do "$k" delete pod x; done'
+check "two values, one runs"              ask   'k=kubectl; k="kubectl --context prod"; $k delete pod x'
+check "kind in a variable"                ask   'kind=secrets; kubectl get $kind -o yaml'
+check "kinds in a loop"                   ask   'for r in pods secrets; do kubectl get $r; done'
+check "kind from outside the command"     ask   'kubectl get "$KIND"'
+check "verb from a substitution"          ask   'kubectl $(cat verb.txt) pod x'
+check "verb after a quoted -n \$(…)"      ask   'kubectl -n "$(cat ns)" delete pod x'
+check "verb after --context=\"\$(…)\""    ask   'kubectl --context="$(cat ctx)" delete pod x'
+check "delete inside a flag value"        ask   'kubectl --context "$(kubectl delete ns y)" get pods'
+check "loop value, then delete"           ask   'for ns in a b; do kubectl -n $ns delete pod x; done'
+check "xargs supplies the verb"           ask   'echo delete pod x | xargs kubectl'
+check "xargs -n1, flags only"             ask   'cat names | xargs -n1 kubectl --context prod'
+check "xargs supplies get's kind"         ask   'echo secrets | xargs kubectl get'
+check "xargs -I{} as get's kind"          ask   'echo secrets | xargs -I{} kubectl get {}'
+check "xargs -I@ as get's kind"           ask   'echo secrets | xargs -I@ kubectl get @'
+check "xargs -I @, separate"              ask   'echo secrets | xargs -I @ kubectl get @'
+check "parallel supplies the verb"        ask   'echo delete | parallel kubectl'
+check "quoted \$(kubectl get secrets)"    ask   'echo "$(kubectl get secrets)"'
+check "k=kubectl; \"\$k\" get"            allow 'k=kubectl; "$k" get pods'
+check "variable only echoed"              allow 'K=kubectl; echo "$K delete"'
+check "\$(which kubectl) get"             allow '$(which kubectl) get pods'
+check "\$(command -v kubectl) version"    allow '"$(command -v kubectl)" version'
+check "\${KUBECTL:-kubectl} get"          allow '${KUBECTL:-kubectl} get pods -A'
+check "loop over namespaces, a read"      allow 'for ns in a b; do kubectl -n "$ns" get pods; done'
+check "loop over kinds, all reads"        allow 'for r in pods svc; do kubectl get $r; done'
+check "comma in one value"                allow 'x="kubectl get pods,svc"; $x'
+check "quoted -n \$(…), a read"           allow 'kubectl -n "$(cat ns)" get pods'
+check "--context=\"\$(…)\", a read"       allow 'kubectl --context="$(cat ctx)" get pods'
+check "quoted current-context value"      allow 'kubectl --context "$(kubectl config current-context)" get pods'
+check "quoted current-context"            allow 'CTX="$(kubectl config current-context)"'
+check "xargs grep names kubectl"          allow 'git ls-files | xargs grep -l kubectl'
+check "xargs kubectl get pods"            allow 'echo api-0 | xargs kubectl get pods'
+check "xargs kubectl describe"            allow 'kubectl get pods -o name | xargs -n1 kubectl describe'
+check "xargs kubectl in a grep pattern"   allow 'grep -rn "xargs kubectl" docs/'
+check "pattern in a variable, grepped"    allow "pattern='kubectl delete'; grep -rn \"\$pattern\" ."
+check "logs of a substituted pod"         allow 'kubectl logs $(kubectl get pods -o name | head -1)'
+check "-n from the environment"           allow 'kubectl get pods -n $NS'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
