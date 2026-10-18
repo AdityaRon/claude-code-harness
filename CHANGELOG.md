@@ -6,6 +6,46 @@ the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
 installed machine to the newest tag.
 
+## v1.0.3 (2026-10-18)
+
+Merged since v1.0.2: 2 PRs.
+
+### Security
+- kubectl-guard: a grep pattern or path naming kubectl is text, beside any command (#102)
+
+### Speed
+- tests: hook-bench's max-vs-sum case uses hooks of clearly different speed (#103)
+
+### Benchmark vs v1.0.2
+
+
+2026-10-18T02:27:34Z, Linux 6.17.0-1022-azure x86_64, AMD EPYC 7763 64-Core Processor, python 3.12.3. Corpus tests/bench-corpus.jsonl: 436 payloads (321 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 2 MultiEdit, 2 NotebookEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, run one at a time. Wait is the slowest hook of a call (Claude Code runs them in parallel); CPU is the sum. Process start here: `bash -c :` 1.5 ms, `jq -n 1` 2.5 ms (p50 of 20), so only same-run comparisons are meaningful.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 321 | 51.5 → 55.1 ms (+7%) | 54.5 → 54.8 ms (+0%) | 95.9 → 96.1 ms (+0%) | 166.7 → 167.2 ms (+0%) |
+| WebFetch | 11 | 18.1 → 18.0 ms (-1%) | 23.0 → 23.1 ms (+0%) | 37.0 → 37.4 ms (+1%) | 27.2 → 27.4 ms (+0%) |
+| Read/Grep | 41 | 49.4 → 49.4 ms (+0%) | 51.8 → 51.6 ms (-0%) | 78.3 → 77.0 ms (-2%) | 56.3 → 56.1 ms (-0%) |
+| Write/Edit | 63 | 49.6 → 49.5 ms (-0%) | 49.8 → 49.8 ms (-0%) | 73.9 → 73.6 ms (-0%) | 105.4 → 105.4 ms (-0%) |
+| All | 436 | 49.8 → 50.0 ms (+0%) | 52.8 → 53.0 ms (+0%) | 95.1 → 95.5 ms (+0%) | 144.0 → 144.3 ms (+0%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean |
+|---|---:|---|---|---|
+| config-guard.sh | 384 | 11.4 → 11.4 ms (+0%) | 30.9 → 30.9 ms (+0%) | 12.1 → 12.1 ms (+0%) |
+| env-guard.sh | 321 | 14.2 → 14.2 ms (-0%) | 84.2 → 86.8 ms (+3%) | 33.4 → 33.4 ms (+0%) |
+| git-guard.sh | 321 | 13.5 → 13.5 ms (+0%) | 81.1 → 73.5 ms (-9%) | 27.0 → 27.1 ms (+0%) |
+| interpreter-guard.sh | 321 | 13.6 → 13.6 ms (+0%) | 79.2 → 79.3 ms (+0%) | 28.1 → 28.1 ms (+0%) |
+| kubectl-guard.sh | 321 | 13.4 → 13.4 ms (+0%) | 50.0 → 51.9 ms (+4%) | 21.9 → 22.3 ms (+2%) |
+| mod-gate.sh | 63 | 3.0 → 3.0 ms (-0%) | 12.3 → 12.0 ms (-3%) | 3.4 → 3.4 ms (-0%) |
+| network-guard.sh | 332 | 17.4 → 17.4 ms (+0%) | 79.6 → 78.8 ms (-1%) | 30.9 → 30.8 ms (-0%) |
+| rm-guard.sh | 321 | 11.7 → 11.6 ms (-0%) | 12.5 → 12.5 ms (-0%) | 15.0 → 15.0 ms (-0%) |
+| secret-scanner.sh | 63 | 23.6 → 23.5 ms (-0%) | 73.9 → 73.6 ms (-0%) | 29.3 → 29.2 ms (-0%) |
+| sensitive-file-guard.sh | 104 | 49.4 → 49.3 ms (-0%) | 59.3 → 60.2 ms (+1%) | 53.4 → 53.3 ms (-0%) |
+
+Decisions: 436 of 436 payloads got the same answer on both sides.
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended).
+
 ## v1.0.2 (2026-10-17)
 
 Merged since v1.0.1: 1 PR.
