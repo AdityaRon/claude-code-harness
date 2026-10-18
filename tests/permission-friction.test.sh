@@ -68,6 +68,24 @@ PY
 
 
 echo ""
+echo "=== approved prompts Claude Code raised itself (permissionDecision, 2.1.296+) ==="
+mkdir -p "$TMP/home/.claude/projects/p"
+NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+row() {  # id tool cwd source
+  jq -nc --arg id "$1" --arg tool "$2" --arg cwd "$3" --arg t "$NOW" \
+    '{type:"assistant", timestamp:$t, sessionId:"s1", cwd:$cwd, message:{content:[{type:"tool_use", id:$id, name:$tool, input:{file_path:($cwd + "/a.py"), command:"true"}}]}}'
+  jq -nc --arg id "$1" --arg src "$4" --arg t "$NOW" \
+    '{type:"user", timestamp:$t, sessionId:"s1", permissionDecision:{decision:"accept", source:$src}, message:{content:[{type:"tool_result", tool_use_id:$id, content:"ok"}]}}'
+}
+{ row e1 Edit /w/proj/.claude/worktrees/agent-1 user_temporary; row b1 Bash /w/other config
+  row q1 AskUserQuestion /w/proj user_temporary; } > "$TMP/home/.claude/projects/p/s1.jsonl"
+approved() { HOME="$TMP/home" python3 "$PF" --days 1 --out "$TMP/o" "$@" >/dev/null 2>&1 \
+  && jq -r '[.prompt_approved[] | "\(.key)=\(.count)"] | join(",")' "$TMP/o/friction.json"; }
+OUT=$(approved); [[ "$OUT" == "file edit under .claude/ in an agent worktree (proj)=1" ]] \
+  && pass "a user-approved edit counts; a config allow and a question answer do not" || fail "prompt_approved" "$OUT"
+OUT=$(approved --project /w/other); [[ -z "$OUT" ]] && pass "--project keeps only that working directory" || fail "--project" "$OUT"
+
+echo ""
 echo "=== every shipped case meets its want on this repo's hooks ==="
 OUT=$(HOME="$TMP/home" python3 "$PF" --cases --replay "$PWD/hooks" 2>&1); rc=$?
 [[ $rc == 0 ]] && pass "$(tail -1 <<<"$OUT")" || fail "shipped cases" "$(grep MISS <<<"$OUT")"

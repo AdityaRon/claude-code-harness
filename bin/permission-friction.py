@@ -7,12 +7,15 @@ blocked, a deny rule fired, the auto-mode classifier blocked or gave no
 verdict, or Claude Code refused on its own. Cross-checks guard asks against
 the harness audit log.
 
-An approved prompt raised by Claude Code itself (not a hook) leaves no trace in
-the transcript, so it is not counted.
+Since Claude Code 2.1.296 each tool result also records how its permission
+resolved (`permissionDecision`), so a prompt Claude Code raised itself (an ask
+rule, a protected path, a mode) and the human approved is counted too. Older
+transcripts show only the rejections.
 
   bin/permission-friction.py --days 49 --out DIR   # DIR/report.md + DIR/friction.json
   bin/permission-friction.py --days 49             # report to stdout
   bin/permission-friction.py --replay hooks/       # also re-run recorded asks/blocks through these guards
+  bin/permission-friction.py --days 2 --project tradedesk   # only calls whose cwd contains this
 """
 import argparse, collections, datetime as dt, glob, json, os, re, shlex, subprocess, sys
 
@@ -261,12 +264,12 @@ def collect(cut):
             if d.get('type') == 'assistant' and isinstance(msg.get('content'), list):
                 for c in msg['content']:
                     if c.get('type') == 'tool_use' and c['id'] not in uses:
-                        uses[c['id']] = dict(tool=c.get('name'), input=c.get('input') or {}, t=t, sid=sid)
+                        uses[c['id']] = dict(tool=c.get('name'), input=c.get('input') or {}, t=t, sid=sid, cwd=d.get('cwd') or '')
             elif d.get('type') == 'user' and isinstance(msg.get('content'), list):
                 for c in msg['content']:
                     if c.get('type') == 'tool_result' and c['tool_use_id'] not in results:
                         results[c['tool_use_id']] = dict(t=t, err=bool(c.get('is_error')), text=text_of(c.get('content')),
-                                                         kind=d.get('toolDenialKind'))
+                                                         kind=d.get('toolDenialKind'), pd=d.get('permissionDecision') or {})
             elif d.get('type') == 'attachment':
                 at = d.get('attachment') or {}
                 if at.get('hookEvent') != 'PreToolUse' or not at.get('toolUseID'):
@@ -283,6 +286,19 @@ def collect(cut):
                     be = at.get('blockingError') or {}
                     hblocks[at['toolUseID']].append(os.path.basename(str(be.get('command'))).replace('.sh', ''))
     return files, uses, results, asks, hblocks, kind
+
+
+def approved_label(u, cmd):
+    # What raised the prompt is not recorded, only that a human approved it: label by
+    # tool, project and whether the path sits under .claude/ (an ask rule there or a
+    # protected path), which is where the prompts on this machine have clustered.
+    proj = os.path.basename(u['cwd'].split('/.claude/worktrees/')[0]) or '?'
+    where = ' in an agent worktree' if '/.claude/worktrees/' in u['cwd'] else ''
+    if u['tool'] in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
+        what = 'file edit under .claude/' if '/.claude/' in cmd else 'file edit'
+    else:
+        what = u['tool']
+    return f'{what}{where} ({proj})'
 
 
 def classify(uses, results, asks, hblocks, kind, rules, msgs):
@@ -328,6 +344,10 @@ def classify(uses, results, asks, hblocks, kind, rules, msgs):
             ev.update(cat='builtin_block', guard='worktree isolation', reason=rt)
         elif r and r['err'] and rt.startswith('<tool_use_error>Blocked'):
             ev.update(cat='builtin_block', guard='sleep-then-command' if 'sleep' in rt[:40] else 'builtin', reason=rt)
+        elif (r and r['pd'].get('decision') == 'accept' and str(r['pd'].get('source', '')).startswith('user')
+              and u['tool'] != 'AskUserQuestion'):  # an answer, not a permission
+            ev.update(cat='prompt_approved', guard=approved_label(u, cmd), reason=f"{r['pd'].get('source')}", outcome='approved',
+                      wait_s=(r['t'] - u['t']).total_seconds())
         else:
             if u['tool'] == 'Bash' and r:
                 baseline[ev['kind']].append((r['t'] - u['t']).total_seconds())
@@ -349,7 +369,7 @@ def streaks_of(uses, events):
         cur = []
         for _, uid in sorted(us):
             e = ev.get(uid)
-            if e and not (e['cat'] == 'guard_ask' and e['outcome'] == 'approved'):
+            if e and not e.get('outcome') == 'approved':
                 cur.append(e)
             else:
                 if len(cur) >= 3:
@@ -399,7 +419,7 @@ def summarize(events, uses, baseline, streaks, audit, audit_tests, audit_first, 
                        reasons=C(e['reason_key'] for e in ge).most_common(5),
                        shapes=C(e['shape'] for e in ge).most_common(8),
                        samples=[mask(e['cmd'], 220) for e in ge[:: max(1, len(ge) // samples)][:samples]])
-            if any(e['cat'] == 'guard_ask' for e in ge):
+            if any(e['cat'] in ('guard_ask', 'prompt_approved') for e in ge):
                 row['outcomes'] = dict(C(e['outcome'] for e in ge))
                 w = [e['wait_s'] for e in ge if e.get('outcome') == 'approved' and 'wait_s' in e]
                 row['wait_p50_s'], row['wait_p90_s'], row['wait_total_h'] = pct(w, .5), pct(w, .9), round(sum(w) / 3600, 1)
@@ -457,7 +477,7 @@ def summarize(events, uses, baseline, streaks, audit, audit_tests, audit_first, 
         hook_blocks=group(by('hook_block')), deny_rules=group(by('deny_rule')),
         rm_rf_targets=C(e['rm_target'] for e in events if 'rm_target' in e).most_common(),
         classifier_blocks=group(by('classifier_block'), samples=4), classifier_unavailable=cats.get('classifier_unavailable', 0),
-        builtin=group(by('builtin_block')), prompt_rejected=group(by('prompt_rejected')),
+        builtin=group(by('builtin_block')), prompt_rejected=group(by('prompt_rejected')), prompt_approved=group(by('prompt_approved')),
         streaks=dict(count=len(streaks), longest=max((len(s) for s in streaks), default=0),
                      top=[dict(len=len(s), start=s[0]['t'].isoformat(timespec='minutes'),
                                cats=C(f"{e['cat']}:{e['guard']}" for e in s).most_common(3))
@@ -486,7 +506,8 @@ def render(d):
                    classifier_block='auto-mode classifier blocked',
                    classifier_unavailable='classifier gave no verdict (transient)',
                    builtin_block='Claude Code built-in refusal (sleep-then-command, worktree isolation)',
-                   prompt_rejected='human rejected a prompt Claude Code raised itself')
+                   prompt_rejected='human rejected a prompt Claude Code raised itself',
+                   prompt_approved='human approved a prompt Claude Code raised itself (2.1.296+)')
     L.append('| category | calls | meaning |\n|---|---:|---|')
     for c, n in t['by_category']:
         L.append(f'| {c} | {n} | {meaning.get(c, "")} |')
@@ -534,7 +555,8 @@ def render(d):
                 ('3. Deny-rule hits (`permissions.deny`)', 'deny_rules'),
                 ('4. Auto-mode classifier blocks', 'classifier_blocks'),
                 ('5. Claude Code built-in refusals', 'builtin'),
-                ('6. Rejected prompts raised by Claude Code itself', 'prompt_rejected'))
+                ('6. Rejected prompts raised by Claude Code itself', 'prompt_rejected'),
+                ('6b. Approved prompts raised by Claude Code itself (an ask rule, a protected path, a mode; 2.1.296+)', 'prompt_approved'))
     for title, key in sections:
         L.append(f'\n## {title}\n')
         if key == 'classifier_blocks':
@@ -565,7 +587,7 @@ def render(d):
                  + ', '.join(f'{k} {n}' for k, n in a['test_bursts']))
     L.append('\n## Configured deny rules\n\n' + ', '.join(f'`{r}`' for r in d['deny_rules_configured']))
     L.append('\n## Blind spots\n\n'
-             '- An approved prompt raised by Claude Code itself (not a hook) leaves no transcript record; only rejections show.\n'
+             '- Before 2.1.296 an approved prompt raised by Claude Code itself left no transcript record; only rejections show for those sessions.\n'
              '- Wait includes the command\'s own run time; compare with the no-prompt baseline.\n'
              '- Transcript asks can exceed audit asks where a subagent transcript repeats a parent call, and fall short where a session file was deleted.\n'
              '- Commands, hosts and command families are masked (tokens, secret values, URL credentials, emails, long blobs, plus ~/.claude/permission-friction.masks) and truncated; masking is pattern-based.\n')
@@ -645,6 +667,7 @@ def render_replay(rows, hooks_dir):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--days', type=int, default=49)
+    ap.add_argument('--project', default='', help='only tool calls whose working directory contains this text')
     ap.add_argument('--out', help='directory for report.md and friction.json (default: report to stdout)')
     ap.add_argument('--replay', metavar='HOOKS_DIR', help="re-run recorded asks/blocks through the guards in HOOKS_DIR (e.g. a branch's hooks/)")
     ap.add_argument('--cases', metavar='JSONL', nargs='?',
@@ -659,6 +682,8 @@ def main():
     cut = now - dt.timedelta(days=a.days)
     rules = deny_rules()
     files, uses, results, asks, hblocks, kind = collect(cut)
+    if a.project:
+        uses = {k: u for k, u in uses.items() if a.project in u['cwd']}
     events, baseline = classify(uses, results, asks, hblocks, kind, rules, guard_messages())
     audit, audit_tests, audit_first = audit_counts(cut)
     data = summarize(events, uses, baseline, streaks_of(uses, events), audit, audit_tests, audit_first, cut, now, rules, len(files))
