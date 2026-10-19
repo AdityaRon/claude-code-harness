@@ -155,6 +155,12 @@ check "nohup prefix"             deny "nohup git push -f origin main"
 check "timeout prefix"           deny "timeout 60 git push -f origin main"
 check "nice prefix"              deny "nice git push --force"
 check "stacked prefixes"         deny "env A=1 B=2 nohup timeout 60 git push -f origin main"
+# lib.sh's assignment rule ran through an unquoted `;` and split a quoted value at its space.
+check "VAR=1; with no space"     deny "X=1;git push -f origin main"
+check "quoted value with a space" deny 'X="a b" git push -f origin main'
+check "quoted value with a ;"    deny "X='a;b' git push -f origin main"
+check "VAR=1;git status"         allow "X=1;git status"
+check "escaped ; in a value"     deny 'X=a\;b git push -f origin main'
 check "assignment with \$HOME"    deny "PATH=\$HOME/bin git push -f origin main"
 check "substitution assignment"  deny "X=\$(git push --force)"
 

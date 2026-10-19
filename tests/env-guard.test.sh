@@ -70,6 +70,8 @@ check "near miss: other file"  allow "/bin/cat README.md"
 echo "=== Env dumpers (expect: deny) ==="
 check "printenv"           deny "printenv"
 check "printenv AWS"       deny "printenv AWS_SECRET_KEY"
+check "escaped ; in a value" deny 'X=a\;b printenv'
+check "quoted space in a value" deny 'X="a b" printenv'
 check "bare env"           deny "env"
 check "export alone"       deny "export"
 check "set alone"          deny "set"
