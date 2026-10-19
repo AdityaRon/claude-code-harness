@@ -380,6 +380,9 @@ check "find -execdir"       deny 'find . -name .env -execdir head {} +'
 check "echo to xargs cat"   deny 'echo .env | xargs cat'
 check "xargs -I"            deny 'echo .env | xargs -I{} cat {}'
 check "find to xargs -0"    deny 'find . -name .env -print0 | xargs -0 cat'
+check "xargs -a .env"       deny 'xargs -a .env grep x'
+check "xargs --arg-file="   deny 'xargs --arg-file=.env echo'
+check "xargs -a creds path" deny 'xargs -a ~/.aws/credentials echo'
 
 echo ""
 echo "=== Wrappers and find/xargs without a secret file (expect: allow) ==="
@@ -389,6 +392,7 @@ check "env var then tool"   allow 'env NODE_ENV=test npm test'
 check "timeout cat README"  allow 'timeout 5 cat README.md'
 check "find -exec grep"     allow "find . -name '*.ts' -exec grep foo {} +"
 check "ls to xargs cat"     allow 'ls | xargs cat'
+check "xargs -a a file list" allow 'xargs -a files.txt grep -n TODO'
 check "template via xargs"  allow 'echo .env.example | xargs cat'
 check "find -name, no reader" allow 'find . -name .env'
 

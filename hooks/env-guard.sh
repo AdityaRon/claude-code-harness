@@ -194,6 +194,8 @@ add "copies a credential file"              "${A}${WRAP}${COPIERS}\s+[^|;&]*${DO
 add "reads a credential file through find"  "${A}find\b[^|;&]*${DOTFILES}[^|;&]*-(exec|execdir|ok|okdir)\s+${READERS}\b"
 add "reads a credential file through find"  "${A}find\b[^|;&]*-(exec|execdir|ok|okdir)\s+${READERS}\s+[^|;&]*${DOTFILES}"
 add "reads a credential file through xargs" "${DOTFILES}[^;&]*\|\s*xargs\b[^|;&]*\s${READERS}\b"
+# `xargs -a FILE` turns each line of FILE into an argument, which any command prints.
+add "reads a credential file through xargs" "${A}${WRAP}xargs\b[^|;&]*\s(-a|--arg-file)(=|\s*)['\"]?[^|;&[:space:]'\"]*${DOTFILES}"
 add "sources a credential file"             "${A}${DOTSOURCE}\s+[^|;&]*${DOTFILES}"
 add "prints the environment"                "${A}${ENV_DUMP}"
 add "prints the environment"                "${A}${JQ_ENV}"
