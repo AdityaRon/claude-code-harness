@@ -2,8 +2,8 @@
 # Blocks bash commands that would print, read, or transmit env variable values
 # and dotfile secrets. Most patterns start at a command boundary (line start,
 # pipe, chain, $(…), backticks), so a word in another program's arguments does
-# not match. Matching is still textual: the same words in a quoted string or a
-# commit message can.
+# not match. A grep pattern or a sed or awk script that opens no file is text.
+# Matching is still textual: the same words in another quoted string can match.
 source "$(dirname "$0")/lib.sh"
 
 read_input
@@ -35,16 +35,90 @@ SCAN=$(printf '%s\n%s' "$NCMD" "$(normalize_command "$NCMD")" \
 # `.ENV` is `.env` on the default macOS filesystem, so patterns naming a file
 # also run on a lower-cased copy, as sensitive-file-guard matches without case.
 SCAN_LC=$(printf '%s\n%s' "$SCAN" "$(printf '%s' "$SCAN" | tr 'A-Z' 'a-z')")
-# grep and rg take a pattern first: `grep -rn '\.env' src/` searches for text.
-# For the reader check that operand is dropped, but only behind options that
-# take no value; -e, -f, --include and the rest keep the whole line.
+# grep and rg take a pattern first, and sed and awk a script: `grep -rn '\.env'
+# src/` searches for text and `sed -i 's/cert.pem/tls.pem/' f` edits it. For the
+# reader check that operand becomes PATTERN, after a wrapper (`| xargs -0 grep`)
+# and options that take no value; -e, -f, --include and the rest keep the line.
 GOPT='(-[cFHhiLlnoqsvwxrREPIaZz]+|--colou?r(=[a-z]+)?|--(line-number|ignore-case|count|files-with-matches|no-heading|with-filename|no-filename|recursive|fixed-strings|word-regexp|only-matching|smart-case|hidden|invert-match|extended-regexp))'
+SOPT="(-[nErsuz]+|-[nErsuz]*i(\\.[A-Za-z0-9_~-]+)?([[:space:]]+(''|\"\"))?|--(quiet|silent|posix|regexp-extended|separate|unbuffered|null-data|debug)|--in-place(=[^[:space:]]*)?)"
+AOPT=$'(-F[[:space:]]*(\'[^\']*\'|"[^"]*"|[^[:space:]\'"]+)|-v[[:space:]]*(\'[^\']*\'|"[^"]*"|[^[:space:]\'"]+)|--)'
 GPAT=$'\'[^\']*\'|"[^"$`]*"|[^-[:space:]\'"|;&$`<>()][^[:space:]\'"|;&$`<>()]*'
-SCAN_R_LC=$SCAN_LC
-case "$SCAN" in *grep*|*rg*)
-  SCAN_R=$(printf '%s\n' "$SCAN" | sed -E "s/((^|[|&;]|\\\$\\(|\`)[[:space:]]*(grep|egrep|fgrep|rg)([[:space:]]+${GOPT})*[[:space:]]+)(${GPAT})([[:space:]]|\$)/\\1PATTERN\\9/g")
-  SCAN_R_LC=$(printf '%s\n%s' "$SCAN_R" "$(printf '%s' "$SCAN_R" | tr 'A-Z' 'a-z')") ;;
-esac
+OP_WRAP='((env|command|builtin|exec|nice|ionice|time|nohup|sudo|doas|timeout|stdbuf|caffeinate|xargs)[[:space:]]([^|;&]*[[:space:]])?)?'
+AWK_IO='getline|system|ARGV|ARGC|ENVIRON|@include|@load|[|]'
+SED_LEAD='[![:space:];{}!]'
+
+# Drop s up to and past the first $1 that no backslash escapes.
+skip_to() {
+  local pre bs rest=$s
+  [[ -n "$1" ]] || return 1
+  while [[ "$rest" == *"$1"* ]]; do
+    pre=${rest%%"$1"*}; rest=${rest#*"$1"}
+    bs=${pre##*[!\\]}
+    (( ${#bs} % 2 == 0 )) && { s=$rest; return 0; }
+  done
+  return 1
+}
+
+# 0 when script $2 of a $1 (sed or awk) cannot open a file. sed: addresses,
+# s and y without a w or e flag, { and p d n N g G h H x l q =; r R w W e or
+# anything else keeps the deny. awk: none of getline, system, ARGV, a pipe ….
+text_only() {
+  local s=$2 c d k
+  s=${s//%3B/;}; s=${s//%7C/|}; s=${s//%26/&}
+  [[ "$1" == awk ]] && { [[ ! "$s" =~ $AWK_IO ]]; return; }
+  while :; do
+    s=${s#"${s%%$SED_LEAD*}"}
+    [[ -z "$s" ]] && return 0
+    while :; do
+      case "$s" in
+        [0-9\$]*) s=${s#"${s%%[!0-9\$]*}"} ;;
+        /*) s=${s:1}; skip_to / || return 1 ;;
+        \\?*) d=${s:1:1}; s=${s:2}; skip_to "$d" || return 1 ;;
+        *) break ;;
+      esac
+      case "$s" in [,~]*) s=${s:1} ;; *) break ;; esac
+    done
+    s=${s#"${s%%[![:space:]!]*}"}
+    c=${s:0:1}; s=${s:1}
+    case "$c" in
+      s|y) d=${s:0:1}; s=${s:1}; skip_to "$d" && skip_to "$d" || return 1
+           [[ "$c" == s ]] && { k=${s%%[!gpiImM0-9we]*}; [[ "$k" == *[we]* ]] && return 1; s=${s:${#k}}; } ;;
+      [pdnNgGhHxlq=\{]) ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+# Set LINE to LINE with each text operand of tools $1 (options $2, kind $3) as
+# PATTERN. The greedy prefix finds the last one first, then the loop moves left.
+drop_operands() {
+  local cur=$LINE out="" re m n tok q trail head
+  re="^((.*([|&;]|\\\$\\(|\`))?)([[:space:]]*${OP_WRAP}($1)([[:space:]]+$2)*[[:space:]]+)(${GPAT})([[:space:]]|\$)"
+  while [[ "$cur" =~ $re ]]; do
+    m=${BASH_REMATCH[0]}; n=${#BASH_REMATCH[@]}
+    tok=${BASH_REMATCH[$((n - 2))]}; trail=${BASH_REMATCH[$((n - 1))]}
+    head=${m:${#BASH_REMATCH[1]}}; head=${head:0:$(( ${#head} - ${#tok} - ${#trail} ))}
+    q=$tok; [[ "$q" == [\'\"]* ]] && q=${q:1:${#q}-2}
+    if [[ "$3" == grep ]] || text_only "$3" "$q"; then tok=PATTERN; fi
+    out=$head$tok$trail${cur:${#m}}$out
+    cur=${BASH_REMATCH[1]}
+  done
+  LINE=$cur$out
+}
+
+# Set SCAN_R_LC, SCAN_LC with the operands dropped. Run only for a reader that
+# already matched: dropping text never adds a match.
+SCAN_R_LC=""
+drop_text_operands() {
+  local SCAN_R="" LINE
+  while IFS= read -r LINE; do
+    case "$LINE" in *grep*|*rg*) drop_operands 'grep|egrep|fgrep|rg' "$GOPT" grep ;; esac
+    case "$LINE" in *sed*) drop_operands 'sed|gsed' "$SOPT" sed ;; esac
+    case "$LINE" in *awk*) drop_operands 'awk|gawk|mawk|nawk' "$AOPT" awk ;; esac
+    SCAN_R+=$LINE$'\n'
+  done <<<"$SCAN"
+  SCAN_R_LC=$(printf '%s\n%s' "$SCAN_R" "$(printf '%s' "$SCAN_R" | tr 'A-Z' 'a-z')")
+}
 
 # Command boundary: start-of-line, pipe, logical chain, subshell, semicolon, &.
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
@@ -120,6 +194,8 @@ add "copies a credential file"              "${A}${WRAP}${COPIERS}\s+[^|;&]*${DO
 add "reads a credential file through find"  "${A}find\b[^|;&]*${DOTFILES}[^|;&]*-(exec|execdir|ok|okdir)\s+${READERS}\b"
 add "reads a credential file through find"  "${A}find\b[^|;&]*-(exec|execdir|ok|okdir)\s+${READERS}\s+[^|;&]*${DOTFILES}"
 add "reads a credential file through xargs" "${DOTFILES}[^;&]*\|\s*xargs\b[^|;&]*\s${READERS}\b"
+# `xargs -a FILE` turns each line of FILE into an argument, which any command prints.
+add "reads a credential file through xargs" "${A}${WRAP}xargs\b[^|;&]*\s(-a|--arg-file)(=|\s*)['\"]?[^|;&[:space:]'\"]*${DOTFILES}"
 add "sources a credential file"             "${A}${DOTSOURCE}\s+[^|;&]*${DOTFILES}"
 add "prints the environment"                "${A}${ENV_DUMP}"
 add "prints the environment"                "${A}${JQ_ENV}"
@@ -142,14 +218,18 @@ block() {   # block WHY MATCH
 }
 
 # One grep over every pattern first: SCAN_LC holds the other two texts (the
-# grep-pattern rewrite only removes a token), so a miss here is a miss for all
-# nineteen, which otherwise cost a fork each.
+# operand rewrite only removes tokens), so a miss here is a miss for all
+# twenty, which otherwise cost a fork each.
 ALLP=""; for P in "${BLOCKED[@]}"; do ALLP="${ALLP:+$ALLP|}$P"; done
 if printf '%s\n' "$SCAN_LC" | grep -qE "$ALLP"; then
   for i in "${!BLOCKED[@]}"; do
     P=${BLOCKED[$i]}
     T=$SCAN; [[ "$P" == *"$DOTFILES"* ]] && T=$SCAN_LC
-    [[ "$P" == "${A}${WRAP}${READERS}"* ]] && T=$SCAN_R_LC
+    if [[ "$P" == "${A}${WRAP}${READERS}"* ]]; then
+      printf '%s\n' "$SCAN_LC" | grep -qE "$P" || continue
+      [[ -n "$SCAN_R_LC" ]] || drop_text_operands
+      T=$SCAN_R_LC
+    fi
     M=$(printf '%s\n' "$T" | grep -oE "$P") && block "${WHY[$i]}" "$M"
   done
 fi
