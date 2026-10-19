@@ -22,8 +22,8 @@
     "capability no one has noticed will not appear here on its own — that is a",
     "standing limitation, and the check prints it rather than implying coverage."
   ],
-  "last_verified_version": "2.1.302 (Claude Code)",
-  "last_verified_date": "2026-10-17",
+  "last_verified_version": "2.1.303 (Claude Code)",
+  "last_verified_date": "2026-10-19",
   "acknowledged_surface": {
     "_comment": [
       "Capability -> the decision a human made about it. Verified by substring",
