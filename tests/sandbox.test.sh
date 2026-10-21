@@ -71,6 +71,13 @@ chmod +x "$TMP/stub/curl" "$TMP/stub/git"
 OUT=$(cd "$TMP" && PATH="$TMP/stub:$PATH" HOME="$TMP/home" bash "$OLDPWD/bin/sandbox-trial.sh" 2>&1)
 [[ "$OUT" == *"example.com (not listed)"*"strictAllowlist denies them"* ]] \
   && pass "no strictAllowlist: an unlisted host is reported, not judged" || fail "not strict" "$OUT"
+[[ "$OUT" == *"git over https (origin)"*"skipped: no https origin="* ]] \
+  && pass "no harness.version: the git probe is skipped, not pointed at this project's repo" || fail "no origin" "$OUT"
+printf 'version=v1.0.0\norigin=https://example.com/fork/harness.git\n' > "$TMP/home/.claude/harness.version"
+OUT=$(cd "$TMP" && PATH="$TMP/stub:$PATH" HOME="$TMP/home" bash "$OLDPWD/bin/sandbox-trial.sh" 2>&1)
+[[ "$OUT" == *"git over https (origin)"*"ok (https://example.com/fork/harness.git)"* ]] \
+  && pass "the recorded origin is the git probe's target" || fail "origin probe" "$OUT"
+rm -f "$TMP/home/.claude/harness.version"
 jq -n '{sandbox: {network: {strictAllowlist: true}}}' > "$TMP/strict.json"
 OUT=$(cd "$TMP" && CLAUDE_SETTINGS_FILE="$TMP/strict.json" PATH="$TMP/stub:$PATH" HOME="$TMP/home" bash "$OLDPWD/bin/sandbox-trial.sh" 2>&1)
 [[ "$OUT" == *"example.com (not listed)"*"(HTTP 200, strictAllowlist)"* ]] \

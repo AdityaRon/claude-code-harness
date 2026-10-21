@@ -68,8 +68,15 @@ if [[ $OFFLINE == 0 ]]; then
   c=$(code https://example.com/); r=$([[ $c == 200 ]] && echo ok || echo blocked)
   if [[ "$STRICT" == true ]]; then expect "net: example.com (not listed)" blocked "$r" "(HTTP $c, strictAllowlist)"
   else expect "net: example.com (not listed)" any "$r" "(HTTP $c; unlisted hosts ask first: sandbox.network.strictAllowlist denies them)"; fi
-  r=$(git ls-remote https://github.com/AdityaRon/claude-code-harness HEAD 2>/dev/null | head -c 7)
-  expect "net: git over https to github" ok "$([[ -n "$r" ]] && echo ok || echo blocked)"
+  # The clone this harness came from, as install.sh recorded it: a fork probes
+  # its own origin, not this project's.
+  ORIGIN=$(sed -n 's/^origin=//p' "$HOME/.claude/harness.version" 2>/dev/null | head -1)
+  if [[ "$ORIGIN" == https://* ]]; then
+    r=$(git ls-remote "$ORIGIN" HEAD 2>/dev/null | head -c 7)
+    expect "net: git over https (origin)"   ok "$([[ -n "$r" ]] && echo ok || echo blocked)" "($ORIGIN)"
+  else
+    row INFO "net: git over https (origin)" "skipped: no https origin= in ~/.claude/harness.version (bash install.sh records it)"
+  fi
   for sock in /var/run/docker.sock "$HOME/.docker/run/docker.sock"; do   # Docker Desktop uses the second
     [[ -S "$sock" ]] || continue
     c=$(code --unix-socket "$sock" http://localhost/_ping)
