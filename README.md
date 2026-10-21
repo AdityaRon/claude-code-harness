@@ -135,12 +135,14 @@ the linked PRs' live state), then sends, or schedules for the morning in quiet
 hours. It resolves a review thread on your own PR only once you answered it and
 that reviewer approved after. It never approves a PR or merges someone else's.
 
-- Needs `gh`, Python 3.10+ with a TOML reader, `jq`, a Slack MCP server (read
-  channel, read thread, search, send, schedule), ListAgents and SendMessage, and
-  the `/loop` trigger. `bash doctor.sh --skill comms-hub` checks each.
-- Config in `~/.config/comms-hub/config.toml`, copied from the skill's
-  `config.example.toml`; state in `~/.local/state/comms-hub/`. `install.sh`
-  creates neither, and neither belongs in a repo ([docs/install.md](docs/install.md)).
+- Needs `gh`, Python 3.10+ with a TOML reader, `jq`, a Slack MCP server (any,
+  registered with `claude mcp add` or `/mcp`, with read channel, read thread,
+  search, send and schedule tools), ListAgents and SendMessage, and the `/loop`
+  trigger. `bash doctor.sh --skill comms-hub` checks each and says how to fix it.
+- Config in `~/.config/comms-hub/config.toml`, written by the skill's
+  `hub.py init` from its `config.example.toml` with your GitHub login and time
+  zone filled in; state in `~/.local/state/comms-hub/`. `install.sh` creates
+  neither, and neither belongs in a repo ([docs/install.md](docs/install.md)).
 - The protocol the comms session follows: [skills/comms-hub/SKILL.md](skills/comms-hub/SKILL.md).
   Each script's lessons are in its docstring; `tests/comms-hub.test.sh` runs the
   tests and `skills/comms-hub/tests/run.py --mutate` checks that each rule's

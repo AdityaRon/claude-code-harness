@@ -85,8 +85,11 @@ Skills go to `~/.claude/skills/<name>/SKILL.md`:
 Neither lives in this repo or in `~/.claude`, and `install.sh` creates neither:
 
 - Config: `~/.config/comms-hub/config.toml` (`$XDG_CONFIG_HOME` is honoured),
-  copied by hand from `~/.claude/skills/comms-hub/config.example.toml`. It holds
-  your logins, Slack ids and session names, so it never goes in a repo.
+  written by `hub.py init` (in `~/.claude/skills/comms-hub/bin/`, run with the
+  Python that `python.sh` beside it prints) from the example beside the skill,
+  with your GitHub login and this machine's time zone filled in; it refuses to
+  overwrite one. It holds your logins, Slack ids and session names, so it never
+  goes in a repo.
 - State: `~/.local/state/comms-hub/` (`$XDG_STATE_HOME`, or `state_dir` in the
   config): the daily log, the messages as sent, the Slack snapshot, the gate's
   pass records, the session's preflight record and the feedback backlog.
@@ -100,8 +103,11 @@ If you keep your home directory's dotfiles in git, ignore both:
 
 Then `bash doctor.sh --skill comms-hub` checks every prerequisite: `gh` signed
 in as the config's login, Python 3.10+ with a TOML reader, `jq`, a connected
-Slack MCP server, SendMessage and ListAgents not denied, and the comms
-session's own record of its tools and trigger.
+Slack MCP server (any server whose name contains `slack`, added with
+`claude mcp add` or `/mcp`), SendMessage and ListAgents not denied, and the
+comms session's own record of its tools and trigger. The last one fails until
+the comms session has run step 0 of the skill once; the others are fixable
+before that, on macOS or Linux, and each failure line says how.
 
 ## Testing the harness
 
@@ -111,6 +117,6 @@ bash doctor.sh
 
 Runs every test in `tests/*.test.sh` and prints a summary. The suite covers known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap), and the settings merge (`config/merge-settings.jq`: that a stale `defaultMode` is replaced, allow/deny lists are unioned, user keys survive, and re-running the installer is a no-op).
 
-`tests/comms-hub.test.sh` runs the comms-hub skill's Python tests with the first Python 3.10+ on PATH that has a TOML reader. Their mutation list is a separate run (78 mutations in 157 s on an Apple M2, 2026-10-21): `python3.11 skills/comms-hub/tests/run.py --mutate` applies each mutation a test file's docstring names to a temp copy of the skill and fails if that file stays green.
+`tests/comms-hub.test.sh` runs the comms-hub skill's Python tests with the first Python 3.10+ on PATH that has a TOML reader. Their mutation list is a separate run (84 mutations in 158 s on an Apple M2, 2026-10-21): `python3.11 skills/comms-hub/tests/run.py --mutate` applies each mutation a test file's docstring names to a temp copy of the skill and fails if that file stays green.
 
 CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS, with Python 3.12, and lints every hook with `shellcheck` on each push and PR. On a PR it also runs the hook benchmark against the base branch; see [releases.md](releases.md).

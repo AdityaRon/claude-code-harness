@@ -14,7 +14,7 @@ lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 echo "comms-hub prerequisites"
 
 if command -v jq >/dev/null 2>&1; then ok "jq ($(jq --version))"
-else bad "jq" "install it: brew install jq, or apt-get install jq"; fi
+else bad "jq" "install it: brew install jq (macOS), apt-get install jq or dnf install jq (Linux)"; fi
 
 if PY=$(bash "$HERE/python.sh" 2>/dev/null); then
   ok "python: $PY ($("$PY" -c 'import platform; print(platform.python_version())'))"
@@ -24,8 +24,8 @@ else
 fi
 
 GH_LOGIN=""
-if ! command -v gh >/dev/null 2>&1; then bad "gh" "install the GitHub CLI: brew install gh"
-elif ! gh auth status >/dev/null 2>&1; then bad "gh authenticated" "run: gh auth login"
+if ! command -v gh >/dev/null 2>&1; then bad "gh" "install the GitHub CLI: brew install gh (macOS), or https://cli.github.com (Linux packages)"
+elif ! gh auth status >/dev/null 2>&1; then bad "gh authenticated" "run: gh auth login (as the account the config's github.login names)"
 else
   GH_LOGIN=$(gh api user --jq .login 2>/dev/null)
   ok "gh authenticated as ${GH_LOGIN:-an account gh api user did not name}"
@@ -46,23 +46,31 @@ if [[ -n "$PY" ]]; then
   fi
 fi
 
+# The session's record names the Slack tools it loaded, and a connector added
+# in /mcp need not appear in `claude mcp list`; the list is the fallback.
+REC="$STATE/preflight.json"
+SLACK_REC=""
+if [[ -n "$STATE" && -f "$REC" ]]; then SLACK_REC=$(jq -r '.slack_send // empty' "$REC" 2>/dev/null); fi
+MCP=""
 if command -v claude >/dev/null 2>&1; then
   # macOS has no timeout(1); claude mcp list health-checks every server.
   MCP=$(perl -e 'alarm shift; exec @ARGV' 60 claude mcp list 2>/dev/null)
-  SLACK=$(printf '%s\n' "$MCP" | grep -i 'slack' | head -1)
-  if [[ -z "$SLACK" ]]; then
-    bad "a Slack MCP server" "none in \`claude mcp list\`: connect one with read channel, read thread, search, send and schedule"
-  elif printf '%s' "$SLACK" | grep -q 'Connected'; then
-    ok "Slack MCP: ${SLACK%%:*} (connected)"
-  else
-    bad "Slack MCP: ${SLACK%%:*}" "listed, not connected: ${SLACK##* - }"
-  fi
-  TICKETS=$(printf '%s\n' "$MCP" | grep -iE 'jira|confluence|atlassian' | head -1)
-  if [[ -n "$TICKETS" ]]; then ok "optional ticket or page MCP: ${TICKETS%%:*}"
-  else note "optional: no Jira or Confluence MCP, so claims citing a ticket or page are checked by hand"; fi
-else
-  bad "claude CLI" "not on PATH, so the MCP servers cannot be listed"
 fi
+SLACK=$(printf '%s\n' "$MCP" | grep -i 'slack' | head -1)
+if [[ -n "$SLACK_REC" ]]; then
+  ok "Slack tools: $SLACK_REC and the rest, recorded by the comms session at step 0"
+elif ! command -v claude >/dev/null 2>&1; then
+  bad "claude CLI" "not on PATH, so the MCP servers cannot be listed"
+elif [[ -z "$SLACK" ]]; then
+  bad "a Slack MCP server" "none in \`claude mcp list\` with slack in its name: add one (\`claude mcp add\`, or the Slack connector in /mcp) that reads a channel and a thread, searches, sends and schedules"
+elif printf '%s' "$SLACK" | grep -q 'Connected'; then
+  ok "Slack MCP: ${SLACK%%:*} (connected)"
+else
+  bad "Slack MCP: ${SLACK%%:*}" "listed, not connected: ${SLACK##* - }"
+fi
+TICKETS=$(printf '%s\n' "$MCP" | grep -iE 'jira|confluence|atlassian' | head -1)
+if [[ -n "$TICKETS" ]]; then ok "optional ticket or page MCP: ${TICKETS%%:*}"
+else note "optional: no Jira or Confluence MCP, so claims citing a ticket or page are checked by hand"; fi
 
 if [[ -f ~/.claude/settings.json ]] && jq -e '[.permissions.deny[]? | select(test("^(SendMessage|ListAgents)(\\(|$)"))] | length > 0' \
      ~/.claude/settings.json >/dev/null 2>&1; then
@@ -71,11 +79,10 @@ else
   ok "SendMessage and ListAgents not in ~/.claude/settings.json permissions.deny"
 fi
 
-REC="$STATE/preflight.json"
 if [[ -z "$STATE" ]]; then
   bad "session preflight" "no state dir, since the config check failed"
 elif [[ ! -f "$REC" ]]; then
-  bad "session preflight" "no record at $REC: run step 0 of the comms-hub skill in the comms session"
+  bad "session preflight" "no record at $REC: expected until the comms session has run step 0 of the skill once; the rest above can be fixed first"
 elif ! AGE=$(jq -er '(now - (.checked_at | fromdateiso8601)) / 3600 | floor' "$REC" 2>/dev/null); then
   bad "session preflight" "$REC has no checked_at in the form 2026-10-21T17:00:00Z"
 else

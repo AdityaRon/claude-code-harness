@@ -46,7 +46,7 @@ class Fail:
 
 class FakeGh:
     """Answers `gh api graphql` by operation name and other calls by `rest` key:
-    "rate_limit", "search" (called with q and page), "pr view" (number, repo).
+    "rate_limit", "user", "search" (called with q and page), "pr view" (number, repo).
     A handler is a value or a callable; a list is consumed one item per call."""
 
     def __init__(self, graphql=None, rest=None):
@@ -85,6 +85,8 @@ class FakeGh:
             wrap = (lambda d: {"data": d}) if not isinstance(res, Fail) else None
         elif args[:2] == ["api", "rate_limit"]:
             res, wrap = self._answer("rate_limit"), None
+        elif args[:2] == ["api", "user"]:
+            res, wrap = self._answer("user"), None
         elif "search/issues" in args:
             v = self._vars(args)
             res, wrap = self._answer("search", v["q"], int(v["page"])), None

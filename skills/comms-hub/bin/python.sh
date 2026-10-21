@@ -10,5 +10,5 @@ sys.exit(0 if sys.version_info >= (3, 10) and (u.find_spec("tomllib") or u.find_
     exit 0
   fi
 done
-echo "no Python 3.10+ with tomllib or tomli on PATH (brew install python@3.12, or pip install tomli on 3.10)" >&2
+echo "no Python 3.10+ with tomllib or tomli on PATH: brew install python@3.12 (macOS); apt-get install python3-tomli or dnf install python3-tomli on a 3.10 Linux, or a newer python3 package" >&2
 exit 1

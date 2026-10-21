@@ -1,7 +1,9 @@
 """Shared pieces of the comms-hub scripts: config, state paths, the gh runner,
 review state and CI state. Imported by the scripts beside it; run directly:
 
-  hub.py config       the config path, the state dir, or what is wrong with the config
+  hub.py init         write the config from the example, with the login, owners and
+                      zone this machine knows; refuses to touch an existing one
+  hub.py config       the config path, the state dir, the ids, or what is wrong with the config
   hub.py log TEXT     append a line to today's log in the state dir
 """
 from __future__ import annotations
@@ -70,34 +72,45 @@ def config_path(explicit: str | None = None) -> Path:
     return Path(base).expanduser() / "comms-hub" / "config.toml"
 
 
-def _strings(value):
+def placeholders(value, key: str = ""):
+    """The dotted keys whose value still reads CHANGE-ME, each once."""
     if isinstance(value, str):
-        yield value
+        if PLACEHOLDER in value:
+            yield key
     elif isinstance(value, dict):
-        for v in value.values():
-            yield from _strings(v)
+        for k, v in value.items():
+            yield from placeholders(v, f"{key}.{k}" if key else k)
     elif isinstance(value, list):
+        seen = set()
         for v in value:
-            yield from _strings(v)
+            for k in placeholders(v, key):
+                if k not in seen:
+                    seen.add(k)
+                    yield k
+
+
+def example_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "config.example.toml"
 
 
 def load_config(explicit: str | None = None) -> dict:
     """The config with defaults filled in. Raises ConfigError naming the key."""
     path = config_path(explicit)
     if not path.is_file():
-        raise ConfigError(f"no config at {path}: copy config.example.toml there and fill it in")
+        raise ConfigError(f"no config at {path}: `{sys.executable} {os.path.abspath(__file__)} init` "
+                          f"writes one from {example_path()}")
     try:
         cfg = _toml().loads(path.read_text())
     except Exception as e:  # tomllib.TOMLDecodeError, or tomli's
         raise ConfigError(f"{path}: not valid TOML: {e}")
-    left = [s for s in _strings(cfg) if PLACEHOLDER in s]
+    left = list(placeholders(cfg))
     if left:
-        raise ConfigError(f"{path}: {len(left)} value(s) still read {PLACEHOLDER}")
+        raise ConfigError(f"{path}: still {PLACEHOLDER}: {', '.join(left)}")
     gh = cfg.setdefault("github", {})
     if not gh.get("login"):
-        raise ConfigError(f"{path}: github.login is required")
+        raise ConfigError(f"{path}: github.login is required (`gh api user --jq .login` prints yours)")
     if not gh.get("owners"):
-        raise ConfigError(f"{path}: github.owners needs at least one org or user")
+        raise ConfigError(f"{path}: github.owners needs at least one org or user, such as your login")
     gh.setdefault("watch_repos", [])
     gh.setdefault("watch_authors", [])
     gh.setdefault("merged_days", 7)
@@ -114,7 +127,8 @@ def load_config(explicit: str | None = None) -> dict:
             raise ConfigError(f"{path}: quiet_hours.{k} must be HH:MM, not {q[k]!r}")
     # A fixed UTC offset would schedule across a DST change an hour off.
     if not q.get("tz"):
-        raise ConfigError(f'{path}: quiet_hours.tz is required, an IANA zone such as "Europe/Berlin"')
+        raise ConfigError(f'{path}: quiet_hours.tz is required, an IANA zone such as "Europe/Berlin"'
+                          + (f" (this machine's is {system_zone()})" if system_zone() else ""))
     from zoneinfo import ZoneInfo
     try:
         ZoneInfo(q["tz"])
@@ -135,6 +149,42 @@ def state_dir(cfg: dict | None = None) -> Path:
     d = d.expanduser()
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     return d
+
+
+def tmp_dir(cfg: dict | None = None) -> Path:
+    """Where dumps, listings and drafts go: the session's job tmp when Claude
+    Code set one, else under the state dir. Never /tmp, which every job shares."""
+    if os.environ.get("CLAUDE_JOB_DIR"):
+        d = Path(os.environ["CLAUDE_JOB_DIR"]) / "tmp"
+    else:
+        d = state_dir(cfg) / "tmp"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _valid_zone(name: str) -> bool:
+    from zoneinfo import ZoneInfo
+    try:
+        ZoneInfo(name)
+    except (KeyError, ValueError):  # ZoneInfoNotFoundError is a KeyError
+        return False
+    return True
+
+
+def system_zone() -> str | None:
+    """This machine's IANA zone, or None: $TZ, then the /etc/localtime link
+    (macOS and most Linux), then /etc/timezone (Debian). A copied, unlinked
+    /etc/localtime has no name, so the config has to say."""
+    names = [os.environ.get("TZ") or ""]
+    names.append(os.path.realpath("/etc/localtime").partition("zoneinfo/")[2])
+    try:
+        names.append(Path("/etc/timezone").read_text().strip())
+    except OSError:
+        pass
+    for n in names:
+        if re.fullmatch(r"[A-Za-z_]+(/[A-Za-z0-9_+-]+)+", n) and _valid_zone(n):
+            return n
+    return None
 
 
 def now() -> dt.datetime:
@@ -306,20 +356,62 @@ def ci_summary(nodes: list[dict]) -> tuple[str, list[str]]:
     return "green", []
 
 
-def main(argv=None) -> int:
+def init(gh: Gh | None = None, example: Path | None = None) -> int:
+    """The example config at config_path(), with what this machine already
+    knows filled in. An existing file is never touched: it holds ids by hand."""
+    path = config_path()
+    if path.exists():
+        print(f"refusing: {path} exists; edit it, or move it away first")
+        return 1
+    text = (example or example_path()).read_text()
+    filled = []
+    try:
+        login = (gh or Gh()).json(["api", "user"])["login"]
+        if not re.fullmatch(r"[\w-]+", str(login)):
+            raise ValueError(f"login {login!r}")
+    except (GhError, KeyError, TypeError, ValueError) as e:
+        login = None
+        filled.append(f"github.login: not read from gh ({e}); gh auth login, then fill it in")
+    if login:
+        text = (text.replace(f'login = "{PLACEHOLDER}"', f'login = "{login}"', 1)
+                    .replace(f'owners = ["{PLACEHOLDER}"]', f'owners = ["{login}"]', 1))
+        filled.append(f"github.login and github.owners from gh: {login} (add your org to owners)")
+    tz = system_zone()
+    if tz:
+        text = text.replace(f'tz = "{PLACEHOLDER}"', f'tz = "{tz}"', 1)
+        filled.append(f"quiet_hours.tz from this machine: {tz}")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+        f.write(text)
+    print(f"wrote {path}")
+    for line in filled:
+        print(f"  {line}")
+    left = list(placeholders(_toml().loads(text)))
+    print(f"  still {PLACEHOLDER}, fill in by hand: {', '.join(left)}" if left else "  nothing left to fill in")
+    return 0
+
+
+def main(argv=None, gh: Gh | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] not in (["config"], ["log"]) or (argv[0] == "log" and len(argv) < 2):
+    if argv[:1] not in (["init"], ["config"], ["log"]) or (argv[0] == "log" and len(argv) < 2):
         print(__doc__.split("run directly:", 1)[1].rstrip())
         return 2
+    if argv[0] == "init":
+        return init(gh)
     try:
         cfg = load_config()
     except ConfigError as e:
         print(f"config: {e}")
         return 2
     if argv[0] == "config":
+        s = cfg["slack"]
         print(f"config: {cfg['_path']}")
         print(f"state: {state_dir(cfg)}")
+        print(f"tmp: {tmp_dir(cfg)}")
         print(f"login: {cfg['github']['login']} owners: {','.join(cfg['github']['owners'])}")
+        print(f"slack: primary_dm={s.get('primary_dm') or '-'} my_user_id={s.get('my_user_id') or '-'} "
+              f"watched={','.join(s.get('watched_channels') or []) or '-'}")
+        print(f"quiet: {cfg['quiet_hours']['start']} to {cfg['quiet_hours']['post_at']} {cfg['quiet_hours']['tz']}")
         for r in cfg["routing"]:
             print(f"route: {r.get('session')} repos={','.join(r.get('repos', [])) or '-'} "
                   f"tickets={','.join(r.get('tickets', [])) or '-'}")

@@ -35,22 +35,33 @@ scheduled id, or why it held the draft.
 
 ## Setup, once per machine
 
-1. `bash install.sh` from the clone puts this skill in `~/.claude/skills/comms-hub/`.
-2. Copy `~/.claude/skills/comms-hub/config.example.toml` to
-   `~/.config/comms-hub/config.toml` and replace every `CHANGE-ME`. That file
-   holds the ids and names a public repo cannot, and never goes in a repo.
-   State goes to `~/.local/state/comms-hub/` unless `state_dir` says otherwise.
-3. In the comms session: step 0 below, then the trigger, `/loop` with the cron
-   interval `7,37 * * * *` and the prompt `comms-hub tick`.
-4. From the clone: `bash doctor.sh --skill comms-hub`, until every line reads ok.
+Needs `gh` signed in as you, Python 3.10+ with a TOML reader, `jq`, and a Slack
+MCP server registered with Claude Code under a name containing `slack` (the
+Slack connector from `/mcp`, or any server added with `claude mcp add`) whose
+tools read a channel, read a thread, search, send and schedule a message.
+Nothing here depends on which server it is: step 0 records the tool names.
 
-In the commands below, `PY` is the interpreter that
+1. `bash install.sh` from the clone puts this skill in `~/.claude/skills/comms-hub/`.
+2. `PY B/hub.py init` writes `~/.config/comms-hub/config.toml` from the
+   example with your GitHub login, that login as the one owner searched, and
+   this machine's time zone filled in; it refuses to touch an existing file.
+   Fill in each `CHANGE-ME` it lists (the Slack ids; the example says where
+   Slack shows them) and add your org to `github.owners`. That file holds the
+   ids and names a public repo cannot, and never goes in a repo. State goes to
+   `~/.local/state/comms-hub/` unless `state_dir` says otherwise.
+3. From the clone: `bash doctor.sh --skill comms-hub`. Every line but the
+   session preflight can read ok before the comms session exists.
+4. In the comms session: step 0 below, then the trigger, `/loop` with the cron
+   interval `7,37 * * * *` and the prompt `comms-hub tick`. Then doctor again.
+
+In the commands here and below, `PY` is the interpreter that
 `bash ~/.claude/skills/comms-hub/bin/python.sh` prints and `B` is
 `~/.claude/skills/comms-hub/bin`. Write both out in full in every command
-(`/opt/homebrew/bin/python3.11 ~/.claude/skills/comms-hub/bin/queue.py scan`):
-shell variables do not survive between calls. Dumps, listings and drafts go in
-the session's job tmp dir (`$CLAUDE_JOB_DIR/tmp`), never `/tmp`. Each script's
-`--help` gives its flags and exit codes.
+(`/usr/bin/python3.12 ~/.claude/skills/comms-hub/bin/queue.py scan`): shell
+variables do not survive between calls. Dumps, listings and drafts go in the
+directory `PY B/hub.py config` prints as `tmp:` (the session's job tmp dir when
+Claude Code set `CLAUDE_JOB_DIR`, else under the state dir), never `/tmp`,
+which every job shares. Each script's `--help` gives its flags and exit codes.
 
 ## Step 0: preflight
 
@@ -59,7 +70,7 @@ ToolSearch: the Slack MCP's read channel, read thread, search, send message and
 schedule message tools; ListAgents; SendMessage; CronList, for the tick's
 trigger; optionally a Jira or Confluence tool. Then write
 `<state dir>/preflight.json` with the Write tool (`PY B/hub.py config` prints
-the state dir):
+the state dir, the tmp dir, the Slack ids and the routes):
 
 ```json
 {"checked_at": "2026-10-21T17:00:00Z",
