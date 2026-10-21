@@ -439,5 +439,22 @@ check "quoted message quoting \$(cat creds)" allow $'git commit -q -F - <<\'EOF\
 check "unquoted message, plain text"  allow $'git commit -q -F - <<EOF\nfix: stop reading secrets\n\ncat .env was how the old code read them\nEOF'
 
 echo ""
+echo "=== #72 false denies: a jq string, jq inside a quoted cmdsub, a reader before a procsub ==="
+check "jq string literal starting with env"     allow $'jq -c \'select(.guard=="env-guard")\' cases.jsonl'
+check "jq filter quoting a inside a quoted cmdsub" allow $'echo "n: $(jq \'[.[] | select(.key != "a") | .v] | length\' s.json)"'
+check "diff before a procsub naming .ssh as data" allow $'diff a.json <(jq \'{denyRead: ["~/.ssh"]}\' b.json)'
+check "jq env piped, double-quoted: builtin"    deny  'jq -r "env | keys" f.json'
+check "jq dollar-ENV: builtin"                  deny  "jq -n '\$ENV'"
+check "a reader after a procsub reads the key"  deny  'cat <(true) ~/.ssh/id_rsa'
+check "a quoted paren does not swallow the key" deny  'cat <(echo "(") ~/.ssh/id_rsa'
+check "an escaped paren does not swallow it"    deny  'cat <(echo \() ~/.ssh/id_rsa'
+check "a reader inside a procsub"               deny  'diff a <(cat ~/.ssh/id_rsa)'
+check "a reader inside a nested procsub"        deny  'diff a <(sort <(cat ~/.ssh/id_rsa))'
+check "a backtick keeps the line whole"         deny  'cat <(echo `true`) ~/.ssh/id_rsa'
+check "unbalanced keeps the line whole"         deny  "cat <(echo ' ~/.ssh/id_rsa"
+check "a reader after a pipe in a quoted cmdsub" deny 'echo "$(true | cat .env)"'
+check "jq on a credential in a quoted cmdsub"   deny  'echo "$(jq . ~/.aws/credentials)"'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

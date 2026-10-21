@@ -178,6 +178,13 @@
 {"id": "friction-net-curl-to-script-file", "tool_name": "Bash", "tool_input": {"command": "curl -s http://127.0.0.1:8090/progress | python3 txt.py 1500"}, "source": "friction"}
 {"id": "friction-net-curl-to-json-tool", "tool_name": "Bash", "tool_input": {"command": "curl -s http://127.0.0.1:8090/x | python3 -m json.tool"}, "source": "friction"}
 {"id": "friction-interp-jinja-env-attribute", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF'\ntemplates.env.filters['markdown'] = render\nEOF"}, "source": "friction"}
+{"id": "friction-git-commit-message-cmdsub-heredoc", "tool_name": "Bash", "tool_input": {"command": "git commit -m \"$(cat <<'EOF'\nguard: message text\n\ngit push --force is still denied\nEOF\n)\""}, "source": "friction"}
+{"id": "friction-git-commit-message-semicolon-dq", "tool_name": "Bash", "tool_input": {"command": "git commit -m \"guard: note; git push --force stays denied\""}, "source": "friction"}
+{"id": "friction-git-commit-message-semicolon-sq", "tool_name": "Bash", "tool_input": {"command": "git commit -m 'guard: note; git push --force stays denied'"}, "source": "friction"}
+{"id": "friction-gh-pr-body-semicolon", "tool_name": "Bash", "tool_input": {"command": "gh pr create --title \"guard: messages are text\" --body 'still denied: git add .; git push --force'"}, "source": "friction"}
+{"id": "friction-pin-git-message-cmdsub-runs", "tool_name": "Bash", "tool_input": {"command": "git commit -m \"$(git push --force origin main)\""}, "source": "friction"}
+{"id": "friction-pin-git-cmdsub-heredoc-pipe-bash", "tool_name": "Bash", "tool_input": {"command": "git commit -m \"$(cat <<'EOF' | bash\ngit push --force origin main\nEOF\n)\""}, "source": "friction"}
+{"id": "friction-gap-git-push-inside-sh-c", "tool_name": "Bash", "tool_input": {"command": "sh -c 'git push --force origin main'"}, "source": "friction"}
 {"id": "bash-git-status", "tool_name": "Bash", "tool_input": {"command": "git status --short"}, "source": "synthetic"}
 {"id": "bash-git-log", "tool_name": "Bash", "tool_input": {"command": "git log --oneline -20"}, "source": "synthetic"}
 {"id": "bash-git-diff-stat", "tool_name": "Bash", "tool_input": {"command": "git diff --stat main...HEAD"}, "source": "synthetic"}

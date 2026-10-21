@@ -106,6 +106,55 @@ drop_operands() {
   LINE=$cur$out
 }
 
+# A reader's operands end where a <( ) or >( ) begins: that command runs apart,
+# so its text goes on a line of its own, scanned there, and a PROCSUB marks the
+# spot. A line whose parens or quotes this cannot balance, or that holds a
+# backtick, #, $', << or a $( inside double quotes, stays whole: the old reading.
+split_procsubs() {
+  case "$1" in *'<('*|*'>('*) ;; *) printf '%s\n' "$1"; return ;; esac
+  printf '%s\n' "$1" | awk '
+    function cut(s,    out, n, i, c, q, d, j, ch, qq, inner) {
+      if (s ~ /[`#]|\$\047|<</) return ""
+      out = ""; n = length(s); i = 1; q = ""
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (q != "") {
+          if (q == "\"" && c == "\\") { out = out substr(s, i, 2); i += 2; continue }
+          if (q == "\"" && substr(s, i, 2) == "$(") return ""
+          if (c == q) q = ""
+          out = out c; i++; continue
+        }
+        if (c == "\\") { out = out substr(s, i, 2); i += 2; continue }
+        if (c == "\047" || c == "\"") { q = c; out = out c; i++; continue }
+        if ((c == "<" || c == ">") && substr(s, i + 1, 1) == "(") {
+          d = 1; j = i + 2; qq = ""
+          while (j <= n && d > 0) {
+            ch = substr(s, j, 1)
+            if (qq != "") {
+              if (qq == "\"" && ch == "\\") j++
+              else if (qq == "\"" && substr(s, j, 2) == "$(") return ""
+              else if (ch == qq) qq = ""
+            } else if (ch == "\\") j++
+            else if (ch == "\047" || ch == "\"") qq = ch
+            else if (ch == "(") d++
+            else if (ch == ")") d--
+            j++
+          }
+          if (d > 0 || qq != "") return ""
+          inner = substr(s, i + 2, j - i - 3)
+          if (inner ~ /^[ \t]*$/) return ""
+          QUEUE[++QN] = inner; out = out " PROCSUB "; i = j; continue
+        }
+        out = out c; i++
+      }
+      return q == "" ? out : ""
+    }
+    { QN = 0; QH = 1; lines = cut($0)
+      if (lines == "") { print; next }
+      while (QH <= QN) { t = cut(QUEUE[QH++]); if (t == "") { lines = $0; break } lines = lines "\n" t }
+      print lines }'
+}
+
 # Set SCAN_R_LC, SCAN_LC with the operands dropped. Run only for a reader that
 # already matched: dropping text never adds a match.
 SCAN_R_LC=""
@@ -116,7 +165,7 @@ drop_text_operands() {
     case "$LINE" in *sed*) drop_operands 'sed|gsed' "$SOPT" sed ;; esac
     case "$LINE" in *awk*) drop_operands 'awk|gawk|mawk|nawk' "$AOPT" awk ;; esac
     SCAN_R+=$LINE$'\n'
-  done <<<"$SCAN"
+  done <<<"$(split_procsubs "$SCAN")"
   SCAN_R_LC=$(printf '%s\n%s' "$SCAN_R" "$(printf '%s' "$SCAN_R" | tr 'A-Z' 'a-z')")
 }
 
@@ -154,8 +203,9 @@ ENV_END='\s*($|[|;&>)`])'
 ENV_DUMP="(printenv|env(\s+-[0-9A-Za-z]+)*${ENV_END}|export(\s+-p)?${ENV_END}|set${ENV_END}|declare\s+-(p|x)\b|compgen\s+-e)"
 
 # jq's env builtin and $ENV, and awk's ENVIRON, print variables with no dotfile
-# or $VAR in the command. A key (.env, .["env"]) is not the builtin.
-JQ_ENV='jq\b[^|;&]*(\$ENV|([^.$A-Za-z0-9_"]|[^[]")env\b)'
+# or $VAR in the command. A key (.env, .["env"]) is not the builtin, and nor is a
+# string inside the filter ("env-guard"): a shell quote opening the filter follows a space.
+JQ_ENV='jq\b[^|;&]*(\$ENV|([^.$A-Za-z0-9_"]|\s")env\b)'
 AWK_ENV='[gm]?awk\b.*ENVIRON'
 
 # A $VAR whose NAME signals a secret: contains SECRET/PASSWORD anywhere, or ends
@@ -244,7 +294,9 @@ case "$SCAN" in *jq*|*yq*)
     # Each segment opens with its boundary (| ; && $( or a backtick), then jq.
     rest=$(printf '%s' "$seg" | sed -E 's/^[^a-z]*(jq|yq)[[:space:]]+//')
     W=()
-    if toks=$(printf '%s' "$rest" | xargs printf '%s\n' 2>/dev/null); then
+    # Inside "$( … )" the segment runs on to the outer `)"`, which unbalances the split.
+    if toks=$(printf '%s' "$rest" | xargs printf '%s\n' 2>/dev/null) \
+       || toks=$(printf '%s' "$rest" | sed -E 's/[)"`[:space:]]+$//' | xargs printf '%s\n' 2>/dev/null); then
       while IFS= read -r w; do W+=("$w"); done <<<"$toks"
     else
       set -f; read -ra W <<<"$rest"; set +f
