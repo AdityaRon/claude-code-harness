@@ -69,6 +69,10 @@ def run_mutations() -> int:
             try:
                 for sub in ("bin", "tests"):
                     shutil.copytree(SKILL / sub, work / sub)
+                # test_hub.py reads the example config: without it every hub.py
+                # mutation went red on FileNotFoundError, not on the rule.
+                for f in SKILL.glob("*.example.toml"):
+                    shutil.copy(f, work / f.name)
                 target = work / "bin" / script
                 text = target.read_text()
                 n = text.count(old)
