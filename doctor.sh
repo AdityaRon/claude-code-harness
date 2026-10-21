@@ -11,7 +11,7 @@ if [[ "${1:-}" == "--skill" ]]; then
 fi
 
 if ! command -v jq &>/dev/null; then
-  echo "FATAL: jq is required. Install via: brew install jq" >&2
+  echo "FATAL: jq is required. Install via: brew install jq (macOS), apt-get install jq or dnf install jq (Linux)" >&2
   exit 1
 fi
 

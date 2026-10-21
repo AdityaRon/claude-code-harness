@@ -269,7 +269,7 @@ echo ""
 if command -v jq &>/dev/null; then
   echo "  ✓ jq installed"
 else
-  echo "  ✗ jq not installed — hooks require jq. Run: brew install jq"
+  echo "  ✗ jq not installed — hooks require jq. Run: brew install jq (macOS), apt-get install jq or dnf install jq (Linux)"
 fi
 
 if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
