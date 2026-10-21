@@ -126,7 +126,7 @@ branch_on_remote() {
   [[ -n $(git -C "$1" for-each-ref --count=1 --contains "$tip" --format=x refs/remotes 2>/dev/null) ]]
 }
 branch_delete_safe() {
-  local raw segs seg t i b repo cwd n=0 names
+  local raw segs seg t i b repo cwd n=0 names force
   cwd=$(jq_get '.cwd')
   raw=$(separate_groups "$(strip_inert_heredocs "$(jq_get '.tool_input.command')")")
   # xargs appends names the command does not show; normalize_wrappers hides it.
@@ -154,17 +154,22 @@ branch_delete_safe() {
       /*) ;;
       *) [[ -n "$cwd" ]] || return 1; repo="$cwd/$repo" ;;
     esac
-    names=()
+    names=(); force=0
     for ((i = i + 1; i < ${#t[@]}; i++)); do
       case "${t[i]}" in
         [0-9]\>*|\>*|[0-9]\<*|\<*) break ;;
-        -[dDfq]|-[dDfq][dDfq]|--delete|--force|--quiet) ;;
+        --force|-*[Df]*) [[ "${t[i]}" =~ ^(--force|-[dDfq]|-[dDfq][dDfq])$ ]] || return 1; force=1 ;;
+        -[dq]|-[dq][dq]|--delete|--quiet) ;;
         -*) return 1 ;;
         *) names+=("${t[i]}") ;;
       esac
     done
     [[ ${#names[@]} -gt 0 ]] || return 1
-    for b in "${names[@]}"; do branch_on_remote "$repo" "$b" || return 1; done
+    # A plain -d loses nothing: git itself refuses a branch not merged into HEAD or its upstream.
+    for b in "${names[@]}"; do
+      if [[ $force -eq 1 ]]; then branch_on_remote "$repo" "$b" || return 1
+      else [[ "$b" =~ ^[A-Za-z0-9._/@+-]+$ && "$b" != -* ]] || return 1; fi
+    done
     n=$((n + 1))
   done <<<"$segs"
   [[ $n -gt 0 && $n -eq $(gate_segments branch "\s${BRANCH_DEL}") ]]
