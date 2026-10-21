@@ -6,6 +6,64 @@ the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
 installed machine to the newest tag.
 
+## v1.1.0 (2026-10-21)
+
+Merged since v1.0.8: 7 PRs.
+
+### Security
+- git-guard: a plain git branch -d runs (#120)
+- mod-gate: ask for a mod that hooks settings.read or agent.spawn (#119)
+
+### Compatibility
+- contract: review Claude Code releases up to 2.1.306 (#116)
+
+### Other
+- comms-hub: ready for a fork or a fresh setup (#123)
+- Clear the four open #72 false denies and A11b message text (#122)
+- settings: retire the Bash(python:*) and Bash(node:*) allow rules (#121)
+- comms-hub: one session speaks on Slack for all of them (#118)
+
+### Benchmark vs v1.0.8
+
+
+2026-10-21T22:34:37Z, Linux 7.0.0-1017-azure x86_64, AMD EPYC 7763 64-Core Processor, python 3.12.3. Corpus tests/bench-corpus.jsonl: 443 payloads (328 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 2 MultiEdit, 2 NotebookEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, run one at a time. Wait is the slowest hook of a call (Claude Code runs them in parallel); CPU is the sum. Process start here: `bash -c :` 1.6 ms, `jq -n 1` 2.6 ms (p50 of 20), so only same-run comparisons are meaningful.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 328 | 61.1 → 61.0 ms (-0%) | 61.1 → 62.0 ms (+2%) | 108.9 → 110.0 ms (+1%) | 185.7 → 187.2 ms (+1%) |
+| WebFetch | 11 | 20.2 → 20.2 ms (+0%) | 26.1 → 26.1 ms (+0%) | 42.5 → 42.5 ms (-0%) | 30.9 → 30.9 ms (-0%) |
+| Read/Grep | 41 | 53.7 → 53.6 ms (-0%) | 56.3 → 56.4 ms (+0%) | 85.1 → 85.9 ms (+1%) | 61.5 → 61.7 ms (+0%) |
+| Write/Edit | 63 | 53.3 → 53.1 ms (-0%) | 53.9 → 53.8 ms (-0%) | 81.6 → 81.2 ms (-0%) | 115.6 → 115.5 ms (-0%) |
+| All | 443 | 54.7 → 55.1 ms (+1%) | 58.7 → 59.4 ms (+1%) | 107.3 → 108.6 ms (+1%) | 160.4 → 161.5 ms (+1%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean |
+|---|---:|---|---|---|
+| config-guard.sh | 391 | 12.6 → 12.7 ms (+1%) | 34.4 → 34.4 ms (-0%) | 13.4 → 13.4 ms (+0%) |
+| env-guard.sh | 328 | 15.5 → 15.6 ms (+0%) | 97.7 → 99.3 ms (+2%) | 37.3 → 37.4 ms (+0%) |
+| git-guard.sh | 328 | 14.9 → 14.9 ms (+0%) | 94.1 → 95.5 ms (+1%) | 31.3 → 31.9 ms (+2%) |
+| interpreter-guard.sh | 328 | 14.9 → 15.0 ms (+1%) | 86.7 → 90.6 ms (+4%) | 31.2 → 31.6 ms (+1%) |
+| kubectl-guard.sh | 328 | 14.6 → 14.7 ms (+0%) | 58.0 → 58.4 ms (+1%) | 24.3 → 24.5 ms (+1%) |
+| mod-gate.sh | 63 | 3.3 → 3.2 ms (-1%) | 13.5 → 13.4 ms (-1%) | 3.7 → 3.7 ms (-0%) |
+| network-guard.sh | 339 | 19.0 → 19.1 ms (+1%) | 88.3 → 88.1 ms (-0%) | 33.8 → 33.8 ms (+0%) |
+| rm-guard.sh | 328 | 12.8 → 12.8 ms (+1%) | 14.0 → 13.9 ms (-1%) | 16.4 → 16.5 ms (+1%) |
+| secret-scanner.sh | 63 | 25.9 → 25.8 ms (-0%) | 81.6 → 81.2 ms (-0%) | 32.2 → 32.2 ms (+0%) |
+| sensitive-file-guard.sh | 104 | 53.3 → 53.1 ms (-0%) | 65.9 → 67.2 ms (+2%) | 58.2 → 58.2 ms (+0%) |
+
+Decisions: 435 of 443 payloads got the same answer on both sides.
+
+| Payload | base | head |
+|---|---|---|
+| friction-env-jq-string-starts-with-env `jq -c 'select(.guard=="env-guard")' docs/permission-friction` | deny (env-guard.sh) | allow (silent) |
+| friction-env-reader-procsub-filter-path `diff a.json <(jq '{denyRead: ["~/.ssh"]}' b.json)` | deny (env-guard.sh) | allow (silent) |
+| friction-env-jq-in-quoted-cmdsub `echo "n: $(jq '[.[] | select(.key != "a") | .v] | length' s.` | deny (env-guard.sh) | allow (silent) |
+| friction-interp-jinja-env-attribute `python3 - <<'EOF' templates.env.filters['markdown'] = render` | ask (interpreter-guard.sh) | allow (silent) |
+| friction-git-commit-message-cmdsub-heredoc `git commit -m "$(cat <<'EOF' guard: message text  git push -` | deny (git-guard.sh) | allow (silent) |
+| friction-git-commit-message-semicolon-dq `git commit -m "guard: note; git push --force stays denied"` | deny (git-guard.sh) | allow (silent) |
+| friction-git-commit-message-semicolon-sq `git commit -m 'guard: note; git push --force stays denied'` | deny (git-guard.sh) | allow (silent) |
+| friction-gh-pr-body-semicolon `gh pr create --title "guard: messages are text" --body 'stil` | deny (git-guard.sh) | allow (silent) |
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended).
+
 ## v1.0.8 (2026-10-21)
 
 Merged since v1.0.7: 1 PR.
