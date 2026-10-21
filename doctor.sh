@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Runs every test in tests/ and reports totals.
 # Exit code = number of failing suites.
+#   bash doctor.sh --skill comms-hub   that skill's prerequisites instead
 set -u
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
+
+if [[ "${1:-}" == "--skill" ]]; then
+  [[ -f "skills/${2:-}/bin/prereqs.sh" ]] || { echo "no prerequisite check for skill '${2:-}'" >&2; exit 2; }
+  exec bash "skills/$2/bin/prereqs.sh"
+fi
 
 if ! command -v jq &>/dev/null; then
   echo "FATAL: jq is required. Install via: brew install jq" >&2

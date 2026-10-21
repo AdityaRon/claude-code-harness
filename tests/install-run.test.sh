@@ -17,6 +17,7 @@ fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"
+unset XDG_CONFIG_HOME
 mkdir -p "$HOME/.claude/rules"
 
 # A machine-local rule, and a stray file the installer has never heard of.
@@ -53,6 +54,11 @@ printf '%s' '{"permissions":{"deny":["Bash(rm -rf /:*)"]}}' > "$HOME/.claude/loc
 # Not a regular file, named like a fragment. A FIFO there would block jq's open;
 # a directory takes the same [[ -f ]] branch without risking a hung test.
 mkdir "$HOME/.claude/local-settings/odd.json"
+
+# A comms-hub config of the user's own, which no install may touch.
+CH_SENTINEL='# my comms-hub config, names a workspace'
+mkdir -p "$HOME/.config/comms-hub"
+printf '%s\n' "$CH_SENTINEL" > "$HOME/.config/comms-hub/config.toml"
 
 # Twelve backups from earlier installs; this run makes a thirteenth.
 for i in 00 01 02 03 04 05 06 07 08 09 10 11; do printf '{}' > "$HOME/.claude/settings.json.bak.202601010000$i"; done
@@ -103,6 +109,18 @@ done
 [ -z "$MISSING" ] \
   && pass "every rules/ file installed identically" \
   || fail "every rules/ file installed identically" "$MISSING"
+
+echo ""
+echo "=== a skill's scripts install with it; its tests and the user's config do not ==="
+SK="$HOME/.claude/skills/comms-hub"
+[ -x "$SK/bin/queue.py" ] && [ -f "$SK/bin/hub.py" ] && [ -f "$SK/config.example.toml" ] && [ -f "$SK/SKILL.md" ] \
+  && pass "comms-hub's SKILL.md, bin/ and example config installed" || fail "comms-hub installed" "$(ls -R "$SK" 2>&1 | head -5)"
+[ ! -e "$SK/tests" ] && pass "its tests stay in the clone" || fail "its tests stay in the clone" "installed"
+[ "$(cat "$HOME/.config/comms-hub/config.toml")" = "$CH_SENTINEL" ] && [ "$(ls -A "$HOME/.config/comms-hub" | wc -l | tr -d ' ')" = 1 ] \
+  && pass "an existing comms-hub config is left byte for byte, nothing beside it" \
+  || fail "comms-hub config untouched" "$(ls -A "$HOME/.config/comms-hub")"
+! grep -qF 'comms-hub is not configured' <<<"$OUT" \
+  && pass "no setup hint when the config exists" || fail "no setup hint when the config exists" "hint printed"
 
 # The rest of the install still has to work; a rules change must not break it.
 [ -f "$HOME/.claude/settings.json" ] \
@@ -155,9 +173,12 @@ OUT2=$(cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh 2>&1)
 [ "$(jq '.permissions.allow | length' "$S")" = "$N1" ] \
   && pass "re-running with fragments adds nothing" || fail "re-running with fragments adds nothing" "$N1 -> $(jq '.permissions.allow | length' "$S")"
 FRESH="$TMP/fresh"; mkdir -p "$FRESH"
-(export HOME="$FRESH"; cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh >/dev/null 2>&1)
+OUT3=$(export HOME="$FRESH" XDG_CONFIG_HOME=""; cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh 2>&1)
 [ "$(jq -r .effortLevel "$FRESH/.claude/settings.json" 2>/dev/null)" = "high" ] && [ -f "$FRESH/.claude/state/effort-high.migrated" ] \
   && pass "a fresh install gets high and marks the move done" || fail "fresh install" "$(ls "$FRESH/.claude/state" 2>&1)"
+[ ! -e "$FRESH/.config/comms-hub" ] && grep -qF 'comms-hub is not configured' <<<"$OUT3" \
+  && pass "a fresh install creates no comms-hub config and says how to make one" \
+  || fail "fresh install and comms-hub config" "$(ls -A "$FRESH/.config" 2>&1)"
 
 echo ""
 echo "=== a hook the harness did not install survives a real run ==="

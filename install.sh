@@ -100,13 +100,29 @@ ORIGIN=$(git -C "$REPO" remote get-url origin 2>/dev/null || true)
 } > ~/.claude/harness.version
 echo "  ✓ harness.version ($VER)"
 
+# A skill's bin/ and *.example.toml go with its SKILL.md, by glob; its tests/
+# stay in the clone. comms-hub reads ~/.config/comms-hub/config.toml, which
+# this installer never creates or touches: it holds names a public repo cannot.
 for skill in "$REPO"/skills/*/; do
   [[ -d "$skill" ]] || continue
   name=$(basename "$skill")
   mkdir -p ~/.claude/skills/"$name"
   cp "$skill"SKILL.md ~/.claude/skills/"$name"/SKILL.md
+  for f in "$skill"*.example.toml; do
+    if [[ -f "$f" ]]; then cp "$f" ~/.claude/skills/"$name"/; fi
+  done
+  if [[ -d "$skill"bin ]]; then
+    mkdir -p ~/.claude/skills/"$name"/bin
+    for f in "$skill"bin/*; do
+      if [[ -f "$f" ]]; then cp "$f" ~/.claude/skills/"$name"/bin/; fi
+    done
+  fi
   echo "  ✓ skills/$name"
 done
+if [[ -d "$REPO/skills/comms-hub" && ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/comms-hub/config.toml" ]]; then
+  echo "  ℹ comms-hub is not configured: copy ~/.claude/skills/comms-hub/config.example.toml to"
+  echo "     ~/.config/comms-hub/config.toml, fill it in, then run: bash doctor.sh --skill comms-hub"
+fi
 
 # ---- Personal rules --------------------------------------------------
 # ~/.claude/rules/ is user scope: every file here loads in every session, in

@@ -21,7 +21,8 @@ median approved ask held its call 133 s, against 5 s for a Bash call with no pro
 ## Install and update
 
 Needs macOS or Linux with bash, `jq` (the guards fail closed without it), `gh`,
-`python3` (for `bin/hook-bench.py` and `bin/permission-friction.py`) and `claude`.
+`python3` (for `bin/hook-bench.py` and `bin/permission-friction.py`; 3.10 or
+newer with a TOML reader for the comms-hub skill and its tests) and `claude`.
 
 ```bash
 git clone https://github.com/AdityaRon/claude-code-harness.git
@@ -122,6 +123,29 @@ What `install.sh` does with a value you set, from `config/merge-settings.jq`:
 
 Each of these in full: [docs/customization.md](docs/customization.md).
 
+## comms-hub: one session speaks on Slack for all of them
+
+A skill for running several sessions at once. One long-lived session, the comms
+session, runs a tick on a `/loop` cron trigger: it reads GitHub for your PRs and
+review requests and Slack for replies, and routes each event to the peer session
+that owns the PR or ticket. It is the only session that sends Slack. A peer hands
+it a draft and a target with SendMessage; it checks every claim against its
+source, runs the draft through a gate (every PR a link, no em dash, no `>` quote,
+the linked PRs' live state), then sends, or schedules for the morning in quiet
+hours. It resolves a review thread on your own PR only once you answered it and
+that reviewer approved after. It never approves a PR or merges someone else's.
+
+- Needs `gh`, Python 3.10+ with a TOML reader, `jq`, a Slack MCP server (read
+  channel, read thread, search, send, schedule), ListAgents and SendMessage, and
+  the `/loop` trigger. `bash doctor.sh --skill comms-hub` checks each.
+- Config in `~/.config/comms-hub/config.toml`, copied from the skill's
+  `config.example.toml`; state in `~/.local/state/comms-hub/`. `install.sh`
+  creates neither, and neither belongs in a repo ([docs/install.md](docs/install.md)).
+- The protocol the comms session follows: [skills/comms-hub/SKILL.md](skills/comms-hub/SKILL.md).
+  Each script's lessons are in its docstring; `tests/comms-hub.test.sh` runs the
+  tests and `skills/comms-hub/tests/run.py --mutate` checks that each rule's
+  mutation turns a test red.
+
 ## Design choices
 
 - A hook sees the whole command and a permission rule sees only a prefix, so enforcement lives in the guards and the deny list is a backstop ([docs/permissions.md](docs/permissions.md)).
@@ -160,6 +184,7 @@ rules/                   ← installed to ~/.claude/rules, loaded in every sessi
   prose-and-comments.md  collaboration.md  working-agreement.md  environment.md
   python-tests.md        ← path-scoped: loads only when Claude opens Python
 skills/                  ← memory-audit/, memory-archive/, pr-review/
+  comms-hub/             ← SKILL.md, config.example.toml, bin/ (its scripts), tests/ (Python)
 tests/                   ← one <name>.test.sh per hook or script, plus bench-corpus.jsonl
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
