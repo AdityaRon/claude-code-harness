@@ -9,8 +9,11 @@
 #         session's scratch, remote branch deletion whose tip no other ref
 #         holds, remote set-url/add, any other alias, identity and signing config
 # Most patterns start at a command boundary, but matching is textual: the same
-# words in a commit message or heredoc can still match.
+# words in a heredoc, or in a message this cannot prove is text, can still match.
 source "$(dirname "$0")/lib.sh"
+
+# The command without message heredoc bodies or quoted messages (lib.sh).
+strip_messages() { strip_message_args "$(strip_inert_heredocs "$1")"; }
 
 read_input
 require_jq_or_deny
@@ -24,6 +27,11 @@ CMD=$(jq_get '.tool_input.command')
 R=$(printf '%s' "$CMD" | tr -d '"'\''\\')
 [[ "$R" == *[Gg][Ii][Tt]* ]] || exit 0
 CMD=$(strip_inert_heredocs "$CMD")
+# The .git/hooks check still reads a quoted message, as it always has.
+MSG_FREE=$(strip_message_args "$CMD")
+HOOKS_TEXT=""
+[[ "$MSG_FREE" != "$CMD" ]] && HOOKS_TEXT=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
+CMD=$MSG_FREE
 
 # Strip assignment/wrapper prefixes before anything below matches. The anchor A
 # admits only real command boundaries, so `VAR=1 git push -f`, `env FOO=bar git
@@ -51,7 +59,8 @@ GIT="${XARGS}git(\s+${GOPT})*\s+"
 
 # Each check below contains one of these, so one grep stands in for all of them
 # when none is present: git status, log, diff, show and commit skip the rest.
-printf '%s\n%s\n' "$CMD" "$SCAN" | grep -qiE "core\.hookspath|\.git/hooks|${GIT}(push|reset|clean|branch|checkout|restore|stash|worktree|add|config|remote|filter-branch|filter-repo|update-ref|reflog)" || exit 0
+printf '%s\n%s\n' "$CMD" "$SCAN" | grep -qiE "core\.hookspath|\.git/hooks|${GIT}(push|reset|clean|branch|checkout|restore|stash|worktree|add|config|remote|filter-branch|filter-repo|update-ref|reflog)" \
+  || printf '%s\n' "$HOOKS_TEXT" | grep -qE '\.git/hooks' || exit 0
 
 # --- core.hooksPath via -c on ANY subcommand ----------------------------
 # `git -c core.hooksPath=/tmp/evil <anything>` points hooks at an attacker
@@ -108,7 +117,7 @@ fi
 # segment only the gate saw went unchecked while the one beside it passed the
 # call. Prints how many segments of subcommand $1 match $2 in the gate's view.
 gate_segments() {
-  normalize_command "$(strip_inert_heredocs "$(jq_get '.tool_input.command')")" | tr -d '"'\''\\' \
+  normalize_command "$(strip_messages "$(jq_get '.tool_input.command')")" | tr -d '"'\''\\' \
     | grep -oE "${A}${GIT}$1\s+[^|;&]*" | grep -cE "$2"
 }
 
@@ -128,7 +137,7 @@ branch_on_remote() {
 branch_delete_safe() {
   local raw segs seg t i b repo cwd n=0 names
   cwd=$(jq_get '.cwd')
-  raw=$(separate_groups "$(strip_inert_heredocs "$(jq_get '.tool_input.command')")")
+  raw=$(separate_groups "$(strip_messages "$(jq_get '.tool_input.command')")")
   # xargs appends names the command does not show; normalize_wrappers hides it.
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
   raw=$(normalize_wrappers "$raw")
@@ -251,7 +260,7 @@ push_delete_safe() {
   local cmd raw segs seg t i k r repo cwd n=0 del b fu pu gone=""
   local -a refs names s_repo=() s_remote=() s_names=()
   cwd=$(jq_get '.cwd')
-  cmd=$(strip_inert_heredocs "$(jq_get '.tool_input.command')")
+  cmd=$(strip_messages "$(jq_get '.tool_input.command')")
   raw=$(separate_groups "$cmd")
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
   raw=$(normalize_wrappers "$raw")
@@ -341,7 +350,7 @@ FOUND=""
 broad_add_safe() {
   local raw segs seg t i repo cwd n=0 p out
   cwd=$(jq_get '.cwd')
-  raw=$(separate_groups "$(strip_inert_heredocs "$(jq_get '.tool_input.command')")")
+  raw=$(separate_groups "$(strip_messages "$(jq_get '.tool_input.command')")")
   # xargs appends stdin, which can hold -f; normalize_wrappers would hide it.
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
   raw=$(normalize_wrappers "$raw")
@@ -463,7 +472,7 @@ done < <(printf '%s\n' "$CMD" | grep -oE "${A}${GIT}config\s+[^|;&]*")
 # old pattern never saw it. This check is deliberately unanchored (it fires
 # wherever the path appears, a commit message included) — dropping the
 # required slash widens that, it does not change its shape.
-if printf '%s\n' "$CMD" | grep -qE "\.git/hooks(/|\b)"; then
+if printf '%s\n%s\n' "$CMD" "$HOOKS_TEXT" | grep -qE "\.git/hooks(/|\b)"; then
   emit_deny "Blocked: writing into .git/hooks can install a persistent payload. Not permitted."
   exit 0
 fi

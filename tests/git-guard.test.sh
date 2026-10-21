@@ -249,6 +249,32 @@ check "hooks word in a message"  allow "git commit -m 'harden the git hooks dire
 # the pattern widens that, it does not change its shape, so a message naming
 # the path literally is denied here exactly as `.git/hooks/` already was.
 check "hooks path in a message"  deny  "git commit -m 'note the .git/hooks vector'"
+check "hooks path in a dq message" deny 'git commit -m "see .git/hooks; it is guarded"'
+
+echo ""
+echo "=== A quoted message is text; what runs is not (A11b) ==="
+check "sq message with ; push --force"  allow "git commit -m 'fix: note; git push --force stays denied'"
+check "dq message with ; push --force"  allow 'git commit -m "fix: note; git push --force stays denied"'
+check "bundled -am message"             allow 'git commit -am "x; git add ."'
+check "--message= and attached -m"      allow "git commit --message='a; git reset --hard' -m'b; git clean -f'"
+check "git -C dir commit message"       allow "git -C repo commit -m 'note; git push --force'"
+check "gh title and body"               allow "gh pr create --title \"a; git push --force\" --body 'b; git add .'"
+check "cmdsub heredoc message"          allow $'git commit -m "$(cat <<\'EOF\'\nfix: guard\n\ngit push --force is still denied\nEOF\n)"'
+check "cmdsub heredoc, plain unquoted"  allow $'git commit -m "$(cat <<EOF\nguard tweaks; git add . is denied\nEOF\n)"'
+check "-F - heredoc message"            allow $'git commit -F - <<\'EOF\'\nguard tweaks\n\ngit add . is still denied\nEOF'
+check "push after a message"            deny  "git commit -m 'wip' && git push --force"
+check "push after a dq message"         deny  'git commit -am "x; y" ; git push -f origin main'
+check "message runs a cmdsub"           deny  'git commit -m "$(git push --force)"'
+check "dq message holding \$ stays"     deny  'git commit -m "$X; git push --force"'
+check "ANSI-C message stays"            deny  "git commit -m \$'a\\'; git push --force'"
+check "unclosed message quote"          deny  "git commit -m 'note; git push --force"
+check "cmdsub heredoc piped to bash"    deny  $'git commit -m "$(cat <<\'EOF\' | bash\ngit push --force\nEOF\n)"'
+check "cmdsub heredoc read by bash"     deny  $'git commit -m "$(bash <<\'EOF\'\ngit push --force\nEOF\n)"'
+check "unquoted heredoc body runs \$()" deny  $'git commit -m "$(cat <<EOF\n$(git push --force)\nEOF\n)"'
+check "push takes no message flag"      deny  "git push -m 'x' --force"
+check "comment line keeps old reading"  deny  $'# it\'s\ngit commit -m \'x\'; git push --force'
+# Known limit: a wrapper before git is not read as a commit, so its message stays.
+check "wrapper before commit (limit)"   deny  "VAR=1 git commit -m 'note; git push --force'"
 
 echo ""
 echo "=== Quoted and parent-tree staging, xargs, whole-tree discards ==="
@@ -375,6 +401,8 @@ check_wt "-qD bundle, commits only local"    ask   "git branch -qD b-local" "$M"
 check_wt "-Dq bundle, commits only local"    ask   "git branch -Dq b-local" "$M"
 check_wt "--del abbreviation"                ask   "git branch --del --force b-local" "$M"
 check_wt "quoted -D"                         ask   "git branch \"-D\" b-local" "$M"
+# The gate and the parser both read the command with its quoted message gone.
+check_wt "-D after a message naming another" allow "git commit -m 'note; git branch -D b-local' && git branch -D b-pushed" "$M"
 
 echo ""
 echo "=== push --delete: runs only when another ref holds the tip the remote reports ==="

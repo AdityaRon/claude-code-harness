@@ -154,6 +154,8 @@ normalize_command() {
 # body goes; the opener and terminator stay, so the command itself is scanned
 # and a later pass still sees a balanced heredoc. An unquoted delimiter has the
 # shell run $(...) and backticks in the body, so such a body holding $ or ` stays.
+# `-m "$(cat <<'EOF'` is the same message when the line ends at the delimiter:
+# anything after it (`| bash`) would run the body.
 strip_message_heredocs() {
   case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
   printf '%s\n' "$1" | awk '
@@ -164,12 +166,65 @@ strip_message_heredocs() {
     { print
       if (match($0, /<<-?[ \t]*["\047\\]?[A-Za-z_][A-Za-z0-9_]*/)) {
         pre = substr($0, 1, RSTART - 1); n = split(pre, seg, /\|\||&&|[|;&]/); last = seg[n]
+        oq = substr($0, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", oq); oq = substr(oq, 1, 1)
+        post = substr($0, RSTART + RLENGTH); if (oq == "\047" || oq == "\"") sub("^" oq, "", post)
         if (last ~ /^[ \t]*(git[ \t]+(-[^ \t]+[ \t]+)*commit|gh[ \t]+(pr|issue))[ \t]/ \
-            && last ~ /(^|[ \t])(-F|--file|--body-file)[ \t]*=?[ \t]*-([ \t]|$)/) {
+            && (last ~ /(^|[ \t])(-F|--file|--body-file)[ \t]*=?[ \t]*-([ \t]|$)/ \
+                || (last ~ /(^|[ \t])(-[A-Za-z]*m|--message|-[tb]|--title|--body)[ \t]*=?[ \t]*"\$\([ \t]*cat[ \t]*$/ \
+                    && post ~ /^[ \t]*$/))) {
           term = substr($0, RSTART + 2, RLENGTH - 2); dash = (term ~ /^-/)
           lit = (term ~ /^-?[ \t]*["\047\\]/); buf = ""
           sub(/^-?[ \t]*["\047\\]?/, "", term); body = 1 } } }
     END { if (body && buf ~ /[$`]/) printf "%s", buf }'
+}
+
+# A quoted -m or --message to git commit, or -t, -b, --title or --body to gh
+# pr|issue, is text git or gh stores and nothing runs, so its words become `msg`:
+# `git commit -m 'note; git push --force is denied'` is not a force push. A
+# double-quoted one holding $ or ` stays. Anything this does not model (a heredoc,
+# a backtick, $', a # comment, $( or ${ in double quotes, an unclosed quote)
+# leaves the whole command as typed.
+strip_message_args() {
+  case "$1" in *commit*|*gh*) ;; *) printf '%s' "$1"; return ;; esac
+  case "$1" in *\'*|*\"*) ;; *) printf '%s' "$1"; return ;; esac
+  printf '%s\n' "$1" | awk '
+    function msgflag(    g) {
+      if (seg ~ /^[ \t]*git[ \t]+((-[cC][ \t]+[^ \t]+|-[^ \t]+)[ \t]+)*commit[ \t]/) g = "(-[A-Za-z]*m|--message)"
+      else if (seg ~ /^[ \t]*gh[ \t]+(pr|issue)[ \t]+[a-z-]+[ \t]/) g = "(-[tb]|--title|--body)"
+      else return 0
+      return (word == "" && prev ~ ("^" g "$")) || word ~ ("^" g "=?$")
+    }
+    { s = s (NR > 1 ? "\n" : "") $0 }
+    END {
+      n = length(s); out = ""; seg = ""; word = ""; prev = ""; q = ""; i = 1
+      while (i <= n) {
+        c = substr(s, i, 1); t = c
+        if (q == "\047") { if (c == q) q = "" }
+        else if (q == "\"") {
+          if (c == "`" || substr(s, i, 2) ~ /^\$[({]$/) { print s; exit }
+          if (c == "\\") t = substr(s, i, 2); else if (c == q) q = ""
+        } else if (c == "\\") t = substr(s, i, 2)
+        else if (substr(s, i, 3) == "<<<") t = "<<<"
+        else if (c == "`" || substr(s, i, 2) == "<<" || substr(s, i, 2) == "$\047" || (c == "#" && word == "")) { print s; exit }
+        else if (c == "\047" || c == "\"") {
+          if (msgflag()) {
+            j = i + 1; ok = 1
+            while (j <= n && substr(s, j, 1) != c) {
+              if (c == "\"" && substr(s, j, 1) == "\\") j++
+              else if (c == "\"" && substr(s, j, 1) ~ /[$`]/) ok = 0
+              j++
+            }
+            if (j > n) { print s; exit }
+            if (ok) { t = c "msg" c; out = out t; seg = seg t; word = word t; i = j + 1; continue }
+          }
+          q = c
+        } else if (c ~ /[;&|()\n]/) { out = out c; seg = ""; word = ""; prev = ""; i++; continue }
+        else if (c == " " || c == "\t") { if (word != "") prev = word; word = ""; out = out c; seg = seg c; i++; continue }
+        out = out t; seg = seg t; word = word t; i += length(t)
+      }
+      if (q != "") { print s; exit }
+      print out
+    }'
 }
 
 # Text written to a notes file is not a command. Drop heredoc bodies from the

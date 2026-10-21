@@ -88,7 +88,7 @@ a project's settings.
 
 ## Cases
 
-`permission-friction-cases.jsonl` (next to this file), 180 cases. The first 27 have the tool input, the
+`permission-friction-cases.jsonl` (next to this file), 187 cases. The first 27 have the tool input, the
 decision observed on local `main` at b8427b2 and on `adityaron/main` at 516db51,
 a `why`, and a `want` where the answer is not a policy call. Cases with no
 `want` are policy calls and only report. Seven `control-*` cases pin decisions
@@ -97,13 +97,15 @@ run silent). The other 132 came from review: `pin-*` cases are what a guard fix
 must still catch, `hole-*` cases were silent allows on 516db51 (the group and reserved-word ones on 5ad2f49), and `fp-*`/`ok-*`
 cases are false positives a fix should clear. The 12 added on 2026-10-07 carry
 decisions on `main` at 960d21e and 0a34c00: false denies #64 and #66 cleared,
-two controls, the harness-write policy, and three false denies still open (#72),
-which have no `want`. The 4 added on 2026-10-13 are jq filters with a `(` inside
-quotes: three cleared by the quote fix in `normalize_binaries`, and one, jq
-inside `"$( )"`, still open (#72). Of the 5 added on 2026-10-14 (main at
-1c49f21), four are cleared: a grep or rg pattern naming `.env`, and curl piped
-to a local script or `python3 -m json.tool`. One, `templates.env` in a python
-heredoc, is still open (#72).
+two controls, the harness-write policy, and three false denies from #72, now
+cleared. The 4 added on 2026-10-13 are jq filters with a `(` inside quotes: three
+cleared by the quote fix in `normalize_binaries`, and the fourth, jq inside
+`"$( )"`, cleared since. Of the 5 added on 2026-10-14 (main at 1c49f21), four
+were cleared then: a grep or rg pattern naming `.env`, and curl piped to a local
+script or `python3 -m json.tool`; `templates.env` in a python heredoc is cleared
+since. The 7 added on 2026-10-21 (main at c2b1981) are commit messages and PR
+bodies that name a blocked git command (#72, A11b): four false denies, two
+controls, and one open gap, a `git push --force` inside `sh -c` (A2).
 
 ```
 bin/permission-friction.py --cases --replay hooks/
