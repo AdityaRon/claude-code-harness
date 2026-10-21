@@ -210,15 +210,19 @@ strip_inert_heredocs() {
 # A quoted or backslash-escaped `&`, `;` or `|` is text, not a separator, but the
 # guards' [^|;&] spans stop at it and hid the flags after it. Rewritten to %26,
 # %3B, %7C for matching only. An unquoted one, URL or not, still separates.
+# A $( inside double quotes starts unquoted text again, until its own ).
 neutralize_quoted_separators() {
   case "$1" in *'&'*|*';'*|*'|'*) ;; *) printf '%s' "$1"; return ;; esac
   printf '%s\n' "$1" | awk '
     function hide(ch) { return ch == "&" ? "%26" : ch == ";" ? "%3B" : ch == "|" ? "%7C" : ch }
-    BEGIN { q = "" }
+    BEGIN { q = ""; sp = 0 }
     { out = ""; n = length($0)
       for (i = 1; i <= n; i++) {
         c = substr($0, i, 1)
         if (c == "\\" && q != "\047") { out = out c hide(substr($0, i + 1, 1)); i++; continue }
+        if (q == "\"" && c == "$" && substr($0, i + 1, 1) == "(") { up[++sp] = q; depth[sp] = 1; q = ""; out = out "$("; i++; continue }
+        if (q == "" && sp > 0 && c == "(") depth[sp]++
+        if (q == "" && sp > 0 && c == ")" && --depth[sp] == 0) { q = up[sp--]; out = out c; continue }
         if (q == "") {
           if (c == "\047") q = (i > 1 && substr($0, i - 1, 1) == "$") ? "A" : "\047"
           else if (c == "\"") q = "\""

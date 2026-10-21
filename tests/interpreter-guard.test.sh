@@ -220,5 +220,13 @@ check "unquoted message runs inline code" ask $'git commit -q -F - <<EOF\n$(pyth
 check "unquoted notes file runs inline code" ask $'cat > notes.md <<EOF\n$(python3 -c "import os; print(os.environ)")\nEOF'
 
 echo ""
+echo "=== #72: an attribute named env is not the .env file ==="
+check "jinja templates.env.filters"   allow $'python3 - <<\'EOF\'\ntemplates.env.filters[\'markdown\'] = render\nEOF'
+check "open .env still asks"          ask   $'python3 -c "print(open(\'.env\').read())"'
+check "open .env.local still asks"    ask   $'python3 -c "print(open(\'.env.local\').read())"'
+check "open app/.env still asks"      ask   $'python3 -c "print(open(\'app/.env\').read())"'
+check "process.env still asks"        ask   'node -e "console.log(process.env.SECRET)"'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
