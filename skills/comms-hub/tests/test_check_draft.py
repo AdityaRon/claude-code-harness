@@ -13,6 +13,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   quiet-ignored: check_draft.py: `mode, post = hub.send_plan(cfg, hub.now())` => `mode, post = "live", None`
   bare-url-greedy: check_draft.py: `BARE_URL = re.compile(r"https?://[^\s,;)\]>]+")` => `BARE_URL = re.compile(r"https?://\S+")`
   pr-dash-missed: check_draft.py: `\bPR[\s-]*#?\d+\b` => `\bPR\s*#?\d+\b`
+  sent-machine-zone: check_draft.py: `day = hub.local_now(cfg).strftime("%Y-%m-%d")` => `day = hub.now().astimezone().strftime("%Y-%m-%d")`
 """
 import contextlib
 import io
@@ -20,7 +21,7 @@ import os
 import unittest
 from unittest import mock
 
-from fakes import Env, Fail, FakeGh
+from fakes import Env, Fail, FakeGh, machine_zone
 
 import check_draft
 import hub
@@ -150,6 +151,14 @@ class Freshness(unittest.TestCase):
             self.assertEqual(rc, 1)
             self.assertIn("already sent", out)
             self.assertEqual(gate(env, None, "--record-sent", "again")[0], 1)
+
+    def test_the_sent_folder_is_the_day_in_the_configured_zone(self):
+        # DAY is 10:00 on 2026-10-21 in Los Angeles, the config's zone, and 06:00 on the 22nd in Auckland.
+        with Env() as env, machine_zone("Pacific/Auckland"):
+            gate(env, "ok\n", "--top-level", gh=fake())
+            rc, out = gate(env, None, "--record-sent", "1761040800.000100")
+            self.assertEqual(rc, 0, out)
+            self.assertTrue((env.state / "sent" / "2026-10-21" / "1761040800.000100.md").is_file(), out)
 
 
 if __name__ == "__main__":

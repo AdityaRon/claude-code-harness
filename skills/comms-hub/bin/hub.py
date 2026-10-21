@@ -207,6 +207,13 @@ def zone(cfg: dict):
     return ZoneInfo(cfg["quiet_hours"]["tz"])
 
 
+def local_now(cfg: dict | None) -> dt.datetime:
+    """Now in quiet_hours.tz, so a day's log and sent/ folder are the day the
+    quiet hours count; the machine's own zone only when there is no config."""
+    t = now()
+    return t.astimezone(zone(cfg)) if cfg and cfg.get("quiet_hours", {}).get("tz") else t.astimezone()
+
+
 def send_plan(cfg: dict, at: dt.datetime) -> tuple[str, dt.datetime | None]:
     """("live", None), or ("schedule", post_at) when `at` falls in quiet hours."""
     q = cfg["quiet_hours"]
@@ -225,7 +232,7 @@ def send_plan(cfg: dict, at: dt.datetime) -> tuple[str, dt.datetime | None]:
 def append_log(cfg: dict | None, line: str) -> Path:
     d = state_dir(cfg) / "log"
     d.mkdir(exist_ok=True)
-    stamp = now().astimezone()
+    stamp = local_now(cfg)
     p = d / f"{stamp:%Y-%m-%d}.md"
     with p.open("a") as f:
         f.write(f"- {stamp:%H:%M} {line}\n")

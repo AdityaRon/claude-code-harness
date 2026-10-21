@@ -2,6 +2,7 @@
 temp dir. Shared by the test files; not a test file itself."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -126,6 +128,17 @@ class Env:
         self.patch.stop()
         import shutil
         shutil.rmtree(self.dir, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def machine_zone(name):
+    """This process's local zone, the one astimezone() with no argument uses."""
+    try:
+        with mock.patch.dict(os.environ, {"TZ": name}):
+            time.tzset()
+            yield
+    finally:
+        time.tzset()
 
 
 def page(nodes, more=False, cursor="c1"):

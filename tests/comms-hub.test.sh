@@ -2,7 +2,7 @@
 # The comms-hub skill's Python tests (skills/comms-hub/tests), in doctor's tally
 # format. They need Python 3.10+ with a TOML reader, which macOS's python3 3.9
 # is not, so skills/comms-hub/bin/python.sh picks the interpreter. The mutation
-# run is separate (84 mutations, 158 s on an Apple M2, 2026-10-21): skills/comms-hub/tests/run.py --mutate
+# run is separate (87 mutations, 159 s on an Apple M2, 2026-10-21): skills/comms-hub/tests/run.py --mutate
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if ! PY=$(bash "$REPO/skills/comms-hub/bin/python.sh" 2>&1); then

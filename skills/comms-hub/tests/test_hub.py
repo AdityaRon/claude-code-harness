@@ -20,6 +20,8 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   init-tz-unfilled: hub.py: `text = text.replace(f'tz = "{PLACEHOLDER}"', f'tz = "{tz}"', 1)` => `pass`
   zone-unvalidated: hub.py: `and _valid_zone(n):` => `and True:`
   job-tmp-ignored: hub.py: `if os.environ.get("CLAUDE_JOB_DIR"):` => `if False:`
+  log-machine-zone: hub.py: `stamp = local_now(cfg)` => `stamp = now().astimezone()`
+  local-now-machine: hub.py: `return t.astimezone(zone(cfg)) if` => `return t.astimezone() if`
 """
 import contextlib
 import datetime as dt
@@ -31,7 +33,7 @@ import subprocess
 import unittest
 from unittest import mock
 
-from fakes import BIN, Env, Fail, FakeGh, actor
+from fakes import BIN, CONFIG, Env, Fail, FakeGh, actor, machine_zone
 
 import hub
 
@@ -130,6 +132,13 @@ class QuietHours(unittest.TestCase):
     def test_small_hours_schedule_the_same_morning(self):
         mode, post = self.at("2026-10-22T02:00:00-07:00")
         self.assertEqual((mode, post.isoformat()), ("schedule", "2026-10-22T08:00:00-07:00"))
+
+    def test_the_log_day_is_the_configured_zones_not_the_machines(self):
+        # 17:00 UTC on 2026-10-21 is 10:00 that day in Los Angeles and 06:00 the next in Auckland.
+        cfg = CONFIG.replace('tz = "America/Los_Angeles"', 'tz = "Pacific/Auckland"')
+        with Env(config=cfg, now="2026-10-21T17:00:00Z"), machine_zone("America/Los_Angeles"):
+            p = hub.append_log(hub.load_config(), "scan started")
+            self.assertEqual((p.name, p.read_text()), ("2026-10-22.md", "- 06:00 scan started\n"))
 
 
 class Config(unittest.TestCase):
