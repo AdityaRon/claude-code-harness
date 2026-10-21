@@ -71,7 +71,7 @@ against main.
 | `network-guard` | Bash, WebFetch | Deny: file uploads and pipe-to-shell. Ask: request bodies, `DELETE`, hosts off the allowlist, `scp`/`rsync`, local servers |
 | `interpreter-guard` | Bash | Ask: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts |
 | `kubectl-guard` | Bash | Ask: every mutating verb wherever it sits, secret reads, and any subcommand it cannot classify |
-| `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review, or one that runs code outside the guards |
+| `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review, one that runs code outside the guards, or one hooking `settings.read` or `agent.spawn` |
 | `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
 | `memory-lint` | file writes | Advise: name, type, description, `verify:` block and index tier of a memory file |
 | `comment-budget` | file writes | Advise: a comment block an edit grew past 6 lines |

@@ -61,6 +61,22 @@ export function register(on) {
   on('session.start', async ($, e, next) => next(e))
 }
 EOF
+cat > "$TMP/settings.js" <<'EOF'
+export function register(on) {
+  on('settings.read', async ($, e, next) => next(e))
+}
+EOF
+cat > "$TMP/spawn.js" <<'EOF'
+export function register(on) {
+  on('agent.spawn', async ($, e, next) => next(e))
+}
+EOF
+cat > "$TMP/both.js" <<'EOF'
+export function register(on) {
+  on('settings.read', async ($, e, next) => next(e))
+  on('agent.spawn', async ($, e, next) => next(e))
+}
+EOF
 cat > "$TMP/unlisted.js" <<'EOF'
 export function register(on) {
   on('session.start', async ($, e, next) => { const ui = $.ui; return next(e) })
@@ -88,6 +104,19 @@ OUT=$(write "$TMP/override.js")
 OUT=$(write "$TMP/nocalls.js")
 case "$OUT" in *"will hook: session.start."*) ;; *) fail "a mod with no calls is described" "$OUT" ;; esac
 case "$OUT" in *"It calls"*) fail "a mod with no calls lists none" "$OUT" ;; *"will hook"*) pass "a mod with no calls lists none" ;; esac
+[[ "$(decision "$OUT")" == "allow" ]] && pass "a session.start mod is shown, not asked" || fail "a session.start mod is shown, not asked" "$OUT"
+
+# 2.1.304 lets settings.read rewrite the merged settings, and 2.1.300 lets
+# agent.spawn rewrite a spawned agent's prompt and model: both reach past the guards.
+OUT=$(write "$TMP/settings.js")
+[[ "$(decision "$OUT")" == "ask" ]] && pass "a settings.read hook asks" || fail "a settings.read hook asks" "$OUT"
+case "$OUT" in *"rewrite the merged settings"*) pass "and says what it can rewrite" ;; *) fail "settings.read is called out" "$OUT" ;; esac
+OUT=$(write "$TMP/spawn.js")
+[[ "$(decision "$OUT")" == "ask" ]] && pass "an agent.spawn hook asks" || fail "an agent.spawn hook asks" "$OUT"
+case "$OUT" in *"spawned agent's prompt and model"*) pass "and says what it can rewrite" ;; *) fail "agent.spawn is called out" "$OUT" ;; esac
+OUT=$(write "$TMP/both.js")
+[[ "$(decision "$OUT")" == "ask" && "$(printf '%s' "$OUT" | grep -o 'read that hook' | wc -l | tr -d ' ')" == 2 ]] \
+  && pass "both hooks: one ask naming each" || fail "both hooks: one ask naming each" "$OUT"
 
 OUT=$(write "$TMP/unlisted.js")
 case "$OUT" in *"will not load it yet"*) pass "a module validation rejects is allowed, with a notice" ;; *) fail "a module validation rejects is allowed, with a notice" "$OUT" ;; esac
