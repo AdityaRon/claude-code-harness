@@ -29,6 +29,9 @@
       "Bash(kubectl --context * delete:*)",
       "Bash(claude * --plugin-url:*)"
     ],
-    "allow": []
+    "allow": [
+      "Bash(python:*)",
+      "Bash(node:*)"
+    ]
   }
 }
