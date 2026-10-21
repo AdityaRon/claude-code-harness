@@ -64,7 +64,7 @@ against main.
 | `env-guard` | Bash | Deny: reading, dumping, copying or sending env values and dotfiles (`cat .env`, `printenv`, `nc`) |
 | `sensitive-file-guard` | Read, Grep, file writes | Deny: `.env`, keys, SSH and cloud credentials, credential folders. Ask: a Grep at or above your home folder |
 | `secret-scanner` | file writes | Deny: high-confidence token shapes (AWS, GitHub, Slack, Stripe, Google, Anthropic, OpenAI, PEM) in written content |
-| `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, a broad `git add` that would stage a credential file or that it cannot check. Ask: deleting a local or remote branch whose tip no other ref holds, remote and identity changes |
+| `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, a broad `git add` that would stage a credential file or that it cannot check. Ask: force-deleting a local branch, or deleting a remote one, whose tip no other ref holds (a plain `git branch -d` runs: git refuses an unmerged branch itself), remote and identity changes |
 | `rm-guard` | Bash | Deny: recursive `rm` of home, root or a top-level folder, and `rm -rf` outside the session's scratch folder |
 | `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, shell startup files, `~/.gitconfig`, LaunchAgents. Deny: moving or emptying `~/.claude` |
 | `network-guard` | Bash, WebFetch | Deny: file uploads and pipe-to-shell. Ask: request bodies, `DELETE`, hosts off the allowlist, `scp`/`rsync`, local servers |

@@ -373,6 +373,16 @@ check_wt "-D, then one a function runs"      ask   "f() { \"\$@\"; }; git branch
 check_wt "-D, xargs adds a name"             ask   "echo b-local | xargs git branch -D b-pushed" "$M"
 check_wt "-qD bundle, commits only local"    ask   "git branch -qD b-local" "$M"
 check_wt "-Dq bundle, commits only local"    ask   "git branch -Dq b-local" "$M"
+# A plain -d runs whatever holds the tip: git refuses an unmerged branch itself.
+check_wt "-d, commits only local"            allow "git branch -d b-local" "$M"
+check_wt "-dq bundle, commits only local"    allow "git branch -dq b-local" "$M"
+check_wt "--delete, commits only local"      allow "git branch --delete b-local" "$M"
+check_wt "-d, two names"                     allow "git branch -d b-local b-pushed" "$M"
+check_wt "-d -f, commits only local"         ask   "git branch -d -f b-local" "$M"
+check_wt "-df bundle, commits only local"    ask   "git branch -df b-local" "$M"
+check_wt "--delete --force, only local"      ask   "git branch --delete --force b-local" "$M"
+check_wt "-d, name in a variable"            ask   "B=b-local; git branch -d \$B" "$M"
+check_wt "-d, then -D of a local-only tip"   ask   "git branch -d b-pushed && git branch -D b-local" "$M"
 check_wt "--del abbreviation"                ask   "git branch --del --force b-local" "$M"
 check_wt "quoted -D"                         ask   "git branch \"-D\" b-local" "$M"
 
