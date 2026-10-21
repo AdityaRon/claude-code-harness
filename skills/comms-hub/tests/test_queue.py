@@ -12,12 +12,19 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   unknown-not-blocking: queue.py: `blocked.append(f"{len(unknown)} PR(s) could not be read")` => `pass`
   latest-reviews: queue.py: `hub.standing_reviews(pr["reviews"]["nodes"])` => `hub.standing_reviews(pr["latestReviews"]["nodes"])`
   drift-ignored: queue.py: `if oid != head:` => `if False:`
-  bots-count: queue.py: `return hub.login(actor) not in (None, me) and not hub.is_bot(actor)` => `return hub.login(actor) not in (None, me)`
+  bots-count: queue.py: `return not hub.is_me(actor, me) and not hub.is_bot(actor)` => `return not hub.is_me(actor, me)`
+  deleted-dropped: queue.py: `return not hub.is_me(actor, me) and not hub.is_bot(actor)` => `return hub.login(actor) is not None and not hub.is_me(actor, me) and not hub.is_bot(actor)`
+  case-sensitive-me: hub.py: `return (login(actor) or "").lower() == me.lower()` => `return login(actor) == me`
+  archived-counted: queue.py: `if n["repository"].get("isArchived"):  # search's archived:false drops it too` => `if False:`
   old-activity-counts: queue.py: `events = sorted(e for e in events if e[0] > last_reply)` => `events = sorted(events)`
+  no-previous-scan: queue.py: `stamp.write_text(at.isoformat() + "\n")` => `pass`
+  main-thread-wall: queue.py: `if time.time() - wall0 > wall_limit:` => `if False:`
   monotonic-watchdog: queue.py: `clock = time.time` => `clock = time.monotonic`
   watchdog-no-exit: queue.py: `exit_fn(3)` => `pass`
-  kill-nothing: queue.py: `if "queue.py" not in cmd:` => `if True:`
-  kill-anything: queue.py: `if "queue.py" not in cmd:` => `if False:`
+  kill-nothing: queue.py: `if not ("comms-hub" in cmd and "queue.py" in cmd and " scan" in cmd):` => `if True:`
+  kill-anything: queue.py: `if not ("comms-hub" in cmd and "queue.py" in cmd and " scan" in cmd):` => `if False:`
+  kill-an-editor: queue.py: `if not ("comms-hub" in cmd and "queue.py" in cmd and " scan" in cmd):` => `if "queue.py" not in cmd:`
+  stdlib-queue-unbound: hub.py: `import queue  # noqa: F401` => `pass`
 """
 import contextlib
 import importlib.util
@@ -31,7 +38,7 @@ import time
 import unittest
 from unittest import mock
 
-from fakes import BIN, ME, Env, Fail, FakeGh, actor, page
+from fakes import BIN, CONFIG, ME, Env, Fail, FakeGh, actor, page
 
 import hub
 
@@ -49,9 +56,9 @@ def item(n, author, repo="acme/app"):
             "user": {"login": author}, "updated_at": RECENT, "html_url": f"https://github.com/{repo}/pull/{n}"}
 
 
-def node(n, state="OPEN", updated=RECENT, merged=None, repo="acme/app"):
+def node(n, state="OPEN", updated=RECENT, merged=None, repo="acme/app", archived=False):
     return {"number": n, "state": state, "updatedAt": updated, "mergedAt": merged,
-            "repository": {"nameWithOwner": repo, "owner": {"login": repo.split("/")[0]}}}
+            "repository": {"nameWithOwner": repo, "isArchived": archived, "owner": {"login": repo.split("/")[0]}}}
 
 
 def ev(name, at, bot=False):
@@ -93,6 +100,7 @@ def fake(**over):
     searched = over.get("searched", mine_open)
 
     def search(query, pg):
+        query = query.lower()  # GitHub matches qualifiers case-insensitively
         if "review-requested:" in query:
             rows = [item(9, "teammate")]
         elif f"author:{ME}" in query:
@@ -109,7 +117,8 @@ def fake(**over):
 
     return FakeGh(
         graphql={
-            "CommsMyOpen": {"viewer": {"login": ME, "pullRequests": page([node(n) for n in mine_open])}},
+            "CommsMyOpen": {"viewer": {"login": ME, "pullRequests": page(
+                [node(n) for n in mine_open] + [node(n, repo="acme/old", archived=True) for n in over.get("archived", [])])}},
             "CommsMine": over.get("mine_pages", [{"viewer": {"pullRequests": page(
                 [node(1), node(2), node(3), node(4, state="MERGED", merged=RECENT),
                  node(6, state="MERGED", updated="2026-10-13T10:00:00Z", merged="2026-10-13T09:00:00Z")])}}]),
@@ -121,9 +130,9 @@ def fake(**over):
               "search": search})
 
 
-def scan(gh):
+def scan(gh, config=None):
     out = []
-    with Env(now=NOW):
+    with Env(now=NOW, **({"config": config} if config else {})):
         rc = q.scan(hub.load_config(), hub.Gh(runner=gh, pause=0), emit=out.append)
     return rc, "\n".join(out)
 
@@ -228,6 +237,42 @@ class Scan(unittest.TestCase):
         rc, out = scan(fake(details={**DETAILS, 3: d}))
         self.assertIn("bob approved at a commit no longer on the branch", out)
 
+    def test_a_config_login_in_another_case_is_still_me(self):
+        rc, out = scan(fake(), config=CONFIG.replace(f'login = "{ME}"', f'login = "{ME.upper()}"'))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([r.split()[0] for r in section(out, "OUTBOUND")], ["acme/app#2", "acme/app#4"])
+        self.assertNotIn(f"{ME} comment", out)
+
+    def test_a_deleted_accounts_comment_is_activity(self):
+        d = detail(2, comments=[ev(ME, "2026-10-19T10:00:00Z"), {"author": None, "createdAt": "2026-10-20T10:00:00Z"}])
+        rc, out = scan(fake(details={**DETAILS, 2: d}))
+        self.assertIn("a deleted account comment", section(out, "OUTBOUND")[0])
+
+    def test_an_open_pr_in_an_archived_repo_does_not_split_the_instruments(self):
+        rc, out = scan(fake(archived=[11]))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("my-open-xcheck: search=4 graphql=4 agree", out)
+
+    def test_previous_scan_is_recorded_for_the_slack_window(self):
+        with Env(now=NOW) as env:
+            outs = []
+            for _ in range(2):
+                out = []
+                q.scan(hub.load_config(), hub.Gh(runner=fake(), pause=0), emit=out.append)
+                outs.append("\n".join(out))
+            log = "".join(p.read_text() for p in (env.state / "log").iterdir())
+        self.assertIn("previous-scan: none", outs[0])
+        self.assertIn("previous-scan: 2026-10-21T17:00:00+00:00 epoch=1792602000", outs[1])
+        self.assertEqual(log.count("scan started"), 2)
+
+    def test_a_scan_that_outlived_the_wall_limit_is_blocked_even_unwatched(self):
+        base = time.time()
+        ticks = iter([base] + [base + 1000] * 1000)
+        with mock.patch("time.time", lambda: next(ticks)):
+            rc, out = scan(fake())
+        self.assertEqual(rc, 3, out)
+        self.assertIn("wall-clock time", out)
+
 
 class Watchdog(unittest.TestCase):
     def test_wall_clock_jump_fires_it(self):
@@ -288,7 +333,7 @@ class PreviousScan(unittest.TestCase):
         return p
 
     def test_a_running_scan_is_killed(self):
-        p = self.spawn("queue.py", "scan")
+        p = self.spawn(str(BIN / "queue.py"), "scan")
         time.sleep(0.2)
         with Env() as env:
             env.state.mkdir(parents=True)
@@ -297,8 +342,8 @@ class PreviousScan(unittest.TestCase):
             self.assertIn(f"pid {p.pid}", q.kill_previous(pidfile) or "")
         self.assertIsNotNone(p.wait(timeout=5))
 
-    def test_another_process_is_left_alone(self):
-        p = self.spawn("something-else")
+    def test_an_editor_on_the_script_is_left_alone(self):
+        p = self.spawn(str(BIN / "queue.py"))
         time.sleep(0.2)
         with Env() as env:
             env.state.mkdir(parents=True)

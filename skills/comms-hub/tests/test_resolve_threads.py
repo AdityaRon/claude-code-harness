@@ -1,12 +1,14 @@
 r"""resolve_threads.py: each of the five rules, paging, and the re-read after --apply.
 
 Mutations (run.py --mutate applies each and expects this file to fail):
-  rule1-not-mine: resolve_threads.py: `if hub.login(pr.get("author")) != me:` => `if False:`
+  rule1-not-mine: resolve_threads.py: `if not hub.is_me(pr.get("author"), me):` => `if False:`
   rule1-not-open: resolve_threads.py: `if pr.get("state") != "OPEN":` => `if False:`
   rule2-resolved: resolve_threads.py: `if t.get("isResolved"):` => `if False:`
-  rule2-own-thread (may survive): resolve_threads.py: `if hub.login(opener) == me:` => `if False:`
+  rule2-own-thread (may survive): resolve_threads.py: `if hub.is_me(opener, me):` => `if False:`
   rule2-bot: resolve_threads.py: `if hub.is_bot(opener):` => `if False:`
-  rule3-last-word: resolve_threads.py: `if hub.login(last.get("author")) != me:` => `if False:`
+  rule3-last-word: resolve_threads.py: `if not hub.is_me(last.get("author"), me):` => `if False:`
+  case-sensitive-me: hub.py: `return (login(actor) or "").lower() == me.lower()` => `return login(actor) == me`
+  viewer-unchecked: resolve_threads.py: `if viewer.lower() != me.lower():` => `if False:`
   rule4-any-standing: resolve_threads.py: `if not review or review.get("state") != "APPROVED":` => `if not review:`
   rule4-any-approver: resolve_threads.py: `review = standing.get(hub.login(opener))` => `review = next((r for r in standing.values() if r["state"] == "APPROVED"), None)`
   rule4-commented-revokes: hub.py: `if r.get("state") in ("COMMENTED", "PENDING"):` => `if r.get("state") in ("PENDING",):`
@@ -70,6 +72,10 @@ class Rules(unittest.TestCase):
     def test_answered_then_approved_resolves(self):
         self.assertVerdict(pr([ANSWERED], [review("bob", "APPROVED", T12)]), "RESOLVE")
 
+    def test_my_login_in_another_case_is_still_me(self):
+        skip, out = rt.decide(pr([ANSWERED], [review("bob", "APPROVED", T12)]), ME.upper())
+        self.assertEqual((skip, [v for v, _, _ in out]), (None, ["RESOLVE"]))
+
     def test_approval_survives_a_later_commented_review(self):
         self.assertVerdict(pr([ANSWERED], [review("bob", "APPROVED", T12), review("bob", "COMMENTED", T13)]),
                            "RESOLVE")
@@ -120,8 +126,9 @@ class Rules(unittest.TestCase):
 
 
 class Apply(unittest.TestCase):
-    def run_main(self, *argv, reread=True):
+    def run_main(self, *argv, reread=True, viewer=ME):
         fake = FakeGh(graphql={
+            "CommsViewer": {"viewer": {"login": viewer}},
             "CommsMyOpenThreads": {"viewer": {"login": ME, "pullRequests": page(
                 [{"number": 7, "repository": {"nameWithOwner": "acme/app", "owner": {"login": "acme"}}}])}},
             "CommsThreads": {"repository": {"pullRequest": pr(
@@ -149,6 +156,12 @@ class Apply(unittest.TestCase):
         self.assertEqual(fake.count("resolveReviewThread"), 1)
         self.assertIn(f"resolved {REF} src/a.py:3 thread=t1 isResolved=true (re-read)", out)
         self.assertIn("resolved thread t1", log)
+
+    def test_signed_in_as_someone_else_blocks_before_reading(self):
+        rc, out, fake, _ = self.run_main("--apply", viewer="other-account")
+        self.assertEqual(rc, 3)
+        self.assertIn("gh is signed in as other-account", out)
+        self.assertEqual((fake.count("CommsThreads"), fake.count("resolveReviewThread")), (0, 0))
 
     def test_a_reread_that_says_open_is_reported_and_fails(self):
         rc, out, _, log = self.run_main("--apply", reread=False)

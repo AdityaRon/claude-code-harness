@@ -93,16 +93,17 @@ it, and the tick cannot run without it.
      `PY B/slack_diff.py <job tmp>/dm.tsv --channel <primary_dm> --commit --read <every NEW and MOVED ts>`.
      The first run takes `--commit --baseline` instead; say nothing before it
      was checked. UNREADABLE or UNTRUSTED means the read failed: no commit, say so.
-   - Each watched channel: read with `oldest` at the previous tick's start
-     (in the daily log; 24 hours back on the first tick). Read in full any thread
-     that names the user, or a PR or ticket they own.
+   - Each watched channel: read with `oldest` set to the `previous-scan` epoch
+     that step 1's header printed (24 hours back when it says none). Read in
+     full any thread that names the user, or a PR or ticket they own.
    - Mentions: search `<@my_user_id> after:YYYY-MM-DD` (two days back), sorted
      by time. Use the date filter: an epoch filter once returned 0, and an empty
      result is ambiguous. The newest hit shows how far the search reached; if
      it is older than the last tick, say the search may not have reached.
 3. **Route** every event: a review, a comment, a Slack reply. The owner is the
-   `routing` entry whose `repos` holds the PR's repo, or whose `tickets` holds
-   the ticket key's prefix. Run ListAgents now, at routing time, and confirm the
+   `routing` entry (`PY B/hub.py config` prints them) whose `repos` holds the
+   PR's repo, or whose `tickets` holds the ticket key's prefix. Run ListAgents
+   now, at routing time, and confirm the
    owner is listed. Send one SendMessage per peer covering all of its items,
    each with its link, what changed, and what is asked of it. No entry, or the
    owner is not listed: `~/.claude/session-route.sh --pr N --repo owner/name`

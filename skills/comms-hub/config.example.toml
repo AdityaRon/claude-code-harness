@@ -20,7 +20,7 @@ my_user_id = "CHANGE-ME"       # your Slack member id, for the mention search
 [quiet_hours]
 start = "19:00"                # from this time, messages are scheduled instead of sent
 post_at = "08:00"              # for this time the next morning
-tz = "CHANGE-ME"               # an IANA zone such as "Europe/Berlin"
+tz = "CHANGE-ME"               # required: an IANA zone such as "Europe/Berlin", so DST is right
 
 # One table per peer session. A PR in one of `repos`, or a ticket whose key starts
 # with one of `tickets` and a dash, routes to `session`, its name in ListAgents.

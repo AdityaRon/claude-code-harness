@@ -10,6 +10,10 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   quiet-never: hub.py: `if not quiet:` => `if True:`
   next-day-always: hub.py: `day = local.date() if t < post else` => `day = local.date() if False else`
   placeholders-ok: hub.py: `if left:` => `if False:`
+  tz-optional: hub.py: `if not q.get("tz"):` => `if False:`
+  bad-time-ok: hub.py: `dt.time.fromisoformat(q[k])` => `pass`
+  queued-hidden: hub.py: `started = started or "~"  # queued, not started: newer than any run that has` => `pass`
+  case-sensitive-me: hub.py: `return (login(actor) or "").lower() == me.lower()` => `return login(actor) == me`
 """
 import datetime as dt
 import subprocess
@@ -43,6 +47,11 @@ class StandingReviews(unittest.TestCase):
     def test_comment_only_reviewer_has_no_standing(self):
         self.assertNotIn("bob", hub.standing_reviews([review("bob", "COMMENTED", "2026-10-01T10:00:00Z")]))
 
+    def test_my_login_matches_whatever_its_case(self):
+        self.assertTrue(hub.is_me(actor("AdityaR"), "adityar"))
+        self.assertFalse(hub.is_me(None, "adityar"))
+        self.assertFalse(hub.is_me(actor("bob"), "adityar"))
+
 
 def run(name, conclusion, start, status="COMPLETED"):
     return {"__typename": "CheckRun", "name": name, "status": status, "conclusion": conclusion, "startedAt": start}
@@ -62,6 +71,10 @@ class Ci(unittest.TestCase):
                                          run("t", "FAILURE", "2026-10-01T10:00:00Z")])[0], "green")
         self.assertEqual(hub.ci_summary([run("t", "SUCCESS", "2026-10-01T10:00:00Z"),
                                          run("t", "FAILURE", "2026-10-01T10:05:00Z")])[0], "red")
+
+    def test_a_queued_rerun_is_not_masked_by_the_earlier_success(self):
+        queued = {"__typename": "CheckRun", "name": "t", "status": "QUEUED", "conclusion": None, "startedAt": None}
+        self.assertEqual(hub.ci_summary([run("t", "SUCCESS", "2026-10-01T10:00:00Z"), queued]), ("pending", ["t"]))
 
     def test_in_progress_is_pending_and_status_contexts_count(self):
         self.assertEqual(hub.ci_summary([run("t", None, "2026-10-01T10:00:00Z", status="IN_PROGRESS")])[0], "pending")
@@ -129,6 +142,15 @@ class Config(unittest.TestCase):
         with Env(config=example.replace('tz = "CHANGE-ME"', 'tz = "Europe/Berlin"').replace("CHANGE-ME", "x")):
             cfg = hub.load_config()
             self.assertEqual(cfg["routing"][0]["session"], "x")
+
+    def test_a_zone_is_required_and_times_must_exist(self):
+        base = '[github]\nlogin = "x"\nowners = ["a"]\n[quiet_hours]\n'
+        with Env(config=base):
+            with self.assertRaisesRegex(hub.ConfigError, "tz is required"):
+                hub.load_config()
+        with Env(config=base + 'tz = "Europe/Berlin"\nstart = "25:99"\n'):
+            with self.assertRaisesRegex(hub.ConfigError, "HH:MM"):
+                hub.load_config()
 
     def test_a_bad_zone_is_a_config_error(self):
         with Env(config='[github]\nlogin = "x"\nowners = ["a"]\n[quiet_hours]\ntz = "Mars/Olympus"\n'):

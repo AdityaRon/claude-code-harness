@@ -31,11 +31,11 @@ WALL_LIMIT = 330
 POLL = float(os.environ.get("COMMS_HUB_WATCHDOG_POLL", "5"))
 
 MY_OPEN = """query CommsMyOpen($cursor:String){viewer{login pullRequests(states:OPEN,first:100,after:$cursor){
- pageInfo{hasNextPage endCursor} nodes{number repository{nameWithOwner owner{login}}}}}}"""
+ pageInfo{hasNextPage endCursor} nodes{number repository{nameWithOwner isArchived owner{login}}}}}}"""
 
 MINE = """query CommsMine($cursor:String){viewer{pullRequests(states:[OPEN,MERGED],first:25,after:$cursor,
  orderBy:{field:UPDATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}
- nodes{number state updatedAt mergedAt repository{nameWithOwner owner{login}}}}}}"""
+ nodes{number state updatedAt mergedAt repository{nameWithOwner isArchived owner{login}}}}}}"""
 
 PR = """query CommsPR($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
  pullRequest(number:$number){number url title state isDraft createdAt mergedAt headRefOid mergeStateStatus
@@ -100,7 +100,8 @@ def kill_previous(pidfile) -> str | None:
     if pid == os.getpid() or not alive(pid):
         return None
     cmd = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
-    if "queue.py" not in cmd:
+    # A reused pid could be an editor open on this file: only a running scan is ours.
+    if not ("comms-hub" in cmd and "queue.py" in cmd and " scan" in cmd):
         return None
     os.kill(pid, signal.SIGTERM)
     for _ in range(30):
@@ -152,6 +153,8 @@ def my_open_graphql(gh: hub.Gh, me: str, owners) -> set[str]:
             raise Blocked(f"gh is signed in as {v['login']}, the config says {me}")
         page = v["pullRequests"]
         for n in page["nodes"]:
+            if n["repository"].get("isArchived"):  # search's archived:false drops it too
+                continue
             if n["repository"]["owner"]["login"].lower() in want:
                 refs.add(f"{n['repository']['nameWithOwner']}#{n['number']}")
         if not page["pageInfo"]["hasNextPage"]:
@@ -169,7 +172,7 @@ def my_recent(gh: hub.Gh, owners, cutoff: dt.datetime) -> tuple[set[str], int]:
         pages += 1
         page = gh.graphql(MINE, cursor=cursor)["viewer"]["pullRequests"]
         for n in page["nodes"]:
-            if n["repository"]["owner"]["login"].lower() not in want:
+            if n["repository"]["owner"]["login"].lower() not in want or n["repository"].get("isArchived"):
                 continue
             merged = hub.parse_time(n.get("mergedAt"))
             if n["state"] == "OPEN" or (merged and merged >= cutoff):
@@ -200,17 +203,20 @@ def classify(ref: str, pr: dict, me: str) -> dict:
     comments = pr["comments"]["nodes"]
     thread_comments = [c for t in pr["reviewThreads"]["nodes"] for c in t["comments"]["nodes"]]
     t = hub.parse_time
-    mine = ([t(c["createdAt"]) for c in comments + thread_comments if hub.login(c.get("author")) == me]
-            + [t(r["submittedAt"]) for r in reviews if hub.login(r.get("author")) == me])
+    mine = ([t(c["createdAt"]) for c in comments + thread_comments if hub.is_me(c.get("author"), me)]
+            + [t(r["submittedAt"]) for r in reviews if hub.is_me(r.get("author"), me)])
     last_reply = max(mine) if mine else t(pr["createdAt"])
 
     def theirs(actor):
-        return hub.login(actor) not in (None, me) and not hub.is_bot(actor)
+        return not hub.is_me(actor, me) and not hub.is_bot(actor)
 
-    events = ([(t(c["createdAt"]), hub.login(c["author"]), "comment") for c in comments if theirs(c.get("author"))]
-              + [(t(c["createdAt"]), hub.login(c["author"]), "thread comment") for c in thread_comments
+    def who(actor):
+        return hub.login(actor) or "a deleted account"
+
+    events = ([(t(c["createdAt"]), who(c.get("author")), "comment") for c in comments if theirs(c.get("author"))]
+              + [(t(c["createdAt"]), who(c.get("author")), "thread comment") for c in thread_comments
                  if theirs(c.get("author"))]
-              + [(t(r["submittedAt"]), hub.login(r["author"]), f"review {r['state']}") for r in reviews
+              + [(t(r["submittedAt"]), who(r.get("author")), f"review {r['state']}") for r in reviews
                  if theirs(r.get("author"))])
     events = sorted(e for e in events if e[0] > last_reply)
     out = {"outbound": None, "awaiting": None, "drift": []}
@@ -252,13 +258,24 @@ def classify(ref: str, pr: dict, me: str) -> dict:
 
 # ---- the scan --------------------------------------------------------------
 
-def scan(cfg: dict, gh: hub.Gh, emit=print) -> int:
+def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> int:
+    wall0 = time.time()
     g = cfg["github"]
     me, owners, authors = g["login"], g["owners"], g["watch_authors"]
     at = hub.now()
     cutoff = at - dt.timedelta(days=int(g["merged_days"]))
     blocked: list[str] = []
     emit(f"comms-hub queue {at:%Y-%m-%dT%H:%MZ} login={me} owners={','.join(owners)} merged_days={g['merged_days']}")
+    # The Slack step reads watched channels from the previous scan's start.
+    stamp = hub.state_dir(cfg) / "last-scan"
+    try:
+        prev = hub.parse_time(stamp.read_text().strip()) if stamp.is_file() else None
+    except ValueError:
+        prev = None
+    emit(f"previous-scan: {prev.isoformat()} epoch={int(prev.timestamp())}" if prev
+         else "previous-scan: none (first scan: read watched channels from 24 hours back)")
+    stamp.write_text(at.isoformat() + "\n")
+    hub.append_log(cfg, f"scan started {at:%Y-%m-%dT%H:%M:%SZ}")
 
     need = 2 + len(authors)
     can_search = False
@@ -365,6 +382,11 @@ def scan(cfg: dict, gh: hub.Gh, emit=print) -> int:
         emit(f"== {name} ({len(rows)}) ==")
         for row in rows:
             emit(row)
+    # The watchdog polls on monotonic sleep, so a scan that wakes after its last
+    # gh call could finish before it looks: check the wall clock here too.
+    if time.time() - wall0 > wall_limit:
+        blocked.append(f"the scan took more than {wall_limit:g}s of wall-clock time (the machine slept?); "
+                       "what it read may be stale")
     if blocked:
         for b in blocked:
             emit(f"BLOCKED: {b}")
@@ -400,7 +422,7 @@ def main(argv=None, gh=None) -> int:
 
     watchdog(args.wall_limit, on_fire=drop_pidfile)
     try:
-        return scan(cfg, gh or hub.Gh())
+        return scan(cfg, gh or hub.Gh(), wall_limit=args.wall_limit)
     finally:
         drop_pidfile()
 

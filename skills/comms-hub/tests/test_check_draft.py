@@ -11,6 +11,8 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   age-unchecked: check_draft.py: `if age > args.max_age or age < 0:` => `if False:`
   resend-ok: check_draft.py: `if stamp.get("sent_id"):` => `if False:`
   quiet-ignored: check_draft.py: `mode, post = hub.send_plan(cfg, hub.now())` => `mode, post = "live", None`
+  bare-url-greedy: check_draft.py: `BARE_URL = re.compile(r"https?://[^\s,;)\]>]+")` => `BARE_URL = re.compile(r"https?://\S+")`
+  pr-dash-missed: check_draft.py: `\bPR[\s-]*#?\d+\b` => `\bPR\s*#?\d+\b`
 """
 import contextlib
 import io
@@ -72,8 +74,13 @@ class Shape(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("inside a code span", out)
 
+    def test_a_reference_glued_to_a_url_is_still_checked(self):
+        rc, out = self.check("See https://github.com/acme/app/pull/12,#13 please\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("'#13' is not a link", out)
+
     def test_unlinked_pr_references_fail(self):
-        for ref in ("#12", "acme/app#12", "PR 12", "PR #12"):
+        for ref in ("#12", "acme/app#12", "PR 12", "PR #12", "PR-12"):
             rc, out = self.check(f"See {ref} please\n")
             self.assertEqual(rc, 1, ref)
             self.assertIn("is not a link", out, ref)

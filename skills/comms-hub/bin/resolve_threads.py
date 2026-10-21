@@ -25,6 +25,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hub  # noqa: E402
 
+VIEWER = """query CommsViewer{viewer{login}}"""
+
 MY_OPEN = """query CommsMyOpenThreads($cursor:String){viewer{login pullRequests(states:OPEN,first:100,after:$cursor){
  pageInfo{hasNextPage endCursor} nodes{number repository{nameWithOwner owner{login}}}}}}"""
 
@@ -41,7 +43,7 @@ REREAD = """query CommsThread($id:ID!){node(id:$id){... on PullRequestReviewThre
 
 def decide(pr: dict, me: str):
     """(pr_skip_reason or None, [(verdict, thread, reason)])."""
-    if hub.login(pr.get("author")) != me:
+    if not hub.is_me(pr.get("author"), me):
         return "not my PR", []
     if pr.get("state") != "OPEN":
         return f"PR is {pr.get('state')}", []
@@ -65,14 +67,14 @@ def decide(pr: dict, me: str):
         if hub.login(opener) is None:
             out.append(("SKIP", t, "opener unknown (deleted account)"))
             continue
-        if hub.login(opener) == me:
+        if hub.is_me(opener, me):
             out.append(("SKIP", t, "I opened it"))
             continue
         if hub.is_bot(opener):
             out.append(("SKIP", t, f"opened by a bot ({hub.login(opener)})"))
             continue
         last = comments[-1]
-        if hub.login(last.get("author")) != me:
+        if not hub.is_me(last.get("author"), me):
             out.append(("SKIP", t, f"{hub.login(last.get('author'))} has the last word"))
             continue
         review = standing.get(hub.login(opener))
@@ -113,6 +115,14 @@ def main(argv=None, gh=None) -> int:
     gh = gh or hub.Gh()
     me = cfg["github"]["login"]
     rc = 0
+    try:
+        viewer = gh.graphql(VIEWER)["viewer"]["login"]
+    except hub.GhError as e:
+        print(f"BLOCKED: could not read which account gh is signed in as: {e}")
+        return 3
+    if viewer.lower() != me.lower():
+        print(f"BLOCKED: gh is signed in as {viewer}, the config says {me}; nothing resolved")
+        return 3
     try:
         refs = args.pr or my_open_prs(gh, cfg["github"]["owners"])
     except hub.GhError as e:

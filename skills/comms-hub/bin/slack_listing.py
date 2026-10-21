@@ -28,7 +28,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hub  # noqa: E402
 
 TS_RE = r"(?im)^[\s*_>|-]*(?:message[ _]?)?(?:ts|timestamp)\**\s*[:=]\s*\**\s*[\"'`]?(\d{9,10}\.\d{6})"
-REPLIES_RE = r"(?im)(?:reply[ _]count|replies|thread replies)\**\s*[:=]\s*\**\s*(\d+)|\b(\d+) repl(?:y|ies)\b"
+THREAD_TS_RE = r"(?im)^[\s*_>|-]*thread[ _]?ts\**\s*[:=]\s*\**\s*[\"'`]?(\d{9,10}\.\d{6})"
+# A labelled count wins over a bare "3 replies", which a message's own text can say.
+REPLIES_LABELLED = r"(?im)(?:reply[ _]count|replies|thread replies)\**\s*[:=]\s*\**\s*(\d+)"
+REPLIES_BARE = r"(?i)\b(\d+) repl(?:y|ies)\b"
 
 
 class Unreadable(Exception):
@@ -73,18 +76,24 @@ def parse_json(obj) -> dict[str, int]:
     return out
 
 
-def parse_text(text: str, ts_re: str, replies_re: str) -> dict[str, int]:
+def parse_text(text: str, ts_re: str, replies_re: str | None) -> dict[str, int]:
     starts = list(re.finditer(ts_re, text))
     out = {}
     for i, m in enumerate(starts):
         block = text[m.end(): starts[i + 1].start() if i + 1 < len(starts) else len(text)]
-        r = re.search(replies_re, block)
+        th = re.search(THREAD_TS_RE, block)
+        if th and th.group(1) != m.group(1):
+            continue
+        if replies_re:
+            r = re.search(replies_re, block)
+        else:
+            r = re.search(REPLIES_LABELLED, block) or re.search(REPLIES_BARE, block)
         count = next((g for g in r.groups() if g), "0") if r else "0"
         out[m.group(1)] = int(count)
     return out
 
 
-def parse(text: str, ts_re: str = TS_RE, replies_re: str = REPLIES_RE) -> dict[str, int]:
+def parse(text: str, ts_re: str = TS_RE, replies_re: str | None = None) -> dict[str, int]:
     if not text.strip():
         raise Unreadable("the dump is empty")
     try:
@@ -134,7 +143,7 @@ def patterns(args) -> tuple[str, str]:
         except hub.ConfigError:
             s = {}
         ts_re = ts_re or s.get("listing_ts_pattern") or TS_RE
-        replies_re = replies_re or s.get("listing_replies_pattern") or REPLIES_RE
+        replies_re = replies_re or s.get("listing_replies_pattern")
     return ts_re, replies_re
 
 

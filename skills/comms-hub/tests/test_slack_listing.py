@@ -5,6 +5,8 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   float-ts-ok: slack_listing.py: `if not isinstance(ts, str):` => `if False:`
   empty-ok: slack_listing.py: `if not found:` => `if False:`
   keep-everything: slack_listing.py: `kept = {ts: c for ts, c in snapshot.items() if ts_key(ts) < oldest}` => `kept = dict(snapshot)`
+  thread-reply-kept: slack_listing.py: `if th and th.group(1) != m.group(1):` => `if False:`
+  bare-count-first: slack_listing.py: `r = re.search(REPLIES_LABELLED, block) or re.search(REPLIES_BARE, block)` => `r = re.search(REPLIES_BARE, block) or re.search(REPLIES_LABELLED, block)`
   string-order: slack_listing.py: `return "".join(f"{ts}\t{listing[ts]}\n" for ts in sorted(listing, key=ts_key))` => `return "".join(f"{ts}\t{listing[ts]}\n" for ts in sorted(listing))`
 """
 import json
@@ -34,6 +36,14 @@ class Parse(unittest.TestCase):
                 f"## Message 2\nMessage TS: {B}\nno thread here\n"
                 f"## Message 3\n- timestamp = \"{C}\"\n(2 replies)\n")
         self.assertEqual(sl.parse(dump), {A: 4, B: 0, C: 2})
+
+    def test_a_labelled_count_beats_the_message_text(self):
+        dump = f"ts: {A}\nI sent 3 replies to the vendor already\nreplies: 5\n"
+        self.assertEqual(sl.parse(dump), {A: 5})
+
+    def test_a_reply_listed_in_the_page_is_not_a_top_level_message(self):
+        dump = f"ts: {A}\nreplies: 1\nts: {B}\nthread_ts: {A}\nhello, a reply\n"
+        self.assertEqual(sl.parse(dump), {A: 1})
 
     def test_unrecognised_or_empty_input_is_an_error(self):
         for dump in ("", "   \n", "Here are the messages:\nhello there\n", json.dumps({"ok": True})):

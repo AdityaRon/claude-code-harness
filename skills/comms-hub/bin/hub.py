@@ -106,14 +106,20 @@ def load_config(explicit: str | None = None) -> dict:
     q.setdefault("start", "19:00")
     q.setdefault("post_at", "08:00")
     for k in ("start", "post_at"):
-        if not re.fullmatch(r"\d{2}:\d{2}", str(q[k])):
-            raise ConfigError(f"{path}: quiet_hours.{k} must be HH:MM, not {q[k]!r}")
-    if q.get("tz"):
-        from zoneinfo import ZoneInfo
         try:
-            ZoneInfo(q["tz"])
-        except (KeyError, ValueError) as e:  # ZoneInfoNotFoundError is a KeyError
-            raise ConfigError(f"{path}: quiet_hours.tz {q['tz']!r} is not an IANA zone: {e}")
+            if not re.fullmatch(r"\d{2}:\d{2}", str(q[k])):
+                raise ValueError
+            dt.time.fromisoformat(q[k])
+        except ValueError:
+            raise ConfigError(f"{path}: quiet_hours.{k} must be HH:MM, not {q[k]!r}")
+    # A fixed UTC offset would schedule across a DST change an hour off.
+    if not q.get("tz"):
+        raise ConfigError(f'{path}: quiet_hours.tz is required, an IANA zone such as "Europe/Berlin"')
+    from zoneinfo import ZoneInfo
+    try:
+        ZoneInfo(q["tz"])
+    except (KeyError, ValueError) as e:  # ZoneInfoNotFoundError is a KeyError
+        raise ConfigError(f"{path}: quiet_hours.tz {q['tz']!r} is not an IANA zone: {e}")
     cfg.setdefault("routing", [])
     cfg["_path"] = str(path)
     return cfg
@@ -148,8 +154,7 @@ def parse_time(s: str | None) -> dt.datetime | None:
 
 def zone(cfg: dict):
     from zoneinfo import ZoneInfo
-    name = cfg.get("quiet_hours", {}).get("tz")
-    return ZoneInfo(name) if name else dt.datetime.now().astimezone().tzinfo
+    return ZoneInfo(cfg["quiet_hours"]["tz"])
 
 
 def send_plan(cfg: dict, at: dt.datetime) -> tuple[str, dt.datetime | None]:
@@ -246,6 +251,11 @@ def login(actor) -> str | None:
     return (actor or {}).get("login")
 
 
+def is_me(actor, me: str) -> bool:
+    """Logins compare case-insensitively, as GitHub does; the config may spell mine differently."""
+    return (login(actor) or "").lower() == me.lower()
+
+
 def is_bot(actor) -> bool:
     a = actor or {}
     return a.get("__typename") == "Bot" or (a.get("login") or "").endswith("[bot]")
@@ -282,6 +292,7 @@ def ci_summary(nodes: list[dict]) -> tuple[str, list[str]]:
             name, started = n.get("name"), n.get("startedAt") or n.get("completedAt") or ""
             if n.get("status") != "COMPLETED":
                 verdict = "pending"
+                started = started or "~"  # queued, not started: newer than any run that has
             else:
                 verdict = "green" if n.get("conclusion") in GREEN else "red"
         if name not in latest or started >= latest[name][0]:
@@ -308,8 +319,10 @@ def main(argv=None) -> int:
     if argv[0] == "config":
         print(f"config: {cfg['_path']}")
         print(f"state: {state_dir(cfg)}")
-        print(f"login: {cfg['github']['login']} owners: {','.join(cfg['github']['owners'])} "
-              f"routing: {len(cfg['routing'])} session(s)")
+        print(f"login: {cfg['github']['login']} owners: {','.join(cfg['github']['owners'])}")
+        for r in cfg["routing"]:
+            print(f"route: {r.get('session')} repos={','.join(r.get('repos', [])) or '-'} "
+                  f"tickets={','.join(r.get('tickets', [])) or '-'}")
         return 0
     print(f"logged to {append_log(cfg, ' '.join(argv[1:]))}")
     return 0
