@@ -120,8 +120,8 @@ for skill in "$REPO"/skills/*/; do
   echo "  ✓ skills/$name"
 done
 if [[ -d "$REPO/skills/comms-hub" && ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/comms-hub/config.toml" ]]; then
-  echo "  ℹ comms-hub is not configured: copy ~/.claude/skills/comms-hub/config.example.toml to"
-  echo "     ~/.config/comms-hub/config.toml, fill it in, then run: bash doctor.sh --skill comms-hub"
+  echo "  ℹ comms-hub is not configured (optional): the Setup section of ~/.claude/skills/comms-hub/SKILL.md"
+  echo "     starts with hub.py init, which writes ~/.config/comms-hub/config.toml; then: bash doctor.sh --skill comms-hub"
 fi
 
 # ---- Personal rules --------------------------------------------------
@@ -269,7 +269,7 @@ echo ""
 if command -v jq &>/dev/null; then
   echo "  ✓ jq installed"
 else
-  echo "  ✗ jq not installed — hooks require jq. Run: brew install jq"
+  echo "  ✗ jq not installed — hooks require jq. Run: brew install jq (macOS), apt-get install jq or dnf install jq (Linux)"
 fi
 
 if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then

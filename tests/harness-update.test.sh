@@ -307,6 +307,11 @@ chmod 755 "$CLONE"
 [ "$RC" = 0 ] && [[ "$OUT" == *"cloning https://github.com/AdityaRon/claude-code-harness.git into $TMP/fallback-src (the default"* ]] \
   && [ "$(installed)" = v1.0.8 ] && grep -qx "repo=$TMP/fallback-src" "$HV" \
   && pass "no origin=, unreadable repo=: clones the default URL and installs" || fail "default URL" "rc=$RC $OUT"
+old_record; chmod 000 "$CLONE"
+OUT=$(HARNESS_UPDATE_URL="$TMP/origin.git" HARNESS_UPDATE_CLONE="$TMP/env-src" bash "$UPD" --no-cli --check 2>&1); RC=$?
+chmod 755 "$CLONE"
+[ "$RC" = 0 ] && [[ "$OUT" == *"cloning $TMP/origin.git into $TMP/env-src (the default"*"v1.0.8 is available"* ]] \
+  && pass "HARNESS_UPDATE_URL replaces the default URL, for a fork" || fail "HARNESS_UPDATE_URL" "rc=$RC $OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

@@ -27,7 +27,7 @@ cat > "$TMP/list.json" <<EOF
   $(bot 88 claude/contract-2.1.99),
   $(bot 89 claude/contract-2.1.299),
   {"number":96,"headRefName":"claude/contract-2.1.200","author":{"login":"github-actions[bot]"}},
-  {"number":75,"headRefName":"claude/contract-2.1.296","author":{"login":"AdityaRon","is_bot":false}},
+  {"number":75,"headRefName":"claude/contract-2.1.296","author":{"login":"octocat","is_bot":false}},
   $(bot 91 claude/contract-2.1.301),
   $(bot 92 drift-autoland),
   $(bot 93 claude/contract-2.1.250-retry) ]

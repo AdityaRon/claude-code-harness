@@ -1,15 +1,20 @@
-# comms-hub config. Copy it to ~/.config/comms-hub/config.toml and replace every
-# CHANGE-ME: the scripts refuse to run while one is left. The copy holds names
-# and ids a public repo cannot, so it never goes in a repo.
+# comms-hub config. `hub.py init` copies it to ~/.config/comms-hub/config.toml
+# with github.login, github.owners and quiet_hours.tz filled in from this
+# machine; replace every CHANGE-ME left, the scripts refuse to run while one
+# remains. The copy holds names and ids a public repo cannot, so it never goes
+# in a repo.
 
 [github]
-login = "CHANGE-ME"            # your GitHub login; gh must be signed in as it
-owners = ["CHANGE-ME"]         # the orgs or users whose repos are searched
+login = "CHANGE-ME"            # your GitHub login (gh api user --jq .login); gh must be signed in as it
+owners = ["CHANGE-ME"]         # the orgs or users whose repos are searched: your login, your employer's org
 watch_repos = []               # "owner/name" list WATCHED searches; empty means all of owners
 watch_authors = []             # logins whose open PRs you follow, requested or not
 merged_days = 7                # how long a merged PR of yours stays in OUTBOUND
 
 [slack]
+# A channel id starts with C (channel) or D (DM): in Slack, open the channel's
+# details and it is at the bottom. Your member id starts with U: your profile,
+# the three dots, "Copy member ID".
 primary_dm = "CHANGE-ME"       # channel id of the one DM read in full each tick
 watched_channels = []          # channel ids read with `oldest` each tick
 my_user_id = "CHANGE-ME"       # your Slack member id, for the mention search
@@ -22,12 +27,12 @@ start = "19:00"                # from this time, messages are scheduled instead 
 post_at = "08:00"              # for this time the next morning
 tz = "CHANGE-ME"               # required: an IANA zone such as "Europe/Berlin", so DST is right
 
-# One table per peer session. A PR in one of `repos`, or a ticket whose key starts
-# with one of `tickets` and a dash, routes to `session`, its name in ListAgents.
-# Delete the table if nothing routes yet; unrouted events are asked about.
-[[routing]]
-session = "CHANGE-ME"
-repos = ["CHANGE-ME"]          # "owner/name"
-tickets = []                   # project prefixes, such as "PROJ"
+# One table per peer session, once something routes. A PR in one of `repos`, or
+# a ticket whose key starts with one of `tickets` and a dash, routes to
+# `session`, its name in ListAgents. Unrouted events are asked about.
+# [[routing]]
+# session = "CHANGE-ME"
+# repos = ["CHANGE-ME"]        # "owner/name"
+# tickets = []                 # project prefixes, such as "PROJ"
 
 # state_dir = "~/.local/state/comms-hub"

@@ -34,6 +34,14 @@ bash install.sh
 - Backs the previous file up as `settings.json.bak.<timestamp>` and folds in `~/.claude/local-settings/*.json`.
 - Runs `doctor.sh` to verify every hook.
 
+**A fork, or a fresh copy.** Clone your own copy instead, then run
+`bin/fork-setup.sh` from it. It reports what GitHub needs before this repo's
+workflows run: Actions on, the workflows GitHub turns off on a fork back on,
+Actions allowed to open pull requests (Release and Upstream drift open them),
+and the `CLAUDE_CODE_OAUTH_TOKEN` secret. `bin/fork-setup.sh --apply` turns on
+what is off; the secret you set yourself, with `/install-github-app` in Claude
+Code.
+
 Then run `/hooks` in Claude Code to confirm everything is registered. On a new
 machine, put your `~/.claude/rules/local-*.md` and `~/.claude/local-settings/`
 files in place first; this public repo ships neither. More in
@@ -135,12 +143,14 @@ the linked PRs' live state), then sends, or schedules for the morning in quiet
 hours. It resolves a review thread on your own PR only once you answered it and
 that reviewer approved after. It never approves a PR or merges someone else's.
 
-- Needs `gh`, Python 3.10+ with a TOML reader, `jq`, a Slack MCP server (read
-  channel, read thread, search, send, schedule), ListAgents and SendMessage, and
-  the `/loop` trigger. `bash doctor.sh --skill comms-hub` checks each.
-- Config in `~/.config/comms-hub/config.toml`, copied from the skill's
-  `config.example.toml`; state in `~/.local/state/comms-hub/`. `install.sh`
-  creates neither, and neither belongs in a repo ([docs/install.md](docs/install.md)).
+- Needs `gh`, Python 3.10+ with a TOML reader, `jq`, a Slack MCP server (any,
+  registered with `claude mcp add` or `/mcp`, with read channel, read thread,
+  search, send and schedule tools), ListAgents and SendMessage, and the `/loop`
+  trigger. `bash doctor.sh --skill comms-hub` checks each and says how to fix it.
+- Config in `~/.config/comms-hub/config.toml`, written by the skill's
+  `hub.py init` from its `config.example.toml` with your GitHub login and time
+  zone filled in; state in `~/.local/state/comms-hub/`. `install.sh` creates
+  neither, and neither belongs in a repo ([docs/install.md](docs/install.md)).
 - The protocol the comms session follows: [skills/comms-hub/SKILL.md](skills/comms-hub/SKILL.md).
   Each script's lessons are in its docstring; `tests/comms-hub.test.sh` runs the
   tests and `skills/comms-hub/tests/run.py --mutate` checks that each rule's
@@ -176,6 +186,7 @@ bin/                     ← installed to ~/.claude, or run from the clone
   memory-verify.sh  memory-fix.sh  memory-index.sh  memory-provenance.sh
   session-route.sh       ← which session owns this PR (docs/session-routing.md)
   upstream-check.sh      ← the daily drift check
+  fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json

@@ -79,7 +79,8 @@ runs and tags what landed ([releases.md](releases.md)).
 Setup, once: run `/install-github-app` in Claude Code for this repo. It installs
 the Claude GitHub App, which lets the draft PR run CI, and stores
 `CLAUDE_CODE_OAUTH_TOKEN`; confirm with `gh secret list`. The reviews use your
-plan's usage.
+plan's usage. On a fork, `bin/fork-setup.sh` checks this and the rest GitHub
+leaves off, and `--apply` turns on the workflows and the PR permission.
 
 ## /insights
 

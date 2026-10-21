@@ -14,12 +14,26 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   bad-time-ok: hub.py: `dt.time.fromisoformat(q[k])` => `pass`
   queued-hidden: hub.py: `started = started or "~"  # queued, not started: newer than any run that has` => `pass`
   case-sensitive-me: hub.py: `return (login(actor) or "").lower() == me.lower()` => `return login(actor) == me`
+  placeholders-unnamed: hub.py: `raise ConfigError(f"{path}: still {PLACEHOLDER}: {', '.join(left)}")` => `raise ConfigError(f"{path}: still {PLACEHOLDER}")`
+  init-overwrites: hub.py: `if path.exists():` => `if False:`
+  init-login-unfilled: hub.py: `text = (text.replace(f'login = "{PLACEHOLDER}"', f'login = "{login}"', 1)` => `text = (text`
+  init-tz-unfilled: hub.py: `text = text.replace(f'tz = "{PLACEHOLDER}"', f'tz = "{tz}"', 1)` => `pass`
+  zone-unvalidated: hub.py: `and _valid_zone(n):` => `and True:`
+  job-tmp-ignored: hub.py: `if os.environ.get("CLAUDE_JOB_DIR"):` => `if False:`
+  log-machine-zone: hub.py: `stamp = local_now(cfg)` => `stamp = now().astimezone()`
+  local-now-machine: hub.py: `return t.astimezone(zone(cfg)) if` => `return t.astimezone() if`
 """
+import contextlib
 import datetime as dt
+import io
+import os
+import re
+import stat
 import subprocess
 import unittest
+from unittest import mock
 
-from fakes import BIN, Env, Fail, FakeGh, actor
+from fakes import BIN, CONFIG, Env, Fail, FakeGh, actor, machine_zone
 
 import hub
 
@@ -48,9 +62,9 @@ class StandingReviews(unittest.TestCase):
         self.assertNotIn("bob", hub.standing_reviews([review("bob", "COMMENTED", "2026-10-01T10:00:00Z")]))
 
     def test_my_login_matches_whatever_its_case(self):
-        self.assertTrue(hub.is_me(actor("AdityaR"), "adityar"))
-        self.assertFalse(hub.is_me(None, "adityar"))
-        self.assertFalse(hub.is_me(actor("bob"), "adityar"))
+        self.assertTrue(hub.is_me(actor("OctoCat"), "octocat"))
+        self.assertFalse(hub.is_me(None, "octocat"))
+        self.assertFalse(hub.is_me(actor("bob"), "octocat"))
 
 
 def run(name, conclusion, start, status="COMPLETED"):
@@ -119,6 +133,13 @@ class QuietHours(unittest.TestCase):
         mode, post = self.at("2026-10-22T02:00:00-07:00")
         self.assertEqual((mode, post.isoformat()), ("schedule", "2026-10-22T08:00:00-07:00"))
 
+    def test_the_log_day_is_the_configured_zones_not_the_machines(self):
+        # 17:00 UTC on 2026-10-21 is 10:00 that day in Los Angeles and 06:00 the next in Auckland.
+        cfg = CONFIG.replace('tz = "America/Los_Angeles"', 'tz = "Pacific/Auckland"')
+        with Env(config=cfg, now="2026-10-21T17:00:00Z"), machine_zone("America/Los_Angeles"):
+            p = hub.append_log(hub.load_config(), "scan started")
+            self.assertEqual((p.name, p.read_text()), ("2026-10-22.md", "- 06:00 scan started\n"))
+
 
 class Config(unittest.TestCase):
     def test_defaults_and_required_keys(self):
@@ -129,9 +150,15 @@ class Config(unittest.TestCase):
             with self.assertRaisesRegex(hub.ConfigError, "owners"):
                 hub.load_config()
 
-    def test_a_placeholder_left_in_is_an_error(self):
-        with Env(config='[github]\nlogin = "CHANGE-ME"\nowners = ["a"]\n'):
-            with self.assertRaisesRegex(hub.ConfigError, "CHANGE-ME"):
+    def test_a_placeholder_left_in_is_named(self):
+        with Env(config='[github]\nlogin = "CHANGE-ME"\nowners = ["CHANGE-ME", "CHANGE-ME"]\n[slack]\nmy_user_id = "CHANGE-ME"\n'):
+            with self.assertRaisesRegex(hub.ConfigError, "still CHANGE-ME: github.login, github.owners, slack.my_user_id$"):
+                hub.load_config()
+
+    def test_a_missing_config_names_init_and_the_example(self):
+        with Env() as env:
+            env.config.unlink()
+            with self.assertRaisesRegex(hub.ConfigError, r"hub\.py init` writes one from .*config\.example\.toml"):
                 hub.load_config()
 
     def test_the_example_loads_once_filled_in(self):
@@ -139,9 +166,22 @@ class Config(unittest.TestCase):
         with Env(config=example):
             with self.assertRaisesRegex(hub.ConfigError, "CHANGE-ME"):
                 hub.load_config()
-        with Env(config=example.replace('tz = "CHANGE-ME"', 'tz = "Europe/Berlin"').replace("CHANGE-ME", "x")):
+        filled = example.replace('tz = "CHANGE-ME"', 'tz = "Europe/Berlin"').replace("CHANGE-ME", "x")
+        with Env(config=filled):
+            self.assertEqual(hub.load_config()["routing"], [], "the routing table ships commented out")
+        with Env(config=re.sub(r"(?m)^# (\[\[routing\]\]|session|repos|tickets)", r"\1", filled)):
             cfg = hub.load_config()
-            self.assertEqual(cfg["routing"][0]["session"], "x")
+            self.assertEqual((cfg["routing"][0]["session"], cfg["routing"][0]["repos"]), ("x", ["x"]))
+
+    def test_config_prints_the_ids_and_the_tmp_dir(self):
+        out = io.StringIO()
+        with Env() as env, mock.patch.dict(os.environ, {"CLAUDE_JOB_DIR": str(env.dir / "job")}), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(hub.main(["config"]), 0)
+            lines = out.getvalue().splitlines()
+            self.assertIn(f"tmp: {env.dir / 'job' / 'tmp'}", lines)
+            self.assertIn("slack: primary_dm=dm-primary my_user_id=user-me watched=chan-one", lines)
+            self.assertIn("quiet: 19:00 to 08:00 America/Los_Angeles", lines)
 
     def test_a_zone_is_required_and_times_must_exist(self):
         base = '[github]\nlogin = "x"\nowners = ["a"]\n[quiet_hours]\n'
@@ -156,6 +196,77 @@ class Config(unittest.TestCase):
         with Env(config='[github]\nlogin = "x"\nowners = ["a"]\n[quiet_hours]\ntz = "Mars/Olympus"\n'):
             with self.assertRaisesRegex(hub.ConfigError, "IANA"):
                 hub.load_config()
+
+
+class TmpDir(unittest.TestCase):
+    def test_job_tmp_when_claude_code_set_one_else_under_state(self):
+        with Env() as env:
+            with mock.patch.dict(os.environ, {"CLAUDE_JOB_DIR": str(env.dir / "job")}):
+                self.assertEqual(hub.tmp_dir(hub.load_config()), env.dir / "job" / "tmp")
+            os.environ.pop("CLAUDE_JOB_DIR", None)
+            d = hub.tmp_dir(hub.load_config())
+            self.assertEqual(d, env.state / "tmp")
+            self.assertTrue(d.is_dir())
+
+
+class SystemZone(unittest.TestCase):
+    def zone(self, tz, localtime, timezone=OSError()):
+        with mock.patch.dict(os.environ, {"TZ": tz}), mock.patch("os.path.realpath", return_value=localtime), \
+                mock.patch.object(hub.Path, "read_text", side_effect=[timezone]):
+            return hub.system_zone()
+
+    def test_tz_then_localtime_link_then_etc_timezone(self):
+        self.assertEqual(self.zone("Asia/Tokyo", "/usr/share/zoneinfo/Europe/Berlin"), "Asia/Tokyo")
+        self.assertEqual(self.zone("", "/var/db/timezone/zoneinfo/Europe/Berlin"), "Europe/Berlin")
+        self.assertEqual(self.zone("", "/etc/localtime", "Europe/Berlin\n"), "Europe/Berlin")
+        self.assertIsNone(self.zone("", "/etc/localtime"), "a copied /etc/localtime has no name")
+
+    def test_a_name_that_is_not_a_zone_is_skipped(self):
+        self.assertEqual(self.zone("Mars/Olympus", "/usr/share/zoneinfo/Europe/Berlin"), "Europe/Berlin")
+        self.assertEqual(self.zone("EST5EDT", "/usr/share/zoneinfo/Europe/Berlin"), "Europe/Berlin")
+
+
+class Init(unittest.TestCase):
+    def run_init(self, gh=None, zone="Europe/Berlin"):
+        out = io.StringIO()
+        gh = hub.Gh(runner=gh or FakeGh(rest={"user": {"login": "octocat"}}), pause=0)
+        with mock.patch("hub.system_zone", return_value=zone), contextlib.redirect_stdout(out):
+            rc = hub.main(["init"], gh=gh)
+        return rc, out.getvalue()
+
+    def test_writes_the_example_with_login_owners_and_zone_filled(self):
+        with Env() as env:
+            env.config.unlink()
+            rc, out = self.run_init()
+            self.assertEqual(rc, 0, out)
+            text = env.config.read_text()
+            for line in ('login = "octocat"', 'owners = ["octocat"]', 'tz = "Europe/Berlin"'):
+                self.assertIn(line, text)
+            self.assertEqual(stat.S_IMODE(env.config.stat().st_mode), 0o600)
+            self.assertIn(f"wrote {env.config}", out)
+            self.assertIn("still CHANGE-ME, fill in by hand: slack.primary_dm, slack.my_user_id", out)
+            with self.assertRaisesRegex(hub.ConfigError, "slack.primary_dm, slack.my_user_id"):
+                hub.load_config()
+            env.config.write_text(text.replace("CHANGE-ME", "x"))
+            self.assertEqual(hub.load_config()["github"]["login"], "octocat")
+
+    def test_refuses_an_existing_config(self):
+        with Env() as env:
+            before = env.config.read_text()
+            rc, out = self.run_init()
+            self.assertEqual(rc, 1)
+            self.assertIn(f"refusing: {env.config} exists", out)
+            self.assertEqual(env.config.read_text(), before)
+
+    def test_gh_or_the_zone_unknown_leaves_the_placeholder_and_says_so(self):
+        with Env() as env:
+            env.config.unlink()
+            rc, out = self.run_init(gh=FakeGh(rest={"user": [Fail(), Fail()]}), zone=None)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("github.login: not read from gh", out)
+            self.assertIn("still CHANGE-ME, fill in by hand: github.login, github.owners, slack.primary_dm, "
+                          "slack.my_user_id, quiet_hours.tz", out)
+            self.assertIn('login = "CHANGE-ME"', env.config.read_text())
 
 
 if __name__ == "__main__":

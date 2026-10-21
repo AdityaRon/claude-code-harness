@@ -2,6 +2,7 @@
 temp dir. Shared by the test files; not a test file itself."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -46,7 +48,7 @@ class Fail:
 
 class FakeGh:
     """Answers `gh api graphql` by operation name and other calls by `rest` key:
-    "rate_limit", "search" (called with q and page), "pr view" (number, repo).
+    "rate_limit", "user", "search" (called with q and page), "pr view" (number, repo).
     A handler is a value or a callable; a list is consumed one item per call."""
 
     def __init__(self, graphql=None, rest=None):
@@ -85,6 +87,8 @@ class FakeGh:
             wrap = (lambda d: {"data": d}) if not isinstance(res, Fail) else None
         elif args[:2] == ["api", "rate_limit"]:
             res, wrap = self._answer("rate_limit"), None
+        elif args[:2] == ["api", "user"]:
+            res, wrap = self._answer("user"), None
         elif "search/issues" in args:
             v = self._vars(args)
             res, wrap = self._answer("search", v["q"], int(v["page"])), None
@@ -124,6 +128,17 @@ class Env:
         self.patch.stop()
         import shutil
         shutil.rmtree(self.dir, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def machine_zone(name):
+    """This process's local zone, the one astimezone() with no argument uses."""
+    try:
+        with mock.patch.dict(os.environ, {"TZ": name}):
+            time.tzset()
+            yield
+    finally:
+        time.tzset()
 
 
 def page(nodes, more=False, cursor="c1"):

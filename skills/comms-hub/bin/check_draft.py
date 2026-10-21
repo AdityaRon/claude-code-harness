@@ -149,7 +149,7 @@ def record_sent(args, cfg) -> int:
     if not stamp or stamp.get("sent_id") or hub.sha256(data) != stamp["sha256"]:
         print("FAIL: no unsent gate pass for these bytes; nothing recorded")
         return 1
-    day = hub.now().astimezone().strftime("%Y-%m-%d")
+    day = hub.local_now(cfg).strftime("%Y-%m-%d")
     d = hub.state_dir(cfg) / "sent" / day
     d.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w.-]", "_", args.record_sent)
