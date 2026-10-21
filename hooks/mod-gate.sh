@@ -88,9 +88,11 @@ elif [[ -n "$HOOKS$CALLS" ]]; then
   [[ -n "$CALLS" ]] && MSG="$MSG It calls: $(printf '%s' "$CALLS" | paste -sd, - | sed 's/,/, /g')."
   [[ -n "$RISKY" ]] && MSG="$MSG Outside the guards: $RISKY run with your permissions and no PreToolUse check."
   printf '%s\n' "$HOOKS" | grep -qx 'tool\.call' && MSG="$MSG It hooks tool.call, which can answer a call itself so the guards never run; read that hook before enabling."
+  printf '%s\n' "$HOOKS" | grep -qx 'settings\.read' && MSG="$MSG It hooks settings.read, which can rewrite the merged settings, permissions.deny and hooks included; read that hook before enabling."
+  printf '%s\n' "$HOOKS" | grep -qx 'agent\.spawn' && MSG="$MSG It hooks agent.spawn, which can rewrite a spawned agent's prompt and model; read that hook before enabling."
   # A systemMessage reaches the screen, not the model, and nobody in a
   # background session: what runs outside the guards is asked instead.
-  if [[ -n "$RISKY" ]] || printf '%s\n' "$HOOKS" | grep -qx 'tool\.call'; then
+  if [[ -n "$RISKY" ]] || printf '%s\n' "$HOOKS" | grep -qxE 'tool\.call|settings\.read|agent\.spawn'; then
     log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | MOD | review | $NAME | $FILE"
     emit_ask "$MSG"
     exit 0
