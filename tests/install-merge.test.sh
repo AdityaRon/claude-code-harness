@@ -366,6 +366,10 @@ OUT=$(merge '{"permissions":{"deny":["Bash(rm -rf:*)","Bash(rm -rf /:*)","Bash(m
 DENY=$(printf '%s' "$OUT" | jq -c '.permissions.deny')
 [[ "$DENY" != *'rm -rf'* ]] && pass "rm -rf rules removed from an installed settings.json" || fail "retired rules removed" "$DENY"
 [[ "$DENY" == *'Bash(mine:*)'* && "$DENY" == *'Bash(sudo:*)'* ]] && pass "other installed and shipped deny rules kept" || fail "others kept" "$DENY"
+OUT=$(merge '{"permissions":{"allow":["Bash(node:*)","Bash(python:*)","Bash(mine:*)"]}}' "$(cat config/settings.json)")
+ALLOW=$(printf '%s' "$OUT" | jq -c '.permissions.allow')
+[[ "$ALLOW" != *'Bash(node:*)'* && "$ALLOW" != *'Bash(python:*)'* && "$ALLOW" == *'Bash(mine:*)'* && "$ALLOW" == *'Bash(python3:*)'* ]] \
+  && pass "retired allow rules leave too; the user's and python3 stay" || fail "retired allow rules removed" "$ALLOW"
 OUT=$(merge '{"permissions":{"deny":["Bash(rm -rf:*)"]}}' '{"permissions":{"deny":["Bash(rm -rf:*)"]}}')
 [[ "$(printf '%s' "$OUT" | jq -c '.permissions.deny')" == *'rm -rf'* ]] \
   && pass "a retired rule that arrives in NEW (a local-settings fragment) is kept" || fail "fragment keeps a retired rule" "$OUT"
