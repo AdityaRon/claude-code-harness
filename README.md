@@ -34,6 +34,14 @@ bash install.sh
 - Backs the previous file up as `settings.json.bak.<timestamp>` and folds in `~/.claude/local-settings/*.json`.
 - Runs `doctor.sh` to verify every hook.
 
+**A fork, or a fresh copy.** Clone your own copy instead, then run
+`bin/fork-setup.sh` from it. It reports what GitHub needs before this repo's
+workflows run: Actions on, the workflows GitHub turns off on a fork back on,
+Actions allowed to open pull requests (Release and Upstream drift open them),
+and the `CLAUDE_CODE_OAUTH_TOKEN` secret. `bin/fork-setup.sh --apply` turns on
+what is off; the secret you set yourself, with `/install-github-app` in Claude
+Code.
+
 Then run `/hooks` in Claude Code to confirm everything is registered. On a new
 machine, put your `~/.claude/rules/local-*.md` and `~/.claude/local-settings/`
 files in place first; this public repo ships neither. More in
@@ -178,6 +186,7 @@ bin/                     ← installed to ~/.claude, or run from the clone
   memory-verify.sh  memory-fix.sh  memory-index.sh  memory-provenance.sh
   session-route.sh       ← which session owns this PR (docs/session-routing.md)
   upstream-check.sh      ← the daily drift check
+  fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json
