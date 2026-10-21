@@ -18,7 +18,9 @@ LOG="$HOME/.claude/logs/harness-update.log"
 CONF="$HOME/.claude/harness-update.conf"
 LABEL=com.claude-code-harness.update
 RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
-DEFAULT_URL=https://github.com/AdityaRon/claude-code-harness.git
+# Last resort when harness.version records no origin= and repo= is unreadable:
+# this project's repo, which is not a fork's. HARNESS_UPDATE_URL overrides it.
+DEFAULT_URL=${HARNESS_UPDATE_URL:-https://github.com/AdityaRon/claude-code-harness.git}
 # Local time, minute 17: a tag is installed within six hours.
 HOURS="1 7 13 19"
 
@@ -71,7 +73,7 @@ make_clone() {
   if [[ -z "$url" && -n "$dev" ]]; then
     url=$(git -C "$dev" remote get-url origin 2>/dev/null); from="the origin of $dev"
   fi
-  [[ -n "$url" ]] || { url=$DEFAULT_URL; from="the default: no origin recorded or readable"; }
+  [[ -n "$url" ]] || { url=$DEFAULT_URL; from="the default: no origin recorded or readable; a fork sets HARNESS_UPDATE_URL or passes --repo"; }
   say "cloning $url into $REPO ($from)"
   mkdir -p "$(dirname "$REPO")"
   git clone --quiet "$url" "$REPO" 2>>"$LOG" || { say "git clone of $url failed (see $LOG)"; exit 1; }
