@@ -41,7 +41,8 @@ for reading the repo, not for the installed tree.
   harness-src/             ← harness-update.sh's own clone, made on its first run
   harness.version          ← version, commit, the clone it came from and its origin, install time
   harness-contract.version ← last_verified_version from config/upstream-contract.json
-  skills/<name>/SKILL.md   ← memory-audit, memory-archive, pr-review
+  skills/<name>/SKILL.md   ← memory-audit, memory-archive, pr-review, comms-hub
+  skills/comms-hub/bin/    ← its scripts; config.example.toml sits beside its SKILL.md
   rules/*.md               ← copied from rules/; local-*.md and other files left alone
   local-settings/*.json    ← yours, read by install.sh and network-guard
   logs/
@@ -75,6 +76,32 @@ Skills go to `~/.claude/skills/<name>/SKILL.md`:
 - `memory-archive`: relieve an over-limit index; proposes, never writes.
 - `pr-review`: writing, answering and requesting a review; loads only when a
   review is in play.
+- `comms-hub`: the tick for the one session that speaks on Slack for all the
+  others. Its `bin/` scripts and `config.example.toml` install with it; its
+  tests stay in the clone.
+
+## comms-hub's config and state
+
+Neither lives in this repo or in `~/.claude`, and `install.sh` creates neither:
+
+- Config: `~/.config/comms-hub/config.toml` (`$XDG_CONFIG_HOME` is honoured),
+  copied by hand from `~/.claude/skills/comms-hub/config.example.toml`. It holds
+  your logins, Slack ids and session names, so it never goes in a repo.
+- State: `~/.local/state/comms-hub/` (`$XDG_STATE_HOME`, or `state_dir` in the
+  config): the daily log, the messages as sent, the Slack snapshot, the gate's
+  pass records, the session's preflight record and the feedback backlog.
+
+If you keep your home directory's dotfiles in git, ignore both:
+
+```gitignore
+.config/comms-hub/
+.local/state/comms-hub/
+```
+
+Then `bash doctor.sh --skill comms-hub` checks every prerequisite: `gh` signed
+in as the config's login, Python 3.10+ with a TOML reader, `jq`, a connected
+Slack MCP server, SendMessage and ListAgents not denied, and the comms
+session's own record of its tools and trigger.
 
 ## Testing the harness
 
@@ -84,4 +111,6 @@ bash doctor.sh
 
 Runs every test in `tests/*.test.sh` and prints a summary. The suite covers known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap), and the settings merge (`config/merge-settings.jq`: that a stale `defaultMode` is replaced, allow/deny lists are unioned, user keys survive, and re-running the installer is a no-op).
 
-CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS and lints every hook with `shellcheck` on each push and PR. On a PR it also runs the hook benchmark against the base branch; see [releases.md](releases.md).
+`tests/comms-hub.test.sh` runs the comms-hub skill's Python tests with the first Python 3.10+ on PATH that has a TOML reader. Their mutation list is a separate run (78 mutations in 157 s on an Apple M2, 2026-10-21): `python3.11 skills/comms-hub/tests/run.py --mutate` applies each mutation a test file's docstring names to a temp copy of the skill and fails if that file stays green.
+
+CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS, with Python 3.12, and lints every hook with `shellcheck` on each push and PR. On a PR it also runs the hook benchmark against the base branch; see [releases.md](releases.md).

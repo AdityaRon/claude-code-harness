@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""The Slack send gate. Run it on the exact file you will send, then send in the
+same turn.
+
+  check_draft.py FILE (--reply TS | --top-level)   shape, live PR state, send mode; records a pass
+  check_draft.py FILE --assert-fresh [--max-age S]  the bytes are the ones that passed, recently
+  check_draft.py FILE --record-sent ID             after sending: keep a copy, log it, retire the pass
+
+Exit 0 pass, 1 the draft fails a rule, 2 usage or config, 3 live state unknown.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hub  # noqa: E402
+
+PR_URL = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
+SLACK_LINK = re.compile(r"<(https?://[^|>\s]+)(?:\|[^>]*)?>")
+MD_LINK = re.compile(r"\[[^\]]*\]\((https?://[^)\s]+)\)")
+BARE_URL = re.compile(r"https?://[^\s,;)\]>]+")
+PR_REF = re.compile(r"(?<![\w/#&])(?:[\w.-]+/[\w.-]+#\d+|#\d+\b|\bPR[\s-]*#?\d+\b|\bpull request\s+#?\d+\b)", re.I)
+CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+TS = re.compile(r"\d{10}\.\d{6}")
+TOKEN = re.compile(r"\b(?:xox[abposr]-[\w-]{10,}|gh[pousr]_\w{30,}|github_pat_\w{30,}|AKIA[0-9A-Z]{16}|sk-[\w-]{30,})")
+MAX_AGE = 300
+EM_DASH = chr(0x2014)
+
+
+def shape_problems(text: str) -> list[str]:
+    out = []
+    for n, line in enumerate(text.splitlines(), 1):
+        if EM_DASH in line:
+            out.append(f"line {n}: em dash")
+        if line.lstrip().startswith(">"):
+            out.append(f"line {n}: starts with '>' (Slack renders a quote)")
+    for m in CODE.finditer(text):
+        if ">" in m.group(0):
+            out.append(f"line {text.count(chr(10), 0, m.start()) + 1}: '>' inside a code span")
+    # Links first, so a reference inside link text or a URL is not flagged.
+    rest = BARE_URL.sub(" ", MD_LINK.sub(" ", SLACK_LINK.sub(" ", text)))
+    for m in PR_REF.finditer(rest):
+        out.append(f"PR reference {m.group(0)!r} is not a link")
+    if TOKEN.search(text):
+        out.append("a token-shaped string: no secrets in a message")
+    return out
+
+
+def linked_prs(text: str) -> list[tuple[str, str, int]]:
+    seen = []
+    for m in PR_URL.finditer(text):
+        k = (m.group(1), m.group(2), int(m.group(3)))
+        if k not in seen:
+            seen.append(k)
+    return seen
+
+
+def live_state(gh: hub.Gh, prs) -> tuple[list[str], bool]:
+    lines, ok = [], True
+    for owner, repo, n in prs:
+        ref = f"{owner}/{repo}#{n}"
+        try:
+            d = gh.json(["pr", "view", str(n), "--repo", f"{owner}/{repo}", "--json",
+                         "state,isDraft,headRefOid,mergeStateStatus,reviewDecision"])
+        except hub.GhError as e:
+            lines.append(f"{ref} UNKNOWN ({e})")
+            ok = False
+            continue
+        lines.append(f"{ref} state={d.get('state')} draft={'yes' if d.get('isDraft') else 'no'} "
+                     f"head={(d.get('headRefOid') or '?')[:7]} merge={d.get('mergeStateStatus')} "
+                     f"review={d.get('reviewDecision') or 'NONE'}")
+    return lines, ok
+
+
+def stamp_path(cfg, path: str):
+    d = hub.state_dir(cfg) / "gate"
+    d.mkdir(exist_ok=True)
+    return d / (hub.sha256(os.path.realpath(path).encode())[:16] + ".json")
+
+
+def gate(args, cfg, gh) -> int:
+    data = open(args.file, "rb").read()
+    text = data.decode("utf-8")
+    if args.reply and not TS.fullmatch(args.reply):
+        print(f"FAIL: --reply {args.reply!r} is not a Slack ts (1234567890.123456)")
+        return 2
+    target = f"reply:{args.reply}" if args.reply else "top-level"
+    problems = shape_problems(text)
+    lines, known = live_state(gh, linked_prs(text))
+    print(f"target: {target}")
+    for line in lines:
+        print(f"pr: {line}")
+    mode, post = hub.send_plan(cfg, hub.now())
+    if mode == "live":
+        print("send: live")
+    else:
+        print(f"send: schedule post_at={post.isoformat()} epoch={int(post.timestamp())} "
+              "(scheduled messages cannot be edited through the API: hold it instead if a fold-in is expected)")
+    for p in problems:
+        print(f"FAIL: {p}")
+    if problems:
+        return 1
+    if not known:
+        print("BLOCKED: a linked PR's live state is unknown; the claims cannot be checked")
+        return 3
+    stamp = {"path": os.path.realpath(args.file), "sha256": hub.sha256(data),
+             "passed_at": hub.now().timestamp(), "target": target, "send": mode,
+             "post_at": post.isoformat() if post else None, "prs": lines}
+    stamp_path(cfg, args.file).write_text(json.dumps(stamp, indent=1))
+    print(f"PASS sha256={stamp['sha256'][:12]}: send this file in the same turn, after --assert-fresh")
+    return 0
+
+
+def read_stamp(cfg, path):
+    p = stamp_path(cfg, path)
+    if not p.is_file():
+        return None, p
+    return json.loads(p.read_text()), p
+
+
+def assert_fresh(args, cfg) -> int:
+    stamp, _ = read_stamp(cfg, args.file)
+    if not stamp:
+        print("STALE: no gate pass recorded for this file")
+        return 1
+    if stamp.get("sent_id"):
+        print(f"STALE: this pass was already sent as {stamp['sent_id']}")
+        return 1
+    if hub.sha256(open(args.file, "rb").read()) != stamp["sha256"]:
+        print("STALE: the file changed since the gate passed; run the gate again")
+        return 1
+    age = hub.now().timestamp() - stamp["passed_at"]
+    if age > args.max_age or age < 0:
+        print(f"STALE: the pass is {age:.0f}s old (limit {args.max_age}s); run the gate again")
+        return 1
+    print(f"FRESH {age:.0f}s target={stamp['target']} send={stamp['send']}"
+          + (f" post_at={stamp['post_at']}" if stamp.get("post_at") else ""))
+    return 0
+
+
+def record_sent(args, cfg) -> int:
+    stamp, p = read_stamp(cfg, args.file)
+    data = open(args.file, "rb").read()
+    if not stamp or stamp.get("sent_id") or hub.sha256(data) != stamp["sha256"]:
+        print("FAIL: no unsent gate pass for these bytes; nothing recorded")
+        return 1
+    day = hub.now().astimezone().strftime("%Y-%m-%d")
+    d = hub.state_dir(cfg) / "sent" / day
+    d.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^\w.-]", "_", args.record_sent)
+    shutil.copyfile(args.file, d / f"{safe}.md")
+    stamp["sent_id"] = args.record_sent
+    p.write_text(json.dumps(stamp, indent=1))
+    verb = "scheduled" if stamp["send"] == "schedule" else "sent"
+    hub.append_log(cfg, f"{verb} {args.record_sent} target={stamp['target']} sha256={stamp['sha256'][:12]}")
+    print(f"recorded {verb} {args.record_sent}: sent/{day}/{safe}.md")
+    return 0
+
+
+def main(argv=None, gh=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("file")
+    ap.add_argument("--reply", metavar="TS")
+    ap.add_argument("--top-level", action="store_true")
+    ap.add_argument("--assert-fresh", action="store_true")
+    ap.add_argument("--max-age", type=int, default=MAX_AGE)
+    ap.add_argument("--record-sent", metavar="ID")
+    ap.add_argument("--config")
+    args = ap.parse_args(argv)
+    try:
+        cfg = hub.load_config(args.config)
+    except hub.ConfigError as e:
+        print(f"config: {e}")
+        return 2
+    if not os.path.isfile(args.file):
+        print(f"no such file: {args.file}")
+        return 2
+    if args.assert_fresh:
+        return assert_fresh(args, cfg)
+    if args.record_sent:
+        return record_sent(args, cfg)
+    if bool(args.reply) == bool(args.top_level):
+        print("say where it goes: exactly one of --reply TS or --top-level")
+        return 2
+    return gate(args, cfg, gh or hub.Gh())
+
+
+if __name__ == "__main__":
+    sys.exit(main())

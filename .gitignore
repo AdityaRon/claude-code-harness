@@ -1,0 +1,4 @@
+# comms-hub reads ~/.config/comms-hub/config.toml; a copy made in the clone by
+# mistake holds ids and names, and this repo is public.
+/skills/comms-hub/config.toml
+__pycache__/
