@@ -3,11 +3,15 @@
 
   queue.py scan [--wall-limit S]
 
-Sections: INBOUND (review requested from me), WATCHED (open PRs by watched
-authors, requested or not), AWAITING (my open PRs with nothing new from anyone),
-OUTBOUND (activity on my PRs, open or merged within merged_days, newer than my
-last reply), DRIFT (an approval pinned to an older head), UNKNOWN (a PR that
-could not be read). The header prints search-quota and my-open-xcheck.
+Sections: INBOUND (review requested from me personally, not through a team,
+drafts left out), WATCHED (open PRs by watched authors that I have not reviewed
+at their current head, requested or not, drafts left out), AWAITING (my open
+PRs with nothing new from anyone), OUTBOUND (activity on my PRs, open or merged
+within merged_days, newer than my last reply; an approval or a dismissal with
+no body is not activity I owe a reply), DRIFT (an approval pinned to an older
+head), UNKNOWN (a PR that could not be read). The header prints search-quota,
+my-open-xcheck and, for a watched author the search finds nothing for, whether
+graphql agrees.
 
 A scan that prints BLOCKED (exit 3) means the queue is unknown, not empty.
 A scan still running from an earlier tick is killed first.
@@ -37,12 +41,15 @@ MINE = """query CommsMine($cursor:String){viewer{pullRequests(states:[OPEN,MERGE
  orderBy:{field:UPDATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}
  nodes{number state updatedAt mergedAt repository{nameWithOwner isArchived owner{login}}}}}}"""
 
+AUTHOR_OPEN = """query CommsAuthorOpen($login:String!,$cursor:String){user(login:$login){pullRequests(states:OPEN,first:100,after:$cursor){
+ pageInfo{hasNextPage endCursor} nodes{number isDraft repository{nameWithOwner isArchived owner{login}}}}}}"""
+
 PR = """query CommsPR($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
  pullRequest(number:$number){number url title state isDraft createdAt mergedAt headRefOid mergeStateStatus
   reviewDecision author{login}
   reviewRequests(first:50){nodes{requestedReviewer{__typename ... on User{login} ... on Team{slug}
    ... on Bot{login} ... on Mannequin{login}}}}
-  reviews(first:100){pageInfo{hasNextPage} nodes{author{login __typename} state submittedAt commit{oid}}}
+  reviews(first:100){pageInfo{hasNextPage} nodes{author{login __typename} state body submittedAt commit{oid}}}
   comments(last:100){nodes{author{login __typename} createdAt}}
   reviewThreads(first:100){pageInfo{hasNextPage} nodes{comments(last:50){nodes{author{login __typename} createdAt}}}}
   commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage}
@@ -162,6 +169,25 @@ def my_open_graphql(gh: hub.Gh, me: str, owners) -> set[str]:
         cursor = page["pageInfo"]["endCursor"]
 
 
+def author_open_graphql(gh: hub.Gh, author: str, owners, repos) -> set[str]:
+    """An author's open, non-draft PRs in the watched repos (else the owners), by
+    graphql: the check behind a search that found none."""
+    want_repos = {r.lower() for r in repos}
+    want_owners = {o.lower() for o in owners}
+    refs, cursor = set(), None
+    while True:
+        page = gh.graphql(AUTHOR_OPEN, login=author, cursor=cursor)["user"]["pullRequests"]
+        for n in page["nodes"]:
+            repo = n["repository"]
+            if n["isDraft"] or repo.get("isArchived"):
+                continue
+            if (repo["nameWithOwner"].lower() in want_repos if want_repos else repo["owner"]["login"].lower() in want_owners):
+                refs.add(f"{repo['nameWithOwner']}#{n['number']}")
+        if not page["pageInfo"]["hasNextPage"]:
+            return refs
+        cursor = page["pageInfo"]["endCursor"]
+
+
 def my_recent(gh: hub.Gh, owners, cutoff: dt.datetime) -> tuple[set[str], int]:
     """My open PRs and those merged since the cutoff, newest update first, paged
     only until a page ends before the cutoff. Never a repo's whole PR list: one
@@ -213,11 +239,16 @@ def classify(ref: str, pr: dict, me: str) -> dict:
     def who(actor):
         return hub.login(actor) or "a deleted account"
 
+    def owed(r):
+        """An approval or a dismissal with no body asks nothing; its inline comments are thread comments."""
+        if r["state"] in ("APPROVED", "DISMISSED") and not (r.get("body") or "").strip():
+            return False
+        return theirs(r.get("author"))
+
     events = ([(t(c["createdAt"]), who(c.get("author")), "comment") for c in comments if theirs(c.get("author"))]
               + [(t(c["createdAt"]), who(c.get("author")), "thread comment") for c in thread_comments
                  if theirs(c.get("author"))]
-              + [(t(r["submittedAt"]), who(r.get("author")), f"review {r['state']}") for r in reviews
-                 if theirs(r.get("author"))])
+              + [(t(r["submittedAt"]), who(r.get("author")), f"review {r['state']}") for r in reviews if owed(r)])
     events = sorted(e for e in events if e[0] > last_reply)
     out = {"outbound": None, "awaiting": None, "drift": []}
     url = pr["url"]
@@ -256,6 +287,22 @@ def classify(ref: str, pr: dict, me: str) -> dict:
     return out
 
 
+def watched_row(ref: str, pr: dict, me: str, requested: bool, updated: str) -> str | None:
+    """The WATCHED line for a PR by a watched author, or None when it is a draft
+    or I already reviewed its current head."""
+    if pr["isDraft"]:
+        return None
+    head = pr["headRefOid"]
+    mine = sorted((r for r in pr["reviews"]["nodes"] if hub.is_me(r.get("author"), me) and r.get("state") != "PENDING"),
+                  key=lambda r: r.get("submittedAt") or "")
+    if any(((r.get("commit") or {}).get("oid")) == head for r in mine):
+        return None
+    last = mine[-1] if mine else None
+    seen = f"{last['state']}@{((last.get('commit') or {}).get('oid') or '?')[:7]}" if last else "none"
+    return (f"{ref} by {hub.login(pr.get('author')) or '?'} requested={'yes' if requested else 'no'} head={head[:7]} "
+            f"my-review={seen} updated {updated[:10]} {pr['title']!r}  {pr['url']}")
+
+
 # ---- the scan --------------------------------------------------------------
 
 def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> int:
@@ -266,14 +313,14 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     cutoff = at - dt.timedelta(days=int(g["merged_days"]))
     blocked: list[str] = []
     emit(f"comms-hub queue {at:%Y-%m-%dT%H:%MZ} login={me} owners={','.join(owners)} merged_days={g['merged_days']}")
-    # The Slack step reads watched channels from the previous scan's start.
+    # How far back the mention searches must reach; the Slack pages are read without `oldest`.
     stamp = hub.state_dir(cfg) / "last-scan"
     try:
         prev = hub.parse_time(stamp.read_text().strip()) if stamp.is_file() else None
     except ValueError:
         prev = None
     emit(f"previous-scan: {prev.isoformat()} epoch={int(prev.timestamp())}" if prev
-         else "previous-scan: none (first scan: read watched channels from 24 hours back)")
+         else "previous-scan: none (first scan: nothing before this tick was checked)")
     stamp.write_text(at.isoformat() + "\n")
     hub.append_log(cfg, f"scan started {at:%Y-%m-%dT%H:%M:%SZ}")
 
@@ -298,7 +345,8 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     inbound, watched, searched_open = [], [], None
     if can_search:
         try:
-            rows, _ = search(gh, f"is:pr is:open archived:false review-requested:{me} {scope(owners)}")
+            # review-requested: alone counts a team's requests as mine.
+            rows, _ = search(gh, f"is:pr is:open archived:false user-review-requested:{me} draft:false {scope(owners)}")
             inbound = sorted(rows, key=row_ref)
             rows, _ = search(gh, f"is:pr is:open archived:false author:{me} {scope(owners)}")
             searched_open = {row_ref(r) for r in rows}
@@ -308,6 +356,15 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
                     continue
                 rows, _ = search(gh, f"is:pr is:open archived:false author:{a} {where}")
                 watched += rows
+                if rows:
+                    continue
+                # A zero is an instrument reading until the other instrument agrees.
+                by_graph = author_open_graphql(gh, a, owners, g["watch_repos"])
+                if by_graph:
+                    blocked.append(f"WATCHED: the search found no open PR by {a}, graphql lists "
+                                   f"{len(by_graph)}: {' '.join(sorted(by_graph))}")
+                else:
+                    emit(f"watched-xcheck: {a} has no open PR (search and graphql agree)")
         except (hub.GhError, Blocked) as e:
             blocked.append(str(e))
 
@@ -340,9 +397,10 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
         emit(f"my-prs: {len(below)} open but not updated since the cutoff, fetched by number: {' '.join(below)}")
     refs |= set(below)
 
+    watched_items = {row_ref(r): r for r in sorted(watched, key=row_ref)}
     outbound, awaiting, drift, unknown = [], [], [], []
     with cf.ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(fetch_pr, gh, ref): ref for ref in sorted(refs)}
+        futures = {pool.submit(fetch_pr, gh, ref): ref for ref in sorted(refs | set(watched_items))}
         details = {}
         for f in cf.as_completed(futures):
             ref = futures[f]
@@ -350,7 +408,7 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
                 details[ref] = f.result()
             except hub.GhError as e:
                 unknown.append(f"{ref} UNKNOWN: {e}")
-    for ref in sorted(details):
+    for ref in sorted(refs & set(details)):
         rows = classify(ref, details[ref], me)
         if rows["outbound"]:
             outbound.append(rows["outbound"])
@@ -361,14 +419,12 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
         blocked.append(f"{len(unknown)} PR(s) could not be read")
 
     inbound_refs = {row_ref(r) for r in inbound}
-    seen, watched_rows = set(), []
-    for r in sorted(watched, key=row_ref):
-        ref = row_ref(r)
-        if ref in seen:
-            continue
-        seen.add(ref)
-        watched_rows.append(f"{ref} by {r['user']['login']} requested={'yes' if ref in inbound_refs else 'no'} "
-                            f"updated {r['updated_at'][:10]} {r['title']!r}  {r['html_url']}")
+    watched_rows = []
+    for ref, r in watched_items.items():
+        if ref in details:
+            row = watched_row(ref, details[ref], me, ref in inbound_refs, r["updated_at"])
+            if row:
+                watched_rows.append(row)
     sections = [
         ("INBOUND", [f"{row_ref(r)} by {r['user']['login']} updated {r['updated_at'][:10]} {r['title']!r}  {r['html_url']}"
                      for r in inbound]),

@@ -25,6 +25,12 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   kill-anything: queue.py: `if not ("comms-hub" in cmd and "queue.py" in cmd and " scan" in cmd):` => `if False:`
   kill-an-editor: queue.py: `if not ("comms-hub" in cmd and "queue.py" in cmd and " scan" in cmd):` => `if "queue.py" not in cmd:`
   stdlib-queue-unbound: hub.py: `import queue  # noqa: F401` => `pass`
+  team-requests-inbound: queue.py: `user-review-requested:{me} draft:false` => `review-requested:{me} draft:false`
+  draft-requests-inbound: queue.py: `user-review-requested:{me} draft:false` => `user-review-requested:{me}`
+  empty-approval-owed: queue.py: `if r["state"] in ("APPROVED", "DISMISSED") and not (r.get("body") or "").strip():` => `if False:`
+  watched-draft-listed: queue.py: `if pr["isDraft"]:` => `if False:`
+  watched-reviewed-listed: queue.py: `if any(((r.get("commit") or {}).get("oid")) == head for r in mine):` => `if False:`
+  watched-zero-trusted: queue.py: `if by_graph:` => `if False:`
 """
 import contextlib
 import importlib.util
@@ -51,8 +57,8 @@ NOW = "2026-10-21T17:00:00+00:00"
 RECENT, OLD = "2026-10-20T10:00:00Z", "2026-10-01T10:00:00Z"
 
 
-def item(n, author, repo="acme/app"):
-    return {"number": n, "repository_url": f"https://api.github.com/repos/{repo}", "title": f"pr {n}",
+def item(n, author, repo="acme/app", draft=False):
+    return {"number": n, "repository_url": f"https://api.github.com/repos/{repo}", "title": f"pr {n}", "draft": draft,
             "user": {"login": author}, "updated_at": RECENT, "html_url": f"https://github.com/{repo}/pull/{n}"}
 
 
@@ -65,15 +71,16 @@ def ev(name, at, bot=False):
     return {"author": actor(name, bot=bot), "createdAt": at}
 
 
-def rv(name, state, at, oid="h2"):
-    return {"author": actor(name), "state": state, "submittedAt": at, "commit": {"oid": oid} if oid else None}
+def rv(name, state, at, oid="h2", body="a word"):
+    return {"author": actor(name), "state": state, "submittedAt": at, "commit": {"oid": oid} if oid else None,
+            "body": body}
 
 
 def detail(n, state="OPEN", head="h2", reviews=(), comments=(), threads=(), checks=(), requests=(), draft=False,
-           decision=None):
+           decision=None, author=ME):
     return {"number": n, "url": f"https://github.com/acme/app/pull/{n}", "title": f"pr {n}", "state": state,
             "isDraft": draft, "createdAt": OLD, "mergedAt": None, "headRefOid": head, "mergeStateStatus": "CLEAN",
-            "reviewDecision": decision, "author": actor(ME),
+            "reviewDecision": decision, "author": actor(author),
             "reviewRequests": {"nodes": [{"requestedReviewer": {"__typename": "User", "login": r}} for r in requests]},
             "reviews": page(list(reviews)), "latestReviews": {"nodes": []},
             "comments": {"nodes": list(comments)},
@@ -92,7 +99,13 @@ DETAILS = {
               comments=[ev(ME, "2026-10-19T10:00:00Z")]),
     4: detail(4, state="MERGED", comments=[ev(ME, "2026-10-17T10:00:00Z"), ev("carol", "2026-10-18T10:00:00Z")]),
     5: detail(5, draft=True),
+    # teammate's: 9 requested of me, 10 reviewed at an older head, 13 a draft, 14 reviewed at its head
+    9: detail(9, author="teammate", requests=[ME]),
+    10: detail(10, author="teammate", reviews=[rv(ME, "COMMENTED", OLD, oid="h1")]),
+    13: detail(13, author="teammate", draft=True),
+    14: detail(14, author="teammate", reviews=[rv(ME, "COMMENTED", RECENT, oid="h2")]),
 }
+WATCHED = [9, 10, 13, 14]
 
 
 def fake(**over):
@@ -103,10 +116,14 @@ def fake(**over):
         query = query.lower()  # GitHub matches qualifiers case-insensitively
         if "review-requested:" in query:
             rows = [item(9, "teammate")]
+            if "user-review-requested:" not in query:
+                rows.append(item(11, "teammate"))  # requested of a team I am on
+            if "draft:false" not in query:
+                rows.append(item(12, "teammate", draft=True))
         elif f"author:{ME}" in query:
             rows = [item(n, ME) for n in searched]
         else:
-            rows = [item(9, "teammate"), item(10, "teammate")]
+            rows = [item(n, "teammate") for n in over.get("watched", WATCHED)]
         total = over.get("total", len(rows)) if f"author:{ME}" in query else len(rows)
         return {"total_count": total, "incomplete_results": over.get("incomplete", False),
                 "items": rows if pg == 1 else []}
@@ -123,6 +140,10 @@ def fake(**over):
                 [node(1), node(2), node(3), node(4, state="MERGED", merged=RECENT),
                  node(6, state="MERGED", updated="2026-10-13T10:00:00Z", merged="2026-10-13T09:00:00Z")])}}]),
             "CommsPR": pr,
+            "CommsAuthorOpen": {"user": {"pullRequests": page(
+                [{"number": n, "isDraft": False, "repository": {"nameWithOwner": "acme/app", "isArchived": False,
+                                                                 "owner": {"login": "acme"}}}
+                 for n in over.get("author_open", [])])}},
         },
         rest={"rate_limit": {"resources": {"search": {"limit": 30, "remaining": over.get("quota", 30),
                                                       "reset": 1792600000},
@@ -157,6 +178,8 @@ class Scan(unittest.TestCase):
         self.assertEqual([r.split()[0] for r in section(out, "INBOUND")], ["acme/app#9"])
         self.assertEqual([r.split()[:4] for r in section(out, "WATCHED")],
                          [["acme/app#10", "by", "teammate", "requested=no"], ["acme/app#9", "by", "teammate", "requested=yes"]])
+        self.assertIn("acme/app#10 by teammate requested=no head=h2 my-review=COMMENTED@h1 updated 2026-10-20",
+                      section(out, "WATCHED")[0])
         awaiting = section(out, "AWAITING")
         self.assertIn("acme/app#1 waits-on=requested bob decision=NONE ci=green", awaiting[0])
         self.assertTrue(any(r.startswith("acme/app#5 waits-on=draft (yours)") for r in awaiting), awaiting)
@@ -167,6 +190,47 @@ class Scan(unittest.TestCase):
                                                   "https://github.com/acme/app/pull/3"])
         self.assertNotIn("acme/app#6", out, "merged before the cutoff")
         self.assertTrue(out.endswith("OK"))
+
+    def test_inbound_is_what_was_asked_of_me_personally_and_not_a_draft(self):
+        gh = fake()
+        rc, out = scan(gh)
+        self.assertEqual(rc, 0, out)
+        q = next(" ".join(c) for c in gh.calls if "review-requested:" in " ".join(c))
+        self.assertIn(f"user-review-requested:{ME} draft:false", q)
+        self.assertEqual([r.split()[0] for r in section(out, "INBOUND")], ["acme/app#9"],
+                         "a team's request (#11) and a draft (#12) are not mine to review")
+
+    def test_watched_skips_drafts_and_prs_reviewed_at_their_head(self):
+        rc, out = scan(fake())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([r.split()[0] for r in section(out, "WATCHED")], ["acme/app#10", "acme/app#9"])
+        self.assertNotIn("acme/app#13", out, "a draft")
+        self.assertNotIn("acme/app#14", out, "reviewed at h2, its head")
+
+    def test_a_watched_author_the_search_finds_nothing_for_is_checked_by_graphql(self):
+        rc, out = scan(fake(watched=[]))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("watched-xcheck: teammate has no open PR (search and graphql agree)", out)
+        self.assertEqual(section(out, "WATCHED"), [])
+        rc, out = scan(fake(watched=[], author_open=[15]))
+        self.assertEqual(rc, 3, out)
+        self.assertIn("BLOCKED: WATCHED: the search found no open PR by teammate, graphql lists 1: acme/app#15", out)
+
+    def test_an_empty_approval_or_dismissal_is_not_owed_a_reply(self):
+        after = "2026-10-20T10:00:00Z"
+        quiet = detail(2, comments=[ev(ME, "2026-10-19T10:00:00Z")],
+                       reviews=[rv("bob", "APPROVED", after, body=""), rv("carol", "DISMISSED", after, body=" ")])
+        rc, out = scan(fake(details={**DETAILS, 2: quiet}))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([r.split()[0] for r in section(out, "OUTBOUND")], ["acme/app#4"])
+        self.assertNotIn("acme/app#2", "".join(section(out, "DRIFT")), "approved at the head: no drift")
+        worded = detail(2, comments=[ev(ME, "2026-10-19T10:00:00Z")], reviews=[rv("bob", "APPROVED", after, body="one nit")])
+        self.assertIn("bob review APPROVED", section(scan(fake(details={**DETAILS, 2: worded}))[1], "OUTBOUND")[0])
+        inline = detail(2, comments=[ev(ME, "2026-10-19T10:00:00Z")], reviews=[rv("bob", "APPROVED", after, body="")],
+                        threads=[[ev("bob", after)], [ev("bob", after)], [ev("bob", after)]])
+        row = section(scan(fake(details={**DETAILS, 2: inline}))[1], "OUTBOUND")[0]
+        self.assertIn("bob thread comment x3", row, "the empty approval's inline comments are still owed")
+        self.assertNotIn("review APPROVED", row)
 
     def test_instruments_disagree(self):
         rc, out = scan(fake(searched=[1, 2, 3]))
@@ -253,7 +317,7 @@ class Scan(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn("my-open-xcheck: search=4 graphql=4 agree", out)
 
-    def test_previous_scan_is_recorded_for_the_slack_window(self):
+    def test_previous_scan_is_recorded_for_the_mention_searches(self):
         with Env(now=NOW) as env:
             outs = []
             for _ in range(2):
