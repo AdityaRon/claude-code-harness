@@ -286,6 +286,8 @@ check "kubectl get piped to a pattern"   allow "kubectl get pods | grep -E 'Runn
 check "commit message with a ;"          allow "git commit -m 'note; kubectl delete pod x'"
 check "text written to a notes file"     allow "grep -rn 'kubectl delete' . > hits.txt"
 check "echo to /dev/null, then make"     allow 'echo kubectl delete pod x >/dev/null 2>&1; make'
+check "heredoc to an assigned \$F, prose" allow $'F="$CLAUDE_JOB_DIR/tmp/draft.md"; cat > "$F" <<\'EOF\'\nOpen a shell with kubectl exec.\nEOF'
+check "heredoc, then wc and echo"        allow $'cat > a.md <<\'EOF\'\nOpen a shell with kubectl exec.\nEOF\nwc -l a.md; echo ok'
 
 echo ""
 echo "=== ...but kubectl run any other way still asks (expect: ask) ==="
@@ -321,6 +323,12 @@ check "written to a script, then run"    ask   "echo 'kubectl delete pod x' > x.
 check "sort -o a script, then run"       ask   "echo 'kubectl delete pod x' | sort -o x.sh; bash x.sh"
 check "printf -v, then run"              ask   "printf -v c 'kubectl delete pod x'; \$c"
 check "heredoc apostrophe, then a ;"     ask   $'cat <<\'EOF\' > notes.txt\necho don\'t\nEOF\ngrep x y; kubectl delete pod x'
+check "heredoc to an unassigned \$F"     ask   $'cat > $F <<\'EOF\'\nkubectl delete pod x\nEOF'
+check "heredoc to \$F that is a script"  ask   $'F=run.sh; cat > "$F" <<\'EOF\'\nkubectl delete pod x\nEOF'
+check "heredoc to \$F set twice"         ask   $'F=run.sh; true || F=a.md; cat > "$F" <<\'EOF\'\nkubectl delete pod x\nEOF'
+check "heredoc to \$F set by a command"  ask   $'F="$(echo a.md)"; cat > "$F" <<\'EOF\'\nkubectl delete pod x\nEOF'
+check "an assignment before bash <<"     ask   $'X=1 bash <<\'EOF\'\nkubectl delete pod x\nEOF'
+check "heredoc, then head piped to sh"   ask   $'cat > a.md <<\'EOF\'\nkubectl delete pod x\nEOF\nhead -1 a.md | sh'
 
 echo ""
 echo "=== A text command that stores text for a later command keeps it scanned ==="

@@ -431,6 +431,7 @@ check "gh pr body names printenv"     allow $'gh pr create --title x --body-file
 check "notes file names cat .env"     allow $'cat > notes.md <<\'EOF\'\ncat .env\nEOF'
 check "a script file is not notes"    deny  $'cat > run.sh <<\'EOF\'\ncat .env\nEOF'
 check "heredoc fed to bash"           deny  $'bash <<\'EOF\'\ncat .env\nEOF'
+check "an assignment before bash <<"  deny  $'X=1 bash <<\'EOF\'\ncat .env\nEOF'
 check "message, then a real read"     deny  $'git commit -q -F - <<\'EOF\'\nmsg\nEOF\ncat .env'
 # An unquoted delimiter makes the shell run $(...) and backticks in the body.
 check "unquoted message runs \$(cat creds)" deny $'git commit -q -F - <<EOF\nnote $(cat ~/.aws/credentials)\nEOF'
