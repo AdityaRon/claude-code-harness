@@ -211,11 +211,34 @@ SECRET_PATH_RE='(^|/)secrets?(/|\?|$)'
 text_cmd() {
   case "$1" in
     grep|egrep|fgrep|rg|which|type|whereis|echo|printf|head|tail|wc|sort|uniq|cut|tr|cat|less|more|column|ls|cd|true|gh) return 0 ;;
+    sed) sed_prints_only "${@:2}" && return 0 ;;
     # A PR title or commit message names kubectl as text. Only git subcommands
     # that never run an argument: `bisect run`, `rebase -x` and a `!` alias do.
     git) case "${2:-}" in commit|stash|tag|notes|log|status|diff|grep|add|branch|switch|show|ls-files|fetch|pull|push|worktree) return 0 ;; esac ;;
   esac
   return 1
+}
+
+# sed's arguments, quotes intact: true when every script only prints lines by
+# number or pattern (`-n 1,9p`, `-n '/x/p;20p'`). -i, -f, e, w and r write or run.
+sed_prints_only() {
+  local a e=0 scripts=() seen=0 p
+  local print_re='^[[:space:]]*((([0-9]+|\$)(,([0-9]+|\$|\+[0-9]+))?)|(/[^/]*/(,/[^/]*/)?))?p[[:space:]]*$'
+  for a in "$@"; do
+    a=${a//[\"\']/}
+    if (( e )); then scripts+=("$a"); e=0; seen=1; continue; fi
+    case "$a" in
+      -e) e=1 ;;
+      --quiet|--silent|--regexp-extended|--separate|--unbuffered) ;;
+      -*) [[ "$a" =~ ^-[nErsuz]+$ ]] || return 1 ;;
+      *) (( seen )) || { scripts+=("$a"); seen=1; } ;;
+    esac
+  done
+  (( ${#scripts[@]} )) || return 1
+  for a in "${scripts[@]}"; do
+    IFS=';' read -ra parts <<<"$a"
+    for p in "${parts[@]}"; do [[ "$p" =~ $print_re ]] || return 1; done
+  done
 }
 
 # Does text command $1 (arguments after it) store text a later command can read
@@ -490,7 +513,10 @@ fi
 # (lib.sh), and only where that split is sound: one line (no heredoc, `|` or `\`
 # continuing onto the next), no group, substitution or compound command.
 # A text pipeline that writes stays when something else here could run it.
-if [[ "$CMD" != *$'\n'* && "$CMD" == *[\;\&\|]* && "$CMD" != *[\(\)\{\}\`]* ]] \
+# A quoted paren is text (`grep -E 'kubectl (cp|exec)'`); "$(…)" runs even in quotes.
+BLANK=$(printf '%s' "$CMD" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")
+if [[ "$CMD" != *$'\n'* && "$CMD" == *[\;\&\|]* && "$CMD" != *'$('* && "$CMD" != *'`'* \
+      && "$CMD" != *[\<\>]'('* && "$CMD" != *"\$'"* && "$CMD" != *\\[\"\']* && "$BLANK" != *[\(\)\{\}]* ]] \
    && ! printf '%s\n' "$CMD" | grep -qE '(^|[^[:alnum:]_])(fi|done|esac)([^[:alnum:]_]|$)'; then
   # A literal %7C must not come back as a `|`, so % is escaped first.
   PCMD=$CMD; [[ "$CMD" == *%* ]] && PCMD=$(printf '%s' "$CMD" | sed 's/%/%25/g')
@@ -503,7 +529,7 @@ if [[ "$CMD" != *$'\n'* && "$CMD" == *[\;\&\|]* && "$CMD" != *[\(\)\{\}\`]* ]] \
       while [[ $# -gt 0 ]] && is_redirect "$1"; do shift; done
       [[ $# -eq 0 ]] && continue
       w="${1//[\"\']/}"; w="${w##*/}"
-      text_cmd "$w" "${2:-}" || { t=0; ANY_O=1; continue; }
+      text_cmd "$w" "${@:2}" || { t=0; ANY_O=1; continue; }
       writes_to "$w" "${@:2}" && wr=1
     done
     TEXT+=("$t"); WR+=("$wr")

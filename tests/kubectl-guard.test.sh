@@ -288,6 +288,8 @@ check "text written to a notes file"     allow "grep -rn 'kubectl delete' . > hi
 check "echo to /dev/null, then make"     allow 'echo kubectl delete pod x >/dev/null 2>&1; make'
 check "heredoc to an assigned \$F, prose" allow $'F="$CLAUDE_JOB_DIR/tmp/draft.md"; cat > "$F" <<\'EOF\'\nOpen a shell with kubectl exec.\nEOF'
 check "heredoc, then wc and echo"        allow $'cat > a.md <<\'EOF\'\nOpen a shell with kubectl exec.\nEOF\nwc -l a.md; echo ok'
+check "sed prints, grep pattern in ( )"  allow "sed -n 1,9p run.sh | grep -E 'kubectl (cp|exec)'"
+check "sed prints a match, then head"    allow "sed -n '/kubectl/p;20p' notes.md | head -5"
 
 echo ""
 echo "=== ...but kubectl run any other way still asks (expect: ask) ==="
@@ -329,6 +331,9 @@ check "heredoc to \$F set twice"         ask   $'F=run.sh; true || F=a.md; cat >
 check "heredoc to \$F set by a command"  ask   $'F="$(echo a.md)"; cat > "$F" <<\'EOF\'\nkubectl delete pod x\nEOF'
 check "an assignment before bash <<"     ask   $'X=1 bash <<\'EOF\'\nkubectl delete pod x\nEOF'
 check "heredoc, then head piped to sh"   ask   $'cat > a.md <<\'EOF\'\nkubectl delete pod x\nEOF\nhead -1 a.md | sh'
+check "quoted \$( ) runs, then a grep"   ask   'echo "$(kubectl delete pod x)" | grep x'
+check "sed e runs its pattern space"     ask   "sed -n 's/.*/kubectl delete pod x/ep' f | grep x"
+check "a real subshell before a grep"    ask   "(sed -n 1p f; kubectl delete pod x) | grep -E 'a (b|c)'"
 
 echo ""
 echo "=== A text command that stores text for a later command keeps it scanned ==="
