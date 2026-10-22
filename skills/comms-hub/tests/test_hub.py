@@ -25,6 +25,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   thread-search-dropped: hub.py: `f"with:<@{uid}> is:thread {day}"` => `f"with:<@{uid}> {day}"`
   to-search-dropped: hub.py: `f"to:<@{uid}> {day}", ` => ``
   queries-today: hub.py: `local_now(cfg).date() - dt.timedelta(days=2)` => `local_now(cfg).date()`
+  route-keys-unset: hub.py: `for k in ("repos", "tickets", "channels"):` => `for k in ():`
 """
 import contextlib
 import datetime as dt
@@ -172,9 +173,19 @@ class Config(unittest.TestCase):
         filled = example.replace('tz = "CHANGE-ME"', 'tz = "Europe/Berlin"').replace("CHANGE-ME", "x")
         with Env(config=filled):
             self.assertEqual(hub.load_config()["routing"], [], "the routing table ships commented out")
-        with Env(config=re.sub(r"(?m)^# (\[\[routing\]\]|session|repos|tickets)", r"\1", filled)):
+        with Env(config=re.sub(r"(?m)^# (\[\[routing\]\]|session|repos|tickets|channels)", r"\1", filled)):
             cfg = hub.load_config()
-            self.assertEqual((cfg["routing"][0]["session"], cfg["routing"][0]["repos"]), ("x", ["x"]))
+            self.assertEqual((cfg["routing"][0]["session"], cfg["routing"][0]["repos"], cfg["routing"][0]["channels"]),
+                             ("x", ["x"], []))
+
+    def test_a_route_without_channels_or_tickets_gets_empty_lists(self):
+        out = io.StringIO()
+        with Env(config=CONFIG + '[[routing]]\nsession = "app-session"\nrepos = ["acme/app"]\n'), \
+                contextlib.redirect_stdout(out):
+            cfg = hub.load_config()
+            self.assertEqual((cfg["routing"][0]["tickets"], cfg["routing"][0]["channels"]), ([], []))
+            self.assertEqual(hub.main(["config"]), 0)
+        self.assertIn("route: app-session repos=acme/app tickets=- channels=-", out.getvalue().splitlines())
 
     def test_config_prints_the_ids_and_the_tmp_dir(self):
         out = io.StringIO()

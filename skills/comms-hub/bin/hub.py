@@ -135,7 +135,9 @@ def load_config(explicit: str | None = None) -> dict:
         ZoneInfo(q["tz"])
     except (KeyError, ValueError) as e:  # ZoneInfoNotFoundError is a KeyError
         raise ConfigError(f"{path}: quiet_hours.tz {q['tz']!r} is not an IANA zone: {e}")
-    cfg.setdefault("routing", [])
+    for r in cfg.setdefault("routing", []):
+        for k in ("repos", "tickets", "channels"):
+            r.setdefault(k, [])
     cfg["_path"] = str(path)
     return cfg
 
@@ -430,8 +432,8 @@ def main(argv=None, gh: Gh | None = None) -> int:
               f"watched={','.join(s.get('watched_channels') or []) or '-'}")
         print(f"quiet: {cfg['quiet_hours']['start']} to {cfg['quiet_hours']['post_at']} {cfg['quiet_hours']['tz']}")
         for r in cfg["routing"]:
-            print(f"route: {r.get('session')} repos={','.join(r.get('repos', [])) or '-'} "
-                  f"tickets={','.join(r.get('tickets', [])) or '-'}")
+            print(f"route: {r.get('session')} repos={','.join(r['repos']) or '-'} "
+                  f"tickets={','.join(r['tickets']) or '-'} channels={','.join(r['channels']) or '-'}")
         return 0
     if argv[0] == "queries":
         uid = cfg["slack"].get("my_user_id")
