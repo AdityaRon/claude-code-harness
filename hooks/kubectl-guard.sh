@@ -10,7 +10,8 @@
 # `Bash(kubectl delete:*)` in *deny* misses `kubectl --namespace vm delete pod`
 # just as reliably, so "allow kubectl broadly, deny the dangerous verbs" cannot
 # be expressed in settings.json at all. That deny rule is retired; this hook
-# asks on every spelling.
+# asks on every spelling it reads, typed or handed to an inline script's
+# shell-out. A script file and a wrapped interpreter it does not read.
 #
 # This hook sees the whole command string, so it finds the verb wherever it
 # sits. Policy:
@@ -47,6 +48,75 @@ CMD=$(jq_get '.tool_input.command')
 # precise bail-out below still runs on the normalized text.
 printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qi 'kubectl' || exit 0
 CMD=$(strip_inert_heredocs "$CMD")
+
+# An inline script (-c, -e, or a heredoc an interpreter reads) is not shell: its
+# comments and strings name kubectl as text. What it hands a shell-out runs, so
+# that goes on a line of its own; the script's text leaves the scan. Not read: a
+# wrapped interpreter (uv run, env), `cat <<EOF | python3`, a script file.
+interp_view() {
+  printf '%s\n' "$1" | awk '
+    function shellouts(p, lit,    out, rest, a, st, j, d, q, c, names, call) {
+      gsub(/(^|\n)[ \t]*(#|\/\/)[^\n]*/, "\n", p)
+      names = p ~ /(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)/
+      call = "(subprocess\\.[A-Za-z_]+|os\\.(system|popen|exec[a-z]*|spawn[a-z]*)|Popen|check_output|check_call|getoutput|getstatusoutput|execSync|execFileSync|spawnSync|execFile|execa|IO\\.popen|Open3\\.[A-Za-z0-9_]+|(^|[^A-Za-z0-9_])(system|exec|spawn|qx|%x))[ \t]*\\("
+      if (p ~ /from[ \t]+subprocess[ \t]+import/) call = "(" call "|(^|[^A-Za-z0-9_.])(run|call)[ \t]*\\()"
+      out = ""; rest = p
+      while (match(rest, call)) {
+        st = RSTART + RLENGTH; d = 1; q = ""; j = st
+        while (j <= length(rest) && d > 0) {
+          c = substr(rest, j, 1)
+          if (q != "") { if (c == "\\") j++; else if (c == q) q = "" }
+          else if (c == "\"" || c == "\047" || c == "`") q = c
+          else if (c == "(") d++
+          else if (c == ")") d--
+          j++
+        }
+        a = substr(rest, st, j - st - 1); rest = substr(rest, j)
+        out = out view(a, names)
+      }
+      rest = p
+      while (match(rest, /`[^`]*`|(^|[^A-Za-z0-9_.])(system|exec)[ \t]+["\047][^\n;]*/)) {
+        out = out view(substr(rest, RSTART, RLENGTH), names); rest = substr(rest, RSTART + RLENGTH)
+      }
+      return out
+    }
+    function view(a, names) {
+      if (match(a, /(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)/)) {
+        a = substr(a, RSTART); gsub(/[][(){}"\047,`+\\\n]/, " ", a); return a "\n" }
+      return (names && a !~ /["\047`]/) ? "__OPAQUE_SHELLOUT__\n" : ""
+    }
+    { L[++nl] = $0 }
+    END {
+      for (i = 1; i <= nl; i++) {
+        l = L[i]
+        if (body) {
+          t = l; if (dash) sub(/^\t+/, "", t)
+          if (t != term) { buf = buf l "\n"; continue }
+          out = out ((!lit && buf ~ /[$`]/) ? buf : shellouts(buf, lit)) l "\n"; body = 0; buf = ""; continue
+        }
+        out = out l "\n"; s = s l "\n"
+        if (match(l, /<<-?[ \t]*["\047\\]?[A-Za-z_][A-Za-z0-9_]*/)) {
+          tm = substr(l, RSTART, RLENGTH); n = split(substr(l, 1, RSTART - 1), seg, /\|\||&&|[|;&]/)
+          w = seg[n]; sub(/^[ \t]+/, "", w); sub(/[ \t].*/, "", w); sub(/.*\//, "", w)
+          if (w ~ /^(python[0-9.]*|node|nodejs|ruby|perl|php|bun|deno)$/) {
+            dash = (tm ~ /^<<-/); lit = (tm ~ /^<<-?[ \t]*["\047\\]/); term = tm
+            sub(/^<<-?[ \t]*["\047\\]?/, "", term); body = 1; buf = "" } }
+      }
+      if (body) out = out buf
+      rest = s
+      while (match(rest, /(^|[^A-Za-z0-9_.\/-])([^ \t;&|()]*\/)?(python[0-9.]*|node|nodejs|ruby|perl|php|bun)([ \t]+-[A-Za-z-]+)*[ \t]+-(c|e|E|r|p|-eval|-print)[ \t]*["\047]/)) {
+        q = substr(rest, RSTART + RLENGTH - 1, 1); st = RSTART + RLENGTH; j = st
+        while (j <= length(rest) && substr(rest, j, 1) != q) { if (q == "\"" && substr(rest, j, 1) == "\\") j++; j++ }
+        out = out shellouts(substr(rest, st, j - st), q == "\047"); rest = substr(rest, j + 1)
+      }
+      printf "%s", out
+    }'
+}
+case "$CMD" in *python*|*node*|*ruby*|*perl*|*php*|*bun*|*deno*) CMD=$(interp_view "$CMD") ;; esac
+case "$CMD" in *__OPAQUE_SHELLOUT__*)
+  emit_ask "An inline script names kubectl and hands a shell-out a command built from a value this guard cannot read (os.system(cmd), subprocess.run(args)). Put the kubectl command in the shell-out as a literal, or run kubectl directly."
+  exit 0 ;;
+esac
 
 # Global flags that consume the NEXT token as their value. Without this,
 # `kubectl --context delete-me get pods` would read "delete-me" as the verb.

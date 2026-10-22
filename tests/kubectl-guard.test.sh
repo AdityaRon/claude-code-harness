@@ -336,6 +336,30 @@ check "sed e runs its pattern space"     ask   "sed -n 's/.*/kubectl delete pod 
 check "a real subshell before a grep"    ask   "(sed -n 1p f; kubectl delete pod x) | grep -E 'a (b|c)'"
 
 echo ""
+echo "=== An inline script: its shell-outs run, its comments and strings do not ==="
+check "python heredoc, a comment and a string" allow $'python3 - <<\'EOF\'\n# kubectl exec opens a shell\nprint("see kubectl exec")\nEOF'
+check "python -c prints kubectl text"        allow $'python3 -c "print(\'kubectl delete pod a is in the runbook\')"'
+check "subprocess list, a read-only verb"    allow $'python3 -c "import subprocess; subprocess.run([\'kubectl\',\'get\',\'pods\'])"'
+check "a comment names kubectl, ls runs"     allow $'python3 - <<\'EOF\'\n# kubectl delete is never run here\nimport subprocess\nsubprocess.run(["ls"])\nEOF'
+check "a shell-out in a comment"             allow $'python3 - <<\'EOF\'\n# was: os.system("kubectl delete pod a")\nprint("done")\nEOF'
+check "os.system string"                     ask   $'python3 -c "import os; os.system(\'kubectl --context c delete pod a\')"'
+check "subprocess list"                      ask   $'python3 -c "import subprocess; subprocess.run([\'kubectl\',\'delete\',\'pod\',\'a\'])"'
+check "subprocess string, shell=True"        ask   $'python3 -c "import subprocess; subprocess.run(\'kubectl delete pod a\', shell=True)"'
+check "Popen in a heredoc"                   ask   $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.Popen(["kubectl", "--context", "c", "delete", "pod", "a"])\nEOF'
+check "check_output, a list over lines"      ask   $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.check_output([\n    "kubectl", "delete",\n    "pod", "a",\n])\nEOF'
+check "from subprocess import run"           ask   $'python3 - <<\'EOF\'\nfrom subprocess import run\nrun(["kubectl", "delete", "pod", "a"])\nEOF'
+check "exec of code that shells out"         ask   $'python3 -c "exec(\\"import os; os.system(\'kubectl delete pod a\')\\")"'
+check "node execSync"                        ask   $'node -e "require(\'child_process\').execSync(\'kubectl delete pod a\')"'
+check "node spawn, an argument list"         ask   $'node -e "require(\'child_process\').spawn(\'kubectl\', [\'delete\', \'pod\', \'a\'])"'
+check "ruby system"                          ask   $'ruby -e \'system("kubectl delete pod a")\''
+check "perl system without parens"           ask   $'perl -e \'system "kubectl delete pod a"\''
+check "ruby backticks"                       ask   $'ruby -e \'puts `kubectl delete pod a`\''
+check "a shell-out of a variable"            ask   $'python3 - <<\'EOF\'\nimport os\ncmd = "kubectl delete pod a"\nos.system(cmd)\nEOF'
+check "an unquoted heredoc expands \$( )"    ask   $'python3 - <<EOF\nprint("$(kubectl delete pod a)")\nEOF'
+# Known limit: a heredoc piped to an interpreter is still read as shell.
+check "cat heredoc piped to python (limit)"  ask   $'cat <<\'EOF\' | python3\n# kubectl exec is text here\nEOF'
+
+echo ""
 echo "=== A text command that stores text for a later command keeps it scanned ==="
 # uniq takes [INPUT [OUTPUT]]; the writer check knew only >, -o and printf -v.
 check "uniq OUTPUT operand, then sh"     ask   "echo 'kubectl delete pod y' | uniq - out.sh; sh out.sh"
