@@ -6,12 +6,13 @@
   slack_diff.py LISTING --channel NAME --commit --baseline  first run only: accept the page unread
 
 LISTING is slack_listing.py output for a fresh first page (read without
-`oldest`). NEW is a ts the snapshot lacks, MOVED a reply count that changed, GONE
-a snapshot line inside the page's window that the page no longer has. --commit
-refuses unless --read names every NEW and MOVED ts, because the protocol commits
-only after reading each of those threads in full; it then says what it wrote.
-The snapshot is <state_dir>/slack/<channel>.tsv unless --snapshot names one.
-Exit 0, or 2 when the diff cannot be trusted or the commit is refused.
+`oldest`) written in the last 15 minutes: an older one is last tick's page, and
+diffs as "nothing new". NEW is a ts the snapshot lacks, MOVED a reply count that
+changed, GONE a snapshot line inside the page's window that the page no longer
+has. --commit refuses unless --read names every NEW and MOVED ts, because the
+protocol commits only after reading each of those threads in full; it then says
+what it wrote. The snapshot is <state_dir>/slack/<channel>.tsv unless --snapshot
+names one. Exit 0, or 2 when the diff cannot be trusted or the commit is refused.
 """
 from __future__ import annotations
 
@@ -23,6 +24,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hub  # noqa: E402
 import slack_listing as sl  # noqa: E402
+
+MAX_AGE = 15 * 60
 
 
 def diff(snapshot: dict[str, int], page: dict[str, int]):
@@ -59,10 +62,15 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     path = snapshot_path(args)
     try:
+        age = hub.now().timestamp() - os.path.getmtime(args.listing)
         page = sl.read_listing(args.listing)
         snap = sl.read_listing(path)
-    except sl.Unreadable as e:
+    except (sl.Unreadable, OSError) as e:
         print(f"UNREADABLE: {e}")
+        return 2
+    if age > MAX_AGE:
+        print(f"STALE: the listing is {age / 60:.0f} min old (limit {MAX_AGE // 60}): a page from an earlier tick "
+              "diffs as nothing new; read the channel again. Nothing committed.")
         return 2
     if not page:
         print(f"UNTRUSTED: the page is empty against a snapshot of {len(snap)}: "
