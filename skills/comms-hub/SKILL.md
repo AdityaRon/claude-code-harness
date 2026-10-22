@@ -107,10 +107,14 @@ it, and the tick cannot run without it.
    - Each watched channel: read with `oldest` set to the `previous-scan` epoch
      that step 1's header printed (24 hours back when it says none). Read in
      full any thread that names the user, or a PR or ticket they own.
-   - Mentions: search `<@my_user_id> after:YYYY-MM-DD` (two days back), sorted
-     by time. Use the date filter: an epoch filter once returned 0, and an empty
-     result is ambiguous. The newest hit shows how far the search reached; if
-     it is older than the last tick, say the search may not have reached.
+   - Mentions: three searches, not one, each sorted by time: the queries
+     `PY B/hub.py queries` prints (`<@my_user_id>`, `to:<@my_user_id>` and
+     `with:<@my_user_id> is:thread`, each `after:` two days back). Each of the
+     last two once caught a reply the others missed, one under a week-old
+     thread. Use the date filter: an epoch filter once returned 0, and an
+     empty result is ambiguous. The newest hit of each shows how far it
+     reached; if it is older than the last tick, say the search may not have
+     reached.
 3. **Route** every event: a review, a comment, a Slack reply. The owner is the
    `routing` entry (`PY B/hub.py config` prints them) whose `repos` holds the
    PR's repo, or whose `tickets` holds the ticket key's prefix. Run ListAgents

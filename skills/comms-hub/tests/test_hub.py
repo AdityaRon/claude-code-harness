@@ -22,6 +22,9 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   job-tmp-ignored: hub.py: `if os.environ.get("CLAUDE_JOB_DIR"):` => `if False:`
   log-machine-zone: hub.py: `stamp = local_now(cfg)` => `stamp = now().astimezone()`
   local-now-machine: hub.py: `return t.astimezone(zone(cfg)) if` => `return t.astimezone() if`
+  thread-search-dropped: hub.py: `f"with:<@{uid}> is:thread {day}"` => `f"with:<@{uid}> {day}"`
+  to-search-dropped: hub.py: `f"to:<@{uid}> {day}", ` => ``
+  queries-today: hub.py: `local_now(cfg).date() - dt.timedelta(days=2)` => `local_now(cfg).date()`
 """
 import contextlib
 import datetime as dt
@@ -196,6 +199,17 @@ class Config(unittest.TestCase):
         with Env(config='[github]\nlogin = "x"\nowners = ["a"]\n[quiet_hours]\ntz = "Mars/Olympus"\n'):
             with self.assertRaisesRegex(hub.ConfigError, "IANA"):
                 hub.load_config()
+
+
+class MentionQueries(unittest.TestCase):
+    def test_three_searches_dated_two_days_back_in_the_configured_zone(self):
+        # 03:00 UTC on the 22nd is still the 21st in Los Angeles: two days back is the 19th.
+        out = io.StringIO()
+        with Env(now="2026-10-22T03:00:00Z"), contextlib.redirect_stdout(out):
+            self.assertEqual(hub.main(["queries"]), 0)
+        self.assertEqual(out.getvalue().splitlines(), [
+            "<@user-me> after:2026-10-19", "to:<@user-me> after:2026-10-19",
+            "with:<@user-me> is:thread after:2026-10-19"])
 
 
 class TmpDir(unittest.TestCase):

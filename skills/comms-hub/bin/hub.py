@@ -5,6 +5,7 @@ review state and CI state. Imported by the scripts beside it; run directly:
                       zone this machine knows; refuses to touch an existing one
   hub.py config       the config path, the state dir, the ids, or what is wrong with the config
   hub.py log TEXT     append a line to today's log in the state dir
+  hub.py queries      the three Slack mention searches, dated two days back
 """
 from __future__ import annotations
 
@@ -229,6 +230,15 @@ def send_plan(cfg: dict, at: dt.datetime) -> tuple[str, dt.datetime | None]:
     return "schedule", dt.datetime.combine(day, post, tzinfo=tz)
 
 
+def mention_queries(uid: str, since: dt.date) -> list[str]:
+    """The three Slack searches that together find what names me: the mention
+    itself, a message or reply sent to me, and a thread I am in. One search
+    missed replies each of the other two caught, one under a week-old thread.
+    `after:` is exclusive, so the day is the one before the window starts."""
+    day = f"after:{since:%Y-%m-%d}"
+    return [f"<@{uid}> {day}", f"to:<@{uid}> {day}", f"with:<@{uid}> is:thread {day}"]
+
+
 def append_log(cfg: dict | None, line: str) -> Path:
     d = state_dir(cfg) / "log"
     d.mkdir(exist_ok=True)
@@ -400,7 +410,7 @@ def init(gh: Gh | None = None, example: Path | None = None) -> int:
 
 def main(argv=None, gh: Gh | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] not in (["init"], ["config"], ["log"]) or (argv[0] == "log" and len(argv) < 2):
+    if argv[:1] not in (["init"], ["config"], ["log"], ["queries"]) or (argv[0] == "log" and len(argv) < 2):
         print(__doc__.split("run directly:", 1)[1].rstrip())
         return 2
     if argv[0] == "init":
@@ -422,6 +432,14 @@ def main(argv=None, gh: Gh | None = None) -> int:
         for r in cfg["routing"]:
             print(f"route: {r.get('session')} repos={','.join(r.get('repos', [])) or '-'} "
                   f"tickets={','.join(r.get('tickets', [])) or '-'}")
+        return 0
+    if argv[0] == "queries":
+        uid = cfg["slack"].get("my_user_id")
+        if not uid:
+            print("config: slack.my_user_id is required for the mention searches")
+            return 2
+        for q in mention_queries(uid, local_now(cfg).date() - dt.timedelta(days=2)):
+            print(q)
         return 0
     print(f"logged to {append_log(cfg, ' '.join(argv[1:]))}")
     return 0
