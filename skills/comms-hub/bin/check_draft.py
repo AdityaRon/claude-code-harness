@@ -2,10 +2,24 @@
 """The Slack send gate. Run it on the exact file you will send, then send in the
 same turn.
 
-  check_draft.py FILE (--reply TS | --top-level)   shape, live PR state, send mode; records a pass
+  check_draft.py FILE (--reply TS | --top-level) [--asks LOGIN...] [--answers TS...]
+                                                   shape, live PR state, send mode; records a pass
   check_draft.py FILE --assert-fresh [--max-age S]  the bytes are the ones that passed, recently
-  check_draft.py FILE --record-sent ID             after sending: keep a copy, log it, retire the pass
+  check_draft.py FILE --record-sent ID [--replies BEFORE AFTER]
+                                                   after sending: keep a copy, log it, retire the pass
 
+A reply that answers several messages threads under the newest of them: name
+them all with --answers, and --reply must be the newest (six of seven answers
+once landed in the wrong thread). After a reply is sent, --record-sent needs
+the parent's reply count re-read before and after, and refuses one that did
+not move: the send tool says OK either way.
+
+Live state: a line that links a merged or closed PR and calls it awaiting,
+pending or open fails. A line that asks for a review fails when the addressee,
+named with --asks (their GitHub login), has a standing approval at the PR's
+current head: a review ask once went out minutes after the approval. It is the
+addressee's own review that counts, not the PR's decision: another reviewer's
+approval failed an ask once. An ask with no --asks fails, so it cannot slip by.
 Exit 0 pass, 1 the draft fails a rule, 2 usage or config, 3 live state unknown.
 """
 from __future__ import annotations
@@ -30,6 +44,17 @@ TS = re.compile(r"\d{10}\.\d{6}")
 TOKEN = re.compile(r"\b(?:xox[abposr]-[\w-]{10,}|gh[pousr]_\w{30,}|github_pat_\w{30,}|AKIA[0-9A-Z]{16}|sk-[\w-]{30,})")
 MAX_AGE = 300
 EM_DASH = chr(0x2014)
+AWAITING = re.compile(r"\b(?:awaiting|waiting (?:on|for)|pending (?:review|approval|merge)|still open|unmerged|"
+                      r"not (?:yet )?merged|needs? (?:a )?review|(?:ready|open|up) for review)\b", re.I)
+ASK = re.compile(r"\b(?:ptal|please (?:review|take a look|have a look)|(?:could|can|would) you (?:please )?"
+                 r"(?:review|take a look|have a look|look at)|mind (?:reviewing|taking a look)|"
+                 r"(?:a |your )?review (?:please|when you (?:can|get a chance|have a minute))|"
+                 r"review request|requesting (?:a |your )?review|ready for (?:your |a )?review)\b", re.I)
+
+
+def ts_key(ts: str) -> tuple[int, int]:
+    sec, _, frac = ts.partition(".")
+    return int(sec), int(frac or 0)
 
 
 def shape_problems(text: str) -> list[str]:
@@ -60,21 +85,61 @@ def linked_prs(text: str) -> list[tuple[str, str, int]]:
     return seen
 
 
-def live_state(gh: hub.Gh, prs) -> tuple[list[str], bool]:
-    lines, ok = [], True
+def live_state(gh: hub.Gh, prs) -> tuple[list[str], bool, dict[tuple, dict]]:
+    lines, ok, live = [], True, {}
     for owner, repo, n in prs:
         ref = f"{owner}/{repo}#{n}"
         try:
             d = gh.json(["pr", "view", str(n), "--repo", f"{owner}/{repo}", "--json",
-                         "state,isDraft,headRefOid,mergeStateStatus,reviewDecision"])
+                         "state,isDraft,headRefOid,mergeStateStatus,reviewDecision,reviews"])
         except hub.GhError as e:
             lines.append(f"{ref} UNKNOWN ({e})")
             ok = False
             continue
+        head = d.get("headRefOid") or "?"
+        d["standing"] = {k.lower(): v for k, v in hub.standing_reviews(d.get("reviews") or []).items()}
+        approved = [f"{k}@{((r.get('commit') or {}).get('oid') or '?')[:7]}"
+                    for k, r in sorted(d["standing"].items()) if r.get("state") == "APPROVED"]
+        live[(owner, repo, n)] = d
         lines.append(f"{ref} state={d.get('state')} draft={'yes' if d.get('isDraft') else 'no'} "
-                     f"head={(d.get('headRefOid') or '?')[:7]} merge={d.get('mergeStateStatus')} "
-                     f"review={d.get('reviewDecision') or 'NONE'}")
-    return lines, ok
+                     f"head={head[:7]} merge={d.get('mergeStateStatus')} "
+                     f"review={d.get('reviewDecision') or 'NONE'} approved-by={','.join(approved) or '-'}")
+    return lines, ok, live
+
+
+def claim_problems(text: str, live: dict[tuple, dict], asks: list[str]) -> list[str]:
+    """Lines whose words no longer match the linked PR's live state."""
+    out = []
+    every = linked_prs(text)
+    for n, line in enumerate(text.splitlines(), 1):
+        here = linked_prs(line)
+        for pr in here:
+            d = live.get(pr)
+            if not d:
+                continue
+            m = AWAITING.search(line)
+            if d.get("state") in ("MERGED", "CLOSED") and m:
+                out.append(f"line {n}: calls {d['state'].lower()} {pr[0]}/{pr[1]}#{pr[2]} {m.group(0)!r}")
+        if not ASK.search(line):
+            continue
+        for pr in here or every:
+            ref = f"{pr[0]}/{pr[1]}#{pr[2]}"
+            d = live.get(pr)
+            if not d:
+                continue
+            if not asks:
+                out.append(f"line {n}: asks for a review of {ref}; name the addressee with --asks LOGIN "
+                           "so their own review can be checked")
+                continue
+            for login in asks:
+                r = d["standing"].get(login.lower())
+                if not r:
+                    continue
+                oid = (r.get("commit") or {}).get("oid")
+                if r["state"] == "APPROVED" and oid in (None, d.get("headRefOid")):
+                    out.append(f"line {n}: asks {login} to review {ref}, which they approved "
+                               f"{r.get('submittedAt')} at the current head")
+    return out
 
 
 def stamp_path(cfg, path: str):
@@ -86,12 +151,17 @@ def stamp_path(cfg, path: str):
 def gate(args, cfg, gh) -> int:
     data = open(args.file, "rb").read()
     text = data.decode("utf-8")
-    if args.reply and not TS.fullmatch(args.reply):
-        print(f"FAIL: --reply {args.reply!r} is not a Slack ts (1234567890.123456)")
-        return 2
+    for ts in [args.reply] * bool(args.reply) + args.answers:
+        if not TS.fullmatch(ts):
+            print(f"FAIL: {ts!r} is not a Slack ts (1234567890.123456)")
+            return 2
     target = f"reply:{args.reply}" if args.reply else "top-level"
     problems = shape_problems(text)
-    lines, known = live_state(gh, linked_prs(text))
+    if args.answers and args.reply != max(args.answers, key=ts_key):
+        problems.append(f"--reply {args.reply} is not the newest message the draft answers "
+                        f"({max(args.answers, key=ts_key)}): a combined reply threads under the newest")
+    lines, known, live = live_state(gh, linked_prs(text))
+    problems += claim_problems(text, live, args.asks)
     print(f"target: {target}")
     for line in lines:
         print(f"pr: {line}")
@@ -110,7 +180,7 @@ def gate(args, cfg, gh) -> int:
         return 3
     stamp = {"path": os.path.realpath(args.file), "sha256": hub.sha256(data),
              "passed_at": hub.now().timestamp(), "target": target, "send": mode,
-             "post_at": post.isoformat() if post else None, "prs": lines}
+             "post_at": post.isoformat() if post else None, "prs": lines, "asks": args.asks}
     stamp_path(cfg, args.file).write_text(json.dumps(stamp, indent=1))
     print(f"PASS sha256={stamp['sha256'][:12]}: send this file in the same turn, after --assert-fresh")
     return 0
@@ -149,6 +219,16 @@ def record_sent(args, cfg) -> int:
     if not stamp or stamp.get("sent_id") or hub.sha256(data) != stamp["sha256"]:
         print("FAIL: no unsent gate pass for these bytes; nothing recorded")
         return 1
+    if stamp["target"].startswith("reply:") and not args.replies:
+        print("FAIL: a reply is confirmed by its parent's reply count: re-read the thread and pass "
+              "--replies BEFORE AFTER (the send tool says OK either way); nothing recorded")
+        return 1
+    if args.replies:
+        before, after = args.replies
+        if after <= before:
+            print(f"FAIL: the parent's reply count did not move ({before} -> {after}): the reply did not land "
+                  "where the send tool said; nothing recorded")
+            return 1
     day = hub.local_now(cfg).strftime("%Y-%m-%d")
     d = hub.state_dir(cfg) / "sent" / day
     d.mkdir(parents=True, exist_ok=True)
@@ -167,9 +247,15 @@ def main(argv=None, gh=None) -> int:
     ap.add_argument("file")
     ap.add_argument("--reply", metavar="TS")
     ap.add_argument("--top-level", action="store_true")
+    ap.add_argument("--asks", nargs="+", default=[], metavar="LOGIN",
+                    help="the GitHub login(s) of whoever the draft asks for a review")
+    ap.add_argument("--answers", nargs="+", default=[], metavar="TS",
+                    help="the parent ts of every message a combined reply answers")
     ap.add_argument("--assert-fresh", action="store_true")
     ap.add_argument("--max-age", type=int, default=MAX_AGE)
     ap.add_argument("--record-sent", metavar="ID")
+    ap.add_argument("--replies", nargs=2, type=int, metavar=("BEFORE", "AFTER"),
+                    help="the parent's reply count re-read before and after the send")
     ap.add_argument("--config")
     args = ap.parse_args(argv)
     try:

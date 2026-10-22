@@ -103,10 +103,18 @@ it, and the tick cannot run without it.
      and MOVED thread in full. Only then
      `PY B/slack_diff.py <job tmp>/dm.tsv --channel <primary_dm> --commit --read <every NEW and MOVED ts>`.
      The first run takes `--commit --baseline` instead; say nothing before it
-     was checked. UNREADABLE or UNTRUSTED means the read failed: no commit, say so.
-   - Each watched channel: read with `oldest` set to the `previous-scan` epoch
-     that step 1's header printed (24 hours back when it says none). Read in
-     full any thread that names the user, or a PR or ticket they own.
+     was checked. UNREADABLE, UNTRUSTED or STALE means the read failed: no
+     commit, say so. The listing refuses a short (concise) read, which drops
+     reply counts, and a page read with `oldest`; read again in full. The
+     diff refuses a listing older than 15 minutes: last tick's page diffs as
+     nothing new. Several pages of one read go to one listing (`DUMP...`).
+   - Each watched channel: the same as the DM, with its own dump, listing and
+     `--channel <id>`: the first page in full, never with `oldest` (with it,
+     Slack returns the oldest messages first, and a DM once looked quiet with
+     four unread). Read in full every NEW and MOVED thread, not only those
+     that name the user: a reply count that moved is a reply someone may be
+     waiting on. A top-level post that names nobody is an event for the
+     `routing` entry whose `channels` holds the channel (step 3).
    - Mentions: three searches, not one, each sorted by time: the queries
      `PY B/hub.py queries` prints (`<@my_user_id>`, `to:<@my_user_id>` and
      `with:<@my_user_id> is:thread`, each `after:` two days back). Each of the
@@ -117,7 +125,8 @@ it, and the tick cannot run without it.
      reached.
 3. **Route** every event: a review, a comment, a Slack reply. The owner is the
    `routing` entry (`PY B/hub.py config` prints them) whose `repos` holds the
-   PR's repo, or whose `tickets` holds the ticket key's prefix. Run ListAgents
+   PR's repo, whose `tickets` holds the ticket key's prefix, or whose
+   `channels` holds the Slack channel of a post that names nobody. Run ListAgents
    now, at routing time, and confirm the
    owner is listed. Send one SendMessage per peer covering all of its items,
    each with its link, what changed, and what is asked of it. No entry, or the
@@ -131,11 +140,18 @@ it, and the tick cannot run without it.
      edit a fact in.
    - Re-read the target thread in full. A reply since the peer drafted goes
      back to the peer too.
-   - Merge the drafts for one thread into one message, and gate the merge.
+   - Merge the drafts for one thread into one message, and gate the merge. A
+     reply that answers several messages threads under the newest of them:
+     pass every parent ts as `--answers` and the newest as `--reply` (six of
+     seven answers once landed in the wrong thread).
    - Write it to `<job tmp>/draft-<n>.md` and run
-     `PY B/check_draft.py <file> --reply <ts>` (or `--top-level`). Only PASS
-     sends. FAIL: fix the shape (an unlinked PR, a dash, a `>`) or send it back.
-     BLOCKED: a linked PR's live state is unknown, so hold it.
+     `PY B/check_draft.py <file> --reply <ts>` (or `--top-level`), with
+     `--asks <github login>` for whoever the draft asks to review. Only PASS
+     sends. FAIL: fix the shape (an unlinked PR, a dash, a `>`) or send it
+     back; a line that calls a merged PR awaiting, or asks a reviewer for a
+     review they gave at the current head, goes back to the peer (a review ask
+     once went out minutes after the approval). BLOCKED: a linked PR's live
+     state is unknown, so hold it.
    - `PY B/check_draft.py <file> --assert-fresh`, then send the file's text with
      the Slack send tool, `thread_ts` set for a reply.
    - Quiet hours: when the gate printed `send: schedule`, schedule it for that
@@ -143,8 +159,13 @@ it, and the tick cannot run without it.
      API, so if the draft said `fold-in: expected`, or another draft for that
      thread is due, hold it and send it live, gated again, at the first tick
      after `post_at`.
-   - `PY B/check_draft.py <file> --record-sent <message ts or scheduled id>`
-     keeps a copy and logs it. Answer the peer with the ts or id.
+   - Confirm the send: the send tool says OK either way. For a reply, re-read
+     the parent thread and compare its reply count with the one read before
+     the send; for a top-level message, re-read the channel's first page and
+     find the ts. Then
+     `PY B/check_draft.py <file> --record-sent <message ts or scheduled id> --replies <before> <after>`
+     keeps a copy and logs it; it refuses a count that did not move. Answer
+     the peer with the ts or id.
 5. **Log**: `PY B/hub.py log "<one line>"` for each item routed, each draft held
    and why, each question for the user (sends and resolves log themselves).
    Then report to the user: sent, scheduled, held, BLOCKED, and what needs them.
