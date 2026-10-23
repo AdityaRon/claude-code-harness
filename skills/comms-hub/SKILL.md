@@ -95,6 +95,16 @@ it, and the tick cannot run without it.
    1b. `PY B/resolve_threads.py` (a dry run); read every RESOLVE and SKIP. Then
    `PY B/resolve_threads.py --apply`. It re-reads each thread, prints what
    GitHub reports, and logs what was resolved.
+   1c. **INBOUND review**, for each INBOUND PR:
+   `PY B/pr_transcript.py owner/repo#N -o <job tmp>/pr-N.md` (its first line
+   is `head:`), then spawn a reviewer with the Agent tool: the pr-review
+   skill, the transcript, `gh pr diff N --repo owner/repo`, and the ask to
+   write findings only, no verdict, to `<job tmp>/review-N.md`. Then one
+   command, the lint chained to the post with `&&`, never `;` (a `;` once let
+   a refused body go out):
+   `PY B/review_lint.py <job tmp>/review-N.md --pr owner/repo#N --head <sha> && gh pr review N --repo owner/repo --comment --body-file <job tmp>/review-N.md`.
+   The lint re-reads the head and the open state first. COMMENT only: this
+   session never approves or requests changes, whatever the findings say.
 2. **Slack**:
    - The primary DM: read its first page in full, without `oldest`. Write the
      tool's output to `<job tmp>/dm.txt`, run
