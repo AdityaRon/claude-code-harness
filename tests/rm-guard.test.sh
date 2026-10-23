@@ -108,5 +108,16 @@ check "unknown id, a relative path"      deny  'rm -rf build' "$TMP" "eeee0000-0
 rm -f "$HOME/.claude/jobs/abcd1234/state.json"
 
 echo ""
+echo "=== An inline script: its shell-outs run, its text does not ==="
+check "os.system, rm -rf ~/x"                deny  $'python3 -c "import os; os.system(\'rm -rf ~/x\')"'
+check "a subprocess list, rm -rf /"          deny  $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run([\'rm\',\'-rf\',\'/\'])\nEOF'
+check "node execSync, rm -rf src"            deny  $'node -e "require(\'child_process\').execSync(\'rm -rf src\')"'
+check "printed into sh"                      deny  $'python3 -c "print(\'rm -rf ~\')" | sh'
+check "rm -rf in this session's scratch"     allow "python3 -c \"import os; os.system('rm -rf $S/build')\""
+check "a heredoc string names rm -rf ~"      allow $'python3 - <<\'EOF\'\nprint("do not run rm -rf ~ here")\nEOF'
+check "rm -f of one file, not recursive"     allow $'python3 -c "import os; os.system(\'rm -f notes.tmp\')"'
+check "a script appends a note naming rm -rf" allow $'python3 - <<\'EOF\'\np = \'notes.md\'\ns = open(p).read() + \'- `rm -rf "$(pwd)"` now asks\\n\'\nopen(p, \'w\').write(s)\nEOF'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

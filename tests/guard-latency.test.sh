@@ -42,7 +42,7 @@ done)
 CMD="python3 - lib.sh <<'EOF'
 $PY
 EOF
-kubectl get pods"
+kubectl get pods; git status; rm -f notes.tmp"
 echo "=== and a ${#CMD}-byte inline python script ==="
 each_guard "$CMD"
 
