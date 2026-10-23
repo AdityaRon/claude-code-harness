@@ -17,9 +17,10 @@ slack.listing_replies_pattern in the config.
 Input it cannot read is an error, never an empty listing: an empty page reads as
 "nothing new", and that is the answer a failed read must not give. Two more
 reads are refused for the same reason: a page where no message carries a reply
-count or a thread marker, which is what the tool's short (concise) read looks
-like, since a dropped count read as 0 hides a thread that moved (--no-threads
-accepts it, only after reading that no message on the page has a thread); and
+count, a thread marker or the API's full message shape (type and text), which
+is what the tool's short (concise) read looks like, since a dropped count read
+as 0 hides a thread that moved (--no-threads accepts a text page after reading
+that no message on it has a thread); and
 a page whose cursor points newer than its newest message, which is a page read
 with `oldest`, oldest first, so the newest messages are missing.
 Exit 0, or 2 when the dump is unreadable.
@@ -158,7 +159,9 @@ def parse_json(obj, ts_re: str, replies_re: str | None) -> tuple[dict[str, int],
         ts = m.get("ts")
         if not isinstance(ts, str):
             raise Unreadable(f"a ts that is not a string ({ts!r}): a float loses the digits that make it unique")
-        if "reply_count" in m or "thread_ts" in m:
+        # Slack's API puts reply_count only on a thread parent; a full message object carries type and
+        # text, so a page of those with no thread is a full read, not a short one.
+        if "reply_count" in m or "thread_ts" in m or ("type" in m and "text" in m):
             signal = True
         if m.get("thread_ts") not in (None, ts):
             continue

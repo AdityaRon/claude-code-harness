@@ -13,6 +13,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   one-line-missed: slack_listing.py: `starts = list(re.finditer(TS_LINE_RE, text))` => `pass`
   envelope-missed: slack_listing.py: `return parse_text("\n".join(inner), ts_re, replies_re)` => `raise Unreadable("JSON")`
   second-document-dropped: slack_listing.py: `found.update(page)` => `found = page`
+  full-object-not-a-signal: slack_listing.py: `or ("type" in m and "text" in m):` => `or False:`
   second-dump-dropped: slack_listing.py: `page.update(parse(open(dump).read(), *patterns(args), no_threads=args.no_threads))` => `page = parse(open(dump).read(), *patterns(args), no_threads=args.no_threads)`
 """
 import base64
@@ -43,6 +44,12 @@ class ShortReads(unittest.TestCase):
             sl.parse(json.dumps({"messages": [{"ts": A, "text": "hello"}, {"ts": B, "text": "hey"}]}))
         self.assertEqual(sl.parse(json.dumps({"messages": [{"ts": A, "text": "hi", "reply_count": 0}, {"ts": B}]})),
                          {A: 0, B: 0})
+
+    def test_a_page_of_full_api_message_objects_with_no_thread_is_a_full_read(self):
+        # Slack puts reply_count only on a thread parent; type and text are on every message object.
+        full = [{"type": "message", "ts": A, "user": "user-bob", "text": "hello"},
+                {"type": "message", "ts": B, "user": "user-me", "text": "hey"}]
+        self.assertEqual(sl.parse(json.dumps({"ok": True, "messages": full})), {A: 0, B: 0})
 
     def test_a_cursor_newer_than_the_page_means_oldest_was_passed(self):
         with self.assertRaisesRegex(sl.Unreadable, "read with oldest"):
