@@ -354,6 +354,8 @@ check "node spawn, an argument list"         ask   $'node -e "require(\'child_pr
 check "ruby system"                          ask   $'ruby -e \'system("kubectl delete pod a")\''
 check "perl system without parens"           ask   $'perl -e \'system "kubectl delete pod a"\''
 check "ruby backticks"                       ask   $'ruby -e \'puts `kubectl delete pod a`\''
+check "ruby backticks after a first one"     ask   $'ruby -e \'d = `date`; puts `kubectl delete pod a`\''
+check "a backtick in a string, kubectl after" allow $'python3 - <<\'EOF\'\nprint("run `make` first")\nEOF\nkubectl get pods'
 check "a shell-out of a variable"            ask   $'python3 - <<\'EOF\'\nimport os\ncmd = "kubectl delete pod a"\nos.system(cmd)\nEOF'
 check "an unquoted heredoc expands \$( )"    ask   $'python3 - <<EOF\nprint("$(kubectl delete pod a)")\nEOF'
 # Known limit: a heredoc piped to an interpreter is still read as shell.

@@ -88,7 +88,7 @@ a project's settings.
 
 ## Cases
 
-`permission-friction-cases.jsonl` (next to this file), 207 cases. The first 27 have the tool input, the
+`permission-friction-cases.jsonl` (next to this file), 208 cases. The first 27 have the tool input, the
 decision observed on local `main` at b8427b2 and on `adityaron/main` at 516db51,
 a `why`, and a `want` where the answer is not a policy call. Cases with no
 `want` are policy calls and only report. Seven `control-*` cases pin decisions
@@ -106,12 +106,14 @@ script or `python3 -m json.tool`; `templates.env` in a python heredoc is cleared
 since. The 7 added on 2026-10-21 (main at c2b1981) are commit messages and PR
 bodies that name a blocked git command (#72, A11b): four false denies, two
 controls, and one open gap, a `git push --force` inside `sh -c` (A2).
-Of the 20 added on 2026-10-22 (main at c7f1bf2), 12 differ from `want` there:
+Of the 21 added on 2026-10-22 (main at c7f1bf2), 12 differ from `want` there:
 five kubectl-guard false asks on heredoc, python-comment and grep-pattern text,
 three kubectl deletes run from `python3 -c`, a python heredoc and `node -e`
 that kubectl-guard allowed, and `X=1 bash <<'EOF'`, which kubectl-, network-,
-git- and env-guard each allowed. The other 8 are controls and one policy case,
-a heredoc into a `$F` set by an earlier command, which asks.
+git- and env-guard each allowed. The other 9 are controls and one policy case,
+a heredoc into a `$F` set by an earlier command, which asks. One control, a
+backtick in a python string with kubectl on a later line, hung this branch's
+first inline-script reader until the replay's 30 s timeout.
 
 ```
 bin/permission-friction.py --cases --replay hooks/

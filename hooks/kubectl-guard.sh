@@ -76,7 +76,7 @@ interp_view() {
       }
       rest = p
       while (match(rest, /`[^`]*`|(^|[^A-Za-z0-9_.])(system|exec)[ \t]+["\047][^\n;]*/)) {
-        out = out view(substr(rest, RSTART, RLENGTH), names); rest = substr(rest, RSTART + RLENGTH)
+        a = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH); out = out view(a, names)
       }
       return out
     }
