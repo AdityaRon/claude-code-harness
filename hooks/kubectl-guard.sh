@@ -11,7 +11,7 @@
 # just as reliably, so "allow kubectl broadly, deny the dangerous verbs" cannot
 # be expressed in settings.json at all. That deny rule is retired; this hook
 # asks on every spelling it reads, typed or handed to an inline script's
-# shell-out. A script file and a wrapped interpreter it does not read.
+# shell-out. A script file and a heredoc under a wrapper it does not read.
 #
 # This hook sees the whole command string, so it finds the verb wherever it
 # sits. Policy:
@@ -51,18 +51,23 @@ CMD=$(strip_inert_heredocs "$CMD")
 
 # An inline script (-c, -e, or a heredoc an interpreter reads) is not shell: its
 # comments and strings name kubectl as text. What it hands a shell-out runs, so
-# that goes on a line of its own; the script's text leaves the scan. Not read: a
-# wrapped interpreter (uv run, env), `cat <<EOF | python3`, a script file.
+# that is rebuilt as the shell line it runs, command word included, on a line of
+# its own; the script's text leaves the scan. Not read: a script file,
+# `cat <<EOF | python3`, and a heredoc under a wrapper (`uv run python - <<EOF`).
 interp_view() {
   printf '%s\n' "$1" | awk '
-    function shellouts(p, lit,    out, rest, a, st, j, d, q, c, names, call) {
+    BEGIN { NO = "\003"; KRE = "(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)"
+            SAFE = "^(head|tail|grep|egrep|fgrep|rg|wc|sort|uniq|cut|tr|cat|less|more|jq|column|fold|nl)$" }
+    function langof(w) { return w ~ /python/ ? "py" : w ~ /ruby/ ? "rb" : w ~ /perl/ ? "pl" : w ~ /php/ ? "php" : "js" }
+    function trim(s) { sub(/^[ \t\n]+/, "", s); sub(/[ \t\n]+$/, "", s); return s }
+    function shellouts(p, lang,    out, rest, a, st, j, d, q, c, names, call, cm, mode) {
       gsub(/(^|\n)[ \t]*(#|\/\/)[^\n]*/, "\n", p)
-      names = p ~ /(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)/
+      names = p ~ KRE
       call = "(subprocess\\.[A-Za-z_]+|os\\.(system|popen|exec[a-z]*|spawn[a-z]*)|Popen|check_output|check_call|getoutput|getstatusoutput|execSync|execFileSync|spawnSync|execFile|execa|IO\\.popen|Open3\\.[A-Za-z0-9_]+|(^|[^A-Za-z0-9_])(system|exec|spawn|qx|%x))[ \t]*\\("
       if (p ~ /from[ \t]+subprocess[ \t]+import/) call = "(" call "|(^|[^A-Za-z0-9_.])(run|call)[ \t]*\\()"
       out = ""; rest = p
       while (match(rest, call)) {
-        st = RSTART + RLENGTH; d = 1; q = ""; j = st
+        cm = substr(rest, RSTART, RLENGTH); st = RSTART + RLENGTH; d = 1; q = ""; j = st
         while (j <= length(rest) && d > 0) {
           c = substr(rest, j, 1)
           if (q != "") { if (c == "\\") j++; else if (c == q) q = "" }
@@ -72,50 +77,166 @@ interp_view() {
           j++
         }
         a = substr(rest, st, j - st - 1); rest = substr(rest, j)
-        out = out view(a, names)
+        mode = cm ~ /(qx|%x)[ \t]*\($/ ? "shell" : (lang == "py" && cm ~ /(^|[^A-Za-z0-9_.])exec[ \t]*\($/) ? "code" : "args"
+        out = out view(a, names, mode, lang)
       }
+      # Backticks and a bare `system "..."` run a shell in ruby, perl and php only.
+      if (lang !~ /^(rb|pl|php)$/) return out
       rest = p
       while (match(rest, /`[^`]*`|(^|[^A-Za-z0-9_.])(system|exec)[ \t]+["\047][^\n;]*/)) {
-        a = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH); out = out view(a, names)
+        a = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH)
+        if (a ~ /^`/) out = out view(substr(a, 2, length(a) - 2), names, "shell", lang)
+        else { sub(/^[^A-Za-z0-9_.]?(system|exec)[ \t]+/, "", a); out = out view(a, names, "args", lang) }
       }
       return out
     }
-    function view(a, names) {
-      if (match(a, /(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)/)) {
-        a = substr(a, RSTART); gsub(/[][(){}"\047,`+\\\n]/, " ", a); return a "\n" }
-      return (names && a !~ /["\047`]/) ? "__OPAQUE_SHELLOUT__\n" : ""
+    # Top-level comma split, outside quotes and brackets.
+    function splitargs(a, arr,    n, i, c, q, d, cur) {
+      n = 0; q = ""; d = 0; cur = ""
+      for (i = 1; i <= length(a); i++) {
+        c = substr(a, i, 1)
+        if (q != "") { cur = cur c; if (c == "\\") { i++; cur = cur substr(a, i, 1) } else if (c == q) q = ""; continue }
+        if (c == "\"" || c == "\047" || c == "`") q = c
+        else if (c == "(" || c == "[" || c == "{") d++
+        else if (c == ")" || c == "]" || c == "}") d--
+        else if (c == "," && d == 0) { arr[++n] = cur; cur = ""; continue }
+        cur = cur c
+      }
+      arr[++n] = cur
+      return n
     }
-    { L[++nl] = $0 }
+    # A string literal (r, b, f or u prefix, triple quotes) and nothing else: its text.
+    function str(x,    p, q, i, c, out) {
+      if (!match(x, /^[rRbBfFuU]?[rRbBfFuU]?["\047`]/)) return NO
+      q = substr(x, RLENGTH, 1); p = substr(x, RLENGTH + 1)
+      if (substr(p, 1, 2) == q q) return substr(x, length(x) - 2) == q q q ? substr(p, 3, length(p) - 5) : NO
+      out = ""
+      for (i = 1; i <= length(p); i++) {
+        c = substr(p, i, 1)
+        if (c == "\\") { i++; out = out substr(p, i, 1); continue }
+        if (c == q) return i == length(p) ? out : NO
+        out = out c
+      }
+      return NO
+    }
+    # A string, or a list of strings and names: as shell words. A name is an unset $var.
+    function literal(x,    n, el, i, v, out) {
+      x = trim(x)
+      if (x !~ /^\[.*\]$/) return str(x)
+      n = splitargs(substr(x, 2, length(x) - 2), el); out = ""
+      for (i = 1; i <= n; i++) {
+        v = trim(el[i]); if (v == "" && i == n) continue
+        if (v ~ /^[A-Za-z_][A-Za-z0-9_.]*$/) v = "$__shellout_value"
+        else {
+          v = str(v); if (v == NO) return NO
+          if (v !~ /^[A-Za-z0-9_.\/:=@%+,-]+$/) { gsub(/\047/, "", v); v = "\047" v "\047" }
+        }
+        out = out (out == "" ? "" : " ") v
+      }
+      return out
+    }
+    # Printed to a text command or /dev/null, the script stays text. Printed to a
+    # shell, a file or anything else, its output may run, so it stays in the scan.
+    function outsafe(t,    n, p, i, w) {
+      gsub(/[0-9]*>&[0-9-]+/, "", t); gsub(/[0-9]*>>?[ \t]*\/dev\/null/, "", t)
+      sub(/(;|&&|\|\||&|\n).*/, "", t)
+      if (t ~ />/) return 0
+      n = split(t, p, "|")
+      for (i = 2; i <= n; i++) { w = trim(p[i]); sub(/[ \t].*/, "", w); sub(/.*\//, "", w); if (w !~ SAFE) return 0 }
+      return 1
+    }
+    function flat(s) { s = substr(s, match(s, KRE)); gsub(/[][(){}"\047,`+\\\n]/, " ", s); return s "\002" }
+    # The shell line a shell-out runs. Keyword arguments and option objects are
+    # skipped; arguments that are not literals keep the flat view from kubectl on.
+    function view(a, names, mode, lang,    n, arg, i, x, v, line) {
+      line = ""
+      if (mode == "shell") line = a
+      else {
+        n = splitargs(a, arg)
+        for (i = 1; i <= n; i++) {
+          x = trim(arg[i])
+          if (x == "" || x ~ /^\{/ || x ~ /^[A-Za-z_][A-Za-z0-9_]*[ \t]*(=[^=]|:[^:])/ && x !~ /^args[ \t]*=/) continue
+          sub(/^args[ \t]*=/, "", x)
+          v = literal(x); if (v == NO) { line = NO; break }
+          line = line (line == "" ? "" : " ") v
+        }
+        if (mode == "code" && line != NO) return n == 1 ? shellouts(line, lang) : ""
+      }
+      if (line == NO) {
+        if (a ~ KRE) return flat(a)
+        return (names && a !~ /["\047`]/) ? "__OPAQUE_SHELLOUT__\002" : ""
+      }
+      return line ~ KRE ? line "\002" : ""
+    }
+    function dq(s,    i, c, n, out) {
+      out = ""
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1); n = substr(s, i + 1, 1)
+        if (c == "\\" && (n == "\"" || n == "\\" || n == "$" || n == "`")) { out = out n; i++ } else out = out c
+      }
+      return out
+    }
+    { gsub("\001", ""); gsub("\002", ""); L[++nl] = $0 }
+    # Prints the shell-outs, each ended by \002, then \001, then the command
+    # with the text of each inline script taken out.
     END {
-      for (i = 1; i <= nl; i++) {
+      all = ""; for (i = 1; i <= nl; i++) all = all L[i] "\n"
+      rest = all; t = ""
+      while (match(rest, /(^|[^A-Za-z0-9_.\/-])([^ \t;&|()]*\/)?(python[0-9.]*|node|nodejs|ruby|perl|php|bun)([ \t]+-[A-Za-z-]+)*[ \t]+-(c|e|E|r|p|-eval|-print)[ \t]*["\047]/)) {
+        m = substr(rest, RSTART, RLENGTH); q = substr(m, RLENGTH, 1); st = RSTART + RLENGTH; j = st
+        sub(/^[^A-Za-z0-9_.\/-]/, "", m); sub(/[ \t].*/, "", m); sub(/.*\//, "", m)
+        while (j <= length(rest) && substr(rest, j, 1) != q) { if (q == "\"" && substr(rest, j, 1) == "\\") j++; j++ }
+        raw = substr(rest, st, j - st); views = views shellouts(q == "\"" ? dq(raw) : raw, langof(m))
+        keep = (q == "\"" && raw ~ /(^|[^\\])[$`]/) || !outsafe(substr(rest, j + 1))
+        t = t substr(rest, 1, st - 1) (keep ? raw : ""); rest = substr(rest, j)
+      }
+      t = t rest
+      n = split(t, L, "\n"); out = ""
+      for (i = 1; i < n; i++) {
         l = L[i]
         if (body) {
-          t = l; if (dash) sub(/^\t+/, "", t)
-          if (t != term) { buf = buf l "\n"; continue }
-          out = out ((!lit && buf ~ /[$`]/) ? buf : shellouts(buf, lit)) l "\n"; body = 0; buf = ""; continue
+          tt = l; if (dash) sub(/^\t+/, "", tt)
+          if (tt != term) { buf = buf l "\n"; continue }
+          views = views shellouts(buf, hl)
+          out = out ((keep || !lit && buf ~ /[$`]/) ? buf : "") l "\n"; body = 0; buf = ""; continue
         }
-        out = out l "\n"; s = s l "\n"
+        out = out l "\n"
         if (match(l, /<<-?[ \t]*["\047\\]?[A-Za-z_][A-Za-z0-9_]*/)) {
-          tm = substr(l, RSTART, RLENGTH); n = split(substr(l, 1, RSTART - 1), seg, /\|\||&&|[|;&]/)
-          w = seg[n]; sub(/^[ \t]+/, "", w); sub(/[ \t].*/, "", w); sub(/.*\//, "", w)
+          tm = substr(l, RSTART, RLENGTH); tl = substr(l, RSTART + RLENGTH)
+          k = split(substr(l, 1, RSTART - 1), seg, /\|\||&&|[|;&]/)
+          w = seg[k]; sub(/^[ \t]+/, "", w); sub(/[ \t].*/, "", w); sub(/.*\//, "", w)
           if (w ~ /^(python[0-9.]*|node|nodejs|ruby|perl|php|bun|deno)$/) {
-            dash = (tm ~ /^<<-/); lit = (tm ~ /^<<-?[ \t]*["\047\\]/); term = tm
+            dash = (tm ~ /^<<-/); lit = (tm ~ /^<<-?[ \t]*["\047\\]/); term = tm; hl = langof(w); keep = !outsafe(tl)
             sub(/^<<-?[ \t]*["\047\\]?/, "", term); body = 1; buf = "" } }
       }
       if (body) out = out buf
-      rest = s
-      while (match(rest, /(^|[^A-Za-z0-9_.\/-])([^ \t;&|()]*\/)?(python[0-9.]*|node|nodejs|ruby|perl|php|bun)([ \t]+-[A-Za-z-]+)*[ \t]+-(c|e|E|r|p|-eval|-print)[ \t]*["\047]/)) {
-        q = substr(rest, RSTART + RLENGTH - 1, 1); st = RSTART + RLENGTH; j = st
-        while (j <= length(rest) && substr(rest, j, 1) != q) { if (q == "\"" && substr(rest, j, 1) == "\\") j++; j++ }
-        out = out shellouts(substr(rest, st, j - st), q == "\047"); rest = substr(rest, j + 1)
-      }
-      printf "%s", out
+      printf "%s\001%s", views, out
     }'
 }
-case "$CMD" in *python*|*node*|*ruby*|*perl*|*php*|*bun*|*deno*) CMD=$(interp_view "$CMD") ;; esac
-case "$CMD" in *__OPAQUE_SHELLOUT__*)
-  emit_ask "An inline script names kubectl and hands a shell-out a command built from a value this guard cannot read (os.system(cmd), subprocess.run(args)). Put the kubectl command in the shell-out as a literal, or run kubectl directly."
-  exit 0 ;;
+# An awk error prints nothing, which would read as an empty, allowed command.
+case "$CMD" in *python*|*node*|*ruby*|*perl*|*php*|*bun*|*deno*)
+  if ! IV=$(interp_view "$CMD") || [[ "$IV" != *$'\001'* ]]; then
+    emit_ask "kubectl-guard could not read this command's inline script, so it asks rather than allow it unread."
+    exit 0
+  fi
+  CMD=${IV#*$'\001'}; VIEWS=${IV%%$'\001'*}
+  # Each shell-out runs in a shell of its own, so each is checked as a command of its own.
+  while [[ -n "$VIEWS" ]]; do
+    v=${VIEWS%%$'\002'*}; VIEWS=${VIEWS#"$v"}; VIEWS=${VIEWS#$'\002'}
+    [[ -z "$v" ]] && continue
+    if [[ "$v" == __OPAQUE_SHELLOUT__ ]]; then
+      emit_ask "An inline script names kubectl and hands a shell-out a command built from a value this guard cannot read (os.system(cmd), subprocess.run(args)). Put the kubectl command in the shell-out as a literal, or run kubectl directly."
+      exit 0
+    fi
+    depth=${KUBECTL_GUARD_DEPTH:-0}
+    if (( depth >= 4 )) || ! r=$(jq -nc --arg c "$v" '{tool_name:"Bash",tool_input:{command:$c}}' \
+        | KUBECTL_GUARD_DEPTH=$((depth + 1)) CLAUDE_AUDIT_LOG=/dev/null bash "$0"); then
+      emit_ask "kubectl-guard could not check what this inline script hands a shell-out: $v"
+      exit 0
+    fi
+    reason=$(printf '%s' "$r" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)
+    if [[ -n "$reason" ]]; then emit_ask "An inline script runs this through a shell-out: $v. $reason"; exit 0; fi
+  done ;;
 esac
 
 # Global flags that consume the NEXT token as their value. Without this,

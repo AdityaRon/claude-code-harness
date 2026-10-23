@@ -206,6 +206,12 @@
 {"id": "friction-hole-git-assign-prefix-bash-heredoc", "tool_name": "Bash", "tool_input": {"command": "X=1 bash <<'EOF'\ngit push --force origin main\nEOF"}, "source": "friction"}
 {"id": "friction-hole-env-assign-prefix-bash-heredoc", "tool_name": "Bash", "tool_input": {"command": "X=1 bash <<'EOF'\ncat .env\nEOF"}, "source": "friction"}
 {"id": "friction-pin-kubectl-python-backtick-then-kubectl", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF'\nprint(\"run `make` first\")\nEOF\nkubectl get pods"}, "source": "friction"}
+{"id": "friction-fp-kubectl-python-backtick-text", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF'\nprint(\"see `kubectl delete pod x`\")\nEOF"}, "source": "friction"}
+{"id": "friction-fp-kubectl-python-c-spaced-text", "tool_name": "Bash", "tool_input": {"command": "python3 -c \"print('see: kubectl delete pod a')\""}, "source": "friction"}
+{"id": "friction-ok-kubectl-shellout-greps-text", "tool_name": "Bash", "tool_input": {"command": "python3 -c \"import subprocess; subprocess.run(['grep','kubectl delete','notes.md'])\""}, "source": "friction"}
+{"id": "friction-pin-kubectl-python-output-to-bash", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF' | bash\nprint(\"x; kubectl delete pod a\")\nEOF"}, "source": "friction"}
+{"id": "friction-pin-kubectl-python-output-to-file-then-run", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF' > run.sh\nprint(\"x; kubectl delete pod a\")\nEOF\nbash run.sh"}, "source": "friction"}
+{"id": "friction-hole-kubectl-shellout-bash-c", "tool_name": "Bash", "tool_input": {"command": "python3 -c \"import subprocess; subprocess.run(['bash','-c','kubectl delete pod a'])\""}, "source": "friction"}
 {"id": "bash-git-status", "tool_name": "Bash", "tool_input": {"command": "git status --short"}, "source": "synthetic"}
 {"id": "bash-git-log", "tool_name": "Bash", "tool_input": {"command": "git log --oneline -20"}, "source": "synthetic"}
 {"id": "bash-git-diff-stat", "tool_name": "Bash", "tool_input": {"command": "git diff --stat main...HEAD"}, "source": "synthetic"}
