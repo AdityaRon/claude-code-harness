@@ -140,9 +140,20 @@ echo "=== --with-cli: a Homebrew-cask Claude Code is upgraded first, then the ha
 fake_claude() { printf '#!/usr/bin/env bash\necho "%s (Claude Code)"\n' "$2" > "$1"; chmod +x "$1"; ln -sfn "$1" "$TMP/bin/claude"; }
 mkdir -p "$CASK"; fake_claude "$CASK/claude" 2.1.300
 CONF="$HOME/.claude/harness-update.conf"
+# A stand-in ps: two processes run from the cask binary brew is about to delete.
+printf '#!/usr/bin/env bash\ncat "%s/ps.txt" 2>/dev/null\n' "$TMP" > "$TMP/bin/ps"; chmod +x "$TMP/bin/ps"
+# ps shows the binary's real path, as readlink -f gives it (/private/var here).
+REALCASK=$(readlink -f "$CASK/claude")
+printf '4242 %s\n4243 %s\n4300 /bin/zsh\n' "$REALCASK" "$REALCASK" > "$TMP/ps.txt"
+UPGRADED="$HOME/.claude/state/cli-upgraded"
 rm -f "$TMP/brew.log" "$HOME/order.log"; push_tag v1.0.5 0
 OUT=$(bash "$UPD" --with-cli 2>&1); RC=$?
 [ "$RC" = 0 ] && [ "$(installed)" = v1.0.5 ] && pass "exit 0, v1.0.5 installed" || fail "with-cli run" "rc=$RC $OUT"
+[[ "$OUT" == *"claude: running from $REALCASK: pids 4242 4243; after the upgrade each runs on a deleted binary"* ]] \
+  && pass "names the pids running the binary brew deletes" || fail "pids" "$OUT"
+grep -q "^claude-code@latest 2.1.300 -> 2.1.302 at 20[0-9][0-9]-.*; pids running the old binary: 4242 4243$" "$UPGRADED" 2>/dev/null \
+  && pass "state/cli-upgraded records the upgrade and the pids, for session-start" || fail "cli-upgraded" "$(cat "$UPGRADED" 2>/dev/null)"
+: > "$TMP/ps.txt"
 [ "$(cat "$TMP/brew.log" 2>/dev/null)" = "$(printf 'update --quiet\nupgrade --cask claude-code@latest')" ] \
   && pass "brew update, then upgrade --cask claude-code@latest" || fail "brew calls" "$(cat "$TMP/brew.log" 2>/dev/null)"
 [[ "$OUT" == *"Homebrew cask claude-code@latest (2.1.300) at "*"/Caskroom/"* && "$OUT" == *"claude-code@latest 2.1.300 -> 2.1.302"* ]] \

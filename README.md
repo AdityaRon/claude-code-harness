@@ -188,6 +188,7 @@ bin/                     ← installed to ~/.claude, or run from the clone
   memory-verify.sh  memory-fix.sh  memory-index.sh  memory-provenance.sh
   session-route.sh       ← which session owns this PR (docs/session-routing.md)
   upstream-check.sh      ← the daily drift check
+  relocate-clones.sh     ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads (docs/known-limitations.md)
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts

@@ -209,6 +209,10 @@
       {
         "matcher": "Edit|MultiEdit|Write",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/comment-budget.sh" }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/tcc-check.sh" }]
       }
     ],
     "PostToolUseFailure": [

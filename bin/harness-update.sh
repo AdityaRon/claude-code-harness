@@ -14,6 +14,7 @@ export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 VERSION_FILE="$HOME/.claude/harness.version"
 LATEST_FILE="$HOME/.claude/state/harness-latest"
+UPGRADED="$HOME/.claude/state/cli-upgraded"
 LOG="$HOME/.claude/logs/harness-update.log"
 CONF="$HOME/.claude/harness-update.conf"
 LABEL=com.claude-code-harness.update
@@ -84,7 +85,7 @@ installed_version() { recorded version; }
 # Before the harness, so a release that needs a newer CLI finds it. Never
 # fails the run. CLAUDE_CLI_BIN is a testing seam, as in upstream-check.sh.
 cli_update() {
-  local bin real cask before after
+  local bin real cask before after hosts
   bin=${CLAUDE_CLI_BIN:-$(command -v claude 2>/dev/null)}
   [[ -n "$bin" && -x "$bin" ]] || { say "claude: not on PATH; nothing to upgrade"; return 0; }
   real=$(readlink -f "$bin" 2>/dev/null || echo "$bin")
@@ -101,10 +102,21 @@ cli_update() {
     say "claude: Homebrew cask $cask ($before) at $real; a run without --check upgrades it"; return 0
   fi
   say "claude: Homebrew cask $cask ($before) at $real; running brew upgrade"
+  # brew deletes the old version's directory; a process running from it goes on
+  # from memory, and a background session host loses ~/Desktop, ~/Documents and
+  # ~/Downloads when tccd next restarts (docs/known-limitations.md). Named here
+  # and in $UPGRADED, which session-start reads, so the next failure is explained.
+  hosts=$(ps -axo pid=,comm= 2>/dev/null | awk -v b="$real" '$2 == b { print $1 }' | tr '\n' ' '); hosts=${hosts% }
+  [[ -n "$hosts" ]] && say "claude: running from $real: pids $hosts; after the upgrade each runs on a deleted binary, and a background session host loses ~/Desktop, ~/Documents and ~/Downloads when tccd next restarts; save work and restart them"
   if HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew update --quiet >>"$LOG" 2>&1 \
      && HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade --cask "$cask" >>"$LOG" 2>&1; then
     after=$("$bin" --version 2>/dev/null | cut -d' ' -f1)
-    if [[ "$after" == "$before" ]]; then say "claude: $cask up to date ($after)"; else say "claude: $cask $before -> $after"; fi
+    if [[ "$after" == "$before" ]]; then say "claude: $cask up to date ($after)"
+    else
+      say "claude: $cask $before -> $after"
+      mkdir -p "$(dirname "$UPGRADED")" \
+        && printf '%s %s -> %s at %s; pids running the old binary: %s\n' "$cask" "$before" "$after" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${hosts:-none}" > "$UPGRADED"
+    fi
   else
     # brew's lock, held by a session's own upgrade, lands here too; the next slot retries.
     say "claude: brew update or upgrade --cask $cask failed (see $LOG); the harness update continues"

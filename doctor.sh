@@ -2,12 +2,25 @@
 # Runs every test in tests/ and reports totals.
 # Exit code = number of failing suites.
 #   bash doctor.sh --skill comms-hub   that skill's prerequisites instead
+#   bash doctor.sh --hosts             running claude processes whose binary is gone
 set -u
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 
 if [[ "${1:-}" == "--skill" ]]; then
   [[ -f "skills/${2:-}/bin/prereqs.sh" ]] || { echo "no prerequisite check for skill '${2:-}'" >&2; exit 2; }
   exec bash "skills/$2/bin/prereqs.sh"
+fi
+
+# A background session host whose binary an upgrade deleted loses ~/Desktop,
+# ~/Documents and ~/Downloads (docs/known-limitations.md). Exit 1 when one
+# exists; the owner's one command after "Operation not permitted".
+stale_hosts() { bash -c 'source hooks/lib.sh; stale_claude_hosts' 2>/dev/null; }
+if [[ "${1:-}" == "--hosts" ]]; then
+  STALE=$(stale_hosts)
+  [[ -n "$STALE" ]] || { echo "every running claude process still has its binary"; exit 0; }
+  echo "claude processes whose binary an upgrade deleted; a background host among them has lost ~/Desktop, ~/Documents and ~/Downloads, or will when tccd next restarts. Save work, then restart each:"
+  printf '%s\n' "$STALE" | awk -F'\t' '{ print "  pid " $1 "  " $2 }'
+  exit 1
 fi
 
 if ! command -v jq &>/dev/null; then
@@ -65,5 +78,9 @@ if [[ -n "$UNCOUNTED" ]]; then
   echo "Their pass/fail still counts toward 'suite(s) failed' via exit status."
 fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# Advisory: the updater installs on a green SUMMARY, and a stale host on the
+# machine is no reason to hold a harness release back.
+STALE=$(stale_hosts)
+[[ -z "$STALE" ]] || echo "HOSTS: $(printf '%s\n' "$STALE" | wc -l | tr -d ' ') running claude process(es) have lost their binary to an upgrade (not counted above): bash doctor.sh --hosts"
 
 exit $FAILED_SUITES

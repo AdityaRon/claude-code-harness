@@ -840,3 +840,68 @@ local_net_hosts() {   # keys to read: netAllowlist (default), netAllowBody
     net_host_problem "$h" >/dev/null && printf '%s\n' "$h"
   done
 }
+
+# --- the session's Claude Code host, and whether its binary still exists -------
+# macOS keys a background host's Desktop, Documents and Downloads grant to the
+# host binary's path; an upgrade deletes that path while the host runs on, and
+# access there fails once tccd restarts (docs/known-limitations.md). Seams:
+# CLAUDE_HOST_PS, a file of `pid ppid comm` lines (lib.sh puts the system bin
+# dirs first on PATH, so a stand-in ps is never reached); CLAUDE_HOST_BIN/PID/PARENT.
+host_ps_snapshot() {   # pid ppid comm, one process per line
+  if [[ -n "${CLAUDE_HOST_PS:-}" ]]; then cat "$CLAUDE_HOST_PS" 2>/dev/null
+  else ps -axo pid=,ppid=,comm= 2>/dev/null; fi
+}
+
+# The top-most claude process above $1 (default: this process), as four
+# tab-separated fields: pid, ppid, its comm, and the first app bundle above it
+# (a terminal's, whose grant then covers it) or launchd; nothing when none. TCC
+# attributes to the top-most one, the host; the first one up is often the
+# `--resume` client inside it.
+claude_host() {
+  local pid="${1:-$$}" snap line ppid comm found="" above="" n=0
+  snap=$(host_ps_snapshot)
+  while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && $n -lt 50 ]]; do
+    line=$(awk -v p="$pid" '$1 == p { $1 = ""; sub(/^ +/, ""); print; exit }' <<< "$snap")
+    [[ -n "$line" ]] || break
+    read -r ppid comm <<< "$line"
+    case "${comm##*/}" in claude|claude.exe) found="$pid"$'\t'"$ppid"$'\t'"$comm"; above="" ;;
+      *) [[ -n "$found" && -z "$above" && "$comm" == *.app/* ]] && above=$comm ;; esac
+    pid=$ppid; n=$((n + 1))
+  done
+  [[ -n "$found" ]] || return 0
+  printf '%s\t%s\n' "$found" "${above:-launchd}"
+}
+
+# Silent (0) when this session's host binary exists, the host is under a
+# terminal app (that app's bundle-keyed grant covers it), or there is no host;
+# otherwise prints the diagnosis, markdown headed, and returns 1.
+host_binary_check() {
+  local pid ppid comm above host now marker
+  if [[ -n "${CLAUDE_HOST_BIN:-}" ]]; then
+    pid=${CLAUDE_HOST_PID:-0}; comm=$CLAUDE_HOST_BIN; above=${CLAUDE_HOST_PARENT:-launchd}
+  else
+    host=$(claude_host "${CLAUDE_HOST_START:-$$}"); [[ -n "$host" ]] || return 0
+    IFS=$'\t' read -r pid ppid comm above <<< "$host"
+  fi
+  [[ "$comm" == /* ]] || return 0          # Linux ps gives a bare name: nothing to test
+  [[ -e "$comm" ]] && return 0
+  case "$above" in *.app/*) return 0 ;; esac
+  now=$(command -v claude 2>/dev/null)
+  [[ -n "$now" ]] && now=" claude on PATH is now $(readlink -f "$now" 2>/dev/null || printf '%s' "$now")."
+  echo "## This session's Claude Code binary is gone"
+  echo "The session host, pid $pid, runs from $comm, which no longer exists: an upgrade deleted it and the host runs on from memory.$now macOS keys a background host's Desktop, Documents and Downloads access to that path, so once tccd restarts every access there fails with 'Operation not permitted' (git: couldn't read packed-refs). Save work, then restart this session so it runs from the current binary. A clone outside those folders is unaffected: bin/relocate-clones.sh moves one. Check all hosts: bash doctor.sh --hosts."
+  marker=$(expand_tilde "${CLAUDE_CLI_UPGRADED:-$HOME/.claude/state/cli-upgraded}")
+  [[ -f "$marker" ]] && echo "harness-update.sh's last CLI upgrade: $(head -1 "$marker")"
+  return 1
+}
+
+# Every running claude process whose absolute binary path is gone, as
+# pid<TAB>path lines. For doctor.sh --hosts and the updater.
+stale_claude_hosts() {
+  local pid ppid comm
+  host_ps_snapshot | while read -r pid ppid comm; do
+    case "${comm##*/}" in claude|claude.exe) ;; *) continue ;; esac
+    [[ "$comm" == /* && ! -e "$comm" ]] && printf '%s\t%s\n' "$pid" "$comm"
+  done
+  return 0
+}

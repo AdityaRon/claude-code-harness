@@ -131,6 +131,11 @@ if [[ -f "$PIN_FILE" ]]; then
   fi
 fi
 
+# --- the host's binary is gone: an upgrade deleted it under a running session --
+# Every source, no stamp: a restart is the only fix, and each host is one.
+# One ps; CLAUDE_HOST_PS and CLAUDE_HOST_START are the test seams (lib.sh).
+if ! host_binary_check; then echo ""; fi
+
 # --- a newer harness release ------------------------------------------------
 # harness-update.sh writes the newest tag it fetched; nothing here touches the
 # network. Only a machine installed from a plain tag is nudged: a clone past
