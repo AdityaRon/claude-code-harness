@@ -88,7 +88,7 @@ a project's settings.
 
 ## Cases
 
-`permission-friction-cases.jsonl` (next to this file), 187 cases. The first 27 have the tool input, the
+`permission-friction-cases.jsonl` (next to this file), 225 cases. The first 27 have the tool input, the
 decision observed on local `main` at b8427b2 and on `adityaron/main` at 516db51,
 a `why`, and a `want` where the answer is not a policy call. Cases with no
 `want` are policy calls and only report. Seven `control-*` cases pin decisions
@@ -106,6 +106,21 @@ script or `python3 -m json.tool`; `templates.env` in a python heredoc is cleared
 since. The 7 added on 2026-10-21 (main at c2b1981) are commit messages and PR
 bodies that name a blocked git command (#72, A11b): four false denies, two
 controls, and one open gap, a `git push --force` inside `sh -c` (A2).
+Of the 21 added on 2026-10-22 (main at c7f1bf2), 12 differ from `want` there:
+five kubectl-guard false asks on heredoc, python-comment and grep-pattern text,
+three kubectl deletes run from `python3 -c`, a python heredoc and `node -e`
+that kubectl-guard allowed, and `X=1 bash <<'EOF'`, which kubectl-, network-,
+git- and env-guard each allowed. The other 9 are controls and one policy case,
+a heredoc into a `$F` set by an earlier command, which asks. One control, a
+backtick in a python string with kubectl on a later line, hung this branch's
+first inline-script reader until the replay's 30 s timeout. Six more from a
+review of that reader: two false asks on python text, a `bash -c` shell-out
+main allowed, a shell-out that greps for kubectl text, and two scripts whose
+printed output a shell runs. Two more that main allowed: a `get` kind joined on
+with `+`, and `exec` of code passed a globals dict. The 9 after them are for
+git-guard and rm-guard reading shell-outs: five deletes or force pushes main
+allowed, two controls, and two false denies on python heredocs that edit files,
+shaped like 9 recorded on this Mac in 30 days.
 
 ```
 bin/permission-friction.py --cases --replay hooks/

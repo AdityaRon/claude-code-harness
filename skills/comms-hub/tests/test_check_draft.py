@@ -14,6 +14,25 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   bare-url-greedy: check_draft.py: `BARE_URL = re.compile(r"https?://[^\s,;)\]>]+")` => `BARE_URL = re.compile(r"https?://\S+")`
   pr-dash-missed: check_draft.py: `\bPR[\s-]*#?\d+\b` => `\bPR\s*#?\d+\b`
   sent-machine-zone: check_draft.py: `day = hub.local_now(cfg).strftime("%Y-%m-%d")` => `day = hub.now().astimezone().strftime("%Y-%m-%d")`
+  merged-awaiting-ok: check_draft.py: `if d.get("state") in ("MERGED", "CLOSED") and m:` => `if False:`
+  ask-any-reviewer: check_draft.py: `r = d["at_head"].get(login.lower())` => `r = next(iter(d["at_head"].values()), None)`
+  ask-unaddressed-ok: check_draft.py: `if not asks:` => `if False:`
+  ask-old-head-fails: check_draft.py: `if (r.get("commit") or {}).get("oid") == head and hub.login(r.get("author")):` => `if hub.login(r.get("author")):`
+  thread-reply-is-a-review: check_draft.py: `or (r.get("state") == "COMMENTED" and not (r.get("body") or "").strip())` => ``
+  ask-off-line-missed: check_draft.py: `for pr in here or every:` => `for pr in here:`
+  en-dash-ok: check_draft.py: `if EN_DASH in line:` => `if False:`
+  aws-temp-key-missed: check_draft.py: `(?:AKIA|ASIA)[0-9A-Z]{16}` => `AKIA[0-9A-Z]{16}`
+  launchdarkly-key-missed: check_draft.py: `|(?:sdk|mob|api)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}` => ``
+  pem-missed: check_draft.py: `|-----BEGIN [A-Z ]*-----` => ``
+  assignment-missed: check_draft.py: `|(?i:[a-z_]*(?:key|token|secret|password)\s*[=:]\s*[\"']?[\w./+-]{8,})` => ``
+  mention-map-ignored: check_draft.py: `login = logins.get(sid)` => `login = None`
+  answers-unchecked: check_draft.py: `if args.answers and args.reply != max(args.answers, key=ts_key):` => `if False:`
+  replies-optional: check_draft.py: `if stamp["target"].startswith("reply:") and not args.replies:` => `if False:`
+  send-unconfirmed: check_draft.py: `if after <= before:` => `if False:`
+  posted-still-listed: hub.py: `if parse_time(s.get("post_at")) <= now_:` => `if False:`
+  cap-ignored: check_draft.py: `if len(text) > cap:` => `if False:`
+  cap-hardcoded: check_draft.py: `problems = shape_problems(text, int(cfg["slack"]["max_chars"]))` => `problems = shape_problems(text)`
+  thin-bullet-ok: check_draft.py: `if m and len(re.findall(r"\w+", m.group(1))) < 3:` => `if False:`
 """
 import contextlib
 import io
@@ -21,13 +40,18 @@ import os
 import unittest
 from unittest import mock
 
-from fakes import Env, Fail, FakeGh, machine_zone
+from fakes import CONFIG, Env, Fail, FakeGh, machine_zone
 
 import check_draft
 import hub
 
 PR_JSON = {"state": "OPEN", "isDraft": False, "headRefOid": "abcdef1234", "mergeStateStatus": "CLEAN",
-           "reviewDecision": "APPROVED"}
+           "reviewDecision": "APPROVED", "reviews": []}
+LINK = "<https://github.com/acme/app/pull/12|acme/app#12>"
+
+
+def review(who, state, oid="abcdef1234", at="2026-10-21T16:50:00Z"):
+    return {"author": {"login": who}, "state": state, "submittedAt": at, "commit": {"oid": oid}, "body": ""}
 DAY = "2026-10-21T17:00:00+00:00"      # 10:00 in America/Los_Angeles
 EVENING = "2026-10-22T03:30:00+00:00"  # 20:30 the same evening there
 
@@ -65,6 +89,24 @@ class Shape(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("em dash", out)
 
+    def test_en_dash_fails(self):
+        rc, out = self.check(f"Done {chr(0x2013)} thanks\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("line 1: en dash", out)
+        self.assertEqual(self.check("Done - thanks, 2-3 days\n")[0], 0, "a hyphen is fine")
+
+    def test_more_token_shapes_fail(self):
+        fakes = {"AWS temporary key": "ASIA" + "EXAMPLEEXAMPLE00",
+                 "LaunchDarkly key": "sdk-00000000-0000-0000-0000-000000000000",
+                 "PEM block": "-----BEGIN EXAMPLE PRIVATE KEY-----",
+                 "key assignment": "api_key=examplevalue0000",
+                 "token assignment": "token: 'example-token-0000'"}
+        for name, fixture in fakes.items():
+            rc, out = self.check(f"config has {fixture} in it\n")
+            self.assertEqual(rc, 1, name)
+            self.assertIn("no secrets", out, name)
+        self.assertEqual(self.check("the key = retries; token count 3\n")[0], 0, "prose with the words is fine")
+
     def test_quote_at_line_start_fails(self):
         rc, out = self.check("> you asked\nyes\n")
         self.assertEqual(rc, 1)
@@ -91,6 +133,22 @@ class Shape(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("no secrets", out)
 
+    def test_a_long_draft_fails_at_the_configured_cap(self):
+        long = "word " * 520 + "\n"  # 2601 characters
+        rc, out = self.check(long)
+        self.assertEqual(rc, 1)
+        self.assertIn("2601 characters, over the 2500 cap", out)
+        with Env(config=CONFIG + "\n[slack.extra]\n") as env:
+            env.config.write_text(env.config.read_text().replace('my_user_id = "user-me"', 'my_user_id = "user-me"\nmax_chars = 3000'))
+            self.assertEqual(gate(env, long, "--top-level", gh=fake())[0], 0)
+
+    def test_a_thin_bullet_fails(self):
+        rc, out = self.check("Done:\n- fixed\n- retried the flaky job\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("line 2: thin bullet 'fixed'", out)
+        self.assertNotIn("line 3", out)
+        self.assertEqual(self.check("1. fixed the retry loop\n* and the test\n")[0], 0)
+
 
 class LiveState(unittest.TestCase):
     def test_gh_failure_blocks_and_records_no_pass(self):
@@ -110,12 +168,96 @@ class LiveState(unittest.TestCase):
             self.assertIn("target: reply:1761040800.123456", out)
 
 
+class Claims(unittest.TestCase):
+    def check(self, text, *flags, state=PR_JSON):
+        with Env() as env:
+            return gate(env, text, "--top-level", *flags, gh=fake(state))
+
+    def test_a_merged_pr_called_awaiting_fails(self):
+        merged = {**PR_JSON, "state": "MERGED"}
+        for words in ("still awaiting review", "waiting on CI", "ready for review", "not merged yet"):
+            rc, out = self.check(f"{LINK} is {words}.\n", state=merged)
+            self.assertEqual(rc, 1, words)
+            self.assertIn("calls merged acme/app#12", out)
+        rc, out = self.check(f"{LINK} merged, thanks.\n", state=merged)
+        self.assertEqual(rc, 0, out)
+        rc, out = self.check(f"{LINK} is still awaiting review.\n")
+        self.assertEqual(rc, 0, "an open PR may be awaiting: " + out)
+
+    def test_an_ask_to_someone_who_reviewed_this_head_fails(self):
+        approved = {**PR_JSON, "reviews": [review("Bob", "APPROVED")]}
+        rc, out = self.check(f"could you review {LINK}?\n", "--asks", "bob", state=approved)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("asks bob to review acme/app#12, which they already reviewed (APPROVED) 2026-10-21T16:50:00Z "
+                      "at the current head", out)
+        self.assertIn("approved-by=bob@abcdef1", out)
+        commented = {**PR_JSON, "reviews": [{**review("bob", "COMMENTED"), "body": "two nits, see inline"}]}
+        rc, out = self.check(f"could you review {LINK}?\n", "--asks", "bob", state=commented)
+        self.assertEqual(rc, 1, "a comment review with a body is a review too: " + out)
+        replied = {**PR_JSON, "reviews": [review("bob", "COMMENTED")]}  # body "": what a thread reply creates
+        rc, out = self.check(f"could you review {LINK}?\n", "--asks", "bob", state=replied)
+        self.assertEqual(rc, 0, "a thread reply is not a review: " + out)
+
+    def test_the_addressee_comes_from_the_mention_and_the_config_map(self):
+        cfg = CONFIG + '\n[slack.github_logins]\n"user-bob" = "bob"\n'
+        reviewed = {**PR_JSON, "reviews": [{**review("bob", "COMMENTED"), "body": "one nit"}]}
+        with Env(config=cfg) as env:
+            rc, out = gate(env, f"<@user-bob> could you review {LINK}?\n", "--top-level", gh=fake(reviewed))
+            self.assertEqual(rc, 1, out)
+            self.assertIn("addressees: bob", out)
+            self.assertIn("asks bob to review acme/app#12, which they already reviewed (COMMENTED)", out)
+            rc, out = gate(env, f"<@user-zed> could you review {LINK}?\n", "--top-level", gh=fake(reviewed))
+            self.assertEqual(rc, 1, out)
+            self.assertIn("addressees: - (no slack.github_logins entry for <@user-zed>)", out)
+            self.assertIn("name the addressee with --asks LOGIN", out)
+            rc, out = gate(env, f"<@user-bob> could you review {LINK}?\n", "--top-level", gh=fake())
+            self.assertEqual(rc, 0, "bob has not reviewed it: " + out)
+
+    def test_another_reviewers_approval_does_not_fail_the_ask(self):
+        other = {**PR_JSON, "reviews": [review("carol", "APPROVED")]}
+        rc, out = self.check(f"could you review {LINK}?\n", "--asks", "bob", state=other)
+        self.assertEqual(rc, 0, out)
+
+    def test_an_approval_at_an_older_head_is_a_re_review_ask(self):
+        moved = {**PR_JSON, "reviews": [review("bob", "APPROVED", oid="0123456789")]}
+        rc, out = self.check(f"PTAL {LINK}, head moved.\n", "--asks", "bob", state=moved)
+        self.assertEqual(rc, 0, out)
+        changes = {**PR_JSON, "reviews": [review("bob", "CHANGES_REQUESTED", oid="0123456789")]}
+        self.assertEqual(self.check(f"PTAL {LINK}\n", "--asks", "bob", state=changes)[0], 0, "a push since: re-review")
+
+    def test_an_ask_with_no_addressee_fails_closed(self):
+        rc, out = self.check(f"could you take a look at {LINK}?\n")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("name the addressee with --asks LOGIN", out)
+        self.assertEqual(self.check(f"{LINK} is in; I reviewed it myself.\n")[0], 0, "not an ask")
+
+    def test_an_ask_on_its_own_line_covers_every_linked_pr(self):
+        approved = {**PR_JSON, "reviews": [review("bob", "APPROVED")]}
+        rc, out = self.check(f"Two for you, mind taking a look?\n- {LINK}\n", "--asks", "bob", state=approved)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("line 1: asks bob to review acme/app#12", out)
+
+
 class SendMode(unittest.TestCase):
     def test_daytime_live_evening_schedules(self):
         with Env() as env:
             self.assertIn("send: live", gate(env, "ok\n", "--top-level", gh=fake())[1])
             rc, out = gate(env, "ok\n", "--top-level", gh=fake(), now=EVENING)
             self.assertIn("send: schedule post_at=2026-10-22T08:00:00-07:00", out)
+
+
+class Scheduled(unittest.TestCase):
+    def test_pending_scheduled_messages_are_listed_until_they_post(self):
+        with Env() as env:
+            rc, out = gate(env, "ok\n", "--top-level", gh=fake(), now=EVENING)
+            self.assertIn("send: schedule", out)
+            self.assertEqual(gate(env, None, "--record-sent", "Q0001", now=EVENING)[0], 0)
+            rc, out = gate(env, None, "--scheduled", now="2026-10-22T14:00:00+00:00")  # 07:00 there
+            self.assertEqual(rc, 0, out)
+            self.assertIn("scheduled: 1 pending", out)
+            self.assertIn(f"Q0001 post_at=2026-10-22T08:00:00-07:00 target=top-level copy={env.state}/sent/2026-10-21/Q0001.md", out)
+            rc, out = gate(env, None, "--scheduled", now="2026-10-22T15:30:00+00:00")  # 08:30, posted
+            self.assertIn("scheduled: 0 pending", out)
 
 
 class Freshness(unittest.TestCase):
@@ -151,6 +293,28 @@ class Freshness(unittest.TestCase):
             self.assertEqual(rc, 1)
             self.assertIn("already sent", out)
             self.assertEqual(gate(env, None, "--record-sent", "again")[0], 1)
+
+    def test_a_combined_reply_threads_under_the_newest_message_it_answers(self):
+        older, newer = "1761040800.000100", "1761044400.000200"
+        with Env() as env:
+            rc, out = gate(env, "ok\n", "--reply", older, "--answers", older, newer, gh=fake())
+            self.assertEqual(rc, 1, out)
+            self.assertIn(f"FAIL: --reply {older} is not the newest message the draft answers ({newer})", out)
+            rc, out = gate(env, "ok\n", "--reply", newer, "--answers", older, newer, gh=fake())
+            self.assertEqual(rc, 0, out)
+
+    def test_a_sent_reply_is_recorded_only_when_the_parents_reply_count_moved(self):
+        with Env() as env:
+            gate(env, "ok\n", "--reply", "1761040800.000100", gh=fake())
+            rc, out = gate(env, None, "--record-sent", "1761044400.000200")
+            self.assertEqual(rc, 1, out)
+            self.assertIn("pass --replies BEFORE AFTER", out)
+            rc, out = gate(env, None, "--record-sent", "1761044400.000200", "--replies", "3", "3")
+            self.assertEqual(rc, 1, out)
+            self.assertIn("did not move (3 -> 3)", out)
+            self.assertFalse((env.state / "sent").exists(), "nothing recorded")
+            rc, out = gate(env, None, "--record-sent", "1761044400.000200", "--replies", "3", "4")
+            self.assertEqual(rc, 0, out)
 
     def test_the_sent_folder_is_the_day_in_the_configured_zone(self):
         # DAY is 10:00 on 2026-10-21 in Los Angeles, the config's zone, and 06:00 on the 22nd in Auckland.

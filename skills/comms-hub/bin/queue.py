@@ -3,11 +3,15 @@
 
   queue.py scan [--wall-limit S]
 
-Sections: INBOUND (review requested from me), WATCHED (open PRs by watched
-authors, requested or not), AWAITING (my open PRs with nothing new from anyone),
-OUTBOUND (activity on my PRs, open or merged within merged_days, newer than my
-last reply), DRIFT (an approval pinned to an older head), UNKNOWN (a PR that
-could not be read). The header prints search-quota and my-open-xcheck.
+Sections: INBOUND (review requested from me personally, not through a team,
+drafts left out), WATCHED (open PRs by watched authors that I have not reviewed
+at their current head, requested or not, drafts left out), AWAITING (my open
+PRs with nothing new from anyone), OUTBOUND (activity on my PRs, open or merged
+within merged_days, newer than my last reply; an approval or a dismissal with
+no body is not activity I owe a reply), DRIFT (an approval pinned to an older
+head), UNKNOWN (a PR that could not be read). The header prints search-quota,
+my-open-xcheck and, for a watched author the search finds nothing for, whether
+graphql agrees.
 
 A scan that prints BLOCKED (exit 3) means the queue is unknown, not empty.
 A scan still running from an earlier tick is killed first.
@@ -37,21 +41,47 @@ MINE = """query CommsMine($cursor:String){viewer{pullRequests(states:[OPEN,MERGE
  orderBy:{field:UPDATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}
  nodes{number state updatedAt mergedAt repository{nameWithOwner isArchived owner{login}}}}}}"""
 
+AUTHOR_OPEN = """query CommsAuthorOpen($login:String!,$cursor:String){user(login:$login){pullRequests(states:OPEN,first:100,after:$cursor){
+ pageInfo{hasNextPage endCursor} nodes{number isDraft repository{nameWithOwner isArchived owner{login}}}}}}"""
+
 PR = """query CommsPR($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
  pullRequest(number:$number){number url title state isDraft createdAt mergedAt headRefOid mergeStateStatus
   reviewDecision author{login}
   reviewRequests(first:50){nodes{requestedReviewer{__typename ... on User{login} ... on Team{slug}
    ... on Bot{login} ... on Mannequin{login}}}}
-  reviews(first:100){pageInfo{hasNextPage} nodes{author{login __typename} state submittedAt commit{oid}}}
-  comments(last:100){nodes{author{login __typename} createdAt}}
-  reviewThreads(first:100){pageInfo{hasNextPage} nodes{comments(last:50){nodes{author{login __typename} createdAt}}}}
+  reviews(first:100){pageInfo{hasNextPage} nodes{author{login __typename} state body submittedAt commit{oid}}}
+  comments(first:100){pageInfo{hasNextPage endCursor} nodes{author{login __typename} createdAt}}
+  reviewThreads(first:100){pageInfo{hasNextPage} nodes{id
+   comments(first:50){pageInfo{hasNextPage endCursor} nodes{author{login __typename} createdAt}}}}
   commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage}
    nodes{__typename ... on CheckRun{name status conclusion startedAt completedAt}
    ... on StatusContext{context state createdAt}}}}}}}}}}"""
 
 
+COMMENTS = """query CommsComments($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){
+ pullRequest(number:$number){comments(first:100,after:$cursor){pageInfo{hasNextPage endCursor}
+  nodes{author{login __typename} createdAt}}}}}"""
+
+THREAD_COMMENTS = """query CommsThreadComments($id:ID!,$cursor:String){node(id:$id){... on PullRequestReviewThread{
+ comments(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{author{login __typename} createdAt}}}}}"""
+
+
 class Blocked(Exception):
     pass
+
+
+def page_all(first: dict, more, what: str) -> list[dict]:
+    """Every node behind a first page: `more(cursor)` fetches the next. A list
+    that reads short says "nothing new" about what fell off it."""
+    nodes, info, pages = list(first["nodes"]), first["pageInfo"], 1
+    while info.get("hasNextPage"):
+        if pages >= 20:
+            raise hub.GhError(f"more than 20 pages of {what}")
+        nxt = more(info["endCursor"])
+        nodes += nxt["nodes"]
+        info = nxt["pageInfo"]
+        pages += 1
+    return nodes
 
 
 # ---- the watchdog and the previous scan ------------------------------------
@@ -162,6 +192,25 @@ def my_open_graphql(gh: hub.Gh, me: str, owners) -> set[str]:
         cursor = page["pageInfo"]["endCursor"]
 
 
+def author_open_graphql(gh: hub.Gh, author: str, owners, repos) -> set[str]:
+    """An author's open, non-draft PRs in the watched repos (else the owners), by
+    graphql: the check behind a search that found none."""
+    want_repos = {r.lower() for r in repos}
+    want_owners = {o.lower() for o in owners}
+    refs, cursor = set(), None
+    while True:
+        page = gh.graphql(AUTHOR_OPEN, login=author, cursor=cursor)["user"]["pullRequests"]
+        for n in page["nodes"]:
+            repo = n["repository"]
+            if n["isDraft"] or repo.get("isArchived"):
+                continue
+            if (repo["nameWithOwner"].lower() in want_repos if want_repos else repo["owner"]["login"].lower() in want_owners):
+                refs.add(f"{repo['nameWithOwner']}#{n['number']}")
+        if not page["pageInfo"]["hasNextPage"]:
+            return refs
+        cursor = page["pageInfo"]["endCursor"]
+
+
 def my_recent(gh: hub.Gh, owners, cutoff: dt.datetime) -> tuple[set[str], int]:
     """My open PRs and those merged since the cutoff, newest update first, paged
     only until a page ends before the cutoff. Never a repo's whole PR list: one
@@ -194,6 +243,13 @@ def fetch_pr(gh: hub.Gh, ref: str) -> dict:
         raise hub.GhError("more than 100 reviews; the standing review cannot be read")
     if pr["reviewThreads"]["pageInfo"]["hasNextPage"]:
         raise hub.GhError("more than 100 review threads")
+    pr["comments"]["nodes"] = page_all(
+        pr["comments"], lambda c: gh.graphql(COMMENTS, owner=owner, name=name, number=number, cursor=c)
+        ["repository"]["pullRequest"]["comments"], "comments")
+    for t in pr["reviewThreads"]["nodes"]:
+        t["comments"]["nodes"] = page_all(
+            t["comments"], lambda c, tid=t["id"]: gh.graphql(THREAD_COMMENTS, id=tid, cursor=c)["node"]["comments"],
+            "thread comments")
     return pr
 
 
@@ -213,11 +269,16 @@ def classify(ref: str, pr: dict, me: str) -> dict:
     def who(actor):
         return hub.login(actor) or "a deleted account"
 
+    def owed(r):
+        """An approval or a dismissal with no body asks nothing; its inline comments are thread comments."""
+        if r["state"] in ("APPROVED", "DISMISSED") and not (r.get("body") or "").strip():
+            return False
+        return theirs(r.get("author"))
+
     events = ([(t(c["createdAt"]), who(c.get("author")), "comment") for c in comments if theirs(c.get("author"))]
               + [(t(c["createdAt"]), who(c.get("author")), "thread comment") for c in thread_comments
                  if theirs(c.get("author"))]
-              + [(t(r["submittedAt"]), who(r.get("author")), f"review {r['state']}") for r in reviews
-                 if theirs(r.get("author"))])
+              + [(t(r["submittedAt"]), who(r.get("author")), f"review {r['state']}") for r in reviews if owed(r)])
     events = sorted(e for e in events if e[0] > last_reply)
     out = {"outbound": None, "awaiting": None, "drift": []}
     url = pr["url"]
@@ -256,6 +317,22 @@ def classify(ref: str, pr: dict, me: str) -> dict:
     return out
 
 
+def watched_row(ref: str, pr: dict, me: str, requested: bool, updated: str) -> str | None:
+    """The WATCHED line for a PR by a watched author, or None when it is a draft
+    or I already reviewed its current head."""
+    if pr["isDraft"]:
+        return None
+    head = pr["headRefOid"]
+    mine = sorted((r for r in pr["reviews"]["nodes"] if hub.is_me(r.get("author"), me) and r.get("state") != "PENDING"),
+                  key=lambda r: r.get("submittedAt") or "")
+    if any(((r.get("commit") or {}).get("oid")) == head for r in mine):
+        return None
+    last = mine[-1] if mine else None
+    seen = f"{last['state']}@{((last.get('commit') or {}).get('oid') or '?')[:7]}" if last else "none"
+    return (f"{ref} by {hub.login(pr.get('author')) or '?'} requested={'yes' if requested else 'no'} head={head[:7]} "
+            f"my-review={seen} updated {updated[:10]} {pr['title']!r}  {pr['url']}")
+
+
 # ---- the scan --------------------------------------------------------------
 
 def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> int:
@@ -266,16 +343,26 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     cutoff = at - dt.timedelta(days=int(g["merged_days"]))
     blocked: list[str] = []
     emit(f"comms-hub queue {at:%Y-%m-%dT%H:%MZ} login={me} owners={','.join(owners)} merged_days={g['merged_days']}")
-    # The Slack step reads watched channels from the previous scan's start.
+    # How far back the mention searches must reach; the Slack pages are read without `oldest`.
     stamp = hub.state_dir(cfg) / "last-scan"
     try:
         prev = hub.parse_time(stamp.read_text().strip()) if stamp.is_file() else None
     except ValueError:
         prev = None
     emit(f"previous-scan: {prev.isoformat()} epoch={int(prev.timestamp())}" if prev
-         else "previous-scan: none (first scan: read watched channels from 24 hours back)")
+         else "previous-scan: none (first scan: nothing before this tick was checked)")
+    if hub.first_tick_after_quiet(cfg, prev, at):
+        emit("morning: first tick since quiet hours ended; what was scheduled has posted, confirm each landed")
+    # A scheduled message can be withdrawn only before post_at, so each tick until then re-checks its claims.
+    pending = hub.pending_scheduled(cfg)
+    emit(f"scheduled-pending: {len(pending)}"
+         + (f" ({' '.join(s['sent_id'] for s in pending)}): gate each copy again this tick (check_draft.py --scheduled)"
+            if pending else ""))
     stamp.write_text(at.isoformat() + "\n")
     hub.append_log(cfg, f"scan started {at:%Y-%m-%dT%H:%M:%SZ}")
+    # A held draft lives in a file, not in the session's memory, so a compaction cannot lose it.
+    held = sorted(p.name for p in (hub.state_dir(cfg) / "held").glob("*.md"))
+    emit(f"held-drafts: {len(held)}" + (f" ({' '.join(held)}): gate and send each, or say why it still waits" if held else ""))
 
     need = 2 + len(authors)
     can_search = False
@@ -298,7 +385,8 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     inbound, watched, searched_open = [], [], None
     if can_search:
         try:
-            rows, _ = search(gh, f"is:pr is:open archived:false review-requested:{me} {scope(owners)}")
+            # review-requested: alone counts a team's requests as mine.
+            rows, _ = search(gh, f"is:pr is:open archived:false user-review-requested:{me} draft:false {scope(owners)}")
             inbound = sorted(rows, key=row_ref)
             rows, _ = search(gh, f"is:pr is:open archived:false author:{me} {scope(owners)}")
             searched_open = {row_ref(r) for r in rows}
@@ -308,6 +396,15 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
                     continue
                 rows, _ = search(gh, f"is:pr is:open archived:false author:{a} {where}")
                 watched += rows
+                if rows:
+                    continue
+                # A zero is an instrument reading until the other instrument agrees.
+                by_graph = author_open_graphql(gh, a, owners, g["watch_repos"])
+                if by_graph:
+                    blocked.append(f"WATCHED: the search found no open PR by {a}, graphql lists "
+                                   f"{len(by_graph)}: {' '.join(sorted(by_graph))}")
+                else:
+                    emit(f"watched-xcheck: {a} has no open PR (search and graphql agree)")
         except (hub.GhError, Blocked) as e:
             blocked.append(str(e))
 
@@ -340,17 +437,26 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
         emit(f"my-prs: {len(below)} open but not updated since the cutoff, fetched by number: {' '.join(below)}")
     refs |= set(below)
 
+    watched_items = {row_ref(r): r for r in sorted(watched, key=row_ref)}
     outbound, awaiting, drift, unknown = [], [], [], []
     with cf.ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(fetch_pr, gh, ref): ref for ref in sorted(refs)}
-        details = {}
+        futures = {pool.submit(fetch_pr, gh, ref): ref for ref in sorted(refs | set(watched_items))}
+        details, failed = {}, {}
         for f in cf.as_completed(futures):
             ref = futures[f]
             try:
                 details[ref] = f.result()
             except hub.GhError as e:
-                unknown.append(f"{ref} UNKNOWN: {e}")
-    for ref in sorted(details):
+                failed[ref] = e
+    # One wider re-read, alone and with twice the timeout, before a PR is UNKNOWN.
+    wider = hub.Gh(runner=gh.runner, timeout=gh.timeout * 2, retries=gh.retries, pause=gh.pause)
+    for ref in sorted(failed):
+        emit(f"re-read: {ref} failed ({failed[ref]}); once more with a {wider.timeout:g}s timeout")
+        try:
+            details[ref] = fetch_pr(wider, ref)
+        except hub.GhError as e:
+            unknown.append(f"{ref} UNKNOWN: {e} (after the wider re-read)")
+    for ref in sorted(refs & set(details)):
         rows = classify(ref, details[ref], me)
         if rows["outbound"]:
             outbound.append(rows["outbound"])
@@ -361,14 +467,12 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
         blocked.append(f"{len(unknown)} PR(s) could not be read")
 
     inbound_refs = {row_ref(r) for r in inbound}
-    seen, watched_rows = set(), []
-    for r in sorted(watched, key=row_ref):
-        ref = row_ref(r)
-        if ref in seen:
-            continue
-        seen.add(ref)
-        watched_rows.append(f"{ref} by {r['user']['login']} requested={'yes' if ref in inbound_refs else 'no'} "
-                            f"updated {r['updated_at'][:10]} {r['title']!r}  {r['html_url']}")
+    watched_rows = []
+    for ref, r in watched_items.items():
+        if ref in details:
+            row = watched_row(ref, details[ref], me, ref in inbound_refs, r["updated_at"])
+            if row:
+                watched_rows.append(row)
     sections = [
         ("INBOUND", [f"{row_ref(r)} by {r['user']['login']} updated {r['updated_at'][:10]} {r['title']!r}  {r['html_url']}"
                      for r in inbound]),
