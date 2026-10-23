@@ -67,9 +67,10 @@ GIT="${XARGS}git(\s+${GOPT})*\s+"
 # main` and `g() { git "$@"; }; g push --force` passed all of them while the
 # typed form was denied. A backtick is read in the command as typed: the
 # normalized one spaces backticks out, so a Markdown code span naming git in a
-# heredoc read as git running one.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}[\"']?\\\$" \
-   || printf '%s\n' "$MSG_FREE" | grep -qE "(^|[|&;]|&&|\|\||\\\$\()\s*${GIT}\`"; then
+# heredoc read as git running one. Most git commands hold neither character,
+# and the globs skip both greps for them.
+if { [[ "$CMD" == *'$'* ]] && printf '%s\n' "$CMD" | grep -qE "${A}${GIT}[\"']?\\\$"; } \
+   || { [[ "$MSG_FREE" == *'`'* ]] && printf '%s\n' "$MSG_FREE" | grep -qE "(^|[|&;]|&&|\|\||\\\$\()\s*${GIT}\`"; }; then
   emit_ask "git's subcommand here comes from a variable or a function's arguments, so this guard cannot tell which git command runs. Confirm what it expands to."
   exit 0
 fi
