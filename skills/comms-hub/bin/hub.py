@@ -6,6 +6,7 @@ review state and CI state. Imported by the scripts beside it; run directly:
   hub.py config       the config path, the state dir, the ids, or what is wrong with the config
   hub.py log TEXT     append a line to today's log in the state dir
   hub.py queries      the three Slack mention searches, dated two days back
+  hub.py routed TEXT  the log lines of the last two days that mention TEXT (a link, a key); exit 1 if none
 """
 from __future__ import annotations
 
@@ -261,6 +262,20 @@ def append_log(cfg: dict | None, line: str) -> Path:
     return p
 
 
+def routed(cfg: dict, text: str, days: int = 2) -> list[str]:
+    """Log lines from the last `days` days that mention `text`: what was already
+    routed, held or asked about, so an item is not sent to its owner twice."""
+    d = state_dir(cfg) / "log"
+    today = local_now(cfg).date()
+    out = []
+    for back in range(days):
+        day = today - dt.timedelta(days=back)
+        p = d / f"{day:%Y-%m-%d}.md"
+        if p.is_file():
+            out += [f"{day:%Y-%m-%d} {line}" for line in p.read_text().splitlines() if text in line]
+    return out
+
+
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -422,7 +437,8 @@ def init(gh: Gh | None = None, example: Path | None = None) -> int:
 
 def main(argv=None, gh: Gh | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] not in (["init"], ["config"], ["log"], ["queries"]) or (argv[0] == "log" and len(argv) < 2):
+    if (argv[:1] not in (["init"], ["config"], ["log"], ["queries"], ["routed"])
+            or (argv[0] in ("log", "routed") and len(argv) < 2)):
         print(__doc__.split("run directly:", 1)[1].rstrip())
         return 2
     if argv[0] == "init":
@@ -453,6 +469,12 @@ def main(argv=None, gh: Gh | None = None) -> int:
         for q in mention_queries(uid, local_now(cfg).date() - dt.timedelta(days=2)):
             print(q)
         return 0
+    if argv[0] == "routed":
+        lines = routed(cfg, " ".join(argv[1:]))
+        for line in lines:
+            print(line)
+        print(f"routed: {len(lines)} line(s) in the last 2 days mention {' '.join(argv[1:])!r}")
+        return 0 if lines else 1
     print(f"logged to {append_log(cfg, ' '.join(argv[1:]))}")
     return 0
 

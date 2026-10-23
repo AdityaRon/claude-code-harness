@@ -127,12 +127,18 @@ it, and the tick cannot run without it.
    `routing` entry (`PY B/hub.py config` prints them) whose `repos` holds the
    PR's repo, whose `tickets` holds the ticket key's prefix, or whose
    `channels` holds the Slack channel of a post that names nobody. Run ListAgents
-   now, at routing time, and confirm the
-   owner is listed. Send one SendMessage per peer covering all of its items,
-   each with its link, what changed, and what is asked of it. No entry, or the
-   owner is not listed: `~/.claude/session-route.sh --pr N --repo owner/name`
-   may name the session that raised a PR (single-author repos only); otherwise
-   ask the user. Never act on a PR another session owns.
+   now, at routing time, and confirm the owner is listed. Before messaging an
+   item, check the owner is not already on it: `PY B/hub.py routed <link>`
+   prints what the last two days' log routed, held or asked about it, and
+   ListAgents shows what each session is on; an item routed with nothing new
+   since is not routed again. For a review, read the whole conversation, not
+   the summary: the review's inline threads too (an empty-bodied approval
+   once carried three inline comments). Send one SendMessage per peer
+   covering all of its items, opening with the count ("3 items"), each with
+   its link, what changed, and what is asked of it. No entry, or the owner is
+   not listed: `~/.claude/session-route.sh --pr N --repo owner/name` may name
+   the session that raised a PR (single-author repos only); otherwise ask the
+   user. Never act on a PR another session owns.
 4. **Drafts**. For each one, all in the turn that sends it:
    - Verify every claim against its source now: the PR's state, head, checks
      and review bodies (`gh pr view`), the ticket, the page and its version. A
