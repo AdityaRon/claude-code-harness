@@ -4,8 +4,9 @@
 # hooks check every call and statusline.sh runs outside the sandbox. Ask, not
 # deny, because people extend these, and the repo plus install.sh reaches them
 # anyway. Moving or emptying ~/.claude itself is denied. A write to a Claude Code
-# settings file, a shell startup file, ~/.gitconfig or ~/Library/LaunchAgents
-# asks first. Reads pass. Writes made from inside an interpreter are not seen.
+# settings file, the installed-plugin cache ~/.claude/plugins, a shell startup
+# file, ~/.gitconfig or ~/Library/LaunchAgents asks first. Reads pass. Writes
+# made from inside an interpreter are not seen.
 source "$(dirname "$0")/lib.sh"
 
 read_input
@@ -31,6 +32,7 @@ note() {   # note LEVEL WORD
     deny) why="Blocked: $2 holds the installed harness, whose hooks check every command. Move or empty it yourself if you mean to." ;;
     harness) why="$2 is part of the installed harness, which checks every command. Approve only if you asked for this. bash install.sh overwrites the files it ships; a hook of your own under a new name is kept." ;;
     settings) why="$2 is a Claude Code settings file: a change there can grant permissions or add hooks. Approve only if you asked for this." ;;
+    plugins) why="$2 is in the installed-plugin cache, whose hooks and commands load in every session. Approve only if you asked for this; /plugin install from your own prompt is unaffected." ;;
     startup) why="$2 runs at every shell start or login, or sets git's behaviour everywhere. Approve only if you asked for this." ;;
     *) return ;;
   esac
@@ -71,13 +73,16 @@ abs_path() {
 H=$(abs_path "$HOME")
 HR=$(cd "$H" 2>/dev/null && pwd -P) || HR=$H
 
-level_of() {   # level_of PATH DESTRUCTIVE: deny, harness, settings, startup or nothing
+level_of() {   # level_of PATH DESTRUCTIVE: deny, harness, settings, plugins, startup or nothing
   local p="$1" h c
   case "$p" in */.claude/settings.json|*/.claude/settings.local.json) echo settings; return ;; esac
   for h in "$H" "$HR"; do
     c="$h/.claude"
     case "$p" in
       "$c/hooks"|"$c/hooks/"*) echo harness; return ;;
+      # The Edit deny rules cover the file tools and, since 2.1.309, a redirect;
+      # cp, tee and the rest reached the cache with nothing asking.
+      "$c/plugins"|"$c/plugins/"*) echo plugins; return ;;
       "$c/"*.sh) [[ "${p#"$c"/}" != */* ]] && { echo harness; return; } ;;
       "$c") [[ "$2" == 1 ]] && { echo deny; return; } ;;
       "$h/.zshrc"|"$h/.zshenv"|"$h/.zprofile"|"$h/.zlogin"|"$h/.zlogout"|"$h/.bashrc"|"$h/.bash_profile"|"$h/.bash_login"|"$h/.profile"|"$h/.gitconfig"|"$h/.config/git/config"|"$h/Library/LaunchAgents/"*)

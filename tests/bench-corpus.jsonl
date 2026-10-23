@@ -223,6 +223,12 @@
 {"id": "friction-hole-rm-shellout-home", "tool_name": "Bash", "tool_input": {"command": "python3 -c \"import os; os.system('rm -rf /opt/project/build')\""}, "source": "friction"}
 {"id": "friction-hole-rm-shellout-list-root", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['rm','-rf','/'])\nEOF"}, "source": "friction"}
 {"id": "friction-fp-rm-heredoc-edits-notes", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF'\np = 'notes.md'\ns = open(p).read() + '- `rm -rf \"$(pwd)\"` now asks\\n'\nopen(p, 'w').write(s)\nEOF"}, "source": "friction"}
+{"id": "friction-hole-git-variable-subcommand", "tool_name": "Bash", "tool_input": {"command": "X=push; git $X --force origin main"}, "source": "friction"}
+{"id": "friction-hole-git-function-args", "tool_name": "Bash", "tool_input": {"command": "g() { git \"$@\"; }; g push --force origin main"}, "source": "friction"}
+{"id": "friction-hole-config-plugins-cp", "tool_name": "Bash", "tool_input": {"command": "cp hooks.json ~/.claude/plugins/cache/p/hooks/hooks.json"}, "source": "friction"}
+{"id": "friction-control-git-dash-c-variable", "tool_name": "Bash", "tool_input": {"command": "git -C \"$dir\" status"}, "source": "friction"}
+{"id": "friction-control-config-plugins-ls", "tool_name": "Bash", "tool_input": {"command": "ls -la ~/.claude/plugins/cache"}, "source": "friction"}
+{"id": "friction-control-git-code-span-heredoc", "tool_name": "Bash", "tool_input": {"command": "git status; cat > notes.md <<'EOF'\nthe check (`git` in a compound form, `bash` running a script)\nEOF"}, "source": "friction"}
 {"id": "bash-git-status", "tool_name": "Bash", "tool_input": {"command": "git status --short"}, "source": "synthetic"}
 {"id": "bash-git-log", "tool_name": "Bash", "tool_input": {"command": "git log --oneline -20"}, "source": "synthetic"}
 {"id": "bash-git-diff-stat", "tool_name": "Bash", "tool_input": {"command": "git diff --stat main...HEAD"}, "source": "synthetic"}

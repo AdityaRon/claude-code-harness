@@ -7,7 +7,8 @@
 #         and checkout or restore of the whole tree
 #   ask:  glob staging, stash drop/clear, worktree remove --force outside this
 #         session's scratch, remote branch deletion whose tip no other ref
-#         holds, remote set-url/add, any other alias, identity and signing config
+#         holds, remote set-url/add, any other alias, identity and signing
+#         config, and a subcommand held in a variable or a function's arguments
 # Most patterns start at a command boundary, but matching is textual: the same
 # words in a heredoc, or in a message this cannot prove is text, can still match.
 source "$(dirname "$0")/lib.sh"
@@ -60,6 +61,19 @@ GOPT='(-c[= ][^ ]+|-C[= ][^ ]+|--git-dir[= ][^ ]+|--work-tree[= ][^ ]+|--namespa
 # reaches git from behind a word that is not a command boundary.
 XARGS='(xargs(\s+-[A-Za-z0-9]+(\s+\{\})?)*\s+)?'
 GIT="${XARGS}git(\s+${GOPT})*\s+"
+
+# --- A subcommand this cannot read --------------------------------------
+# Every check below names its subcommand, so `X=push; git $X --force origin
+# main` and `g() { git "$@"; }; g push --force` passed all of them while the
+# typed form was denied. A backtick is read in the command as typed: the
+# normalized one spaces backticks out, so a Markdown code span naming git in a
+# heredoc read as git running one. Most git commands hold neither character,
+# and the globs skip both greps for them.
+if { [[ "$CMD" == *'$'* ]] && printf '%s\n' "$CMD" | grep -qE "${A}${GIT}[\"']?\\\$"; } \
+   || { [[ "$MSG_FREE" == *'`'* ]] && printf '%s\n' "$MSG_FREE" | grep -qE "(^|[|&;]|&&|\|\||\\\$\()\s*${GIT}\`"; }; then
+  emit_ask "git's subcommand here comes from a variable or a function's arguments, so this guard cannot tell which git command runs. Confirm what it expands to."
+  exit 0
+fi
 
 # Each check below contains one of these, so one grep stands in for all of them
 # when none is present: git status, log, diff, show and commit skip the rest.

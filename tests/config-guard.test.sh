@@ -8,9 +8,10 @@ HOOK=hooks/config-guard.sh
 PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cfg.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home" CLAUDE_AUDIT_LOG=/dev/null
-mkdir -p "$HOME/.claude/hooks" "$HOME/Library/LaunchAgents" "$TMP/proj"
+mkdir -p "$HOME/.claude/hooks" "$HOME/.claude/plugins/cache/p/hooks" "$HOME/Library/LaunchAgents" "$TMP/proj"
 touch "$HOME/.claude/hooks/env-guard.sh" "$HOME/.claude/hooks/lib.sh" "$HOME/.claude/statusline.sh"
 ln -s "$HOME/.claude/hooks" "$TMP/link"
+ln -s "$HOME/.claude/plugins" "$TMP/plink"
 
 verdict() {   # verdict TOOL JSON-INPUT [CWD]
   local out
@@ -71,6 +72,21 @@ file_is ask Edit "$HOME/.zshrc"
 file_is ask Edit "$HOME/.gitconfig"
 file_is ask Write "$HOME/Library/LaunchAgents/x.plist"
 file_is ask NotebookEdit "$HOME/.profile"
+
+echo "=== the installed-plugin cache: ask ==="
+bash_is ask 'echo "{}" > ~/.claude/plugins/cache/p/hooks/hooks.json'
+bash_is ask '(echo x) > ~/.claude/plugins/cache/p/hooks/hooks.json'
+bash_is ask 'cp hooks.json ~/.claude/plugins/cache/p/hooks/hooks.json'
+bash_is ask 'tee ~/.claude/plugins/installed_plugins.json < p.json'
+bash_is ask 'mv /srv/p ~/.claude/plugins/cache/'
+bash_is ask 'rm -rf ~/.claude/plugins/cache/p'
+bash_is ask 'cp x.json hooks/hooks.json' "$HOME/.claude/plugins/cache/p"
+file_is ask Write "$HOME/.claude/plugins/cache/p/hooks/hooks.json"
+file_is ask Edit "$TMP/plink/installed_plugins.json"
+bash_is allow 'ls -la ~/.claude/plugins/cache'
+bash_is allow 'jq . ~/.claude/plugins/installed_plugins.json'
+bash_is allow 'cp ~/.claude/plugins/cache/p/hooks/hooks.json /srv/backup/'
+file_is allow Read "$HOME/.claude/plugins/cache/p/hooks/hooks.json"
 
 echo "=== reads and unrelated writes: allow ==="
 bash_is allow 'cmp -s hooks/env-guard.sh ~/.claude/hooks/env-guard.sh'
