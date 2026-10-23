@@ -50,15 +50,38 @@ PR = """query CommsPR($owner:String!,$name:String!,$number:Int!){repository(owne
   reviewRequests(first:50){nodes{requestedReviewer{__typename ... on User{login} ... on Team{slug}
    ... on Bot{login} ... on Mannequin{login}}}}
   reviews(first:100){pageInfo{hasNextPage} nodes{author{login __typename} state body submittedAt commit{oid}}}
-  comments(last:100){nodes{author{login __typename} createdAt}}
-  reviewThreads(first:100){pageInfo{hasNextPage} nodes{comments(last:50){nodes{author{login __typename} createdAt}}}}
+  comments(first:100){pageInfo{hasNextPage endCursor} nodes{author{login __typename} createdAt}}
+  reviewThreads(first:100){pageInfo{hasNextPage} nodes{id
+   comments(first:50){pageInfo{hasNextPage endCursor} nodes{author{login __typename} createdAt}}}}
   commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage}
    nodes{__typename ... on CheckRun{name status conclusion startedAt completedAt}
    ... on StatusContext{context state createdAt}}}}}}}}}}"""
 
 
+COMMENTS = """query CommsComments($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){
+ pullRequest(number:$number){comments(first:100,after:$cursor){pageInfo{hasNextPage endCursor}
+  nodes{author{login __typename} createdAt}}}}}"""
+
+THREAD_COMMENTS = """query CommsThreadComments($id:ID!,$cursor:String){node(id:$id){... on PullRequestReviewThread{
+ comments(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{author{login __typename} createdAt}}}}}"""
+
+
 class Blocked(Exception):
     pass
+
+
+def page_all(first: dict, more, what: str) -> list[dict]:
+    """Every node behind a first page: `more(cursor)` fetches the next. A list
+    that reads short says "nothing new" about what fell off it."""
+    nodes, info, pages = list(first["nodes"]), first["pageInfo"], 1
+    while info.get("hasNextPage"):
+        if pages >= 20:
+            raise hub.GhError(f"more than 20 pages of {what}")
+        nxt = more(info["endCursor"])
+        nodes += nxt["nodes"]
+        info = nxt["pageInfo"]
+        pages += 1
+    return nodes
 
 
 # ---- the watchdog and the previous scan ------------------------------------
@@ -220,6 +243,13 @@ def fetch_pr(gh: hub.Gh, ref: str) -> dict:
         raise hub.GhError("more than 100 reviews; the standing review cannot be read")
     if pr["reviewThreads"]["pageInfo"]["hasNextPage"]:
         raise hub.GhError("more than 100 review threads")
+    pr["comments"]["nodes"] = page_all(
+        pr["comments"], lambda c: gh.graphql(COMMENTS, owner=owner, name=name, number=number, cursor=c)
+        ["repository"]["pullRequest"]["comments"], "comments")
+    for t in pr["reviewThreads"]["nodes"]:
+        t["comments"]["nodes"] = page_all(
+            t["comments"], lambda c, tid=t["id"]: gh.graphql(THREAD_COMMENTS, id=tid, cursor=c)["node"]["comments"],
+            "thread comments")
     return pr
 
 
@@ -406,13 +436,21 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     outbound, awaiting, drift, unknown = [], [], [], []
     with cf.ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(fetch_pr, gh, ref): ref for ref in sorted(refs | set(watched_items))}
-        details = {}
+        details, failed = {}, {}
         for f in cf.as_completed(futures):
             ref = futures[f]
             try:
                 details[ref] = f.result()
             except hub.GhError as e:
-                unknown.append(f"{ref} UNKNOWN: {e}")
+                failed[ref] = e
+    # One wider re-read, alone and with twice the timeout, before a PR is UNKNOWN.
+    wider = hub.Gh(runner=gh.runner, timeout=gh.timeout * 2, retries=gh.retries, pause=gh.pause)
+    for ref in sorted(failed):
+        emit(f"re-read: {ref} failed ({failed[ref]}); once more with a {wider.timeout:g}s timeout")
+        try:
+            details[ref] = fetch_pr(wider, ref)
+        except hub.GhError as e:
+            unknown.append(f"{ref} UNKNOWN: {e} (after the wider re-read)")
     for ref in sorted(refs & set(details)):
         rows = classify(ref, details[ref], me)
         if rows["outbound"]:

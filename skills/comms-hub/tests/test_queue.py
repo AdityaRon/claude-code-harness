@@ -32,6 +32,10 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   watched-reviewed-listed: queue.py: `if any(((r.get("commit") or {}).get("oid")) == head for r in mine):` => `if False:`
   watched-zero-trusted: queue.py: `if by_graph:` => `if False:`
   held-uncounted: queue.py: `held = sorted(p.name for p in (hub.state_dir(cfg) / "held").glob("*.md"))` => `held = []`
+  comments-one-page: queue.py: `while info.get("hasNextPage"):` => `while False:`
+  thread-comments-one-page: queue.py: `t["comments"]["nodes"] = page_all(` => `t["comments"]["nodes"] = t["comments"]["nodes"] or page_all(`
+  no-wider-reread: queue.py: `details[ref] = fetch_pr(wider, ref)` => `raise hub.GhError("no re-read")`
+  reread-not-wider: queue.py: `timeout=gh.timeout * 2` => `timeout=gh.timeout`
 """
 import contextlib
 import importlib.util
@@ -78,14 +82,15 @@ def rv(name, state, at, oid="h2", body="a word"):
 
 
 def detail(n, state="OPEN", head="h2", reviews=(), comments=(), threads=(), checks=(), requests=(), draft=False,
-           decision=None, author=ME):
+           decision=None, author=ME, more_comments=False, more_thread=False):
     return {"number": n, "url": f"https://github.com/acme/app/pull/{n}", "title": f"pr {n}", "state": state,
             "isDraft": draft, "createdAt": OLD, "mergedAt": None, "headRefOid": head, "mergeStateStatus": "CLEAN",
             "reviewDecision": decision, "author": actor(author),
             "reviewRequests": {"nodes": [{"requestedReviewer": {"__typename": "User", "login": r}} for r in requests]},
             "reviews": page(list(reviews)), "latestReviews": {"nodes": []},
-            "comments": {"nodes": list(comments)},
-            "reviewThreads": page([{"comments": {"nodes": list(t)}} for t in threads]),
+            "comments": page(list(comments), more=more_comments),
+            "reviewThreads": page([{"id": f"t{n}-{i}", "comments": page(list(t), more=more_thread)}
+                                   for i, t in enumerate(threads)]),
             "commits": {"nodes": [{"commit": {"oid": head, "statusCheckRollup": {"contexts": page(list(checks))}}}]}}
 
 
@@ -131,7 +136,11 @@ def fake(**over):
 
     def pr(v):
         d = over.get("details", DETAILS).get(v["number"])
+        if isinstance(d, list):  # one answer per call: a gh that fails, then answers
+            d = d.pop(0)
         return d if isinstance(d, Fail) else {"repository": {"pullRequest": d}}
+
+    second = {"pageInfo": {"hasNextPage": False}, "nodes": [ev("bob", "2026-10-20T10:00:00Z")]}
 
     return FakeGh(
         graphql={
@@ -141,7 +150,9 @@ def fake(**over):
                 [node(1), node(2), node(3), node(4, state="MERGED", merged=RECENT),
                  node(6, state="MERGED", updated="2026-10-13T10:00:00Z", merged="2026-10-13T09:00:00Z")])}}]),
             "CommsPR": pr,
-            "CommsAuthorOpen": {"user": {"pullRequests": page(
+            "CommsComments": {"repository": {"pullRequest": {"comments": second}}},
+            "CommsThreadComments": {"node": {"comments": second}},
+            "CommsAuthorOpen":{"user": {"pullRequests": page(
                 [{"number": n, "isDraft": False, "repository": {"nameWithOwner": "acme/app", "isArchived": False,
                                                                  "owner": {"login": "acme"}}}
                  for n in over.get("author_open", [])])}},
@@ -274,7 +285,27 @@ class Scan(unittest.TestCase):
         rc, out = scan(fake(details={**DETAILS, 2: Fail()}))
         self.assertEqual(rc, 3)
         self.assertEqual([r.split()[:2] for r in section(out, "UNKNOWN")], [["acme/app#2", "UNKNOWN:"]])
+        self.assertIn("(after the wider re-read)", section(out, "UNKNOWN")[0])
         self.assertTrue(section(out, "AWAITING"), "the rest is still listed")
+
+    def test_a_second_page_of_comments_or_thread_comments_is_read(self):
+        quiet = detail(2, comments=[ev(ME, "2026-10-19T10:00:00Z")], more_comments=True)
+        gh = fake(details={**DETAILS, 2: quiet})
+        rc, out = scan(gh)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("bob comment", section(out, "OUTBOUND")[0], "bob's comment is on the second page")
+        self.assertEqual(gh.count("CommsComments"), 1)
+        threaded = detail(2, comments=[ev(ME, "2026-10-19T10:00:00Z")], threads=[[ev(ME, "2026-10-18T10:00:00Z")]],
+                          more_thread=True)
+        rc, out = scan(fake(details={**DETAILS, 2: threaded}))
+        self.assertIn("bob thread comment", section(out, "OUTBOUND")[0], "on the thread's second page")
+
+    def test_a_failed_fetch_is_re_read_wider_before_it_is_unknown(self):
+        rc, out = scan(fake(details={**DETAILS, 2: [Fail(), Fail(), DETAILS[2]]}))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("re-read: acme/app#2 failed (gh api graphql: HTTP 502 (tried 2x)); once more with a 90s timeout", out)
+        self.assertEqual(section(out, "UNKNOWN"), [])
+        self.assertEqual([r.split()[0] for r in section(out, "OUTBOUND")], ["acme/app#2", "acme/app#4"])
 
     def test_bot_and_older_activity_are_not_outbound(self):
         d = detail(2, comments=[ev("bob", "2026-10-18T10:00:00Z"), ev(ME, "2026-10-19T10:00:00Z"),
