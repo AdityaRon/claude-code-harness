@@ -22,6 +22,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   answers-unchecked: check_draft.py: `if args.answers and args.reply != max(args.answers, key=ts_key):` => `if False:`
   replies-optional: check_draft.py: `if stamp["target"].startswith("reply:") and not args.replies:` => `if False:`
   send-unconfirmed: check_draft.py: `if after <= before:` => `if False:`
+  posted-still-listed: check_draft.py: `if hub.parse_time(s.get("post_at")) <= now:` => `if False:`
 """
 import contextlib
 import io
@@ -177,6 +178,20 @@ class SendMode(unittest.TestCase):
             self.assertIn("send: live", gate(env, "ok\n", "--top-level", gh=fake())[1])
             rc, out = gate(env, "ok\n", "--top-level", gh=fake(), now=EVENING)
             self.assertIn("send: schedule post_at=2026-10-22T08:00:00-07:00", out)
+
+
+class Scheduled(unittest.TestCase):
+    def test_pending_scheduled_messages_are_listed_until_they_post(self):
+        with Env() as env:
+            rc, out = gate(env, "ok\n", "--top-level", gh=fake(), now=EVENING)
+            self.assertIn("send: schedule", out)
+            self.assertEqual(gate(env, None, "--record-sent", "Q0001", now=EVENING)[0], 0)
+            rc, out = gate(env, None, "--scheduled", now="2026-10-22T14:00:00+00:00")  # 07:00 there
+            self.assertEqual(rc, 0, out)
+            self.assertIn("scheduled: 1 pending", out)
+            self.assertIn(f"Q0001 post_at=2026-10-22T08:00:00-07:00 target=top-level copy={env.state}/sent/2026-10-21/Q0001.md", out)
+            rc, out = gate(env, None, "--scheduled", now="2026-10-22T15:30:00+00:00")  # 08:30, posted
+            self.assertIn("scheduled: 0 pending", out)
 
 
 class Freshness(unittest.TestCase):

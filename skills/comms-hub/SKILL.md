@@ -159,6 +159,12 @@ it, and the tick cannot run without it.
      API, so if the draft said `fold-in: expected`, or another draft for that
      thread is due, hold it and send it live, gated again, at the first tick
      after `post_at`.
+   - The morning re-check: when step 1's header printed `morning:`, run
+     `PY B/check_draft.py --scheduled` and gate each pending message's copy
+     again (`check_draft.py <copy> --reply <ts>`, with the same `--asks`).
+     A FAIL means the claims moved overnight: withdraw it with the Slack
+     server's delete-scheduled tool when it has one, else tell the user
+     before `post_at`, and send the draft back to the peer with what changed.
    - Confirm the send: the send tool says OK either way. For a reply, re-read
      the parent thread and compare its reply count with the one read before
      the send; for a top-level message, re-read the channel's first page and

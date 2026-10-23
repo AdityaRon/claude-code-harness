@@ -328,6 +328,16 @@ class Scan(unittest.TestCase):
         self.assertIn("previous-scan: none", outs[0])
         self.assertIn("previous-scan: 2026-10-21T17:00:00+00:00 epoch=1792602000", outs[1])
         self.assertEqual(log.count("scan started"), 2)
+        self.assertNotIn("morning:", outs[1])
+
+    def test_the_first_scan_after_quiet_hours_says_morning(self):
+        with Env(now=NOW) as env:
+            env.state.mkdir(parents=True)
+            (env.state / "last-scan").write_text("2026-10-21T03:00:00+00:00\n")  # 20:00 the evening before
+            out = []
+            q.scan(hub.load_config(), hub.Gh(runner=fake(), pause=0), emit=out.append)
+        self.assertIn("morning: first tick since quiet hours ended; re-check every scheduled message "
+                      "(check_draft.py --scheduled)", out)
 
     def test_a_scan_that_outlived_the_wall_limit_is_blocked_even_unwatched(self):
         base = time.time()

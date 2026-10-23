@@ -232,6 +232,16 @@ def send_plan(cfg: dict, at: dt.datetime) -> tuple[str, dt.datetime | None]:
     return "schedule", dt.datetime.combine(day, post, tzinfo=tz)
 
 
+def first_tick_after_quiet(cfg: dict, prev: dt.datetime | None, at: dt.datetime) -> bool:
+    """True once a day: `at` is live and `prev` was before today's end of quiet
+    hours, whether that was last evening or a tick the laptop slept through."""
+    if prev is None or send_plan(cfg, at)[0] != "live":
+        return False
+    tz = zone(cfg)
+    end = dt.datetime.combine(at.astimezone(tz).date(), dt.time.fromisoformat(cfg["quiet_hours"]["post_at"]), tzinfo=tz)
+    return prev < end <= at
+
+
 def mention_queries(uid: str, since: dt.date) -> list[str]:
     """The three Slack searches that together find what names me: the mention
     itself, a message or reply sent to me, and a thread I am in. One search

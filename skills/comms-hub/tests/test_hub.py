@@ -26,6 +26,8 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   to-search-dropped: hub.py: `f"to:<@{uid}> {day}", ` => ``
   queries-today: hub.py: `local_now(cfg).date() - dt.timedelta(days=2)` => `local_now(cfg).date()`
   route-keys-unset: hub.py: `for k in ("repos", "tickets", "channels"):` => `for k in ():`
+  morning-never: hub.py: `return prev < end <= at` => `return False`
+  morning-every-tick: hub.py: `return prev < end <= at` => `return True`
 """
 import contextlib
 import datetime as dt
@@ -136,6 +138,16 @@ class QuietHours(unittest.TestCase):
     def test_small_hours_schedule_the_same_morning(self):
         mode, post = self.at("2026-10-22T02:00:00-07:00")
         self.assertEqual((mode, post.isoformat()), ("schedule", "2026-10-22T08:00:00-07:00"))
+
+    def test_the_first_tick_after_quiet_hours_is_the_morning_one(self):
+        t = dt.datetime.fromisoformat
+        morning = t("2026-10-22T08:07:00-07:00")
+        self.assertTrue(hub.first_tick_after_quiet(self.cfg, t("2026-10-22T07:37:00-07:00"), morning))
+        self.assertTrue(hub.first_tick_after_quiet(self.cfg, t("2026-10-21T18:37:00-07:00"), morning), "slept all night")
+        self.assertFalse(hub.first_tick_after_quiet(self.cfg, t("2026-10-22T08:07:00-07:00"), t("2026-10-22T08:37:00-07:00")))
+        self.assertFalse(hub.first_tick_after_quiet(self.cfg, t("2026-10-22T06:37:00-07:00"), t("2026-10-22T07:07:00-07:00")),
+                         "still quiet")
+        self.assertFalse(hub.first_tick_after_quiet(self.cfg, None, morning))
 
     def test_the_log_day_is_the_configured_zones_not_the_machines(self):
         # 17:00 UTC on 2026-10-21 is 10:00 that day in Los Angeles and 06:00 the next in Auckland.

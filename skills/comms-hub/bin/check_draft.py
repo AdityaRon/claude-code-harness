@@ -7,6 +7,7 @@ same turn.
   check_draft.py FILE --assert-fresh [--max-age S]  the bytes are the ones that passed, recently
   check_draft.py FILE --record-sent ID [--replies BEFORE AFTER]
                                                    after sending: keep a copy, log it, retire the pass
+  check_draft.py --scheduled                       scheduled messages not yet posted, with the copy to re-gate
 
 A reply that answers several messages threads under the newest of them: name
 them all with --answers, and --reply must be the newest (six of seven answers
@@ -235,6 +236,7 @@ def record_sent(args, cfg) -> int:
     safe = re.sub(r"[^\w.-]", "_", args.record_sent)
     shutil.copyfile(args.file, d / f"{safe}.md")
     stamp["sent_id"] = args.record_sent
+    stamp["sent_copy"] = str(d / f"{safe}.md")
     p.write_text(json.dumps(stamp, indent=1))
     verb = "scheduled" if stamp["send"] == "schedule" else "sent"
     hub.append_log(cfg, f"{verb} {args.record_sent} target={stamp['target']} sha256={stamp['sha256'][:12]}")
@@ -242,9 +244,29 @@ def record_sent(args, cfg) -> int:
     return 0
 
 
+def list_scheduled(cfg) -> int:
+    """Scheduled messages whose post_at is still ahead: each can be gated again
+    from its sent copy and withdrawn before it posts."""
+    now = hub.now()
+    rows = []
+    for p in sorted((hub.state_dir(cfg) / "gate").glob("*.json")):
+        s = json.loads(p.read_text())
+        if s.get("send") != "schedule" or not s.get("sent_id"):
+            continue
+        if hub.parse_time(s.get("post_at")) <= now:
+            continue
+        rows.append(f"{s['sent_id']} post_at={s['post_at']} target={s['target']} copy={s.get('sent_copy') or '?'}"
+                    + (f" asks={','.join(s['asks'])}" if s.get("asks") else ""))
+    print(f"scheduled: {len(rows)} pending")
+    for r in rows:
+        print(r)
+    return 0
+
+
 def main(argv=None, gh=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("file")
+    ap.add_argument("file", nargs="?")
+    ap.add_argument("--scheduled", action="store_true")
     ap.add_argument("--reply", metavar="TS")
     ap.add_argument("--top-level", action="store_true")
     ap.add_argument("--asks", nargs="+", default=[], metavar="LOGIN",
@@ -263,7 +285,9 @@ def main(argv=None, gh=None) -> int:
     except hub.ConfigError as e:
         print(f"config: {e}")
         return 2
-    if not os.path.isfile(args.file):
+    if args.scheduled:
+        return list_scheduled(cfg)
+    if not args.file or not os.path.isfile(args.file):
         print(f"no such file: {args.file}")
         return 2
     if args.assert_fresh:

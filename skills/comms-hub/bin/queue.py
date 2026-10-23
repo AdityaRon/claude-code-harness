@@ -321,6 +321,8 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
         prev = None
     emit(f"previous-scan: {prev.isoformat()} epoch={int(prev.timestamp())}" if prev
          else "previous-scan: none (first scan: nothing before this tick was checked)")
+    if hub.first_tick_after_quiet(cfg, prev, at):
+        emit("morning: first tick since quiet hours ended; re-check every scheduled message (check_draft.py --scheduled)")
     stamp.write_text(at.isoformat() + "\n")
     hub.append_log(cfg, f"scan started {at:%Y-%m-%dT%H:%M:%SZ}")
 
