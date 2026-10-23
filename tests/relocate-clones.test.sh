@@ -84,6 +84,8 @@ echo ""
 echo "=== --apply: moved, every worktree repaired, records renamed ==="
 OUT=$(bash "$REL" --apply "$D/repoA" "$D/parent/child" 2>&1); RC=$?
 [ "$RC" = 0 ] && pass "exit 0" || fail "exit 0" "rc=$RC $OUT"
+# child has no worktrees: bash 3.2 calls an empty "${ARGS[@]}" unbound under set -u.
+lacks "a repo with no worktrees repairs without a shell error" "unbound variable" "$OUT"
 [ -d "$HOME/code/repoA" ] && [ ! -e "$D/repoA" ] && pass "repoA moved" || fail "repoA moved" ""
 [ -d "$HOME/code/child" ] && [ ! -e "$D/parent/child" ] && pass "child moved; parent, not a repo, stays" || fail "child moved" ""
 git -C "$HOME/code/repoA" status >/dev/null 2>&1 && pass "git status in the moved repo" || fail "repo status" "$(git -C "$HOME/code/repoA" status 2>&1)"

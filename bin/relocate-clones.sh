@@ -123,7 +123,7 @@ for m in "${MOVES[@]}"; do
       [[ -d "$wt" ]] && ARGS+=("$wt")
     done
     echo "git -C $R worktree repair ${ARGS[*]:-}"
-    git -C "$R" worktree repair "${ARGS[@]}" 2>&1 | sed 's/^/  /'
+    git -C "$R" worktree repair ${ARGS[@]+"${ARGS[@]}"} 2>&1 | sed 's/^/  /'
   done < <(find "$DEST" -name node_modules -prune -o -name .git -print -prune 2>/dev/null | sort)
 done
 for r in "${RENAMES[@]}"; do
