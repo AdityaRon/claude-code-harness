@@ -564,5 +564,26 @@ check "printed to head"                      allow $'python3 -c "print(\'git pus
 check "a script adds a test naming push -f"  allow $'python3 - tests/git-guard.test.sh <<\'EOF\'\nimport sys\np = sys.argv[1]; s = open(p).read()\ns = s.replace(\'# end\', \'check "VAR=1; with no space" deny "X=1;git push -f origin main"\\n# end\')\nopen(p, \'w\').write(s)\nEOF'
 
 echo ""
+echo "=== A subcommand in a variable or a function's arguments (expect: ask) ==="
+check "a variable subcommand, --force"       ask   'X=push; git $X --force origin main'
+check "a quoted variable subcommand"         ask   'git "$SUB" --force origin main'
+check "a braced variable subcommand"         ask   'git ${SUB} -f origin main'
+check "a function passing its arguments"     ask   'g() { git "$@"; }; g push --force origin main'
+check "a command substitution subcommand"    ask   'git $(echo push) --force origin main'
+check "a backtick subcommand"                ask   'git `echo push` --force origin main'
+check "after -C, a variable subcommand"      ask   'git -C /repo $SUB --force'
+check "a python variable subcommand"         ask   $'python3 -c "import subprocess; sub=\'push\'; subprocess.run([\'git\', sub, \'--force\'])"'
+check "typed, still denied"                  deny  'cd /repo && git push --force origin main'
+check "a variable as -C's value"             allow 'git -C "$dir" status'
+check "an unquoted -C variable"              allow 'git -C $REPO log --oneline -5'
+check "a variable argument after log"        allow 'git log "$BRANCH" -- "$FILE"'
+check "a loop over branch names"             allow 'for b in $(git branch --format=x); do git log -1 "$b"; done'
+check "git \$X inside a commit message"      allow 'git commit -m "run git $X later"'
+check "git \$X inside an echo"               allow 'echo "git $X"'
+check "a code span in a heredoc, git first"  allow $'git status; cat > notes.md <<\'EOF\'\nthe check (`git` in a compound form, `bash` running a script)\nEOF'
+check "a code span in a heredoc, git after"  allow $'cat > notes.md <<\'EOF\'\nthe check (`git` in a compound form)\nEOF\ngit status'
+check "a python variable after -C"           allow $'python3 -c "import subprocess; repo=\'/r\'; subprocess.run([\'git\',\'-C\',repo,\'status\'])"'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
