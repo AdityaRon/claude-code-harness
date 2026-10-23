@@ -25,6 +25,11 @@ max_chars = 2500               # check_draft.py refuses a longer message
 # listing_ts_pattern = '(?m)^ts: (\d{10}\.\d{6})'
 # listing_replies_pattern = 'replies: (\d+)'
 
+# Slack member id to GitHub login, so a draft that asks <@id> for a review is
+# checked against that person's own review of the PR. Names live here only.
+# [slack.github_logins]
+# "U-member-id" = "octocat"
+
 [quiet_hours]
 start = "19:00"                # from this time, messages are scheduled instead of sent
 post_at = "08:00"              # for this time the next morning

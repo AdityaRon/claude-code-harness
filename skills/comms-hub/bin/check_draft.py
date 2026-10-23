@@ -16,11 +16,13 @@ the parent's reply count re-read before and after, and refuses one that did
 not move: the send tool says OK either way.
 
 Live state: a line that links a merged or closed PR and calls it awaiting,
-pending or open fails. A line that asks for a review fails when the addressee,
-named with --asks (their GitHub login), has a standing approval at the PR's
-current head: a review ask once went out minutes after the approval. It is the
-addressee's own review that counts, not the PR's decision: another reviewer's
-approval failed an ask once. An ask with no --asks fails, so it cannot slip by.
+pending or open fails. A line that asks for a review fails when an addressee
+has already reviewed the PR's current head, in any state: a review ask once
+went out minutes after the approval. The addressees are --asks (GitHub logins)
+and every <@id> the draft mentions that slack.github_logins maps to a login.
+It is the addressee's own review that counts, not the PR's decision: another
+reviewer's approval failed an ask once. An ask with no addressee fails, so it
+cannot slip by.
 Exit 0 pass, 1 the draft fails a rule, 2 usage or config, 3 live state unknown.
 """
 from __future__ import annotations
@@ -42,9 +44,15 @@ BARE_URL = re.compile(r"https?://[^\s,;)\]>]+")
 PR_REF = re.compile(r"(?<![\w/#&])(?:[\w.-]+/[\w.-]+#\d+|#\d+\b|\bPR[\s-]*#?\d+\b|\bpull request\s+#?\d+\b)", re.I)
 CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 TS = re.compile(r"\d{10}\.\d{6}")
-TOKEN = re.compile(r"\b(?:xox[abposr]-[\w-]{10,}|gh[pousr]_\w{30,}|github_pat_\w{30,}|AKIA[0-9A-Z]{16}|sk-[\w-]{30,})")
+TOKEN = re.compile(r"(?<!\w)(?:xox[abposr]-[\w-]{10,}|gh[pousr]_\w{30,}|github_pat_\w{30,}|sk-[\w-]{30,}"
+                   r"|(?:AKIA|ASIA)[0-9A-Z]{16}"  # an AWS key, temporary ones included
+                   r"|(?:sdk|mob|api)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # a LaunchDarkly key
+                   r"|-----BEGIN [A-Z ]*-----"  # a PEM block
+                   r"|(?i:[a-z_]*(?:key|token|secret|password)\s*[=:]\s*[\"']?[\w./+-]{8,}))")  # key=..., token: ...
+MENTION = re.compile(r"<@([\w.-]+)(?:\|[^>]*)?>")
 MAX_AGE = 300
 EM_DASH = chr(0x2014)
+EN_DASH = chr(0x2013)
 AWAITING = re.compile(r"\b(?:awaiting|waiting (?:on|for)|pending (?:review|approval|merge)|still open|unmerged|"
                       r"not (?:yet )?merged|needs? (?:a )?review|(?:ready|open|up) for review)\b", re.I)
 ASK = re.compile(r"\b(?:ptal|please (?:review|take a look|have a look)|(?:could|can|would) you (?:please )?"
@@ -79,6 +87,8 @@ def shape_problems(text: str, cap: int = hub.MAX_CHARS) -> list[str]:
     for n, line in enumerate(text.splitlines(), 1):
         if EM_DASH in line:
             out.append(f"line {n}: em dash")
+        if EN_DASH in line:
+            out.append(f"line {n}: en dash")
         if line.lstrip().startswith(">"):
             out.append(f"line {n}: starts with '>' (Slack renders a quote)")
     for m in CODE.finditer(text):
@@ -115,6 +125,11 @@ def live_state(gh: hub.Gh, prs) -> tuple[list[str], bool, dict[tuple, dict]]:
             continue
         head = d.get("headRefOid") or "?"
         d["standing"] = {k.lower(): v for k, v in hub.standing_reviews(d.get("reviews") or []).items()}
+        # Each reviewer's latest review of the current head, whatever its state: they have reviewed it.
+        d["at_head"] = {}
+        for r in sorted(d.get("reviews") or [], key=lambda r: r.get("submittedAt") or ""):
+            if r.get("state") != "PENDING" and (r.get("commit") or {}).get("oid") == head and hub.login(r.get("author")):
+                d["at_head"][hub.login(r["author"]).lower()] = r
         approved = [f"{k}@{((r.get('commit') or {}).get('oid') or '?')[:7]}"
                     for k, r in sorted(d["standing"].items()) if r.get("state") == "APPROVED"]
         live[(owner, repo, n)] = d
@@ -149,14 +164,24 @@ def claim_problems(text: str, live: dict[tuple, dict], asks: list[str]) -> list[
                            "so their own review can be checked")
                 continue
             for login in asks:
-                r = d["standing"].get(login.lower())
-                if not r:
-                    continue
-                oid = (r.get("commit") or {}).get("oid")
-                if r["state"] == "APPROVED" and oid in (None, d.get("headRefOid")):
-                    out.append(f"line {n}: asks {login} to review {ref}, which they approved "
-                               f"{r.get('submittedAt')} at the current head")
+                r = d["at_head"].get(login.lower())
+                if r:
+                    out.append(f"line {n}: asks {login} to review {ref}, which they already reviewed "
+                               f"({r['state']}) {r.get('submittedAt')} at the current head")
     return out
+
+
+def addressees(text: str, asks: list[str], logins: dict) -> tuple[list[str], list[str]]:
+    """The GitHub logins a draft is addressed to: --asks, plus each <@id> it
+    mentions that slack.github_logins maps; and the ids the config cannot map."""
+    out, unmapped = list(asks), []
+    for sid in MENTION.findall(text):
+        login = logins.get(sid)
+        if login and login.lower() not in {a.lower() for a in out}:
+            out.append(login)
+        elif not login and sid not in unmapped:
+            unmapped.append(sid)
+    return out, unmapped
 
 
 def stamp_path(cfg, path: str):
@@ -178,8 +203,11 @@ def gate(args, cfg, gh) -> int:
         problems.append(f"--reply {args.reply} is not the newest message the draft answers "
                         f"({max(args.answers, key=ts_key)}): a combined reply threads under the newest")
     lines, known, live = live_state(gh, linked_prs(text))
-    problems += claim_problems(text, live, args.asks)
+    asks, unmapped = addressees(text, args.asks, cfg["slack"]["github_logins"])
+    problems += claim_problems(text, live, asks)
     print(f"target: {target}")
+    print(f"addressees: {','.join(asks) or '-'}"
+          + (f" (no slack.github_logins entry for {' '.join('<@' + u + '>' for u in unmapped)})" if unmapped else ""))
     for line in lines:
         print(f"pr: {line}")
     mode, post = hub.send_plan(cfg, hub.now())
@@ -197,7 +225,7 @@ def gate(args, cfg, gh) -> int:
         return 3
     stamp = {"path": os.path.realpath(args.file), "sha256": hub.sha256(data),
              "passed_at": hub.now().timestamp(), "target": target, "send": mode,
-             "post_at": post.isoformat() if post else None, "prs": lines, "asks": args.asks}
+             "post_at": post.isoformat() if post else None, "prs": lines, "asks": asks}
     stamp_path(cfg, args.file).write_text(json.dumps(stamp, indent=1))
     print(f"PASS sha256={stamp['sha256'][:12]}: send this file in the same turn, after --assert-fresh")
     return 0

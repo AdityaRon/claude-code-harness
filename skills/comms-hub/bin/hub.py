@@ -124,6 +124,7 @@ def load_config(explicit: str | None = None) -> dict:
     KNOWN_BOTS.clear()
     KNOWN_BOTS.update(str(b).lower() for b in gh["bots"])
     cfg.setdefault("slack", {}).setdefault("max_chars", MAX_CHARS)
+    cfg["slack"].setdefault("github_logins", {})
     q = cfg.setdefault("quiet_hours", {})
     q.setdefault("start", "19:00")
     q.setdefault("post_at", "08:00")

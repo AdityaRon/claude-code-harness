@@ -162,7 +162,8 @@ it, and the tick cannot run without it.
      seven answers once landed in the wrong thread).
    - Write it to `<job tmp>/draft-<n>.md` and run
      `PY B/check_draft.py <file> --reply <ts>` (or `--top-level`), with
-     `--asks <github login>` for whoever the draft asks to review. Only PASS
+     `--asks <github login>` for whoever the draft asks to review when the
+     config's `slack.github_logins` does not map their `<@id>`. Only PASS
      sends. FAIL: fix the shape (an unlinked PR, a dash, a `>`) or send it
      back; a line that calls a merged PR awaiting, or asks a reviewer for a
      review they gave at the current head, goes back to the peer (a review ask

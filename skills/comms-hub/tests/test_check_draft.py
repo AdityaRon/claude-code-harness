@@ -15,10 +15,16 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   pr-dash-missed: check_draft.py: `\bPR[\s-]*#?\d+\b` => `\bPR\s*#?\d+\b`
   sent-machine-zone: check_draft.py: `day = hub.local_now(cfg).strftime("%Y-%m-%d")` => `day = hub.now().astimezone().strftime("%Y-%m-%d")`
   merged-awaiting-ok: check_draft.py: `if d.get("state") in ("MERGED", "CLOSED") and m:` => `if False:`
-  ask-any-approver: check_draft.py: `r = d["standing"].get(login.lower())` => `r = next((x for x in d["standing"].values() if x["state"] == "APPROVED"), None)`
+  ask-any-reviewer: check_draft.py: `r = d["at_head"].get(login.lower())` => `r = next(iter(d["at_head"].values()), None)`
   ask-unaddressed-ok: check_draft.py: `if not asks:` => `if False:`
-  ask-old-head-fails: check_draft.py: `if r["state"] == "APPROVED" and oid in (None, d.get("headRefOid")):` => `if r["state"] == "APPROVED":`
+  ask-old-head-fails: check_draft.py: `and (r.get("commit") or {}).get("oid") == head and hub.login(r.get("author")):` => `and hub.login(r.get("author")):`
   ask-off-line-missed: check_draft.py: `for pr in here or every:` => `for pr in here:`
+  en-dash-ok: check_draft.py: `if EN_DASH in line:` => `if False:`
+  aws-temp-key-missed: check_draft.py: `(?:AKIA|ASIA)[0-9A-Z]{16}` => `AKIA[0-9A-Z]{16}`
+  launchdarkly-key-missed: check_draft.py: `|(?:sdk|mob|api)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}` => ``
+  pem-missed: check_draft.py: `|-----BEGIN [A-Z ]*-----` => ``
+  assignment-missed: check_draft.py: `|(?i:[a-z_]*(?:key|token|secret|password)\s*[=:]\s*[\"']?[\w./+-]{8,})` => ``
+  mention-map-ignored: check_draft.py: `login = logins.get(sid)` => `login = None`
   answers-unchecked: check_draft.py: `if args.answers and args.reply != max(args.answers, key=ts_key):` => `if False:`
   replies-optional: check_draft.py: `if stamp["target"].startswith("reply:") and not args.replies:` => `if False:`
   send-unconfirmed: check_draft.py: `if after <= before:` => `if False:`
@@ -81,6 +87,24 @@ class Shape(unittest.TestCase):
         rc, out = self.check(f"Done {chr(0x2014)} thanks\n")
         self.assertEqual(rc, 1)
         self.assertIn("em dash", out)
+
+    def test_en_dash_fails(self):
+        rc, out = self.check(f"Done {chr(0x2013)} thanks\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("line 1: en dash", out)
+        self.assertEqual(self.check("Done - thanks, 2-3 days\n")[0], 0, "a hyphen is fine")
+
+    def test_more_token_shapes_fail(self):
+        fakes = {"AWS temporary key": "ASIA" + "EXAMPLEEXAMPLE00",
+                 "LaunchDarkly key": "sdk-00000000-0000-0000-0000-000000000000",
+                 "PEM block": "-----BEGIN EXAMPLE PRIVATE KEY-----",
+                 "key assignment": "api_key=examplevalue0000",
+                 "token assignment": "token: 'example-token-0000'"}
+        for name, fixture in fakes.items():
+            rc, out = self.check(f"config has {fixture} in it\n")
+            self.assertEqual(rc, 1, name)
+            self.assertIn("no secrets", out, name)
+        self.assertEqual(self.check("the key = retries; token count 3\n")[0], 0, "prose with the words is fine")
 
     def test_quote_at_line_start_fails(self):
         rc, out = self.check("> you asked\nyes\n")
@@ -159,12 +183,31 @@ class Claims(unittest.TestCase):
         rc, out = self.check(f"{LINK} is still awaiting review.\n")
         self.assertEqual(rc, 0, "an open PR may be awaiting: " + out)
 
-    def test_an_ask_to_someone_who_approved_at_this_head_fails(self):
+    def test_an_ask_to_someone_who_reviewed_this_head_fails(self):
         approved = {**PR_JSON, "reviews": [review("Bob", "APPROVED")]}
         rc, out = self.check(f"could you review {LINK}?\n", "--asks", "bob", state=approved)
         self.assertEqual(rc, 1, out)
-        self.assertIn("asks bob to review acme/app#12, which they approved 2026-10-21T16:50:00Z at the current head", out)
+        self.assertIn("asks bob to review acme/app#12, which they already reviewed (APPROVED) 2026-10-21T16:50:00Z "
+                      "at the current head", out)
         self.assertIn("approved-by=bob@abcdef1", out)
+        commented = {**PR_JSON, "reviews": [review("bob", "COMMENTED")]}
+        rc, out = self.check(f"could you review {LINK}?\n", "--asks", "bob", state=commented)
+        self.assertEqual(rc, 1, "a comment review of this head is a review too: " + out)
+
+    def test_the_addressee_comes_from_the_mention_and_the_config_map(self):
+        cfg = CONFIG + '\n[slack.github_logins]\n"user-bob" = "bob"\n'
+        reviewed = {**PR_JSON, "reviews": [review("bob", "COMMENTED")]}
+        with Env(config=cfg) as env:
+            rc, out = gate(env, f"<@user-bob> could you review {LINK}?\n", "--top-level", gh=fake(reviewed))
+            self.assertEqual(rc, 1, out)
+            self.assertIn("addressees: bob", out)
+            self.assertIn("asks bob to review acme/app#12, which they already reviewed (COMMENTED)", out)
+            rc, out = gate(env, f"<@user-zed> could you review {LINK}?\n", "--top-level", gh=fake(reviewed))
+            self.assertEqual(rc, 1, out)
+            self.assertIn("addressees: - (no slack.github_logins entry for <@user-zed>)", out)
+            self.assertIn("name the addressee with --asks LOGIN", out)
+            rc, out = gate(env, f"<@user-bob> could you review {LINK}?\n", "--top-level", gh=fake())
+            self.assertEqual(rc, 0, "bob has not reviewed it: " + out)
 
     def test_another_reviewers_approval_does_not_fail_the_ask(self):
         other = {**PR_JSON, "reviews": [review("carol", "APPROVED")]}
@@ -175,8 +218,8 @@ class Claims(unittest.TestCase):
         moved = {**PR_JSON, "reviews": [review("bob", "APPROVED", oid="0123456789")]}
         rc, out = self.check(f"PTAL {LINK}, head moved.\n", "--asks", "bob", state=moved)
         self.assertEqual(rc, 0, out)
-        changes = {**PR_JSON, "reviews": [review("bob", "APPROVED"), review("bob", "CHANGES_REQUESTED", at="2026-10-21T16:55:00Z")]}
-        self.assertEqual(self.check(f"PTAL {LINK}\n", "--asks", "bob", state=changes)[0], 0)
+        changes = {**PR_JSON, "reviews": [review("bob", "CHANGES_REQUESTED", oid="0123456789")]}
+        self.assertEqual(self.check(f"PTAL {LINK}\n", "--asks", "bob", state=changes)[0], 0, "a push since: re-review")
 
     def test_an_ask_with_no_addressee_fails_closed(self):
         rc, out = self.check(f"could you take a look at {LINK}?\n")
