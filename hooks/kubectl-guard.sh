@@ -56,7 +56,7 @@ CMD=$(strip_inert_heredocs "$CMD")
 # `cat <<EOF | python3`, and a heredoc under a wrapper (`uv run python - <<EOF`).
 interp_view() {
   printf '%s\n' "$1" | awk '
-    BEGIN { NO = "\003"; KRE = "(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)"
+    BEGIN { NO = "\003"; OPQ = "__OPAQUE_SHELLOUT__\002"; KRE = "(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)"
             SAFE = "^(head|tail|grep|egrep|fgrep|rg|wc|sort|uniq|cut|tr|cat|less|more|jq|column|fold|nl)$" }
     function langof(w) { return w ~ /python/ ? "py" : w ~ /ruby/ ? "rb" : w ~ /perl/ ? "pl" : w ~ /php/ ? "php" : "js" }
     function trim(s) { sub(/^[ \t\n]+/, "", s); sub(/[ \t\n]+$/, "", s); return s }
@@ -90,8 +90,8 @@ interp_view() {
       }
       return out
     }
-    # Top-level comma split, outside quotes and brackets.
-    function splitargs(a, arr,    n, i, c, q, d, cur) {
+    # Top-level split on sep, outside quotes and brackets.
+    function splitargs(a, arr, sep,    n, i, c, q, d, cur) {
       n = 0; q = ""; d = 0; cur = ""
       for (i = 1; i <= length(a); i++) {
         c = substr(a, i, 1)
@@ -99,31 +99,53 @@ interp_view() {
         if (c == "\"" || c == "\047" || c == "`") q = c
         else if (c == "(" || c == "[" || c == "{") d++
         else if (c == ")" || c == "]" || c == "}") d--
-        else if (c == "," && d == 0) { arr[++n] = cur; cur = ""; continue }
+        else if (c == sep && d == 0) { arr[++n] = cur; cur = ""; continue }
         cur = cur c
       }
       arr[++n] = cur
       return n
     }
-    # A string literal (r, b, f or u prefix, triple quotes) and nothing else: its text.
-    function str(x,    p, q, i, c, out) {
+    # A string literal (r, b, f or u prefix, triple quotes) and nothing else: its
+    # text. An f-string field is a value, so it reads as an unset $var.
+    function str(x,    p, q, i, c, out, f) {
       if (!match(x, /^[rRbBfFuU]?[rRbBfFuU]?["\047`]/)) return NO
-      q = substr(x, RLENGTH, 1); p = substr(x, RLENGTH + 1)
-      if (substr(p, 1, 2) == q q) return substr(x, length(x) - 2) == q q q ? substr(p, 3, length(p) - 5) : NO
-      out = ""
-      for (i = 1; i <= length(p); i++) {
-        c = substr(p, i, 1)
-        if (c == "\\") { i++; out = out substr(p, i, 1); continue }
-        if (c == q) return i == length(p) ? out : NO
-        out = out c
+      f = substr(x, 1, RLENGTH) ~ /[fF]/; q = substr(x, RLENGTH, 1); p = substr(x, RLENGTH + 1)
+      if (substr(p, 1, 2) == q q) out = substr(x, length(x) - 2) == q q q ? substr(p, 3, length(p) - 5) : NO
+      else {
+        out = NO
+        for (i = 1; i <= length(p); i++) {
+          c = substr(p, i, 1)
+          if (c == "\\") { i++; continue }
+          if (c == q) { if (i == length(p)) out = dropesc(substr(p, 1, i - 1)); break }
+        }
       }
-      return NO
+      if (f && out != NO) gsub(/\{[^{}]*\}/, "$__shellout_value", out)
+      return out
     }
-    # A string, or a list of strings and names: as shell words. A name is an unset $var.
-    function literal(x,    n, el, i, v, out) {
+    function dropesc(s,    i, c, out) {
+      out = ""
+      for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); if (c == "\\") { i++; c = substr(s, i, 1) } out = out c }
+      return out
+    }
+    # Strings, lists and names joined by +, and " ".join([...]): as shell words.
+    # A name is an unset $var, so a verb or kind it supplies asks as it does typed.
+    function literal(x,    np, parts, i, v, out, list, prev) {
       x = trim(x)
+      if (x ~ /^["\047][^"\047]*["\047]\.join\(\[.*\]\)$/) { i = index(x, ".join("); x = substr(x, i + 6, length(x) - i - 6) }
+      np = splitargs(x, parts, "+")
+      if (np == 1) return words(x)
+      out = ""; prev = 0
+      for (i = 1; i <= np; i++) {
+        v = trim(parts[i]); list = v ~ /^\[/
+        v = v ~ /^[A-Za-z_][A-Za-z0-9_.]*$/ ? "$__shellout_value" : words(v)
+        if (v == NO) return NO
+        out = out ((i > 1 && (list || prev)) ? " " : "") v; prev = list
+      }
+      return out
+    }
+    function words(x,    n, el, i, v, out) {
       if (x !~ /^\[.*\]$/) return str(x)
-      n = splitargs(substr(x, 2, length(x) - 2), el); out = ""
+      n = splitargs(substr(x, 2, length(x) - 2), el, ","); out = ""
       for (i = 1; i <= n; i++) {
         v = trim(el[i]); if (v == "" && i == n) continue
         if (v ~ /^[A-Za-z_][A-Za-z0-9_.]*$/) v = "$__shellout_value"
@@ -145,27 +167,25 @@ interp_view() {
       for (i = 2; i <= n; i++) { w = trim(p[i]); sub(/[ \t].*/, "", w); sub(/.*\//, "", w); if (w !~ SAFE) return 0 }
       return 1
     }
-    function flat(s) { s = substr(s, match(s, KRE)); gsub(/[][(){}"\047,`+\\\n]/, " ", s); return s "\002" }
     # The shell line a shell-out runs. Keyword arguments and option objects are
-    # skipped; arguments that are not literals keep the flat view from kubectl on.
+    # skipped. One this guard cannot rebuild asks when it, or the script, names
+    # kubectl, and so does a line whose command word is a value.
     function view(a, names, mode, lang,    n, arg, i, x, v, line) {
       line = ""
       if (mode == "shell") line = a
       else {
-        n = splitargs(a, arg)
+        n = splitargs(a, arg, ",")
         for (i = 1; i <= n; i++) {
           x = trim(arg[i])
-          if (x == "" || x ~ /^\{/ || x ~ /^[A-Za-z_][A-Za-z0-9_]*[ \t]*(=[^=]|:[^:])/ && x !~ /^args[ \t]*=/) continue
+          if (x == "" || x ~ /^(\{|\*\*)/ || x ~ /^[A-Za-z_][A-Za-z0-9_]*[ \t]*(=[^=]|:[^:])/ && x !~ /^args[ \t]*=/) continue
           sub(/^args[ \t]*=/, "", x)
           v = literal(x); if (v == NO) { line = NO; break }
           line = line (line == "" ? "" : " ") v
         }
-        if (mode == "code" && line != NO) return n == 1 ? shellouts(line, lang) : ""
+        if (mode == "code" && line != NO) return line != "" ? shellouts(line, lang) : ""
       }
-      if (line == NO) {
-        if (a ~ KRE) return flat(a)
-        return (names && a !~ /["\047`]/) ? "__OPAQUE_SHELLOUT__\002" : ""
-      }
+      if (line == NO) return (a ~ KRE || names && a !~ /["\047`]/) ? OPQ : ""
+      if (names && line ~ /^[ \t\n]*\$__shellout_value/) return OPQ
       return line ~ KRE ? line "\002" : ""
     }
     function dq(s,    i, c, n, out) {

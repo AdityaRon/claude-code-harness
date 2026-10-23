@@ -212,6 +212,8 @@
 {"id": "friction-pin-kubectl-python-output-to-bash", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF' | bash\nprint(\"x; kubectl delete pod a\")\nEOF"}, "source": "friction"}
 {"id": "friction-pin-kubectl-python-output-to-file-then-run", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF' > run.sh\nprint(\"x; kubectl delete pod a\")\nEOF\nbash run.sh"}, "source": "friction"}
 {"id": "friction-hole-kubectl-shellout-bash-c", "tool_name": "Bash", "tool_input": {"command": "python3 -c \"import subprocess; subprocess.run(['bash','-c','kubectl delete pod a'])\""}, "source": "friction"}
+{"id": "friction-hole-kubectl-shellout-concat-kind", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF'\nimport os\nos.system(\"kubectl get \" + kind)\nEOF"}, "source": "friction"}
+{"id": "friction-hole-kubectl-exec-code-with-globals", "tool_name": "Bash", "tool_input": {"command": "python3 -c \"exec(\\\"import os; os.system('kubectl delete pod a')\\\", {})\""}, "source": "friction"}
 {"id": "bash-git-status", "tool_name": "Bash", "tool_input": {"command": "git status --short"}, "source": "synthetic"}
 {"id": "bash-git-log", "tool_name": "Bash", "tool_input": {"command": "git log --oneline -20"}, "source": "synthetic"}
 {"id": "bash-git-diff-stat", "tool_name": "Bash", "tool_input": {"command": "git diff --stat main...HEAD"}, "source": "synthetic"}

@@ -88,7 +88,7 @@ a project's settings.
 
 ## Cases
 
-`permission-friction-cases.jsonl` (next to this file), 214 cases. The first 27 have the tool input, the
+`permission-friction-cases.jsonl` (next to this file), 216 cases. The first 27 have the tool input, the
 decision observed on local `main` at b8427b2 and on `adityaron/main` at 516db51,
 a `why`, and a `want` where the answer is not a policy call. Cases with no
 `want` are policy calls and only report. Seven `control-*` cases pin decisions
@@ -116,7 +116,8 @@ backtick in a python string with kubectl on a later line, hung this branch's
 first inline-script reader until the replay's 30 s timeout. Six more from a
 review of that reader: two false asks on python text, a `bash -c` shell-out
 main allowed, a shell-out that greps for kubectl text, and two scripts whose
-printed output a shell runs.
+printed output a shell runs. Two more that main allowed: a `get` kind joined on
+with `+`, and `exec` of code passed a globals dict.
 
 ```
 bin/permission-friction.py --cases --replay hooks/
