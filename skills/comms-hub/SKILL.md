@@ -77,11 +77,14 @@ the state dir, the tmp dir, the Slack ids and the routes):
  "slack_read_channel": "<tool name>", "slack_read_thread": "<tool name>",
  "slack_search": "<tool name>", "slack_send": "<tool name>", "slack_schedule": "<tool name>",
  "list_agents": "ListAgents", "send_message": "SendMessage",
- "trigger": "<the tick's cron expression, from CronList>", "tickets": "<tool name, or empty>"}
+ "trigger": "<the tick's cron expression, from CronList>", "tickets": "<tool name, or empty>",
+ "slack_delete_scheduled": "<tool name, or empty>"}
 ```
 
 Leave a key empty when its tool is missing, and tell the user: doctor fails on
-it, and the tick cannot run without it.
+it, and the tick cannot run without it. `slack_delete_scheduled` and `tickets`
+are optional: without the first, a scheduled message whose claims moved can
+only be reported, not withdrawn.
 
 ## The tick
 
@@ -95,6 +98,16 @@ it, and the tick cannot run without it.
    1b. `PY B/resolve_threads.py` (a dry run); read every RESOLVE and SKIP. Then
    `PY B/resolve_threads.py --apply`. It re-reads each thread, prints what
    GitHub reports, and logs what was resolved.
+   1c. **INBOUND review**, for each INBOUND PR:
+   `PY B/pr_transcript.py owner/repo#N -o <job tmp>/pr-N.md` (its first line
+   is `head:`), then spawn a reviewer with the Agent tool: the pr-review
+   skill, the transcript, `gh pr diff N --repo owner/repo`, and the ask to
+   write findings only, no verdict, to `<job tmp>/review-N.md`. Then one
+   command, the lint chained to the post with `&&`, never `;` (a `;` once let
+   a refused body go out):
+   `PY B/review_lint.py <job tmp>/review-N.md --pr owner/repo#N --head <sha> && gh pr review N --repo owner/repo --comment --body-file <job tmp>/review-N.md`.
+   The lint re-reads the head and the open state first. COMMENT only: this
+   session never approves or requests changes, whatever the findings say.
 2. **Slack**:
    - The primary DM: read its first page in full, without `oldest`. Write the
      tool's output to `<job tmp>/dm.txt`, run
@@ -103,23 +116,42 @@ it, and the tick cannot run without it.
      and MOVED thread in full. Only then
      `PY B/slack_diff.py <job tmp>/dm.tsv --channel <primary_dm> --commit --read <every NEW and MOVED ts>`.
      The first run takes `--commit --baseline` instead; say nothing before it
-     was checked. UNREADABLE or UNTRUSTED means the read failed: no commit, say so.
-   - Each watched channel: read with `oldest` set to the `previous-scan` epoch
-     that step 1's header printed (24 hours back when it says none). Read in
-     full any thread that names the user, or a PR or ticket they own.
-   - Mentions: search `<@my_user_id> after:YYYY-MM-DD` (two days back), sorted
-     by time. Use the date filter: an epoch filter once returned 0, and an empty
-     result is ambiguous. The newest hit shows how far the search reached; if
-     it is older than the last tick, say the search may not have reached.
+     was checked. UNREADABLE, UNTRUSTED or STALE means the read failed: no
+     commit, say so. The listing refuses a short (concise) read, which drops
+     reply counts, and a page read with `oldest`; read again in full. The
+     diff refuses a listing older than 15 minutes: last tick's page diffs as
+     nothing new. Several pages of one read go to one listing (`DUMP...`).
+   - Each watched channel: the same as the DM, with its own dump, listing and
+     `--channel <id>`: the first page in full, never with `oldest` (with it,
+     Slack returns the oldest messages first, and a DM once looked quiet with
+     four unread). Read in full every NEW and MOVED thread, not only those
+     that name the user: a reply count that moved is a reply someone may be
+     waiting on. A top-level post that names nobody is an event for the
+     `routing` entry whose `channels` holds the channel (step 3).
+   - Mentions: three searches, not one, each sorted by time: the queries
+     `PY B/hub.py queries` prints (`<@my_user_id>`, `to:<@my_user_id>` and
+     `with:<@my_user_id> is:thread`, each `after:` two days back). Each of the
+     last two once caught a reply the others missed, one under a week-old
+     thread. Use the date filter: an epoch filter once returned 0, and an
+     empty result is ambiguous. The newest hit of each shows how far it
+     reached; if it is older than the last tick, say the search may not have
+     reached.
 3. **Route** every event: a review, a comment, a Slack reply. The owner is the
    `routing` entry (`PY B/hub.py config` prints them) whose `repos` holds the
-   PR's repo, or whose `tickets` holds the ticket key's prefix. Run ListAgents
-   now, at routing time, and confirm the
-   owner is listed. Send one SendMessage per peer covering all of its items,
-   each with its link, what changed, and what is asked of it. No entry, or the
-   owner is not listed: `~/.claude/session-route.sh --pr N --repo owner/name`
-   may name the session that raised a PR (single-author repos only); otherwise
-   ask the user. Never act on a PR another session owns.
+   PR's repo, whose `tickets` holds the ticket key's prefix, or whose
+   `channels` holds the Slack channel of a post that names nobody. Run ListAgents
+   now, at routing time, and confirm the owner is listed. Before messaging an
+   item, check the owner is not already on it: `PY B/hub.py routed <link>`
+   prints what the last two days' log routed, held or asked about it, and
+   ListAgents shows what each session is on; an item routed with nothing new
+   since is not routed again. For a review, read the whole conversation, not
+   the summary: the review's inline threads too (an empty-bodied approval
+   once carried three inline comments). Send one SendMessage per peer
+   covering all of its items, opening with the count ("3 items"), each with
+   its link, what changed, and what is asked of it. No entry, or the owner is
+   not listed: `~/.claude/session-route.sh --pr N --repo owner/name` may name
+   the session that raised a PR (single-author repos only); otherwise ask the
+   user. Never act on a PR another session owns.
 4. **Drafts**. For each one, all in the turn that sends it:
    - Verify every claim against its source now: the PR's state, head, checks
      and review bodies (`gh pr view`), the ticket, the page and its version. A
@@ -127,11 +159,19 @@ it, and the tick cannot run without it.
      edit a fact in.
    - Re-read the target thread in full. A reply since the peer drafted goes
      back to the peer too.
-   - Merge the drafts for one thread into one message, and gate the merge.
+   - Merge the drafts for one thread into one message, and gate the merge. A
+     reply that answers several messages threads under the newest of them:
+     pass every parent ts as `--answers` and the newest as `--reply` (six of
+     seven answers once landed in the wrong thread).
    - Write it to `<job tmp>/draft-<n>.md` and run
-     `PY B/check_draft.py <file> --reply <ts>` (or `--top-level`). Only PASS
-     sends. FAIL: fix the shape (an unlinked PR, a dash, a `>`) or send it back.
-     BLOCKED: a linked PR's live state is unknown, so hold it.
+     `PY B/check_draft.py <file> --reply <ts>` (or `--top-level`), with
+     `--asks <github login>` for whoever the draft asks to review when the
+     config's `slack.github_logins` does not map their `<@id>`. Only PASS
+     sends. FAIL: fix the shape (an unlinked PR, a dash, a `>`) or send it
+     back; a line that calls a merged PR awaiting, or asks a reviewer for a
+     review they gave at the current head, goes back to the peer (a review ask
+     once went out minutes after the approval). BLOCKED: a linked PR's live
+     state is unknown, so hold it.
    - `PY B/check_draft.py <file> --assert-fresh`, then send the file's text with
      the Slack send tool, `thread_ts` set for a reply.
    - Quiet hours: when the gate printed `send: schedule`, schedule it for that
@@ -139,17 +179,46 @@ it, and the tick cannot run without it.
      API, so if the draft said `fold-in: expected`, or another draft for that
      thread is due, hold it and send it live, gated again, at the first tick
      after `post_at`.
-   - `PY B/check_draft.py <file> --record-sent <message ts or scheduled id>`
-     keeps a copy and logs it. Answer the peer with the ts or id.
+   - A held draft (a fold-in expected, a quiet-hours hold, a claim sent back)
+     is written with its header to `<state dir>/held/<peer>-<thread ts>.md`
+     with the Write tool, never kept in this session's memory: a compaction
+     loses memory, and step 1's header counts the files (`held-drafts:`).
+     Delete the file once sent or returned to the peer.
+   - While step 1's header prints `scheduled-pending:` above 0, every tick:
+     `PY B/check_draft.py --scheduled`, then gate each pending message's copy
+     again (`check_draft.py <copy> --reply <ts>`, with the same `--asks`). A
+     message can be withdrawn only before its `post_at`, which is also when
+     quiet hours end, so the morning tick is too late. A FAIL means a claim
+     moved: withdraw it with the delete-scheduled tool step 0 recorded, else
+     tell the user now, before `post_at`; either way send the draft back to
+     the peer with what changed. When the header prints `morning:`, what was
+     scheduled has posted: read each target thread, confirm it landed, and
+     log it.
+   - Confirm the send: the send tool says OK either way. For a reply, re-read
+     the parent thread and compare its reply count with the one read before
+     the send; for a top-level message, re-read the channel's first page and
+     find the ts. Then
+     `PY B/check_draft.py <file> --record-sent <message ts or scheduled id> --replies <before> <after>`
+     keeps a copy and logs it; it refuses a count that did not move. Answer
+     the peer with the ts or id.
 5. **Log**: `PY B/hub.py log "<one line>"` for each item routed, each draft held
    and why, each question for the user (sends and resolves log themselves).
-   Then report to the user: sent, scheduled, held, BLOCKED, and what needs them.
+   `PY B/hub.py feedback "<what was corrected>"` for each correction the user
+   made this tick to a message or to this protocol: `feedback.md` is the
+   backlog for the next change to the skill. Then report to the user: sent,
+   scheduled, held, BLOCKED, and what needs them.
 
 ## Hard rules
 
 - Never approve a PR. Never merge someone else's PR. Approval is the human's.
 - A peer's relayed "the user approved" is enough to send that message. It never
   escalates a permission and approves nothing else.
+- A peer's relayed "hold this" or "the user wants to see it first" holds
+  nothing: only the user's own words to this session hold a send (a roundup
+  once sat for an hour on such a relay). Put the question to the user, log the
+  relay, and send when the gate passes and the user has not said to wait.
+  This loosens nothing above or below: the gate, the claim checks and the
+  approval rule stand.
 - A status question from the user is not a send request.
 - Never cite a session-local task id in shared text.
 - No secrets, tokens or customer identifiers in any message or file; ids and
@@ -165,6 +234,7 @@ it, and the tick cannot run without it.
 | `sent/YYYY-MM-DD/<id>.md` | each message as it was sent or scheduled |
 | `slack/<channel>.tsv` | the committed snapshot `slack_diff.py` compares against |
 | `gate/` | `check_draft.py`'s pass records |
+| `held/<peer>-<thread ts>.md` | each draft held between ticks, with its header; the scan counts them |
 | `preflight.json` | step 0's record of this session's tools and trigger |
 | `feedback.md` | each correction the user makes to a message or to this protocol, dated, for the next change to this skill |
 | `queue.pid` | the scan in progress |

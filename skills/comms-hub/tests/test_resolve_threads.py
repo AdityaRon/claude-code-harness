@@ -18,6 +18,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   page-comments: resolve_threads.py: `if t["comments"]["pageInfo"]["hasNextPage"]:` => `if False:`
   reread-trusted: resolve_threads.py: `resolved = bool(gh.graphql(REREAD, id=tid)["node"]["isResolved"])` => `resolved = True`
   dry-run-applies: resolve_threads.py: `if not args.apply:` => `if False:`
+  drift-unmarked: resolve_threads.py: `if oid and head and oid != head:` => `if False:`
 The own-thread rule may survive: a thread I opened needs MY approval to pass
 rule 4, and GitHub forbids approving your own PR.
 """
@@ -42,13 +43,13 @@ def thread(*comments, tid="t1", resolved=False, more=False):
             "comments": page([{"author": who(n), "createdAt": at} for n, at in comments], more=more)}
 
 
-def review(name, state, at):
-    return {"author": who(name), "state": state, "submittedAt": at}
+def review(name, state, at, oid="h2"):
+    return {"author": who(name), "state": state, "submittedAt": at, "commit": {"oid": oid}}
 
 
-def pr(threads, reviews, author=ME, state="OPEN", more_reviews=False, more_threads=False):
+def pr(threads, reviews, author=ME, state="OPEN", more_reviews=False, more_threads=False, head="h2"):
     return {"number": 7, "url": "https://github.com/acme/app/pull/7", "state": state, "author": actor(author),
-            "reviews": page(reviews, more=more_reviews), "reviewThreads": page(threads, more=more_threads)}
+            "headRefOid": head, "reviews": page(reviews, more=more_reviews), "reviewThreads": page(threads, more=more_threads)}
 
 
 T10, T11, T1130, T12, T13 = ("2026-10-20T10:00:00Z", "2026-10-20T11:00:00Z", "2026-10-20T11:30:00Z",
@@ -71,6 +72,12 @@ class Rules(unittest.TestCase):
 
     def test_answered_then_approved_resolves(self):
         self.assertVerdict(pr([ANSWERED], [review("bob", "APPROVED", T12)]), "RESOLVE")
+
+    def test_an_approval_on_an_older_commit_resolves_and_is_marked(self):
+        skip, out = verdicts(pr([ANSWERED], [review("bob", "APPROVED", T12, oid="h1")]))
+        self.assertEqual((skip, out[0][0]), (None, "RESOLVE"))
+        self.assertIn("approval at h1, head is h2 (DRIFT", out[0][1])
+        self.assertNotIn("DRIFT", verdicts(pr([ANSWERED], [review("bob", "APPROVED", T12)]))[1][0][1])
 
     def test_my_login_in_another_case_is_still_me(self):
         skip, out = rt.decide(pr([ANSWERED], [review("bob", "APPROVED", T12)]), ME.upper())

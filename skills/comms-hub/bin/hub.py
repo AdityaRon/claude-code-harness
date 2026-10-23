@@ -5,6 +5,9 @@ review state and CI state. Imported by the scripts beside it; run directly:
                       zone this machine knows; refuses to touch an existing one
   hub.py config       the config path, the state dir, the ids, or what is wrong with the config
   hub.py log TEXT     append a line to today's log in the state dir
+  hub.py queries      the three Slack mention searches, dated two days back
+  hub.py routed TEXT  the log lines of the last two days that mention TEXT (a link, a key); exit 1 if none
+  hub.py feedback TEXT  append a dated correction to feedback.md, for the next change to the skill
 """
 from __future__ import annotations
 
@@ -24,6 +27,8 @@ import time
 from pathlib import Path
 
 PLACEHOLDER = "CHANGE-ME"
+MAX_CHARS = 2500
+KNOWN_BOTS: set[str] = set()  # github.bots from the config, lower-cased; load_config fills it
 
 
 def _bind_stdlib_queue():
@@ -114,7 +119,12 @@ def load_config(explicit: str | None = None) -> dict:
     gh.setdefault("watch_repos", [])
     gh.setdefault("watch_authors", [])
     gh.setdefault("merged_days", 7)
-    cfg.setdefault("slack", {})
+    gh.setdefault("bots", [])
+    gh.setdefault("review_max_chars", MAX_CHARS)
+    KNOWN_BOTS.clear()
+    KNOWN_BOTS.update(str(b).lower() for b in gh["bots"])
+    cfg.setdefault("slack", {}).setdefault("max_chars", MAX_CHARS)
+    cfg["slack"].setdefault("github_logins", {})
     q = cfg.setdefault("quiet_hours", {})
     q.setdefault("start", "19:00")
     q.setdefault("post_at", "08:00")
@@ -134,7 +144,9 @@ def load_config(explicit: str | None = None) -> dict:
         ZoneInfo(q["tz"])
     except (KeyError, ValueError) as e:  # ZoneInfoNotFoundError is a KeyError
         raise ConfigError(f"{path}: quiet_hours.tz {q['tz']!r} is not an IANA zone: {e}")
-    cfg.setdefault("routing", [])
+    for r in cfg.setdefault("routing", []):
+        for k in ("repos", "tickets", "channels"):
+            r.setdefault(k, [])
     cfg["_path"] = str(path)
     return cfg
 
@@ -229,6 +241,25 @@ def send_plan(cfg: dict, at: dt.datetime) -> tuple[str, dt.datetime | None]:
     return "schedule", dt.datetime.combine(day, post, tzinfo=tz)
 
 
+def first_tick_after_quiet(cfg: dict, prev: dt.datetime | None, at: dt.datetime) -> bool:
+    """True once a day: `at` is live and `prev` was before today's end of quiet
+    hours, whether that was last evening or a tick the laptop slept through."""
+    if prev is None or send_plan(cfg, at)[0] != "live":
+        return False
+    tz = zone(cfg)
+    end = dt.datetime.combine(at.astimezone(tz).date(), dt.time.fromisoformat(cfg["quiet_hours"]["post_at"]), tzinfo=tz)
+    return prev < end <= at
+
+
+def mention_queries(uid: str, since: dt.date) -> list[str]:
+    """The three Slack searches that together find what names me: the mention
+    itself, a message or reply sent to me, and a thread I am in. One search
+    missed replies each of the other two caught, one under a week-old thread.
+    `after:` is exclusive, so the day is the one before the window starts."""
+    day = f"after:{since:%Y-%m-%d}"
+    return [f"<@{uid}> {day}", f"to:<@{uid}> {day}", f"with:<@{uid}> is:thread {day}"]
+
+
 def append_log(cfg: dict | None, line: str) -> Path:
     d = state_dir(cfg) / "log"
     d.mkdir(exist_ok=True)
@@ -237,6 +268,43 @@ def append_log(cfg: dict | None, line: str) -> Path:
     with p.open("a") as f:
         f.write(f"- {stamp:%H:%M} {line}\n")
     return p
+
+
+def pending_scheduled(cfg: dict) -> list[dict]:
+    """The gate's records of scheduled messages whose post_at is still ahead:
+    each can be gated again from its sent copy and withdrawn before it posts."""
+    now_ = now()
+    out = []
+    for p in sorted((state_dir(cfg) / "gate").glob("*.json")):
+        s = json.loads(p.read_text())
+        if s.get("send") != "schedule" or not s.get("sent_id"):
+            continue
+        if parse_time(s.get("post_at")) <= now_:
+            continue
+        out.append(s)
+    return out
+
+
+def append_feedback(cfg: dict, text: str) -> Path:
+    """A correction the user made, dated, in feedback.md: the backlog for the next change to this skill."""
+    p = state_dir(cfg) / "feedback.md"
+    with p.open("a") as f:
+        f.write(f"- {local_now(cfg):%Y-%m-%d %H:%M} {text}\n")
+    return p
+
+
+def routed(cfg: dict, text: str, days: int = 2) -> list[str]:
+    """Log lines from the last `days` days that mention `text`: what was already
+    routed, held or asked about, so an item is not sent to its owner twice."""
+    d = state_dir(cfg) / "log"
+    today = local_now(cfg).date()
+    out = []
+    for back in range(days):
+        day = today - dt.timedelta(days=back)
+        p = d / f"{day:%Y-%m-%d}.md"
+        if p.is_file():
+            out += [f"{day:%Y-%m-%d} {line}" for line in p.read_text().splitlines() if text in line]
+    return out
 
 
 def sha256(data: bytes) -> str:
@@ -314,8 +382,10 @@ def is_me(actor, me: str) -> bool:
 
 
 def is_bot(actor) -> bool:
+    """A Bot account, a [bot] login, or a login github.bots names: some bots run as plain users."""
     a = actor or {}
-    return a.get("__typename") == "Bot" or (a.get("login") or "").endswith("[bot]")
+    name = a.get("login") or ""
+    return a.get("__typename") == "Bot" or name.endswith("[bot]") or name.lower() in KNOWN_BOTS
 
 
 def standing_reviews(reviews: list[dict]) -> dict[str, dict]:
@@ -400,7 +470,8 @@ def init(gh: Gh | None = None, example: Path | None = None) -> int:
 
 def main(argv=None, gh: Gh | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] not in (["init"], ["config"], ["log"]) or (argv[0] == "log" and len(argv) < 2):
+    if (argv[:1] not in (["init"], ["config"], ["log"], ["queries"], ["routed"], ["feedback"])
+            or (argv[0] in ("log", "routed", "feedback") and len(argv) < 2)):
         print(__doc__.split("run directly:", 1)[1].rstrip())
         return 2
     if argv[0] == "init":
@@ -416,12 +487,31 @@ def main(argv=None, gh: Gh | None = None) -> int:
         print(f"state: {state_dir(cfg)}")
         print(f"tmp: {tmp_dir(cfg)}")
         print(f"login: {cfg['github']['login']} owners: {','.join(cfg['github']['owners'])}")
+        print(f"bots: {','.join(cfg['github']['bots']) or '-'} max_chars: slack={s['max_chars']} "
+              f"review={cfg['github']['review_max_chars']}")
         print(f"slack: primary_dm={s.get('primary_dm') or '-'} my_user_id={s.get('my_user_id') or '-'} "
               f"watched={','.join(s.get('watched_channels') or []) or '-'}")
         print(f"quiet: {cfg['quiet_hours']['start']} to {cfg['quiet_hours']['post_at']} {cfg['quiet_hours']['tz']}")
         for r in cfg["routing"]:
-            print(f"route: {r.get('session')} repos={','.join(r.get('repos', [])) or '-'} "
-                  f"tickets={','.join(r.get('tickets', [])) or '-'}")
+            print(f"route: {r.get('session')} repos={','.join(r['repos']) or '-'} "
+                  f"tickets={','.join(r['tickets']) or '-'} channels={','.join(r['channels']) or '-'}")
+        return 0
+    if argv[0] == "queries":
+        uid = cfg["slack"].get("my_user_id")
+        if not uid:
+            print("config: slack.my_user_id is required for the mention searches")
+            return 2
+        for q in mention_queries(uid, local_now(cfg).date() - dt.timedelta(days=2)):
+            print(q)
+        return 0
+    if argv[0] == "routed":
+        lines = routed(cfg, " ".join(argv[1:]))
+        for line in lines:
+            print(line)
+        print(f"routed: {len(lines)} line(s) in the last 2 days mention {' '.join(argv[1:])!r}")
+        return 0 if lines else 1
+    if argv[0] == "feedback":
+        print(f"noted in {append_feedback(cfg, ' '.join(argv[1:]))}")
         return 0
     print(f"logged to {append_log(cfg, ' '.join(argv[1:]))}")
     return 0

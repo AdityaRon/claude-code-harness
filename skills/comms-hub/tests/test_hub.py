@@ -22,6 +22,16 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   job-tmp-ignored: hub.py: `if os.environ.get("CLAUDE_JOB_DIR"):` => `if False:`
   log-machine-zone: hub.py: `stamp = local_now(cfg)` => `stamp = now().astimezone()`
   local-now-machine: hub.py: `return t.astimezone(zone(cfg)) if` => `return t.astimezone() if`
+  thread-search-dropped: hub.py: `f"with:<@{uid}> is:thread {day}"` => `f"with:<@{uid}> {day}"`
+  to-search-dropped: hub.py: `f"to:<@{uid}> {day}", ` => ``
+  queries-today: hub.py: `local_now(cfg).date() - dt.timedelta(days=2)` => `local_now(cfg).date()`
+  route-keys-unset: hub.py: `for k in ("repos", "tickets", "channels"):` => `for k in ():`
+  morning-never: hub.py: `return prev < end <= at` => `return False`
+  morning-every-tick: hub.py: `return prev < end <= at` => `return True`
+  routed-today-only: hub.py: `for back in range(days):` => `for back in range(1):`
+  routed-any-line: hub.py: `if text in line]` => `if True]`
+  known-bots-ignored: hub.py: `or name.lower() in KNOWN_BOTS` => `or False`
+  feedback-undated: hub.py: `f.write(f"- {local_now(cfg):%Y-%m-%d %H:%M} {text}\n")` => `f.write(f"- {text}\n")`
 """
 import contextlib
 import datetime as dt
@@ -60,6 +70,16 @@ class StandingReviews(unittest.TestCase):
 
     def test_comment_only_reviewer_has_no_standing(self):
         self.assertNotIn("bob", hub.standing_reviews([review("bob", "COMMENTED", "2026-10-01T10:00:00Z")]))
+
+    def test_a_login_in_github_bots_is_a_bot(self):
+        with Env(config=CONFIG.replace('merged_days = 7', 'merged_days = 7\nbots = ["Renovate-Runner"]')):
+            hub.load_config()
+            self.assertTrue(hub.is_bot(actor("renovate-runner")))
+            self.assertFalse(hub.is_bot(actor("bob")))
+        with Env():
+            hub.load_config()
+            self.assertFalse(hub.is_bot(actor("renovate-runner")), "the list is the config's, not sticky")
+            self.assertTrue(hub.is_bot(actor("ci[bot]")))
 
     def test_my_login_matches_whatever_its_case(self):
         self.assertTrue(hub.is_me(actor("OctoCat"), "octocat"))
@@ -133,6 +153,16 @@ class QuietHours(unittest.TestCase):
         mode, post = self.at("2026-10-22T02:00:00-07:00")
         self.assertEqual((mode, post.isoformat()), ("schedule", "2026-10-22T08:00:00-07:00"))
 
+    def test_the_first_tick_after_quiet_hours_is_the_morning_one(self):
+        t = dt.datetime.fromisoformat
+        morning = t("2026-10-22T08:07:00-07:00")
+        self.assertTrue(hub.first_tick_after_quiet(self.cfg, t("2026-10-22T07:37:00-07:00"), morning))
+        self.assertTrue(hub.first_tick_after_quiet(self.cfg, t("2026-10-21T18:37:00-07:00"), morning), "slept all night")
+        self.assertFalse(hub.first_tick_after_quiet(self.cfg, t("2026-10-22T08:07:00-07:00"), t("2026-10-22T08:37:00-07:00")))
+        self.assertFalse(hub.first_tick_after_quiet(self.cfg, t("2026-10-22T06:37:00-07:00"), t("2026-10-22T07:07:00-07:00")),
+                         "still quiet")
+        self.assertFalse(hub.first_tick_after_quiet(self.cfg, None, morning))
+
     def test_the_log_day_is_the_configured_zones_not_the_machines(self):
         # 17:00 UTC on 2026-10-21 is 10:00 that day in Los Angeles and 06:00 the next in Auckland.
         cfg = CONFIG.replace('tz = "America/Los_Angeles"', 'tz = "Pacific/Auckland"')
@@ -169,9 +199,19 @@ class Config(unittest.TestCase):
         filled = example.replace('tz = "CHANGE-ME"', 'tz = "Europe/Berlin"').replace("CHANGE-ME", "x")
         with Env(config=filled):
             self.assertEqual(hub.load_config()["routing"], [], "the routing table ships commented out")
-        with Env(config=re.sub(r"(?m)^# (\[\[routing\]\]|session|repos|tickets)", r"\1", filled)):
+        with Env(config=re.sub(r"(?m)^# (\[\[routing\]\]|session|repos|tickets|channels)", r"\1", filled)):
             cfg = hub.load_config()
-            self.assertEqual((cfg["routing"][0]["session"], cfg["routing"][0]["repos"]), ("x", ["x"]))
+            self.assertEqual((cfg["routing"][0]["session"], cfg["routing"][0]["repos"], cfg["routing"][0]["channels"]),
+                             ("x", ["x"], []))
+
+    def test_a_route_without_channels_or_tickets_gets_empty_lists(self):
+        out = io.StringIO()
+        with Env(config=CONFIG + '[[routing]]\nsession = "app-session"\nrepos = ["acme/app"]\n'), \
+                contextlib.redirect_stdout(out):
+            cfg = hub.load_config()
+            self.assertEqual((cfg["routing"][0]["tickets"], cfg["routing"][0]["channels"]), ([], []))
+            self.assertEqual(hub.main(["config"]), 0)
+        self.assertIn("route: app-session repos=acme/app tickets=- channels=-", out.getvalue().splitlines())
 
     def test_config_prints_the_ids_and_the_tmp_dir(self):
         out = io.StringIO()
@@ -181,6 +221,7 @@ class Config(unittest.TestCase):
             lines = out.getvalue().splitlines()
             self.assertIn(f"tmp: {env.dir / 'job' / 'tmp'}", lines)
             self.assertIn("slack: primary_dm=dm-primary my_user_id=user-me watched=chan-one", lines)
+            self.assertIn("bots: - max_chars: slack=2500 review=2500", lines)
             self.assertIn("quiet: 19:00 to 08:00 America/Los_Angeles", lines)
 
     def test_a_zone_is_required_and_times_must_exist(self):
@@ -196,6 +237,44 @@ class Config(unittest.TestCase):
         with Env(config='[github]\nlogin = "x"\nowners = ["a"]\n[quiet_hours]\ntz = "Mars/Olympus"\n'):
             with self.assertRaisesRegex(hub.ConfigError, "IANA"):
                 hub.load_config()
+
+
+class MentionQueries(unittest.TestCase):
+    def test_three_searches_dated_two_days_back_in_the_configured_zone(self):
+        # 03:00 UTC on the 22nd is still the 21st in Los Angeles: two days back is the 19th.
+        out = io.StringIO()
+        with Env(now="2026-10-22T03:00:00Z"), contextlib.redirect_stdout(out):
+            self.assertEqual(hub.main(["queries"]), 0)
+        self.assertEqual(out.getvalue().splitlines(), [
+            "<@user-me> after:2026-10-19", "to:<@user-me> after:2026-10-19",
+            "with:<@user-me> is:thread after:2026-10-19"])
+
+
+class Feedback(unittest.TestCase):
+    def test_a_correction_is_appended_dated_in_the_configured_zone(self):
+        with Env(now="2026-10-21T17:00:00Z") as env, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(hub.main(["feedback", "no 'quick' in a status line"]), 0)
+            self.assertEqual(hub.main(["feedback", "lead with the ask"]), 0)
+            self.assertEqual((env.state / "feedback.md").read_text(),
+                             "- 2026-10-21 10:00 no 'quick' in a status line\n- 2026-10-21 10:00 lead with the ask\n")
+
+
+class Routed(unittest.TestCase):
+    def test_finds_what_the_last_two_days_logged_and_nothing_else(self):
+        link = "https://github.com/acme/app/pull/12"
+        with Env(now="2026-10-21T17:00:00Z") as env:
+            (env.state / "log").mkdir(parents=True)
+            (env.state / "log" / "2026-10-20.md").write_text(f"- 16:10 routed {link} to app-session\n- 16:11 held a draft\n")
+            (env.state / "log" / "2026-10-18.md").write_text(f"- 09:00 routed {link} to app-session\n")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = hub.main(["routed", link])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out.getvalue().splitlines(),
+                             [f"2026-10-20 - 16:10 routed {link} to app-session",
+                              f"routed: 1 line(s) in the last 2 days mention '{link}'"])
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(hub.main(["routed", "acme/app#99"]), 1)
 
 
 class TmpDir(unittest.TestCase):

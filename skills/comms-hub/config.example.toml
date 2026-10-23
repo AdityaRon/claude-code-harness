@@ -10,29 +10,39 @@ owners = ["CHANGE-ME"]         # the orgs or users whose repos are searched: you
 watch_repos = []               # "owner/name" list WATCHED searches; empty means all of owners
 watch_authors = []             # logins whose open PRs you follow, requested or not
 merged_days = 7                # how long a merged PR of yours stays in OUTBOUND
+bots = []                      # logins that are bots without a [bot] suffix; their comments are not activity you owe
+review_max_chars = 2500        # review_lint.py refuses a longer review body
 
 [slack]
 # A channel id starts with C (channel) or D (DM): in Slack, open the channel's
 # details and it is at the bottom. Your member id starts with U: your profile,
 # the three dots, "Copy member ID".
 primary_dm = "CHANGE-ME"       # channel id of the one DM read in full each tick
-watched_channels = []          # channel ids read with `oldest` each tick
+watched_channels = []          # channel ids read like the DM each tick: first page in full, no `oldest`
 my_user_id = "CHANGE-ME"       # your Slack member id, for the mention search
+max_chars = 2500               # check_draft.py refuses a longer message
 # Only if slack_listing.py cannot read your MCP's read_channel output; one group each:
 # listing_ts_pattern = '(?m)^ts: (\d{10}\.\d{6})'
 # listing_replies_pattern = 'replies: (\d+)'
+
+# Slack member id to GitHub login, so a draft that asks <@id> for a review is
+# checked against that person's own review of the PR. Names live here only.
+# [slack.github_logins]
+# "U-member-id" = "octocat"
 
 [quiet_hours]
 start = "19:00"                # from this time, messages are scheduled instead of sent
 post_at = "08:00"              # for this time the next morning
 tz = "CHANGE-ME"               # required: an IANA zone such as "Europe/Berlin", so DST is right
 
-# One table per peer session, once something routes. A PR in one of `repos`, or
-# a ticket whose key starts with one of `tickets` and a dash, routes to
-# `session`, its name in ListAgents. Unrouted events are asked about.
+# One table per peer session, once something routes. A PR in one of `repos`, a
+# ticket whose key starts with one of `tickets` and a dash, or a Slack post in
+# one of `channels` that names nobody, routes to `session`, its name in
+# ListAgents. Unrouted events are asked about.
 # [[routing]]
 # session = "CHANGE-ME"
 # repos = ["CHANGE-ME"]        # "owner/name"
 # tickets = []                 # project prefixes, such as "PROJ"
+# channels = []                # Slack channel ids whose unaddressed posts are this session's
 
 # state_dir = "~/.local/state/comms-hub"

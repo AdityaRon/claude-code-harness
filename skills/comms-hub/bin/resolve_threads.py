@@ -12,6 +12,8 @@ A thread is resolved only when all hold:
      COMMENTED, so a later CHANGES_REQUESTED or DISMISSED revokes it and a
      thread reply does not);
   5. that approval was submitted after our last reply on the thread.
+A RESOLVE whose approval sits on an older commit than the head says so (DRIFT):
+the thread still resolves, the approval still needs renewing.
 A PR whose thread or review list is longer than one page is skipped, and so is
 a thread whose comments are. After --apply, isResolved is what GitHub says.
 Exit 0, or 3 when a fetch, a mutation or a re-read failed.
@@ -31,8 +33,8 @@ MY_OPEN = """query CommsMyOpenThreads($cursor:String){viewer{login pullRequests(
  pageInfo{hasNextPage endCursor} nodes{number repository{nameWithOwner owner{login}}}}}}"""
 
 THREADS = """query CommsThreads($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
- pullRequest(number:$number){number url state author{login __typename}
-  reviews(first:100){pageInfo{hasNextPage} nodes{author{login __typename} state submittedAt}}
+ pullRequest(number:$number){number url state headRefOid author{login __typename}
+  reviews(first:100){pageInfo{hasNextPage} nodes{author{login __typename} state submittedAt commit{oid}}}
   reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved path line
    comments(first:100){pageInfo{hasNextPage} nodes{author{login __typename} createdAt}}}}}}}"""
 
@@ -84,7 +86,11 @@ def decide(pr: dict, me: str):
         if hub.parse_time(review["submittedAt"]) <= hub.parse_time(last["createdAt"]):
             out.append(("SKIP", t, f"{hub.login(opener)} approved before our last reply"))
             continue
-        out.append(("RESOLVE", t, f"{hub.login(opener)} approved {review['submittedAt']} after our reply {last['createdAt']}"))
+        why = f"{hub.login(opener)} approved {review['submittedAt']} after our reply {last['createdAt']}"
+        oid, head = (review.get("commit") or {}).get("oid"), pr.get("headRefOid")
+        if oid and head and oid != head:
+            why += f"; approval at {oid[:7]}, head is {head[:7]} (DRIFT: the thread resolves, the approval is older)"
+        out.append(("RESOLVE", t, why))
     return None, out
 
 
