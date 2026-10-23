@@ -23,6 +23,9 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   replies-optional: check_draft.py: `if stamp["target"].startswith("reply:") and not args.replies:` => `if False:`
   send-unconfirmed: check_draft.py: `if after <= before:` => `if False:`
   posted-still-listed: check_draft.py: `if hub.parse_time(s.get("post_at")) <= now:` => `if False:`
+  cap-ignored: check_draft.py: `if len(text) > cap:` => `if False:`
+  cap-hardcoded: check_draft.py: `problems = shape_problems(text, int(cfg["slack"]["max_chars"]))` => `problems = shape_problems(text)`
+  thin-bullet-ok: check_draft.py: `if m and len(re.findall(r"\w+", m.group(1))) < 3:` => `if False:`
 """
 import contextlib
 import io
@@ -30,7 +33,7 @@ import os
 import unittest
 from unittest import mock
 
-from fakes import Env, Fail, FakeGh, machine_zone
+from fakes import CONFIG, Env, Fail, FakeGh, machine_zone
 
 import check_draft
 import hub
@@ -104,6 +107,22 @@ class Shape(unittest.TestCase):
         rc, out = self.check("token xoxb-" + "1" * 12 + "-abcdefghij\n")
         self.assertEqual(rc, 1)
         self.assertIn("no secrets", out)
+
+    def test_a_long_draft_fails_at_the_configured_cap(self):
+        long = "word " * 520 + "\n"  # 2601 characters
+        rc, out = self.check(long)
+        self.assertEqual(rc, 1)
+        self.assertIn("2601 characters, over the 2500 cap", out)
+        with Env(config=CONFIG + "\n[slack.extra]\n") as env:
+            env.config.write_text(env.config.read_text().replace('my_user_id = "user-me"', 'my_user_id = "user-me"\nmax_chars = 3000'))
+            self.assertEqual(gate(env, long, "--top-level", gh=fake())[0], 0)
+
+    def test_a_thin_bullet_fails(self):
+        rc, out = self.check("Done:\n- fixed\n- retried the flaky job\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("line 2: thin bullet 'fixed'", out)
+        self.assertNotIn("line 3", out)
+        self.assertEqual(self.check("1. fixed the retry loop\n* and the test\n")[0], 0)
 
 
 class LiveState(unittest.TestCase):

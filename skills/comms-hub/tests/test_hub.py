@@ -30,6 +30,8 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   morning-every-tick: hub.py: `return prev < end <= at` => `return True`
   routed-today-only: hub.py: `for back in range(days):` => `for back in range(1):`
   routed-any-line: hub.py: `if text in line]` => `if True]`
+  known-bots-ignored: hub.py: `or name.lower() in KNOWN_BOTS` => `or False`
+  feedback-undated: hub.py: `f.write(f"- {local_now(cfg):%Y-%m-%d %H:%M} {text}\n")` => `f.write(f"- {text}\n")`
 """
 import contextlib
 import datetime as dt
@@ -68,6 +70,16 @@ class StandingReviews(unittest.TestCase):
 
     def test_comment_only_reviewer_has_no_standing(self):
         self.assertNotIn("bob", hub.standing_reviews([review("bob", "COMMENTED", "2026-10-01T10:00:00Z")]))
+
+    def test_a_login_in_github_bots_is_a_bot(self):
+        with Env(config=CONFIG.replace('merged_days = 7', 'merged_days = 7\nbots = ["Renovate-Runner"]')):
+            hub.load_config()
+            self.assertTrue(hub.is_bot(actor("renovate-runner")))
+            self.assertFalse(hub.is_bot(actor("bob")))
+        with Env():
+            hub.load_config()
+            self.assertFalse(hub.is_bot(actor("renovate-runner")), "the list is the config's, not sticky")
+            self.assertTrue(hub.is_bot(actor("ci[bot]")))
 
     def test_my_login_matches_whatever_its_case(self):
         self.assertTrue(hub.is_me(actor("OctoCat"), "octocat"))
@@ -209,6 +221,7 @@ class Config(unittest.TestCase):
             lines = out.getvalue().splitlines()
             self.assertIn(f"tmp: {env.dir / 'job' / 'tmp'}", lines)
             self.assertIn("slack: primary_dm=dm-primary my_user_id=user-me watched=chan-one", lines)
+            self.assertIn("bots: - max_chars: slack=2500 review=2500", lines)
             self.assertIn("quiet: 19:00 to 08:00 America/Los_Angeles", lines)
 
     def test_a_zone_is_required_and_times_must_exist(self):
@@ -235,6 +248,15 @@ class MentionQueries(unittest.TestCase):
         self.assertEqual(out.getvalue().splitlines(), [
             "<@user-me> after:2026-10-19", "to:<@user-me> after:2026-10-19",
             "with:<@user-me> is:thread after:2026-10-19"])
+
+
+class Feedback(unittest.TestCase):
+    def test_a_correction_is_appended_dated_in_the_configured_zone(self):
+        with Env(now="2026-10-21T17:00:00Z") as env, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(hub.main(["feedback", "no 'quick' in a status line"]), 0)
+            self.assertEqual(hub.main(["feedback", "lead with the ask"]), 0)
+            self.assertEqual((env.state / "feedback.md").read_text(),
+                             "- 2026-10-21 10:00 no 'quick' in a status line\n- 2026-10-21 10:00 lead with the ask\n")
 
 
 class Routed(unittest.TestCase):

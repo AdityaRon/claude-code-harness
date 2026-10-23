@@ -185,7 +185,10 @@ it, and the tick cannot run without it.
      the peer with the ts or id.
 5. **Log**: `PY B/hub.py log "<one line>"` for each item routed, each draft held
    and why, each question for the user (sends and resolves log themselves).
-   Then report to the user: sent, scheduled, held, BLOCKED, and what needs them.
+   `PY B/hub.py feedback "<what was corrected>"` for each correction the user
+   made this tick to a message or to this protocol: `feedback.md` is the
+   backlog for the next change to the skill. Then report to the user: sent,
+   scheduled, held, BLOCKED, and what needs them.
 
 ## Hard rules
 

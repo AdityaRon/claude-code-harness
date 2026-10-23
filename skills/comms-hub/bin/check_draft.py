@@ -58,8 +58,24 @@ def ts_key(ts: str) -> tuple[int, int]:
     return int(sec), int(frac or 0)
 
 
-def shape_problems(text: str) -> list[str]:
+BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*)$")
+
+
+def thin_bullets(text: str) -> list[str]:
+    """A bullet under three words says nothing the reader can act on."""
     out = []
+    for n, line in enumerate(text.splitlines(), 1):
+        m = BULLET.match(line)
+        if m and len(re.findall(r"\w+", m.group(1))) < 3:
+            out.append(f"line {n}: thin bullet {m.group(1).strip()!r}")
+    return out
+
+
+def shape_problems(text: str, cap: int = hub.MAX_CHARS) -> list[str]:
+    out = []
+    if len(text) > cap:
+        out.append(f"{len(text)} characters, over the {cap} cap (slack.max_chars): split it, or cut")
+    out += thin_bullets(text)
     for n, line in enumerate(text.splitlines(), 1):
         if EM_DASH in line:
             out.append(f"line {n}: em dash")
@@ -157,7 +173,7 @@ def gate(args, cfg, gh) -> int:
             print(f"FAIL: {ts!r} is not a Slack ts (1234567890.123456)")
             return 2
     target = f"reply:{args.reply}" if args.reply else "top-level"
-    problems = shape_problems(text)
+    problems = shape_problems(text, int(cfg["slack"]["max_chars"]))
     if args.answers and args.reply != max(args.answers, key=ts_key):
         problems.append(f"--reply {args.reply} is not the newest message the draft answers "
                         f"({max(args.answers, key=ts_key)}): a combined reply threads under the newest")

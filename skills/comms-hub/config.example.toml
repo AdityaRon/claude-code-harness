@@ -10,6 +10,8 @@ owners = ["CHANGE-ME"]         # the orgs or users whose repos are searched: you
 watch_repos = []               # "owner/name" list WATCHED searches; empty means all of owners
 watch_authors = []             # logins whose open PRs you follow, requested or not
 merged_days = 7                # how long a merged PR of yours stays in OUTBOUND
+bots = []                      # logins that are bots without a [bot] suffix; their comments are not activity you owe
+review_max_chars = 2500        # review_lint.py refuses a longer review body
 
 [slack]
 # A channel id starts with C (channel) or D (DM): in Slack, open the channel's
@@ -18,6 +20,7 @@ merged_days = 7                # how long a merged PR of yours stays in OUTBOUND
 primary_dm = "CHANGE-ME"       # channel id of the one DM read in full each tick
 watched_channels = []          # channel ids read like the DM each tick: first page in full, no `oldest`
 my_user_id = "CHANGE-ME"       # your Slack member id, for the mention search
+max_chars = 2500               # check_draft.py refuses a longer message
 # Only if slack_listing.py cannot read your MCP's read_channel output; one group each:
 # listing_ts_pattern = '(?m)^ts: (\d{10}\.\d{6})'
 # listing_replies_pattern = 'replies: (\d+)'
