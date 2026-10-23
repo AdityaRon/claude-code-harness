@@ -31,6 +31,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   watched-draft-listed: queue.py: `if pr["isDraft"]:` => `if False:`
   watched-reviewed-listed: queue.py: `if any(((r.get("commit") or {}).get("oid")) == head for r in mine):` => `if False:`
   watched-zero-trusted: queue.py: `if by_graph:` => `if False:`
+  held-uncounted: queue.py: `held = sorted(p.name for p in (hub.state_dir(cfg) / "held").glob("*.md"))` => `held = []`
 """
 import contextlib
 import importlib.util
@@ -329,6 +330,16 @@ class Scan(unittest.TestCase):
         self.assertIn("previous-scan: 2026-10-21T17:00:00+00:00 epoch=1792602000", outs[1])
         self.assertEqual(log.count("scan started"), 2)
         self.assertNotIn("morning:", outs[1])
+
+    def test_held_drafts_on_disk_are_counted(self):
+        with Env(now=NOW) as env:
+            (env.state / "held").mkdir(parents=True)
+            (env.state / "held" / "app-session-1761040800.000100.md").write_text("comms-hub draft\n")
+            out = []
+            q.scan(hub.load_config(), hub.Gh(runner=fake(), pause=0), emit=out.append)
+        self.assertIn("held-drafts: 1 (app-session-1761040800.000100.md): gate and send each, or say why it still waits",
+                      out)
+        self.assertIn("held-drafts: 0", scan(fake())[1])
 
     def test_the_first_scan_after_quiet_hours_says_morning(self):
         with Env(now=NOW) as env:

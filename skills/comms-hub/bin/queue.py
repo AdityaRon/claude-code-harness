@@ -325,6 +325,9 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
         emit("morning: first tick since quiet hours ended; re-check every scheduled message (check_draft.py --scheduled)")
     stamp.write_text(at.isoformat() + "\n")
     hub.append_log(cfg, f"scan started {at:%Y-%m-%dT%H:%M:%SZ}")
+    # A held draft lives in a file, not in the session's memory, so a compaction cannot lose it.
+    held = sorted(p.name for p in (hub.state_dir(cfg) / "held").glob("*.md"))
+    emit(f"held-drafts: {len(held)}" + (f" ({' '.join(held)}): gate and send each, or say why it still waits" if held else ""))
 
     need = 2 + len(authors)
     can_search = False

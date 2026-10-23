@@ -165,6 +165,11 @@ it, and the tick cannot run without it.
      API, so if the draft said `fold-in: expected`, or another draft for that
      thread is due, hold it and send it live, gated again, at the first tick
      after `post_at`.
+   - A held draft (a fold-in expected, a quiet-hours hold, a claim sent back)
+     is written with its header to `<state dir>/held/<peer>-<thread ts>.md`
+     with the Write tool, never kept in this session's memory: a compaction
+     loses memory, and step 1's header counts the files (`held-drafts:`).
+     Delete the file once sent or returned to the peer.
    - The morning re-check: when step 1's header printed `morning:`, run
      `PY B/check_draft.py --scheduled` and gate each pending message's copy
      again (`check_draft.py <copy> --reply <ts>`, with the same `--asks`).
@@ -208,6 +213,7 @@ it, and the tick cannot run without it.
 | `sent/YYYY-MM-DD/<id>.md` | each message as it was sent or scheduled |
 | `slack/<channel>.tsv` | the committed snapshot `slack_diff.py` compares against |
 | `gate/` | `check_draft.py`'s pass records |
+| `held/<peer>-<thread ts>.md` | each draft held between ticks, with its header; the scan counts them |
 | `preflight.json` | step 0's record of this session's tools and trigger |
 | `feedback.md` | each correction the user makes to a message or to this protocol, dated, for the next change to this skill |
 | `queue.pid` | the scan in progress |
