@@ -548,5 +548,21 @@ check_wt "clean add, then a named .env"      deny  "git add -A && git add sub/.e
 rm -rf "$WT_HOME"
 
 echo ""
+echo "=== An inline script: its shell-outs run, its text does not ==="
+check "subprocess list, force push"          deny  $'python3 -c "import subprocess; subprocess.run([\'git\',\'push\',\'--force\',\'origin\',\'main\'])"'
+check "os.system in a heredoc, push -f"      deny  $'python3 - <<\'EOF\'\nimport os\nos.system(\'git push -f origin main\')\nEOF'
+check "node execSync, reset --hard"          deny  $'node -e "require(\'child_process\').execSync(\'git reset --hard HEAD~3\')"'
+check "subprocess, git add -A"               deny  $'python3 -c "import subprocess; subprocess.run([\'git\',\'add\',\'-A\'])"'
+check "a split() string, force push"         deny  $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(\'git push --force origin main\'.split())\nEOF'
+check "printed into bash"                    deny  $'python3 -c "print(\'git push --force origin main\')" | bash'
+check "open() into .git/hooks"               deny  $'python3 - <<\'EOF\'\nopen(\'.git/hooks/pre-commit\', \'w\').write(\'exit 0\')\nEOF'
+check "subprocess, git status"               allow $'python3 -c "import subprocess; print(subprocess.run([\'git\',\'status\',\'--short\'], capture_output=True).stdout)"'
+check "a commit message through a shell-out" allow $'python3 -c "import subprocess; subprocess.run([\'git\',\'commit\',\'-m\',\'fix: no git push --force here\'])"'
+check "a heredoc string names force push"    allow $'python3 - <<\'EOF\'\nprint("never run: git push --force origin main")\nEOF'
+check "python -c prints reset --hard text"   allow $'python3 -c "print(\'docs: git reset --hard loses work\')"'
+check "printed to head"                      allow $'python3 -c "print(\'git push --force origin main\')" | head -1'
+check "a script adds a test naming push -f"  allow $'python3 - tests/git-guard.test.sh <<\'EOF\'\nimport sys\np = sys.argv[1]; s = open(p).read()\ns = s.replace(\'# end\', \'check "VAR=1; with no space" deny "X=1;git push -f origin main"\\n# end\')\nopen(p, \'w\').write(s)\nEOF'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

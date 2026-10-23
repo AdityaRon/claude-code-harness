@@ -9,7 +9,11 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
-[[ "$CMD" =~ (^|[^[:alnum:]_.-])rm([[:space:]]|$) ]] || exit 0
+# A quote may follow: subprocess.run(['rm', '-rf', x]) in an inline script.
+RM_WORD='(^|[^[:alnum:]_.-])rm([[:space:]"'\'']|$)'
+[[ "$CMD" =~ $RM_WORD ]] || exit 0
+# A script's shell-outs are checked as commands of their own (lib.sh).
+check_inline_shellouts rm flat
 
 SCRATCH=$(session_scratch "$CMD"$'\n'"$(jq_get '.cwd')")
 # A command that sets the variables in_scratch trusts gets no scratch allowance.

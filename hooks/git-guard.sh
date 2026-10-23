@@ -27,6 +27,10 @@ CMD=$(jq_get '.tool_input.command')
 R=$(printf '%s' "$CMD" | tr -d '"'\''\\')
 [[ "$R" == *[Gg][Ii][Tt]* ]] || exit 0
 CMD=$(strip_inert_heredocs "$CMD")
+# A script's shell-outs are checked as commands (lib.sh). The .git/hooks check
+# still reads the script's text: open('.git/hooks/x', 'w') writes there too.
+INLINE_TEXT=$CMD
+check_inline_shellouts git flat
 # The .git/hooks check still reads a quoted message, as it always has.
 MSG_FREE=$(strip_message_args "$CMD")
 HOOKS_TEXT=""
@@ -60,7 +64,7 @@ GIT="${XARGS}git(\s+${GOPT})*\s+"
 # Each check below contains one of these, so one grep stands in for all of them
 # when none is present: git status, log, diff, show and commit skip the rest.
 printf '%s\n%s\n' "$CMD" "$SCAN" | grep -qiE "core\.hookspath|\.git/hooks|${GIT}(push|reset|clean|branch|checkout|restore|stash|worktree|add|config|remote|filter-branch|filter-repo|update-ref|reflog)" \
-  || printf '%s\n' "$HOOKS_TEXT" | grep -qE '\.git/hooks' || exit 0
+  || printf '%s\n%s\n' "$HOOKS_TEXT" "$INLINE_TEXT" | grep -qE '\.git/hooks' || exit 0
 
 # --- core.hooksPath via -c on ANY subcommand ----------------------------
 # `git -c core.hooksPath=/tmp/evil <anything>` points hooks at an attacker
@@ -477,7 +481,7 @@ done < <(printf '%s\n' "$CMD" | grep -oE "${A}${GIT}config\s+[^|;&]*")
 # old pattern never saw it. This check is deliberately unanchored (it fires
 # wherever the path appears, a commit message included) — dropping the
 # required slash widens that, it does not change its shape.
-if printf '%s\n%s\n' "$CMD" "$HOOKS_TEXT" | grep -qE "\.git/hooks(/|\b)"; then
+if printf '%s\n%s\n%s\n' "$CMD" "$HOOKS_TEXT" "$INLINE_TEXT" | grep -qE "\.git/hooks(/|\b)"; then
   emit_deny "Blocked: writing into .git/hooks can install a persistent payload. Not permitted."
   exit 0
 fi
