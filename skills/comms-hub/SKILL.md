@@ -77,11 +77,14 @@ the state dir, the tmp dir, the Slack ids and the routes):
  "slack_read_channel": "<tool name>", "slack_read_thread": "<tool name>",
  "slack_search": "<tool name>", "slack_send": "<tool name>", "slack_schedule": "<tool name>",
  "list_agents": "ListAgents", "send_message": "SendMessage",
- "trigger": "<the tick's cron expression, from CronList>", "tickets": "<tool name, or empty>"}
+ "trigger": "<the tick's cron expression, from CronList>", "tickets": "<tool name, or empty>",
+ "slack_delete_scheduled": "<tool name, or empty>"}
 ```
 
 Leave a key empty when its tool is missing, and tell the user: doctor fails on
-it, and the tick cannot run without it.
+it, and the tick cannot run without it. `slack_delete_scheduled` and `tickets`
+are optional: without the first, a scheduled message whose claims moved can
+only be reported, not withdrawn.
 
 ## The tick
 
@@ -181,12 +184,16 @@ it, and the tick cannot run without it.
      with the Write tool, never kept in this session's memory: a compaction
      loses memory, and step 1's header counts the files (`held-drafts:`).
      Delete the file once sent or returned to the peer.
-   - The morning re-check: when step 1's header printed `morning:`, run
-     `PY B/check_draft.py --scheduled` and gate each pending message's copy
-     again (`check_draft.py <copy> --reply <ts>`, with the same `--asks`).
-     A FAIL means the claims moved overnight: withdraw it with the Slack
-     server's delete-scheduled tool when it has one, else tell the user
-     before `post_at`, and send the draft back to the peer with what changed.
+   - While step 1's header prints `scheduled-pending:` above 0, every tick:
+     `PY B/check_draft.py --scheduled`, then gate each pending message's copy
+     again (`check_draft.py <copy> --reply <ts>`, with the same `--asks`). A
+     message can be withdrawn only before its `post_at`, which is also when
+     quiet hours end, so the morning tick is too late. A FAIL means a claim
+     moved: withdraw it with the delete-scheduled tool step 0 recorded, else
+     tell the user now, before `post_at`; either way send the draft back to
+     the peer with what changed. When the header prints `morning:`, what was
+     scheduled has posted: read each target thread, confirm it landed, and
+     log it.
    - Confirm the send: the send tool says OK either way. For a reply, re-read
      the parent thread and compare its reply count with the one read before
      the send; for a top-level message, re-read the channel's first page and

@@ -36,10 +36,13 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   thread-comments-one-page: queue.py: `t["comments"]["nodes"] = page_all(` => `t["comments"]["nodes"] = t["comments"]["nodes"] or page_all(`
   no-wider-reread: queue.py: `details[ref] = fetch_pr(wider, ref)` => `raise hub.GhError("no re-read")`
   reread-not-wider: queue.py: `timeout=gh.timeout * 2` => `timeout=gh.timeout`
+  pending-uncounted: queue.py: `pending = hub.pending_scheduled(cfg)` => `pending = []`
+  posted-still-pending: hub.py: `if parse_time(s.get("post_at")) <= now_:` => `if False:`
 """
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import stat
 import subprocess
@@ -378,8 +381,19 @@ class Scan(unittest.TestCase):
             (env.state / "last-scan").write_text("2026-10-21T03:00:00+00:00\n")  # 20:00 the evening before
             out = []
             q.scan(hub.load_config(), hub.Gh(runner=fake(), pause=0), emit=out.append)
-        self.assertIn("morning: first tick since quiet hours ended; re-check every scheduled message "
-                      "(check_draft.py --scheduled)", out)
+        self.assertIn("morning: first tick since quiet hours ended; what was scheduled has posted, confirm each landed", out)
+
+    def test_scheduled_messages_still_ahead_are_counted_every_tick(self):
+        stamp = {"send": "schedule", "sent_id": "Q0001", "post_at": "2026-10-22T08:00:00-07:00", "target": "top-level",
+                 "sha256": "0" * 64, "passed_at": 0}
+        with Env(now=NOW) as env:  # 10:00 on the 21st there; Q0001 posts the next morning
+            (env.state / "gate").mkdir(parents=True)
+            (env.state / "gate" / "a.json").write_text(json.dumps(stamp))
+            (env.state / "gate" / "b.json").write_text(json.dumps({**stamp, "sent_id": "Q0000", "post_at": "2026-10-21T08:00:00-07:00"}))
+            out = []
+            q.scan(hub.load_config(), hub.Gh(runner=fake(), pause=0), emit=out.append)
+        self.assertIn("scheduled-pending: 1 (Q0001): gate each copy again this tick (check_draft.py --scheduled)", out)
+        self.assertIn("scheduled-pending: 0", scan(fake())[1])
 
     def test_a_scan_that_outlived_the_wall_limit_is_blocked_even_unwatched(self):
         base = time.time()

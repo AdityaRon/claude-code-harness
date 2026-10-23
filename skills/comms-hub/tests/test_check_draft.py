@@ -29,7 +29,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   answers-unchecked: check_draft.py: `if args.answers and args.reply != max(args.answers, key=ts_key):` => `if False:`
   replies-optional: check_draft.py: `if stamp["target"].startswith("reply:") and not args.replies:` => `if False:`
   send-unconfirmed: check_draft.py: `if after <= before:` => `if False:`
-  posted-still-listed: check_draft.py: `if hub.parse_time(s.get("post_at")) <= now:` => `if False:`
+  posted-still-listed: hub.py: `if parse_time(s.get("post_at")) <= now_:` => `if False:`
   cap-ignored: check_draft.py: `if len(text) > cap:` => `if False:`
   cap-hardcoded: check_draft.py: `problems = shape_problems(text, int(cfg["slack"]["max_chars"]))` => `problems = shape_problems(text)`
   thin-bullet-ok: check_draft.py: `if m and len(re.findall(r"\w+", m.group(1))) < 3:` => `if False:`

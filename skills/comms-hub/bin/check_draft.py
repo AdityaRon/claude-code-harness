@@ -293,18 +293,9 @@ def record_sent(args, cfg) -> int:
 
 
 def list_scheduled(cfg) -> int:
-    """Scheduled messages whose post_at is still ahead: each can be gated again
-    from its sent copy and withdrawn before it posts."""
-    now = hub.now()
-    rows = []
-    for p in sorted((hub.state_dir(cfg) / "gate").glob("*.json")):
-        s = json.loads(p.read_text())
-        if s.get("send") != "schedule" or not s.get("sent_id"):
-            continue
-        if hub.parse_time(s.get("post_at")) <= now:
-            continue
-        rows.append(f"{s['sent_id']} post_at={s['post_at']} target={s['target']} copy={s.get('sent_copy') or '?'}"
-                    + (f" asks={','.join(s['asks'])}" if s.get("asks") else ""))
+    """Scheduled messages whose post_at is still ahead, with the copy to gate again."""
+    rows = [f"{s['sent_id']} post_at={s['post_at']} target={s['target']} copy={s.get('sent_copy') or '?'}"
+            + (f" asks={','.join(s['asks'])}" if s.get("asks") else "") for s in hub.pending_scheduled(cfg)]
     print(f"scheduled: {len(rows)} pending")
     for r in rows:
         print(r)

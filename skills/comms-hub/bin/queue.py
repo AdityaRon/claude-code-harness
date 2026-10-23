@@ -352,7 +352,12 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     emit(f"previous-scan: {prev.isoformat()} epoch={int(prev.timestamp())}" if prev
          else "previous-scan: none (first scan: nothing before this tick was checked)")
     if hub.first_tick_after_quiet(cfg, prev, at):
-        emit("morning: first tick since quiet hours ended; re-check every scheduled message (check_draft.py --scheduled)")
+        emit("morning: first tick since quiet hours ended; what was scheduled has posted, confirm each landed")
+    # A scheduled message can be withdrawn only before post_at, so each tick until then re-checks its claims.
+    pending = hub.pending_scheduled(cfg)
+    emit(f"scheduled-pending: {len(pending)}"
+         + (f" ({' '.join(s['sent_id'] for s in pending)}): gate each copy again this tick (check_draft.py --scheduled)"
+            if pending else ""))
     stamp.write_text(at.isoformat() + "\n")
     hub.append_log(cfg, f"scan started {at:%Y-%m-%dT%H:%M:%SZ}")
     # A held draft lives in a file, not in the session's memory, so a compaction cannot lose it.

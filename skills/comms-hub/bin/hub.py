@@ -270,6 +270,21 @@ def append_log(cfg: dict | None, line: str) -> Path:
     return p
 
 
+def pending_scheduled(cfg: dict) -> list[dict]:
+    """The gate's records of scheduled messages whose post_at is still ahead:
+    each can be gated again from its sent copy and withdrawn before it posts."""
+    now_ = now()
+    out = []
+    for p in sorted((state_dir(cfg) / "gate").glob("*.json")):
+        s = json.loads(p.read_text())
+        if s.get("send") != "schedule" or not s.get("sent_id"):
+            continue
+        if parse_time(s.get("post_at")) <= now_:
+            continue
+        out.append(s)
+    return out
+
+
 def append_feedback(cfg: dict, text: str) -> Path:
     """A correction the user made, dated, in feedback.md: the backlog for the next change to this skill."""
     p = state_dir(cfg) / "feedback.md"
