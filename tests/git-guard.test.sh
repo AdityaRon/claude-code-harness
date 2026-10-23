@@ -270,6 +270,7 @@ check "ANSI-C message stays"            deny  "git commit -m \$'a\\'; git push -
 check "unclosed message quote"          deny  "git commit -m 'note; git push --force"
 check "cmdsub heredoc piped to bash"    deny  $'git commit -m "$(cat <<\'EOF\' | bash\ngit push --force\nEOF\n)"'
 check "cmdsub heredoc read by bash"     deny  $'git commit -m "$(bash <<\'EOF\'\ngit push --force\nEOF\n)"'
+check "an assignment before bash <<"    deny  $'X=1 bash <<\'EOF\'\ngit push --force origin main\nEOF'
 check "unquoted heredoc body runs \$()" deny  $'git commit -m "$(cat <<EOF\n$(git push --force)\nEOF\n)"'
 check "push takes no message flag"      deny  "git push -m 'x' --force"
 check "comment line keeps old reading"  deny  $'# it\'s\ngit commit -m \'x\'; git push --force'

@@ -8,6 +8,21 @@ export CLAUDE_AUDIT_LOG="$TMP/audit.log"
 LIMIT=${GUARD_LATENCY_LIMIT:-10}
 PASS=0; FAIL=0
 
+now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
+each_guard() {
+  local cmd="$1" payload g t0 t1 secs
+  payload=$(jq -nc --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c},cwd:"/repo",session_id:"00000000-test"}')
+  for g in env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard; do
+    t0=$(now)
+    # alarm caps a hang so one slow guard cannot stall doctor
+    printf '%s' "$payload" | perl -e 'alarm shift; exec @ARGV' $((LIMIT + 5)) bash "hooks/$g.sh" >/dev/null 2>&1
+    t1=$(now)
+    secs=$(perl -e "printf '%.2f', $t1 - $t0")
+    if perl -e "exit !($secs < $LIMIT)"; then echo "  OK (${secs}s): $g"; PASS=$((PASS + 1))
+    else echo "  FAIL (${secs}s, limit ${LIMIT}s): $g"; FAIL=$((FAIL + 1)); fi
+  done
+}
+
 # About 12 KB, past the early exits: git words, quotes, parens, $( and a path
 # under ~/.claude, inside a commit message heredoc.
 BODY=$(for i in $(seq 1 160); do
@@ -16,19 +31,20 @@ done)
 CMD="cd /repo && git commit -F - <<'EOF'
 $BODY
 EOF"
-PAYLOAD=$(jq -nc --arg c "$CMD" '{tool_name:"Bash",tool_input:{command:$c},cwd:"/repo",session_id:"00000000-test"}')
-
-now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
 echo "=== each Bash guard finishes a ${#CMD}-byte command in under ${LIMIT}s ==="
-for g in env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard; do
-  t0=$(now)
-  # alarm caps a hang so one slow guard cannot stall doctor
-  printf '%s' "$PAYLOAD" | perl -e 'alarm shift; exec @ARGV' $((LIMIT + 5)) bash "hooks/$g.sh" >/dev/null 2>&1
-  t1=$(now)
-  secs=$(perl -e "printf '%.2f', $t1 - $t0")
-  if perl -e "exit !($secs < $LIMIT)"; then echo "  OK (${secs}s): $g"; PASS=$((PASS + 1))
-  else echo "  FAIL (${secs}s, limit ${LIMIT}s): $g"; FAIL=$((FAIL + 1)); fi
-done
+each_guard "$CMD"
+
+# An inline script whose strings hold backticks, parens and quotes, in a
+# command that names kubectl: kubectl-guard once looped forever on one.
+PY=$(for i in $(seq 1 40); do
+  printf 'old%d = """  e=(-e '\''s/\\\\$\\\\(/ $( /g; s/`/ ` /g'\'')"""\nprint(f"step {%d}: `make` (done)")\n' "$i" "$i"
+done)
+CMD="python3 - lib.sh <<'EOF'
+$PY
+EOF
+kubectl get pods"
+echo "=== and a ${#CMD}-byte inline python script ==="
+each_guard "$CMD"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

@@ -228,10 +228,12 @@ strip_message_args() {
 }
 
 # Text written to a notes file is not a command. Drop heredoc bodies from the
-# scan only when every segment is an inert writer (cat, tee, cd, mkdir, echo,
-# printf, true, a plain assignment) and every redirect target is a prose file.
-# Any other word anywhere (bash x.sh, chmod, an unknown binary, a .sh target)
-# keeps the body in, so the guards see exactly what they see today.
+# scan only when every segment is an inert writer or reader, or only assignments,
+# and every redirect target is a prose file; anything else keeps the body in.
+# A value may name a $VAR but run nothing. `X=1 bash` is bash, not an assignment:
+# read as one, its heredoc ran unscanned.
+INERT_WORD='("([^"$`]|\$[{]?[A-Za-z_])*"|'"'[^']*'"'|([^[:space:]$`'"'"'"]|\$[{]?[A-Za-z_])*)'
+INERT_SEG='^((cat|tee|cd|mkdir|echo|printf|true|wc|ls|head|tail|stat|file|du|grep|pwd)([[:space:]]|$)|([A-Za-z_][A-Za-z0-9_]*='"$INERT_WORD"'([[:space:]]+|$))+$)'
 strip_inert_heredocs() {
   local s="$1" rest
   case "$s" in *'<<'*) ;; *) printf '%s' "$s"; return ;; esac
@@ -247,16 +249,22 @@ strip_inert_heredocs() {
     { print }
     END { if (body && buf ~ /[$`]/) printf "%s", buf }')
   if printf '%s\n' "$rest" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g' | sed -E 's/^[[:space:]]+//' \
-       | grep -vE '^[[:space:]]*$' \
-       | grep -qvE '^(cat|tee|cd|mkdir|echo|printf|true|[A-Za-z_][A-Za-z0-9_]*=[^$`]*)([[:space:]]|$)'; then
+       | grep -vE '^[[:space:]]*$' | grep -qvE "$INERT_SEG"; then
     printf '%s' "$s"; return
   fi
   # Every target must be prose: each > or >> target, and every file tee is given
   # (`tee a.md b.sh` writes both; reading only the first let a script through).
+  # A whole-word "$F" assigned once in this command is its value.
   if { printf '%s\n' "$rest" | grep -oE '>>?[[:space:]]*[^[:space:];&|<]+' | sed -E 's/^>>?[[:space:]]*//'
        printf '%s\n' "$rest" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g; s/>>?[[:space:]]*[^[:space:];&|<]+//g' \
          | sed -E 's/^[[:space:]]+//' | grep -E '^tee([[:space:]]|$)' | tr -s ' \t' '\n' | grep -vxE 'tee|-.*'
-     } | grep -v '^$' | grep -qvE '\.(md|txt|rst|log|csv)$'; then
+     } | grep -v '^$' | awk '
+       function unq(t) { if (t ~ /^".*"$/ || t ~ /^\047.*\047$/) t = substr(t, 2, length(t) - 2); return t }
+       NR == FNR { if (match($0, /^[A-Za-z_][A-Za-z0-9_]*=/)) { k = substr($0, 1, RLENGTH - 1); n[k]++; v[k] = unq(substr($0, RLENGTH + 1)) } next }
+       { t = unq($0); k = t; gsub(/^\$[{]?|[}]$/, "", k)
+         if (t ~ /^\$[{]?[A-Za-z_][A-Za-z0-9_]*[}]?$/ && n[k] == 1) t = v[k]
+         print t }' <(printf '%s\n' "$rest" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//') - \
+       | grep -qvE '\.(md|txt|rst|log|csv)$'; then
     printf '%s' "$s"; return
   fi
   printf '%s' "$rest"
