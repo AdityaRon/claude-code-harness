@@ -17,8 +17,9 @@ not move: the send tool says OK either way.
 
 Live state: a line that links a merged or closed PR and calls it awaiting,
 pending or open fails. A line that asks for a review fails when an addressee
-has already reviewed the PR's current head, in any state: a review ask once
-went out minutes after the approval. The addressees are --asks (GitHub logins)
+has already reviewed the PR's current head (approved, requested changes, or a
+comment review with a body; a bodiless COMMENTED is a thread reply): a review
+ask once went out minutes after the approval. The addressees are --asks (GitHub logins)
 and every <@id> the draft mentions that slack.github_logins maps to a login.
 It is the addressee's own review that counts, not the PR's decision: another
 reviewer's approval failed an ask once. An ask with no addressee fails, so it
@@ -125,10 +126,13 @@ def live_state(gh: hub.Gh, prs) -> tuple[list[str], bool, dict[tuple, dict]]:
             continue
         head = d.get("headRefOid") or "?"
         d["standing"] = {k.lower(): v for k, v in hub.standing_reviews(d.get("reviews") or []).items()}
-        # Each reviewer's latest review of the current head, whatever its state: they have reviewed it.
+        # Each reviewer's latest review of the current head: an approval, a changes request, or a
+        # comment review with a body. A bodiless COMMENTED is what a thread reply creates, not a review.
         d["at_head"] = {}
         for r in sorted(d.get("reviews") or [], key=lambda r: r.get("submittedAt") or ""):
-            if r.get("state") != "PENDING" and (r.get("commit") or {}).get("oid") == head and hub.login(r.get("author")):
+            if r.get("state") == "PENDING" or (r.get("state") == "COMMENTED" and not (r.get("body") or "").strip()):
+                continue
+            if (r.get("commit") or {}).get("oid") == head and hub.login(r.get("author")):
                 d["at_head"][hub.login(r["author"]).lower()] = r
         approved = [f"{k}@{((r.get('commit') or {}).get('oid') or '?')[:7]}"
                     for k, r in sorted(d["standing"].items()) if r.get("state") == "APPROVED"]

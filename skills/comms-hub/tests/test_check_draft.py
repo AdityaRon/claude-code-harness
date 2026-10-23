@@ -17,7 +17,8 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   merged-awaiting-ok: check_draft.py: `if d.get("state") in ("MERGED", "CLOSED") and m:` => `if False:`
   ask-any-reviewer: check_draft.py: `r = d["at_head"].get(login.lower())` => `r = next(iter(d["at_head"].values()), None)`
   ask-unaddressed-ok: check_draft.py: `if not asks:` => `if False:`
-  ask-old-head-fails: check_draft.py: `and (r.get("commit") or {}).get("oid") == head and hub.login(r.get("author")):` => `and hub.login(r.get("author")):`
+  ask-old-head-fails: check_draft.py: `if (r.get("commit") or {}).get("oid") == head and hub.login(r.get("author")):` => `if hub.login(r.get("author")):`
+  thread-reply-is-a-review: check_draft.py: `or (r.get("state") == "COMMENTED" and not (r.get("body") or "").strip())` => ``
   ask-off-line-missed: check_draft.py: `for pr in here or every:` => `for pr in here:`
   en-dash-ok: check_draft.py: `if EN_DASH in line:` => `if False:`
   aws-temp-key-missed: check_draft.py: `(?:AKIA|ASIA)[0-9A-Z]{16}` => `AKIA[0-9A-Z]{16}`
@@ -190,13 +191,16 @@ class Claims(unittest.TestCase):
         self.assertIn("asks bob to review acme/app#12, which they already reviewed (APPROVED) 2026-10-21T16:50:00Z "
                       "at the current head", out)
         self.assertIn("approved-by=bob@abcdef1", out)
-        commented = {**PR_JSON, "reviews": [review("bob", "COMMENTED")]}
+        commented = {**PR_JSON, "reviews": [{**review("bob", "COMMENTED"), "body": "two nits, see inline"}]}
         rc, out = self.check(f"could you review {LINK}?\n", "--asks", "bob", state=commented)
-        self.assertEqual(rc, 1, "a comment review of this head is a review too: " + out)
+        self.assertEqual(rc, 1, "a comment review with a body is a review too: " + out)
+        replied = {**PR_JSON, "reviews": [review("bob", "COMMENTED")]}  # body "": what a thread reply creates
+        rc, out = self.check(f"could you review {LINK}?\n", "--asks", "bob", state=replied)
+        self.assertEqual(rc, 0, "a thread reply is not a review: " + out)
 
     def test_the_addressee_comes_from_the_mention_and_the_config_map(self):
         cfg = CONFIG + '\n[slack.github_logins]\n"user-bob" = "bob"\n'
-        reviewed = {**PR_JSON, "reviews": [review("bob", "COMMENTED")]}
+        reviewed = {**PR_JSON, "reviews": [{**review("bob", "COMMENTED"), "body": "one nit"}]}
         with Env(config=cfg) as env:
             rc, out = gate(env, f"<@user-bob> could you review {LINK}?\n", "--top-level", gh=fake(reviewed))
             self.assertEqual(rc, 1, out)
