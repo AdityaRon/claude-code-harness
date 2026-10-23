@@ -220,7 +220,7 @@
 {"id": "friction-ok-git-shellout-status", "tool_name": "Bash", "tool_input": {"command": "python3 -c \"import subprocess; print(subprocess.run(['git','status','--short'], capture_output=True).stdout)\""}, "source": "friction"}
 {"id": "friction-pin-git-script-writes-hooks", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF'\nopen('.git/hooks/pre-commit', 'w').write('exit 0')\nEOF"}, "source": "friction"}
 {"id": "friction-fp-git-heredoc-edits-test-file", "tool_name": "Bash", "tool_input": {"command": "python3 - tests/git-guard.test.sh <<'EOF'\nimport sys\np = sys.argv[1]; s = open(p).read()\ns = s.replace('# end', 'check \"VAR=1; with no space\" deny \"X=1;git push -f origin main\"\\n# end')\nopen(p, 'w').write(s)\nEOF"}, "source": "friction"}
-{"id": "friction-hole-rm-shellout-home", "tool_name": "Bash", "tool_input": {"command": "python3 -c \"import os; os.system('rm -rf ~/x')\""}, "source": "friction"}
+{"id": "friction-hole-rm-shellout-home", "tool_name": "Bash", "tool_input": {"command": "python3 -c \"import os; os.system('rm -rf /opt/project/build')\""}, "source": "friction"}
 {"id": "friction-hole-rm-shellout-list-root", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['rm','-rf','/'])\nEOF"}, "source": "friction"}
 {"id": "friction-fp-rm-heredoc-edits-notes", "tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF'\np = 'notes.md'\ns = open(p).read() + '- `rm -rf \"$(pwd)\"` now asks\\n'\nopen(p, 'w').write(s)\nEOF"}, "source": "friction"}
 {"id": "bash-git-status", "tool_name": "Bash", "tool_input": {"command": "git status --short"}, "source": "synthetic"}
