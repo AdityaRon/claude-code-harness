@@ -55,6 +55,7 @@ for reading the repo, not for the installed tree.
     sessions/memory-index/      ← when session-start last reordered each memory index
     plans/<session_id>.path     ← pointer to the session's latest rendered plan (statusline link)
     harness-latest              ← newest release harness-update.sh fetched
+    cli-upgraded                ← harness-update.sh's last CLI upgrade and the pids it cut off
     effort-high.migrated        ← the one-time move of an installed xhigh effortLevel to high has run
   plans-html/
     plan-<ts>.html         ← rendered plan, opened in browser, newest 50 kept

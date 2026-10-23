@@ -20,15 +20,27 @@ PAYLOAD=$(jq -nc --arg c "$CMD" '{tool_name:"Bash",tool_input:{command:$c},cwd:"
 
 now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
 echo "=== each Bash guard finishes a ${#CMD}-byte command in under ${LIMIT}s ==="
-for g in env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard; do
+timed() {   # timed HOOK PAYLOAD LABEL
+  local t0 t1 secs
   t0=$(now)
   # alarm caps a hang so one slow guard cannot stall doctor
-  printf '%s' "$PAYLOAD" | perl -e 'alarm shift; exec @ARGV' $((LIMIT + 5)) bash "hooks/$g.sh" >/dev/null 2>&1
+  printf '%s' "$2" | perl -e 'alarm shift; exec @ARGV' $((LIMIT + 5)) bash "hooks/$1.sh" >/dev/null 2>&1
   t1=$(now)
   secs=$(perl -e "printf '%.2f', $t1 - $t0")
-  if perl -e "exit !($secs < $LIMIT)"; then echo "  OK (${secs}s): $g"; PASS=$((PASS + 1))
-  else echo "  FAIL (${secs}s, limit ${LIMIT}s): $g"; FAIL=$((FAIL + 1)); fi
+  if perl -e "exit !($secs < $LIMIT)"; then echo "  OK (${secs}s): $3"; PASS=$((PASS + 1))
+  else echo "  FAIL (${secs}s, limit ${LIMIT}s): $3"; FAIL=$((FAIL + 1)); fi
+}
+for g in env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard tcc-check; do
+  timed "$g" "$PAYLOAD" "$g"
 done
+
+echo ""
+echo "=== tcc-check runs on every Bash result: a ${#CMD}-byte result holding its trigger, in under ${LIMIT}s ==="
+# The common path is one substring test; this is the other one, jq and all.
+RESP=$(jq -nc --arg s "$CMD"$'\n'"ls: /repo/x: Operation not permitted" '{stdout:$s, stderr:"", interrupted:false}')
+POST=$(jq -nc --arg c "$CMD" --argjson r "$RESP" \
+  '{tool_name:"Bash",hook_event_name:"PostToolUse",tool_input:{command:$c},tool_response:$r,cwd:"/repo",session_id:"00000000-test"}')
+timed tcc-check "$POST" "tcc-check on a result that holds the trigger"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
