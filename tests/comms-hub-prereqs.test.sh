@@ -14,6 +14,7 @@ P="$REPO/skills/comms-hub/bin/prereqs.sh"
 mkdir -p "$TMP/bin" "$TMP/home" "$TMP/state"
 export HOME="$TMP/home" PATH="$TMP/bin:$PATH"
 export COMMS_HUB_CONFIG="$TMP/config.toml" COMMS_HUB_STATE_DIR="$TMP/state"
+export TZ=Europe/Berlin   # the config's quiet_hours.tz, so the trigger's zone check holds
 # gh: signed in as octocat. claude: `mcp list` prints the file MCP_LIST names.
 printf '#!/bin/sh\ncase "$1 $2" in "auth status") exit 0 ;; "api user") echo octocat ;; esac\n' > "$TMP/bin/gh"
 printf '#!/bin/sh\ncat "$MCP_LIST" 2>/dev/null\n' > "$TMP/bin/claude"
@@ -48,6 +49,13 @@ echo "=== the comms session's record satisfies the Slack check, whatever claude 
 jq -n --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{checked_at: $t, slack_read_channel: "r", slack_read_thread: "t",
   slack_search: "s", slack_send: "mcp__slack__send", slack_schedule: "sch", list_agents: "ListAgents",
   send_message: "SendMessage", trigger: "7,37 8-17 * * 1-5", tickets: ""}' > "$TMP/state/preflight.json"
+run
+[[ $RC == 1 && "$OUT" == *"FAIL  trigger: NONE"*"no record of when the trigger was created"* ]] \
+  && pass "no record of the trigger's creation fails: its 7-day expiry is unknown" || fail "trigger NONE" "rc=$RC $OUT"
+jq -n --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{expr: "7,37 8-17 * * 1-5", created: $t}' > "$TMP/state/trigger.json"
+OUT=$(TZ=UTC bash "$P" 2>&1); RC=$?
+[[ $RC == 1 && "$OUT" == *"FAIL  trigger: ZONE"* ]] && pass "a machine clock in another zone than quiet_hours.tz fails" \
+  || fail "trigger ZONE" "rc=$RC $OUT"
 run
 [[ $RC == 0 ]] && pass "every prerequisite holds" || fail "all ok" "rc=$RC $OUT"
 [[ "$OUT" == *"ok    Slack tools: mcp__slack__send and the rest, recorded by the comms session"* ]] \

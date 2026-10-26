@@ -261,6 +261,12 @@
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-snapshot.sh", "async": true }]
       }
     ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/subagent-cache-guard.sh", "async": true }]
+      }
+    ],
     "SessionEnd": [
       {
         "matcher": "",

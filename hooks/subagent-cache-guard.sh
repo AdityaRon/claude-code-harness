@@ -2,14 +2,14 @@
 # Stops a subagent whose prompt cache keeps expiring under it. A gap longer
 # than the subagent TTL (5 minutes by default) between two of its tool calls
 # means its next call wrote its whole context to the cache again. After
-# CLAUDE_SUBAGENT_MAX_COLD_STARTS of them (5; 0 is off) it denies tool calls
-# until the agent replies with where it got to. A resume later than one TTL
-# gets through. Main sessions are left alone: their gaps are a person away.
+# CLAUDE_SUBAGENT_MAX_COLD_STARTS of them in one run (5; 0 is off) it denies
+# tool calls until the agent replies with where it got to. SubagentStop ends a
+# run, so a resume starts a fresh count. Main sessions are left alone.
 source "$(dirname "$0")/lib.sh"
 
 read_input
 [[ "$INPUT" == *'"agent_id"'* ]] || exit 0
-AGENT=$(jq_get '.agent_id')
+IFS=$'\t' read -r AGENT EVENT < <(jq_get '[.agent_id // "", .hook_event_name // ""] | @tsv')
 [[ "$AGENT" =~ ^[A-Za-z0-9_.-]{1,80}$ && "$AGENT" != .* ]] || exit 0
 
 MAX=${CLAUDE_SUBAGENT_MAX_COLD_STARTS:-5}
@@ -31,7 +31,14 @@ if [[ ! -f "$F" ]]; then
 fi
 NOW=$(date +%s); LAST=0; GAPS=0; STOPPED=0
 [[ -f "$F" ]] && read -r LAST GAPS STOPPED < "$F"
-[[ "$LAST" =~ ^[0-9]+$ && "$GAPS" =~ ^[0-9]+$ && "$STOPPED" =~ ^[01]$ ]] || { LAST=0; GAPS=0; STOPPED=0; }
+[[ "$LAST" =~ ^[0-9]+$ && "$GAPS" =~ ^[0-9]+$ && "$STOPPED" =~ ^[012]$ ]] || { LAST=0; GAPS=0; STOPPED=0; }
+
+# STOPPED: 0 running, 1 denied until it replies, 2 replied and idle.
+if [[ "$EVENT" == SubagentStop ]]; then
+  printf '%s %s 2\n' "$NOW" "$GAPS" > "$F" 2>/dev/null
+  exit 0
+fi
+(( STOPPED == 2 )) && { GAPS=0; STOPPED=0; LAST=0; }   # resumed: a new run
 
 COLD=0; (( LAST > 0 && NOW - LAST > TTL )) && COLD=1
 if (( STOPPED )); then

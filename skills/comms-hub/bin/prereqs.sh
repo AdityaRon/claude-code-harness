@@ -100,6 +100,13 @@ else
     if [[ "$LIVE" == "$WANT" ]]; then ok "trigger matches active_hours: $WANT"
     else bad "trigger $LIVE" "active_hours make $WANT: in the comms session, delete the trigger and create $WANT"; fi
   fi
+  # Its age and zone too: a tick that fires off-zone ends at the window check,
+  # before the tick's own trigger check can say why.
+  if [[ -n "$PY" ]]; then
+    while IFS= read -r line; do
+      case "$line" in MISMATCH:*|RENEW:*|ZONE:*|NONE:*) bad "trigger: ${line%%:*}" "${line#*: }" ;; esac
+    done < <("$PY" "$HERE/hub.py" trigger 2>/dev/null)
+  fi
 fi
 
 echo ""

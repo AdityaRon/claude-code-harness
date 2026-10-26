@@ -11,7 +11,7 @@ PASS=0; FAIL=0
 # call LABEL EXPECT [AGENT]: one tool call by AGENT (none: a main-session call).
 call() {
   local label="$1" expect="$2" agent="${3:-}" out got
-  out=$(jq -nc --arg a "$agent" '{tool_name:"Bash",tool_input:{command:"ls"},session_id:"s1"}
+  out=$(jq -nc --arg a "$agent" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:"ls"},session_id:"s1"}
     + (if $a == "" then {} else {agent_id:$a, agent_type:"general-purpose"} end)' | bash "$HOOK" 2>/dev/null)
   got=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
   [[ -z "$got" ]] && got=allow
@@ -22,6 +22,9 @@ call() {
 # ago AGENT SECONDS [GAPS] [STOPPED]: the agent's last call was SECONDS ago.
 ago() { printf '%s %s %s\n' "$(( $(date +%s) - $2 ))" "${3:-0}" "${4:-0}" > "$TMP/state/$1"; }
 gaps() { cut -d' ' -f2 "$TMP/state/$1"; }
+# stop AGENT: the agent finished its turn (it replied).
+stop() { jq -nc --arg a "$1" '{hook_event_name:"SubagentStop",agent_id:$a,agent_type:"general-purpose",session_id:"s1"}' \
+  | bash "$HOOK" >/dev/null 2>&1; }
 
 echo "=== a main session is never counted ==="
 call "no agent_id" allow
@@ -43,6 +46,16 @@ call "another agent is not affected" allow a2
 echo "=== a later resume gets through and counting restarts ==="
 ago a1 4000 5 1; call "resumed an hour later" allow a1
 [[ "$(gaps a1)" == 0 ]] && { echo "  OK: the count restarts"; PASS=$((PASS+1)); } || { echo "  FAIL: gaps $(gaps a1)"; FAIL=$((FAIL+1)); }
+
+echo "=== a reply ends the run, so a resume is not a cold gap ==="
+ago b1 4000 4; stop b1
+[[ "$(cut -d' ' -f3 "$TMP/state/b1")" == 2 ]] && { echo "  OK: SubagentStop marks the agent idle"; PASS=$((PASS+1)); } \
+  || { echo "  FAIL: state $(cat "$TMP/state/b1")"; FAIL=$((FAIL+1)); }
+ago b1 4000 4 2; call "resumed an hour after its reply, with 4 gaps before: a fresh run" allow b1
+[[ "$(gaps b1)" == 0 ]] && { echo "  OK: the resume's gap is not counted"; PASS=$((PASS+1)); } || { echo "  FAIL: gaps $(gaps b1)"; FAIL=$((FAIL+1)); }
+for i in 1 2 3 4 5 6; do ago b2 4000 0 2; call "resume $i of a SendMessage'd agent" allow b2 >/dev/null; done
+[[ "$(gaps b2)" == 0 ]] && { echo "  OK: six resumes never stop it"; PASS=$((PASS+1)); } || { echo "  FAIL: gaps $(gaps b2)"; FAIL=$((FAIL+1)); }
+ago b3 400 4; call "stopped" deny b3; stop b3; call "its reply lets the next resume through at once" allow b3
 
 echo "=== the limit and the TTL follow the settings ==="
 ago a3 400 1; CLAUDE_SUBAGENT_MAX_COLD_STARTS=2 call "CLAUDE_SUBAGENT_MAX_COLD_STARTS=2: the second gap stops it" deny a3
