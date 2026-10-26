@@ -190,7 +190,7 @@
       },
       {
         "matcher": "",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/subagent-cache-guard.sh" }]
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/subagent-cache-guard.sh", "onFailure": "block" }]
       }
     ],
     "PostToolUse": [
