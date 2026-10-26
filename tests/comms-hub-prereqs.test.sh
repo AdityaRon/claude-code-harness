@@ -47,12 +47,18 @@ echo ""
 echo "=== the comms session's record satisfies the Slack check, whatever claude mcp list says ==="
 jq -n --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{checked_at: $t, slack_read_channel: "r", slack_read_thread: "t",
   slack_search: "s", slack_send: "mcp__slack__send", slack_schedule: "sch", list_agents: "ListAgents",
-  send_message: "SendMessage", trigger: "7,37 * * * *", tickets: ""}' > "$TMP/state/preflight.json"
+  send_message: "SendMessage", trigger: "7,37 8-17 * * 1-5", tickets: ""}' > "$TMP/state/preflight.json"
 run
 [[ $RC == 0 ]] && pass "every prerequisite holds" || fail "all ok" "rc=$RC $OUT"
 [[ "$OUT" == *"ok    Slack tools: mcp__slack__send and the rest, recorded by the comms session"* ]] \
   && pass "the recorded send tool stands in for the mcp list" || fail "recorded slack" "$OUT"
-[[ "$OUT" == *"ok    trigger: 7,37 * * * *"* ]] && pass "the trigger is read from the record" || fail "trigger" "$OUT"
+[[ "$OUT" == *"ok    trigger: 7,37 8-17 * * 1-5"* ]] && pass "the trigger is read from the record" || fail "trigger" "$OUT"
+[[ "$OUT" == *"ok    trigger matches active_hours: 7,37 8-17 * * 1-5"* ]] && pass "and matches active_hours" || fail "trigger match" "$OUT"
+jq '.trigger = "*/15 * * * *"' "$TMP/state/preflight.json" > "$TMP/p.json" && mv "$TMP/p.json" "$TMP/state/preflight.json"
+run
+[[ $RC == 1 && "$OUT" == *"FAIL  trigger */15 * * * *"*"active_hours make 7,37 8-17 * * 1-5"* ]] \
+  && pass "a trigger that ticks all weekend fails, naming the one to create" || fail "trigger mismatch" "rc=$RC $OUT"
+jq '.trigger = "7,37 8-17 * * 1-5"' "$TMP/state/preflight.json" > "$TMP/p.json" && mv "$TMP/p.json" "$TMP/state/preflight.json"
 jq 'del(.slack_send)' "$TMP/state/preflight.json" > "$TMP/p.json" && mv "$TMP/p.json" "$TMP/state/preflight.json"
 run
 [[ $RC == 2 && "$OUT" == *"FAIL  a Slack MCP server"* && "$OUT" == *"FAIL  slack_send"* ]] \

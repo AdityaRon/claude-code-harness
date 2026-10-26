@@ -92,6 +92,14 @@ else
     else bad "$k" "missing from $REC: the comms session did not find it at step 0"; fi
   done
   [[ "$AGE" -le 168 ]] || bad "session preflight is ${AGE}h old" "rerun step 0 in the comms session; tools come and go"
+  # The trigger the session recorded against the one active_hours make: a
+  # mismatch is how a tick ends up firing every 15 minutes all weekend.
+  LIVE=$(jq -r '.trigger // empty' "$REC" | tr -s ' ')
+  WANT=""; [[ -n "$PY" ]] && WANT=$("$PY" "$HERE/hub.py" cron 2>/dev/null)
+  if [[ -n "$LIVE" && -n "$WANT" ]]; then
+    if [[ "$LIVE" == "$WANT" ]]; then ok "trigger matches active_hours: $WANT"
+    else bad "trigger $LIVE" "active_hours make $WANT: in the comms session, delete the trigger and create $WANT"; fi
+  fi
 fi
 
 echo ""

@@ -187,6 +187,10 @@
       {
         "matcher": "ExitPlanMode",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/plan-to-html.sh", "async": true }]
+      },
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/subagent-cache-guard.sh" }]
       }
     ],
     "PostToolUse": [
