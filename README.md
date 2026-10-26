@@ -192,6 +192,7 @@ bin/                     ← installed to ~/.claude, or run from the clone
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts
+  spend-report.py        ← what sessions, subagents and loop ticks cost, from local transcripts
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json
 hooks/                   ← one file per hook, plus shared lib.sh
 rules/                   ← installed to ~/.claude/rules, loaded in every session

@@ -109,7 +109,9 @@ echo "=== Every blocking PreToolUse hook blocks when it fails ==="
 while IFS=$'\t' read -r matcher cmd on; do
   if [[ "$on" == block ]]; then echo "  OK: $matcher ${cmd##*/}"; PASS=$((PASS+1))
   else echo "  FAIL (onFailure=$on): $matcher ${cmd##*/}"; FAIL=$((FAIL+1)); fi
-done < <(jq -r '.hooks.PreToolUse[] | .matcher as $m | .hooks[] | select(.async | not)
+# An empty matcher (every tool) prints as (all): read collapses an empty first field.
+done < <(jq -r '.hooks.PreToolUse[] | (if (.matcher // "") == "" then "(all)" else .matcher end) as $m
+  | .hooks[] | select(.async | not)
   | [$m, .command, (.onFailure // "unset")] | @tsv' config/settings.json)
 
 echo ""

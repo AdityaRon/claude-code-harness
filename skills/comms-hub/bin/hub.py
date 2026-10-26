@@ -8,6 +8,17 @@ review state and CI state. Imported by the scripts beside it; run directly:
   hub.py queries      the three Slack mention searches, dated two days back
   hub.py routed TEXT  the log lines of the last two days that mention TEXT (a link, a key); exit 1 if none
   hub.py feedback TEXT  append a dated correction to feedback.md, for the next change to the skill
+  hub.py cron         the tick's cron expression, made from active_hours
+  hub.py window [--margin MIN | --review] [--full-done]
+                      open (exit 0) or closed (exit 1) for active_hours, and whether this tick
+                      scans in full; --margin: closed too when it closes within MIN minutes,
+                      --review within review_margin_minutes; --full-done records a full scan
+  hub.py trigger [--live EXPR] [--created EXPR]
+                      what is wrong with the tick's trigger: not the cron above, no record of
+                      its creation, or due for renewal before Claude Code expires it (exit 1)
+  hub.py launch [--check]
+                      the command that starts the comms session; --check: whether this
+                      session was started with it (exit 1 if not)
 """
 from __future__ import annotations
 
@@ -28,6 +39,10 @@ from pathlib import Path
 
 PLACEHOLDER = "CHANGE-ME"
 MAX_CHARS = 2500
+DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+CADENCES = (10, 15, 20, 30, 60)
+TICK_MINUTE = 7          # off the hour, when every other schedule fires
+TRIGGER_RENEW_DAYS = 6   # Claude Code deletes a recurring task 7 days after it was created
 KNOWN_BOTS: set[str] = set()  # github.bots from the config, lower-cased; load_config fills it
 
 
@@ -144,6 +159,30 @@ def load_config(explicit: str | None = None) -> dict:
         ZoneInfo(q["tz"])
     except (KeyError, ValueError) as e:  # ZoneInfoNotFoundError is a KeyError
         raise ConfigError(f"{path}: quiet_hours.tz {q['tz']!r} is not an IANA zone: {e}")
+    a = cfg.setdefault("active_hours", {})
+    a.setdefault("days", list(DAYS[:5]))
+    a.setdefault("start", "08:00")
+    a.setdefault("end", "18:00")
+    a.setdefault("every_minutes", 30)
+    a.setdefault("review_margin_minutes", 120)
+    a.setdefault("full_scan_minutes", 120)
+    if not a["days"] or not isinstance(a["days"], list) or any(d not in DAYS for d in a["days"]):
+        raise ConfigError(f"{path}: active_hours.days must list days from {', '.join(DAYS)}, not {a['days']!r}")
+    for k in ("start", "end"):
+        # The trigger's hour field cannot start or stop a window mid-hour.
+        if not re.fullmatch(r"([01]\d|2[0-3]):00|24:00", str(a[k])) or (k == "start" and a[k] == "24:00"):
+            raise ConfigError(f"{path}: active_hours.{k} must be a whole hour, HH:00, not {a[k]!r}")
+    if a["start"] >= a["end"]:
+        raise ConfigError(f"{path}: active_hours.start {a['start']} must come before end {a['end']}")
+    if a["every_minutes"] not in CADENCES:
+        raise ConfigError(f"{path}: active_hours.every_minutes must be one of {CADENCES}, not {a['every_minutes']!r}")
+    se = cfg.setdefault("session", {})
+    se.setdefault("compact_window", 150_000)
+    se.setdefault("mcp_timeout_ms", 120_000)
+    if not isinstance(se["compact_window"], int) or not 100_000 <= se["compact_window"] <= 1_000_000:
+        raise ConfigError(f"{path}: session.compact_window must be 100000 to 1000000 tokens, not {se['compact_window']!r}")
+    if not isinstance(se["mcp_timeout_ms"], int) or se["mcp_timeout_ms"] < 1000:
+        raise ConfigError(f"{path}: session.mcp_timeout_ms must be 1000 or more, not {se['mcp_timeout_ms']!r}")
     for r in cfg.setdefault("routing", []):
         for k in ("repos", "tickets", "channels"):
             r.setdefault(k, [])
@@ -249,6 +288,108 @@ def first_tick_after_quiet(cfg: dict, prev: dt.datetime | None, at: dt.datetime)
     tz = zone(cfg)
     end = dt.datetime.combine(at.astimezone(tz).date(), dt.time.fromisoformat(cfg["quiet_hours"]["post_at"]), tzinfo=tz)
     return prev < end <= at
+
+
+def _ranges(nums: list[int]) -> str:
+    """[1, 2, 3, 5] -> "1-3,5"."""
+    out, i = [], 0
+    while i < len(nums):
+        j = i
+        while j + 1 < len(nums) and nums[j + 1] == nums[j] + 1:
+            j += 1
+        out.append(str(nums[i]) if i == j else f"{nums[i]}-{nums[j]}")
+        i = j + 1
+    return ",".join(out)
+
+
+def cron(cfg: dict) -> str:
+    """The tick's trigger for active_hours, as standard 5-field cron. Claude Code
+    reads it in this machine's zone, so trigger_problems() checks that zone."""
+    a = cfg["active_hours"]
+    minutes = ",".join(str(m) for m in range(TICK_MINUTE, 60, a["every_minutes"]))
+    first, last = int(a["start"][:2]), int(a["end"][:2]) - 1
+    hours = str(first) if first == last else f"{first}-{last}"
+    days = sorted((DAYS.index(d) + 1) % 7 for d in a["days"])  # cron counts from Sunday, 0
+    return f"{minutes} {hours} * * {_ranges(days)}"
+
+
+def window(cfg: dict, at: dt.datetime) -> tuple[dt.datetime | None, dt.datetime | None]:
+    """(today's close, None) while active_hours are open, else (None, the next opening)."""
+    a, tz = cfg["active_hours"], zone(cfg)
+    local = at.astimezone(tz)
+    start = dt.time.fromisoformat(a["start"])
+    end = dt.time(0) if a["end"] == "24:00" else dt.time.fromisoformat(a["end"])
+    workday = lambda d: DAYS[d.weekday()] in a["days"]
+    if workday(local.date()) and start <= local.time() and (a["end"] == "24:00" or local.time() < end):
+        close = dt.datetime.combine(local.date() + dt.timedelta(days=a["end"] == "24:00"), end, tzinfo=tz)
+        return close, None
+    day = local.date()
+    if not (workday(day) and local.time() < start):
+        day += dt.timedelta(days=1)
+        while not workday(day):
+            day += dt.timedelta(days=1)
+    return None, dt.datetime.combine(day, start, tzinfo=tz)
+
+
+def _record(cfg: dict, name: str) -> dict:
+    try:
+        return json.loads((state_dir(cfg) / name).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def scan_plan(cfg: dict, at: dt.datetime) -> str:
+    """"full" on the window's first tick and once full_scan_minutes have passed
+    since the last full scan finished, else "quick"."""
+    a, tz = cfg["active_hours"], zone(cfg)
+    last = parse_time(_record(cfg, "tick.json").get("full"))
+    opened = dt.datetime.combine(at.astimezone(tz).date(), dt.time.fromisoformat(a["start"]), tzinfo=tz)
+    if last is None or last < opened or at - last >= dt.timedelta(minutes=a["full_scan_minutes"]):
+        return "full"
+    return "quick"
+
+
+def trigger_problems(cfg: dict, at: dt.datetime, live: str | None = None) -> list[str]:
+    """What is wrong with the tick's trigger, each line naming the fix; [] when nothing."""
+    want, out = cron(cfg), []
+    fix = f"delete it with CronDelete, create {want!r} with CronCreate, then `hub.py trigger --created {want!r}`"
+    if live is not None and " ".join(live.split()) != want:
+        out.append(f"MISMATCH: the live trigger is {' '.join(live.split())!r}, active_hours make {want!r}: {fix}")
+    tz = zone(cfg)
+    if at.astimezone().utcoffset() != at.astimezone(tz).utcoffset():
+        out.append(f"ZONE: this machine's clock is UTC{at.astimezone():%z} and quiet_hours.tz {tz.key} is "
+                   f"UTC{at.astimezone(tz):%z}; the trigger fires by the machine's clock, so its hours are off")
+    rec = _record(cfg, "trigger.json")
+    created = parse_time(rec.get("created"))
+    if created is None:
+        out.append(f"NONE: no record of when the trigger was created, so its 7-day expiry is unknown: {fix}")
+    elif rec.get("expr") != want:
+        out.append(f"MISMATCH: the trigger was created as {rec.get('expr')!r}, active_hours make {want!r}: {fix}")
+    elif at - created >= dt.timedelta(days=TRIGGER_RENEW_DAYS):
+        out.append(f"RENEW: created {created.astimezone(tz):%Y-%m-%d}, and Claude Code deletes a recurring task "
+                   f"7 days after it was created: {fix}")
+    return out
+
+
+def launch_env(cfg: dict) -> dict[str, str]:
+    """The comms session's own env. Passed with --settings: a value exported in the
+    shell loses to ~/.claude/settings.json's env, which sets the compact window."""
+    s = cfg["session"]
+    return {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(s["compact_window"]), "MCP_TOOL_TIMEOUT": str(s["mcp_timeout_ms"])}
+
+
+def _tokens(v: str | None) -> int | None:
+    m = re.fullmatch(r"(\d+)([kKmM]?)", (v or "").strip())
+    return int(m[1]) * {"": 1, "k": 1000, "m": 1_000_000}[m[2].lower()] if m else None
+
+
+def launch_problems(cfg: dict, env) -> list[str]:
+    out = []
+    for k, want in launch_env(cfg).items():
+        have = _tokens(env.get(k))
+        if have is None or have > int(want):
+            out.append(f"{k} is {env.get(k) or 'unset'} in this session, want {want} or less")
+    return out
 
 
 def mention_queries(uid: str, since: dt.date) -> list[str]:
@@ -470,7 +611,8 @@ def init(gh: Gh | None = None, example: Path | None = None) -> int:
 
 def main(argv=None, gh: Gh | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if (argv[:1] not in (["init"], ["config"], ["log"], ["queries"], ["routed"], ["feedback"])
+    if (argv[:1] not in (["init"], ["config"], ["log"], ["queries"], ["routed"], ["feedback"], ["cron"],
+                         ["window"], ["trigger"], ["launch"])
             or (argv[0] in ("log", "routed", "feedback") and len(argv) < 2)):
         print(__doc__.split("run directly:", 1)[1].rstrip())
         return 2
@@ -492,6 +634,8 @@ def main(argv=None, gh: Gh | None = None) -> int:
         print(f"slack: primary_dm={s.get('primary_dm') or '-'} my_user_id={s.get('my_user_id') or '-'} "
               f"watched={','.join(s.get('watched_channels') or []) or '-'}")
         print(f"quiet: {cfg['quiet_hours']['start']} to {cfg['quiet_hours']['post_at']} {cfg['quiet_hours']['tz']}")
+        a = cfg["active_hours"]
+        print(f"active: {','.join(a['days'])} {a['start']} to {a['end']}, every {a['every_minutes']} min: {cron(cfg)}")
         for r in cfg["routing"]:
             print(f"route: {r.get('session')} repos={','.join(r['repos']) or '-'} "
                   f"tickets={','.join(r['tickets']) or '-'} channels={','.join(r['channels']) or '-'}")
@@ -513,8 +657,77 @@ def main(argv=None, gh: Gh | None = None) -> int:
     if argv[0] == "feedback":
         print(f"noted in {append_feedback(cfg, ' '.join(argv[1:]))}")
         return 0
+    if argv[0] in ("cron", "window", "trigger", "launch"):
+        return schedule_cmd(cfg, argv)
     print(f"logged to {append_log(cfg, ' '.join(argv[1:]))}")
     return 0
+
+
+def schedule_cmd(cfg: dict, argv: list[str]) -> int:
+    """cron, window, trigger and launch; see the module docstring."""
+    import argparse
+    ap = argparse.ArgumentParser(prog=f"hub.py {argv[0]}")
+    if argv[0] == "window":
+        ap.add_argument("--margin", type=int, default=0, metavar="MIN")
+        ap.add_argument("--review", action="store_true")
+        ap.add_argument("--full-done", action="store_true")
+    elif argv[0] == "trigger":
+        ap.add_argument("--live", metavar="EXPR")
+        ap.add_argument("--created", metavar="EXPR")
+    elif argv[0] == "launch":
+        ap.add_argument("--check", action="store_true")
+    args = ap.parse_args(argv[1:])
+    at, tz = now(), zone(cfg)
+    if argv[0] == "cron":
+        print(cron(cfg))
+        return 0
+    if argv[0] == "window":
+        if args.full_done:
+            p = state_dir(cfg) / "tick.json"
+            p.write_text(json.dumps({**_record(cfg, "tick.json"), "full": at.isoformat()}) + "\n")
+            print(f"full scan recorded at {at.astimezone(tz):%H:%M}")
+            return 0
+        margin = cfg["active_hours"]["review_margin_minutes"] if args.review else args.margin
+        close, opens = window(cfg, at)
+        if opens:
+            print(f"window: closed, opens {opens:%a %Y-%m-%d %H:%M} {tz.key}")
+            return 1
+        if close - at < dt.timedelta(minutes=margin):
+            print(f"window: closing at {close:%H:%M}, within {margin} min")
+            return 1
+        print(f"window: open until {close:%H:%M}")
+        plan = scan_plan(cfg, at)
+        last = parse_time(_record(cfg, "tick.json").get("full"))
+        opened = dt.datetime.combine(at.astimezone(tz).date(), dt.time.fromisoformat(cfg["active_hours"]["start"]),
+                                     tzinfo=tz)
+        print(f"scan: {plan}" + (" (the window's first)" if last is None or last < opened else ""))
+        return 0
+    if argv[0] == "trigger":
+        if args.created:
+            expr = " ".join(args.created.split())
+            (state_dir(cfg) / "trigger.json").write_text(json.dumps({"expr": expr, "created": at.isoformat()}) + "\n")
+            print(f"trigger {expr!r} recorded as created {at.astimezone(tz):%Y-%m-%d %H:%M}")
+        problems = trigger_problems(cfg, at, args.live)
+        print(f"trigger: want {cron(cfg)!r}")
+        for line in problems:
+            print(line)
+        return 1 if problems else 0
+    if args.check:
+        problems = launch_problems(cfg, os.environ)
+        for line in problems:
+            print(line)
+        if problems:
+            print("restart the comms session with the command `hub.py launch` prints")
+            return 1
+        print("launch: this session has the comms session's compact window and MCP timeout")
+        return 0
+    print("claude --settings " + shlex_quote(json.dumps({"env": launch_env(cfg)}, separators=(",", ":"))))
+    return 0
+
+
+def shlex_quote(s: str) -> str:
+    import shlex
+    return shlex.quote(s)
 
 
 if __name__ == "__main__":

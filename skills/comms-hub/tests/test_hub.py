@@ -1,4 +1,4 @@
-r"""hub.py: standing reviews, the CI verdict, the gh runner, quiet hours, config.
+r"""hub.py: standing reviews, the CI verdict, the gh runner, quiet hours, config, active hours.
 
 Mutations (run.py --mutate applies each and expects this file to fail):
   commented-revokes: hub.py: `if r.get("state") in ("COMMENTED", "PENDING"):` => `if r.get("state") in ("PENDING",):`
@@ -32,6 +32,21 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   routed-any-line: hub.py: `if text in line]` => `if True]`
   known-bots-ignored: hub.py: `or name.lower() in KNOWN_BOTS` => `or False`
   feedback-undated: hub.py: `f.write(f"- {local_now(cfg):%Y-%m-%d %H:%M} {text}\n")` => `f.write(f"- {text}\n")`
+  weekend-ticks: hub.py: `days = sorted((DAYS.index(d) + 1) % 7 for d in a["days"])` => `days = list(range(7))`
+  close-hour-ticks: hub.py: `int(a["end"][:2]) - 1` => `int(a["end"][:2])`
+  window-every-day: hub.py: `workday = lambda d: DAYS[d.weekday()] in a["days"]` => `workday = lambda d: True`
+  window-margin-ignored: hub.py: `if close - at < dt.timedelta(minutes=margin):` => `if False:`
+  review-margin-ignored: hub.py: `margin = cfg["active_hours"]["review_margin_minutes"] if args.review else args.margin` => `margin = args.margin`
+  full-scan-not-daily: hub.py: `if last is None or last < opened or` => `if last is None or`
+  full-scan-never-due: hub.py: `or at - last >= dt.timedelta(minutes=a["full_scan_minutes"]):` => `:`
+  trigger-never-renewed: hub.py: `elif at - created >= dt.timedelta(days=TRIGGER_RENEW_DAYS):` => `elif False:`
+  live-trigger-unchecked: hub.py: `if live is not None and " ".join(live.split()) != want:` => `if False:`
+  trigger-zone-unchecked: hub.py: `if at.astimezone().utcoffset() != at.astimezone(tz).utcoffset():` => `if False:`
+  created-expr-unchecked: hub.py: `elif rec.get("expr") != want:` => `elif False:`
+  launch-any-window: hub.py: `if have is None or have > int(want):` => `if have is None:`
+  days-unvalidated: hub.py: `or any(d not in DAYS for d in a["days"]):` => `or False:`
+  mid-hour-window: hub.py: `if not re.fullmatch(r"([01]\d|2[0-3]):00|24:00", str(a[k]))` => `if False`
+  cadence-unvalidated: hub.py: `if a["every_minutes"] not in CADENCES:` => `if False:`
 """
 import contextlib
 import datetime as dt
@@ -346,6 +361,115 @@ class Init(unittest.TestCase):
             self.assertIn("still CHANGE-ME, fill in by hand: github.login, github.owners, slack.primary_dm, "
                           "slack.my_user_id, quiet_hours.tz", out)
             self.assertIn('login = "CHANGE-ME"', env.config.read_text())
+
+
+def at(s):
+    return dt.datetime.fromisoformat(s)
+
+
+def main_out(*argv, now=None):
+    out = io.StringIO()
+    env = {"COMMS_HUB_NOW": now} if now else {}
+    with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(out):
+        rc = hub.main(list(argv))
+    return rc, out.getvalue()
+
+
+class ActiveHours(unittest.TestCase):
+    def cfg(self, extra=""):
+        with Env(config=CONFIG + extra):
+            return hub.load_config()
+
+    def test_the_default_trigger_skips_weekends_and_nights(self):
+        self.assertEqual(hub.cron(self.cfg()), "7,37 8-17 * * 1-5")
+
+    def test_the_trigger_follows_the_config(self):
+        c = self.cfg('\n[active_hours]\ndays = ["Mon", "Tue", "Wed", "Fri", "Sun"]\nstart = "09:00"\n'
+                     'end = "10:00"\nevery_minutes = 15\n')
+        self.assertEqual(hub.cron(c), "7,22,37,52 9 * * 0-3,5")
+
+    def test_bad_active_hours_are_refused_by_name(self):
+        for extra, key in (('days = "Mon-Fri"', "days"), ('days = ["Funday"]', "days"), ("days = []", "days"),
+                           ('start = "08:30"', "start"), ('end = "07:00"', "start"),
+                           ("every_minutes = 25", "every_minutes")):
+            with Env(config=CONFIG + "\n[active_hours]\n" + extra + "\n"):
+                with self.assertRaisesRegex(hub.ConfigError, "active_hours." + key):
+                    hub.load_config()
+        with Env(config=CONFIG + "\n[session]\ncompact_window = 50000\n"):
+            with self.assertRaisesRegex(hub.ConfigError, "session.compact_window"):
+                hub.load_config()
+
+    def test_the_window_is_closed_on_weekends_and_nights(self):
+        c = self.cfg()
+        monday = at("2026-10-26T08:00:00-07:00")
+        self.assertEqual(hub.window(c, at("2026-10-24T10:00:00-07:00")), (None, monday), "Saturday")
+        self.assertEqual(hub.window(c, at("2026-10-23T18:00:00-07:00")), (None, monday), "Friday at close")
+        self.assertEqual(hub.window(c, at("2026-10-26T07:59:00-07:00")), (None, monday), "Monday before start")
+        self.assertEqual(hub.window(c, at("2026-10-26T08:00:00-07:00")), (at("2026-10-26T18:00:00-07:00"), None))
+        self.assertEqual(hub.window(c, at("2026-10-27T03:00:00+00:00")), (None, at("2026-10-27T08:00:00-07:00")),
+                         "20:00 Monday, read in the config's zone")
+
+    def test_window_exits_1_when_closed_or_closing(self):
+        with Env():
+            self.assertEqual(main_out("window", now="2026-10-24T10:00:00-07:00")[0], 1)
+            rc, out = main_out("window", "--margin", "120", now="2026-10-26T16:30:00-07:00")
+            self.assertEqual((rc, out.strip()), (1, "window: closing at 18:00, within 120 min"))
+            self.assertEqual(main_out("window", "--review", now="2026-10-26T16:30:00-07:00")[0], 1,
+                             "--review uses review_margin_minutes")
+            rc, out = main_out("window", "--margin", "120", now="2026-10-26T15:30:00-07:00")
+            self.assertEqual(rc, 0)
+            self.assertIn("window: open until 18:00", out)
+            self.assertIn("scan: full (the window's first)", out)
+
+    def test_a_full_scan_opens_each_day_and_recurs(self):
+        with Env():
+            c = hub.load_config()
+            self.assertEqual(hub.scan_plan(c, at("2026-10-26T08:07:00-07:00")), "full", "nothing recorded")
+            main_out("window", "--full-done", now="2026-10-26T08:10:00-07:00")
+            self.assertEqual(hub.scan_plan(c, at("2026-10-26T08:37:00-07:00")), "quick")
+            self.assertEqual(hub.scan_plan(c, at("2026-10-26T10:11:00-07:00")), "full", "two hours on")
+            self.assertEqual(hub.scan_plan(c, at("2026-10-27T08:07:00-07:00")), "full", "the next day's first tick")
+        with Env(config=CONFIG + "\n[active_hours]\nfull_scan_minutes = 2000\n"):
+            c = hub.load_config()
+            main_out("window", "--full-done", now="2026-10-26T17:37:00-07:00")
+            self.assertEqual(hub.scan_plan(c, at("2026-10-26T17:50:00-07:00")), "quick")
+            self.assertEqual(hub.scan_plan(c, at("2026-10-27T08:07:00-07:00")), "full",
+                             "the window's first tick is full however long full_scan_minutes is")
+
+    def test_the_trigger_is_checked_against_the_config_and_its_age(self):
+        with Env(), machine_zone("America/Los_Angeles"):
+            c = hub.load_config()
+            t0 = at("2026-10-19T08:00:00-07:00")
+            self.assertTrue(hub.trigger_problems(c, t0)[0].startswith("NONE"))
+            self.assertEqual(main_out("trigger", "--created", "7,37  8-17 * * 1-5", now=t0.isoformat())[0], 0)
+            self.assertEqual(hub.trigger_problems(c, at("2026-10-24T08:00:00-07:00"), "7,37 8-17 * * 1-5"), [])
+            live = hub.trigger_problems(c, at("2026-10-24T08:00:00-07:00"), "*/15 * * * *")
+            self.assertEqual(len(live), 1)
+            self.assertIn("MISMATCH: the live trigger is '*/15 * * * *'", live[0])
+            renew = hub.trigger_problems(c, at("2026-10-25T08:00:00-07:00"))
+            self.assertEqual(len(renew), 1)
+            self.assertTrue(renew[0].startswith("RENEW: created 2026-10-19"), renew)
+            self.assertEqual(main_out("trigger", "--created", "7,37 * * * *", now=t0.isoformat())[0], 1)
+            self.assertIn("created as '7,37 * * * *'", hub.trigger_problems(c, t0)[0])
+
+    def test_a_machine_in_another_zone_is_named(self):
+        with Env(), machine_zone("UTC"):
+            c = hub.load_config()
+            zone = [p for p in hub.trigger_problems(c, at("2026-10-26T08:00:00-07:00")) if p.startswith("ZONE")]
+            self.assertEqual(len(zone), 1)
+            self.assertIn("UTC+0000", zone[0])
+
+    def test_the_launch_check_wants_the_small_window_and_a_timeout(self):
+        c = self.cfg()
+        ok = {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150k", "MCP_TOOL_TIMEOUT": "60000"}
+        self.assertEqual(hub.launch_problems(c, ok), [])
+        self.assertEqual(len(hub.launch_problems(c, {**ok, "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "600000"})), 1)
+        self.assertEqual(len(hub.launch_problems(c, {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150000"})), 1)
+        with Env():
+            rc, out = main_out("launch")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "claude --settings '{\"env\":{\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\":\"150000\","
+                                      "\"MCP_TOOL_TIMEOUT\":\"120000\"}}'")
 
 
 if __name__ == "__main__":

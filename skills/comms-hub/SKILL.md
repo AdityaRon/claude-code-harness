@@ -51,8 +51,17 @@ Nothing here depends on which server it is: step 0 records the tool names.
    `~/.local/state/comms-hub/` unless `state_dir` says otherwise.
 3. From the clone: `bash doctor.sh --skill comms-hub`. Every line but the
    session preflight can read ok before the comms session exists.
-4. In the comms session: step 0 below, then the trigger, `/loop` with the cron
-   interval `7,37 * * * *` and the prompt `comms-hub tick`. Then doctor again.
+4. Start the comms session with the command `PY B/hub.py launch` prints
+   (`claude --settings '…'`): a 150k-token compact window and a 2-minute MCP
+   timeout for this session only. Every tick re-reads the whole context, and
+   the tick's state is on disk, so a small context loses nothing. Exported in
+   the shell instead, the window loses to the one `~/.claude/settings.json`
+   sets. Then step 0 below, then the trigger: `/loop` with the cron interval
+   `PY B/hub.py cron` prints (from `[active_hours]`: weekdays, 08:07 to 17:37,
+   by default) and the prompt `comms-hub tick`, then
+   `PY B/hub.py trigger --created "<that interval>"`. Never a self-paced
+   `/loop`: a wakeup cannot sleep past an hour, so it would tick all weekend.
+   Then doctor again.
 
 In the commands here and below, `PY` is the interpreter that
 `bash ~/.claude/skills/comms-hub/bin/python.sh` prints and `B` is
@@ -82,11 +91,29 @@ the state dir, the tmp dir, the Slack ids and the routes):
 ```
 
 Leave a key empty when its tool is missing, and tell the user: doctor fails on
-it, and the tick cannot run without it. `slack_delete_scheduled` and `tickets`
+it, and the tick cannot run without it. Then `PY B/hub.py launch --check`: a
+failure means this session was not started with `hub.py launch`'s command, so
+tell the user to restart it with that command. `slack_delete_scheduled` and `tickets`
 are optional: without the first, a scheduled message whose claims moved can
 only be reported, not withdrawn.
 
 ## The tick
+
+Before anything, `PY B/hub.py window`. Exit 1 means outside `[active_hours]`:
+end the tick there, with no log line and no report, since nobody can act on
+what it finds (the trigger's jitter can fire one a few minutes after close). A
+peer's draft that arrives then is still handled when it arrives (step 4).
+When it prints `scan: full`, run CronList too, then
+`PY B/hub.py trigger --live "<the tick's expression>"`: a MISMATCH, RENEW,
+ZONE or NONE line says what to delete and create (Claude Code deletes a
+recurring task 7 days after it was created, so without RENEW the loop dies
+weekly). With `scan: quick`, step 2 reads the DM only.
+
+**Fail fast.** If the tick's first call out (the scan, or the first Slack
+read) fails, times out, or gets no permission verdict, run
+`PY B/hub.py log "tick ended: <why>"` and end the tick. Never retry inside the
+tick: the next fire is the retry, and every call re-reads this session's
+whole context.
 
 0. **A scan still running** from an earlier tick is killed by the next
    `queue.py scan`, which says so. A scan that slept with the laptop ends
@@ -98,7 +125,12 @@ only be reported, not withdrawn.
    1b. `PY B/resolve_threads.py` (a dry run); read every RESOLVE and SKIP. Then
    `PY B/resolve_threads.py --apply`. It re-reads each thread, prints what
    GitHub reports, and logs what was resolved.
-   1c. **INBOUND review**, for each INBOUND PR:
+   1c. **INBOUND review**, for each INBOUND PR: first
+   `PY B/hub.py window --review`. Exit 1 means the window closes before a
+   review could finish with someone there to read it, and a subagent left
+   running while the laptop sleeps re-writes its whole cache on every wake:
+   log `review of <PR> waits for the next window` and spawn nothing. The PR
+   stays INBOUND, so a later tick reviews it. Otherwise
    `PY B/pr_transcript.py owner/repo#N -o <job tmp>/pr-N.md` (its first line
    is `head:`), then spawn a reviewer with the Agent tool: the pr-review
    skill, the transcript, `gh pr diff N --repo owner/repo`, and the ask to
@@ -121,14 +153,14 @@ only be reported, not withdrawn.
      reply counts, and a page read with `oldest`; read again in full. The
      diff refuses a listing older than 15 minutes: last tick's page diffs as
      nothing new. Several pages of one read go to one listing (`DUMP...`).
-   - Each watched channel: the same as the DM, with its own dump, listing and
+   - With `scan: full` only, each watched channel: the same as the DM, with its own dump, listing and
      `--channel <id>`: the first page in full, never with `oldest` (with it,
      Slack returns the oldest messages first, and a DM once looked quiet with
      four unread). Read in full every NEW and MOVED thread, not only those
      that name the user: a reply count that moved is a reply someone may be
      waiting on. A top-level post that names nobody is an event for the
      `routing` entry whose `channels` holds the channel (step 3).
-   - Mentions: three searches, not one, each sorted by time: the queries
+   - With `scan: full` only, mentions: three searches, not one, each sorted by time: the queries
      `PY B/hub.py queries` prints (`<@my_user_id>`, `to:<@my_user_id>` and
      `with:<@my_user_id> is:thread`, each `after:` two days back). Each of the
      last two once caught a reply the others missed, one under a week-old
@@ -203,6 +235,12 @@ only be reported, not withdrawn.
      the peer with the ts or id.
 5. **Log**: `PY B/hub.py log "<one line>"` for each item routed, each draft held
    and why, each question for the user (sends and resolves log themselves).
+   After a full scan, `PY B/hub.py window --full-done`. A tick that found
+   nothing new anywhere, and holds and schedules nothing, reports one line.
+   On the window's first tick (`scan: full (the window's first)`), also
+   `python3 ~/.claude/spend-report.py --since 24h --tick-prompt "comms-hub tick" --max-ticks 5 --max-rewrites 10 --top 3`
+   and put every ALERT line in the report: what the ticks and their
+   reviewers cost since yesterday.
    `PY B/hub.py feedback "<what was corrected>"` for each correction the user
    made this tick to a message or to this protocol: `feedback.md` is the
    backlog for the next change to the skill. Then report to the user: sent,
@@ -236,5 +274,7 @@ only be reported, not withdrawn.
 | `gate/` | `check_draft.py`'s pass records |
 | `held/<peer>-<thread ts>.md` | each draft held between ticks, with its header; the scan counts them |
 | `preflight.json` | step 0's record of this session's tools and trigger |
+| `trigger.json` | the tick's trigger and when it was created, for its 7-day expiry |
+| `tick.json` | when the last full scan finished |
 | `feedback.md` | each correction the user makes to a message or to this protocol, dated, for the next change to this skill |
 | `queue.pid` | the scan in progress |

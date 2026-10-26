@@ -61,6 +61,13 @@ cp "$REPO/bin/session-route.sh" ~/.claude/session-route.sh
 chmod +x ~/.claude/session-route.sh
 echo "  ✓ session-route.sh"
 
+# ---- Spend report -----------------------------------------------------
+# What sessions, subagents and loop ticks cost, read from local transcripts.
+# The comms-hub tick runs it once a day for its alerts.
+cp "$REPO/bin/spend-report.py" ~/.claude/spend-report.py
+chmod +x ~/.claude/spend-report.py
+echo "  ✓ spend-report.py"
+
 # Hosts network-guard allows on this machine only, read from local-settings at
 # every call; see docs/customization.md.
 for t in sandbox sandbox-trial; do
