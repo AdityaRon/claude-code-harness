@@ -141,7 +141,9 @@ whole context.
    `PY B/pr_transcript.py owner/repo#N -o <job tmp>/pr-N.md` (its first line
    is `head:`), then spawn a reviewer with the Agent tool: the pr-review
    skill, the transcript, `gh pr diff N --repo owner/repo`, and the ask to
-   write findings only, no verdict, to `<job tmp>/review-N.md`. Then one
+   write findings only, no verdict, to `<job tmp>/review-N.md`, leaving out
+   what another reviewer already raised (the transcript has every review and
+   thread). Then one
    command, the lint chained to the post with `&&`, never `;` (a `;` once let
    a refused body go out):
    `PY B/review_lint.py <job tmp>/review-N.md --pr owner/repo#N --head <sha> && gh pr review N --repo owner/repo --comment --body-file <job tmp>/review-N.md`.
@@ -262,7 +264,11 @@ whole context.
    `PY B/hub.py feedback "<what was corrected>"` for each correction the user
    made this tick to a message or to this protocol: `feedback.md` is the
    backlog for the next change to the skill. Then report to the user: sent,
-   scheduled, reacted, held, BLOCKED, and what needs them.
+   scheduled, reacted, held, BLOCKED, and what needs them. The user has not
+   read the threads, so each item stands alone: its link, who asked what in
+   one quoted line (20 words at most), and what went out or what is needed
+   from them. The thread is already in this session's context, so that is a
+   line per item, never a re-read.
 
 ## Hard rules
 

@@ -14,6 +14,9 @@ description: How to write a PR review, answer review comments, and request revie
 - Shape: open on the sources actually read, not the diff. Bold lead-ins for what
   you chased down, each citing `file`:line. Asks numbered, ranked, non-blocking;
   "Nit:" for trivia; label what is inherited, not introduced. Close "Net: approving".
+- Read every review and inline thread already on the PR first. Leave out what
+  another reviewer raised; where you would add to it, reply on their thread
+  instead. A finding raised twice costs the author a second answer.
 - An ask the diff cannot be edited to satisfy is a rollout note for the ticket.
 - Edit a review in place to keep APPROVED (`gh api -X PUT .../reviews/<id>`);
   trim rather than re-post. A review submitted with an empty body cannot be
