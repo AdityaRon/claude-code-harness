@@ -5,7 +5,9 @@ review state and CI state. Imported by the scripts beside it; run directly:
                       zone this machine knows; refuses to touch an existing one
   hub.py config       the config path, the state dir, the ids, or what is wrong with the config
   hub.py log TEXT     append a line to today's log in the state dir
-  hub.py queries      the three Slack mention searches, dated two days back
+  hub.py queries [--control]
+                      the three Slack mention searches, dated two days back; --control: the
+                      same a week further back, which an empty search needs before it is quiet
   hub.py routed TEXT  the log lines of the last two days that mention TEXT (a link, a key); exit 1 if none
   hub.py feedback TEXT  append a dated correction to feedback.md, for the next change to the skill
   hub.py cron         the tick's cron expression, made from active_hours
@@ -140,6 +142,12 @@ def load_config(explicit: str | None = None) -> dict:
     KNOWN_BOTS.update(str(b).lower() for b in gh["bots"])
     cfg.setdefault("slack", {}).setdefault("max_chars", MAX_CHARS)
     cfg["slack"].setdefault("github_logins", {})
+    # Slack's API takes the name bare; a config copied from the client often has the colons.
+    ack = str(cfg["slack"].setdefault("ack_reaction", "white_check_mark")).strip(":")
+    if not re.fullmatch(r"[\w+'.-]+", ack):
+        raise ConfigError(f"{path}: slack.ack_reaction must be an emoji name such as white_check_mark, "
+                          f"not {cfg['slack']['ack_reaction']!r}")
+    cfg["slack"]["ack_reaction"] = ack
     q = cfg.setdefault("quiet_hours", {})
     q.setdefault("start", "19:00")
     q.setdefault("post_at", "08:00")
@@ -401,6 +409,12 @@ def mention_queries(uid: str, since: dt.date) -> list[str]:
     return [f"<@{uid}> {day}", f"to:<@{uid}> {day}", f"with:<@{uid}> is:thread {day}"]
 
 
+# An empty search is quiet only if the same query, reaching further back, finds
+# rows: a filter Slack cannot read also returns nothing (an epoch filter once
+# returned 0). A week, so a Monday's control reaches past the weekend.
+CONTROL_DAYS = 7
+
+
 def append_log(cfg: dict | None, line: str) -> Path:
     d = state_dir(cfg) / "log"
     d.mkdir(exist_ok=True)
@@ -632,7 +646,7 @@ def main(argv=None, gh: Gh | None = None) -> int:
         print(f"bots: {','.join(cfg['github']['bots']) or '-'} max_chars: slack={s['max_chars']} "
               f"review={cfg['github']['review_max_chars']}")
         print(f"slack: primary_dm={s.get('primary_dm') or '-'} my_user_id={s.get('my_user_id') or '-'} "
-              f"watched={','.join(s.get('watched_channels') or []) or '-'}")
+              f"watched={','.join(s.get('watched_channels') or []) or '-'} ack={s['ack_reaction']}")
         print(f"quiet: {cfg['quiet_hours']['start']} to {cfg['quiet_hours']['post_at']} {cfg['quiet_hours']['tz']}")
         a = cfg["active_hours"]
         print(f"active: {','.join(a['days'])} {a['start']} to {a['end']}, every {a['every_minutes']} min: {cron(cfg)}")
@@ -645,7 +659,13 @@ def main(argv=None, gh: Gh | None = None) -> int:
         if not uid:
             print("config: slack.my_user_id is required for the mention searches")
             return 2
-        for q in mention_queries(uid, local_now(cfg).date() - dt.timedelta(days=2)):
+        if argv[1:] not in ([], ["--control"]):
+            print("usage: hub.py queries [--control]")
+            return 2
+        since = local_now(cfg).date() - dt.timedelta(days=2)
+        if argv[1:] == ["--control"]:
+            since -= dt.timedelta(days=CONTROL_DAYS)
+        for q in mention_queries(uid, since):
             print(q)
         return 0
     if argv[0] == "routed":
