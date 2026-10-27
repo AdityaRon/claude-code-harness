@@ -17,8 +17,8 @@ review state and CI state. Imported by the scripts beside it; run directly:
                       what is wrong with the tick's trigger: not the cron above, no record of
                       its creation, or due for renewal before Claude Code expires it (exit 1)
   hub.py launch [--check]
-                      the command that starts the comms session; --check: whether this
-                      session was started with it (exit 1 if not)
+                      the command that starts the comms session, with the panel when it is
+                      installed; --check: whether this session was started with it (exit 1 if not)
 """
 from __future__ import annotations
 
@@ -378,6 +378,13 @@ def launch_env(cfg: dict) -> dict[str, str]:
     return {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(s["compact_window"]), "MCP_TOOL_TIMEOUT": str(s["mcp_timeout_ms"])}
 
 
+def panel_dir() -> Path | None:
+    """The skill's panel mod beside bin/: held drafts and today's log in a pane.
+    Only the comms session loads it, through the command `launch` prints."""
+    p = Path(__file__).resolve().parent.parent / "panel"
+    return p if (p / ".claude-plugin" / "plugin.json").is_file() else None
+
+
 def _tokens(v: str | None) -> int | None:
     m = re.fullmatch(r"(\d+)([kKmM]?)", (v or "").strip())
     return int(m[1]) * {"": 1, "k": 1000, "m": 1_000_000}[m[2].lower()] if m else None
@@ -721,7 +728,9 @@ def schedule_cmd(cfg: dict, argv: list[str]) -> int:
             return 1
         print("launch: this session has the comms session's compact window and MCP timeout")
         return 0
-    print("claude --settings " + shlex_quote(json.dumps({"env": launch_env(cfg)}, separators=(",", ":"))))
+    cmd = "claude --settings " + shlex_quote(json.dumps({"env": launch_env(cfg)}, separators=(",", ":")))
+    panel = panel_dir()
+    print(cmd + (f" --plugin-dir {shlex_quote(str(panel))}" if panel else ""))
     return 0
 
 

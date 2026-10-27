@@ -5,8 +5,9 @@ same turn.
   check_draft.py FILE (--reply TS | --top-level) [--asks LOGIN...] [--answers TS...]
                                                    shape, live PR state, send mode; records a pass
   check_draft.py FILE --assert-fresh [--max-age S]  the bytes are the ones that passed, recently
-  check_draft.py FILE --record-sent ID [--replies BEFORE AFTER]
-                                                   after sending: keep a copy, log it, retire the pass
+  check_draft.py FILE --record-sent ID [--replies BEFORE AFTER] [--context TEXT]
+                                                   after sending: keep a copy, log it, retire the pass;
+                                                   --context: who asked what, on the log line the panel shows
   check_draft.py --scheduled                       scheduled messages not yet posted, with the copy to re-gate
 
 A reply that answers several messages threads under the newest of them: name
@@ -287,7 +288,9 @@ def record_sent(args, cfg) -> int:
     stamp["sent_copy"] = str(d / f"{safe}.md")
     p.write_text(json.dumps(stamp, indent=1))
     verb = "scheduled" if stamp["send"] == "schedule" else "sent"
-    hub.append_log(cfg, f"{verb} {args.record_sent} target={stamp['target']} sha256={stamp['sha256'][:12]}")
+    context = " ".join((args.context or "").split())
+    hub.append_log(cfg, f"{verb} {args.record_sent} target={stamp['target']} sha256={stamp['sha256'][:12]}"
+                   + (f": {context}" if context else ""))
     print(f"recorded {verb} {args.record_sent}: sent/{day}/{safe}.md")
     return 0
 
@@ -317,6 +320,7 @@ def main(argv=None, gh=None) -> int:
     ap.add_argument("--record-sent", metavar="ID")
     ap.add_argument("--replies", nargs=2, type=int, metavar=("BEFORE", "AFTER"),
                     help="the parent's reply count re-read before and after the send")
+    ap.add_argument("--context", metavar="TEXT", help="who asked what, in one line, for the log")
     ap.add_argument("--config")
     args = ap.parse_args(argv)
     try:

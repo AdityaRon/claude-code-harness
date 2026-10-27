@@ -116,6 +116,9 @@ SK="$HOME/.claude/skills/comms-hub"
 [ -x "$SK/bin/queue.py" ] && [ -f "$SK/bin/hub.py" ] && [ -f "$SK/config.example.toml" ] && [ -f "$SK/SKILL.md" ] \
   && pass "comms-hub's SKILL.md, bin/ and example config installed" || fail "comms-hub installed" "$(ls -R "$SK" 2>&1 | head -5)"
 [ ! -e "$SK/tests" ] && pass "its tests stay in the clone" || fail "its tests stay in the clone" "installed"
+[ -f "$SK/panel/.claude-plugin/plugin.json" ] && [ -f "$SK/panel/hooks/register.tsx" ] && [ -f "$SK/panel/types/index.d.ts" ] \
+  && [ ! -e "$SK/panel/panel.test.tsx" ] \
+  && pass "its panel mod installed, without its test" || fail "panel installed" "$(ls -R "$SK/panel" 2>&1 | head -8)"
 [ "$(cat "$HOME/.config/comms-hub/config.toml")" = "$CH_SENTINEL" ] && [ "$(ls -A "$HOME/.config/comms-hub" | wc -l | tr -d ' ')" = 1 ] \
   && pass "an existing comms-hub config is left byte for byte, nothing beside it" \
   || fail "comms-hub config untouched" "$(ls -A "$HOME/.config/comms-hub")"

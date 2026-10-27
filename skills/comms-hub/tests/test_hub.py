@@ -44,6 +44,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   trigger-zone-unchecked: hub.py: `if at.astimezone().utcoffset() != at.astimezone(tz).utcoffset():` => `if False:`
   created-expr-unchecked: hub.py: `elif rec.get("expr") != want:` => `elif False:`
   launch-any-window: hub.py: `if have is None or have > int(want):` => `if have is None:`
+  launch-without-panel: hub.py: `print(cmd + (f" --plugin-dir {shlex_quote(str(panel))}" if panel else ""))` => `print(cmd)`
   days-unvalidated: hub.py: `or any(d not in DAYS for d in a["days"]):` => `or False:`
   mid-hour-window: hub.py: `if not re.fullmatch(r"([01]\d|2[0-3]):00|24:00", str(a[k]))` => `if False`
   cadence-unvalidated: hub.py: `if a["every_minutes"] not in CADENCES:` => `if False:`
@@ -465,11 +466,15 @@ class ActiveHours(unittest.TestCase):
         self.assertEqual(hub.launch_problems(c, ok), [])
         self.assertEqual(len(hub.launch_problems(c, {**ok, "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "600000"})), 1)
         self.assertEqual(len(hub.launch_problems(c, {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150000"})), 1)
-        with Env():
+        settings = "claude --settings '{\"env\":{\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\":\"150000\",\"MCP_TOOL_TIMEOUT\":\"120000\"}}'"
+        with Env(), mock.patch.object(hub, "panel_dir", return_value=None):
             rc, out = main_out("launch")
         self.assertEqual(rc, 0)
-        self.assertEqual(out.strip(), "claude --settings '{\"env\":{\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\":\"150000\","
-                                      "\"MCP_TOOL_TIMEOUT\":\"120000\"}}'")
+        self.assertEqual(out.strip(), settings)
+        with Env(), mock.patch.object(hub, "panel_dir", return_value=hub.Path("/home/me/.claude/skills/comms-hub/panel")):
+            rc, out = main_out("launch")
+        self.assertEqual(out.strip(), settings + " --plugin-dir /home/me/.claude/skills/comms-hub/panel",
+                         "the panel loads into the comms session alone")
 
 
 if __name__ == "__main__":
