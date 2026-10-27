@@ -174,7 +174,10 @@ whole context.
      `with:<@my_user_id> is:thread`, each `after:` two days back). Each of the
      last two once caught a reply the others missed, one under a week-old
      thread. Use the date filter: an epoch filter once returned 0, and an
-     empty result is ambiguous. The newest hit of each shows how far it
+     empty result is ambiguous. An empty search counts as quiet only when the
+     same query from `PY B/hub.py queries --control` (a week further back)
+     returns rows; empty too, the search is not working, so say mentions are
+     unknown, never quiet. The newest hit of each shows how far it
      reached; if it is older than the last tick, say the search may not have
      reached.
 3. **Route** every event: a review, a comment, a Slack reply. The owner is the

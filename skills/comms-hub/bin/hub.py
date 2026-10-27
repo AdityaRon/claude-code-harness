@@ -5,7 +5,9 @@ review state and CI state. Imported by the scripts beside it; run directly:
                       zone this machine knows; refuses to touch an existing one
   hub.py config       the config path, the state dir, the ids, or what is wrong with the config
   hub.py log TEXT     append a line to today's log in the state dir
-  hub.py queries      the three Slack mention searches, dated two days back
+  hub.py queries [--control]
+                      the three Slack mention searches, dated two days back; --control: the
+                      same a week further back, which an empty search needs before it is quiet
   hub.py routed TEXT  the log lines of the last two days that mention TEXT (a link, a key); exit 1 if none
   hub.py feedback TEXT  append a dated correction to feedback.md, for the next change to the skill
   hub.py cron         the tick's cron expression, made from active_hours
@@ -407,6 +409,12 @@ def mention_queries(uid: str, since: dt.date) -> list[str]:
     return [f"<@{uid}> {day}", f"to:<@{uid}> {day}", f"with:<@{uid}> is:thread {day}"]
 
 
+# An empty search is quiet only if the same query, reaching further back, finds
+# rows: a filter Slack cannot read also returns nothing (an epoch filter once
+# returned 0). A week, so a Monday's control reaches past the weekend.
+CONTROL_DAYS = 7
+
+
 def append_log(cfg: dict | None, line: str) -> Path:
     d = state_dir(cfg) / "log"
     d.mkdir(exist_ok=True)
@@ -651,7 +659,13 @@ def main(argv=None, gh: Gh | None = None) -> int:
         if not uid:
             print("config: slack.my_user_id is required for the mention searches")
             return 2
-        for q in mention_queries(uid, local_now(cfg).date() - dt.timedelta(days=2)):
+        if argv[1:] not in ([], ["--control"]):
+            print("usage: hub.py queries [--control]")
+            return 2
+        since = local_now(cfg).date() - dt.timedelta(days=2)
+        if argv[1:] == ["--control"]:
+            since -= dt.timedelta(days=CONTROL_DAYS)
+        for q in mention_queries(uid, since):
             print(q)
         return 0
     if argv[0] == "routed":

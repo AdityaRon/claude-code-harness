@@ -48,6 +48,8 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   mid-hour-window: hub.py: `if not re.fullmatch(r"([01]\d|2[0-3]):00|24:00", str(a[k]))` => `if False`
   cadence-unvalidated: hub.py: `if a["every_minutes"] not in CADENCES:` => `if False:`
   ack-unvalidated: hub.py: `if not re.fullmatch(r"[\w+'.-]+", ack):` => `if False:`
+  control-not-earlier: hub.py: `since -= dt.timedelta(days=CONTROL_DAYS)` => `pass`
+  queries-any-flag: hub.py: `if argv[1:] not in ([], ["--control"]):` => `if False:`
 """
 import contextlib
 import datetime as dt
@@ -269,6 +271,15 @@ class MentionQueries(unittest.TestCase):
         self.assertEqual(out.getvalue().splitlines(), [
             "<@user-me> after:2026-10-19", "to:<@user-me> after:2026-10-19",
             "with:<@user-me> is:thread after:2026-10-19"])
+
+    def test_the_control_is_the_same_searches_a_week_further_back(self):
+        out = io.StringIO()
+        with Env(now="2026-10-22T03:00:00Z"), contextlib.redirect_stdout(out):
+            self.assertEqual(hub.main(["queries", "--control"]), 0)
+            self.assertEqual(hub.main(["queries", "--contrl"]), 2)
+        self.assertEqual(out.getvalue().splitlines()[:3], [
+            "<@user-me> after:2026-10-12", "to:<@user-me> after:2026-10-12",
+            "with:<@user-me> is:thread after:2026-10-12"])
 
 
 class Feedback(unittest.TestCase):
