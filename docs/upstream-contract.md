@@ -70,9 +70,9 @@ approves its own PR's CI; a dispatched run does not count for those checks and i
 only the fallback when approval is refused. A new
 contract PR closes the older ones `github-actions` opened, with a link, and deletes
 their branches; one you opened is left alone. After any merge: `bash install.sh`.
-On exit 1, a breakage, Claude fixes the harness instead: it may edit `bin/`,
-`hooks/`, `tests/`, `config/`, `docs/` and `rules/` and run the tests, and reviews
-the releases too. Its PR is always a **draft** for you, and the workflow refuses to
+On exit 1, a breakage, Claude fixes the harness instead: it may edit the bin,
+hooks, tests, config, docs and rules folders and run the tests, and reviews the
+releases too. Its PR is always a **draft** for you, and the workflow refuses to
 publish a fix that touches `.github/`, drops a deny or ask rule, or adds a line
 holding a credential (`tests/workflow-gates.test.sh`). 2.1.311's breakage waited as
 an issue until a hand-tagged run fixed it (#142).
