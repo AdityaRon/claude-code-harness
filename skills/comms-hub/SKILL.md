@@ -176,8 +176,8 @@ whole context.
      thread. Use the date filter: an epoch filter once returned 0, and an
      empty result is ambiguous. An empty search counts as quiet only when the
      same query from `PY B/hub.py queries --control` (a week further back)
-     returns rows; empty too, the search is not working, so say mentions are
-     unknown, never quiet. The newest hit of each shows how far it
+     returns rows; ask for the smallest page, since one row proves it. Empty
+     too, the search is not working, so say mentions are unknown, never quiet. The newest hit of each shows how far it
      reached; if it is older than the last tick, say the search may not have
      reached.
 3. **Route** every event: a review, a comment, a Slack reply. The owner is the
@@ -222,11 +222,13 @@ whole context.
      `slack_react` tool, in quiet hours too, since a reaction is not a message;
      log it (`PY B/hub.py log "reacted <emoji> on <ts>: <PR> review on GitHub"`),
      and tell the peer. No `slack_react` tool: hold the draft and tell the user.
-     `send: none`: a top-level message that only restates; drop it and tell the
-     peer. A `kind: react` draft skips the gate: confirm its claim (your review
-     is on the PR at its head, or the PR merged after it), then react the same
-     way. WARN names lines that restate inside a message that says more: it may
-     send, and reads better with them cut.
+     A top-level draft has no ts: find the message that asked for each review
+     (search Slack for the PR's link) and react there; with none in Slack, drop
+     it, since GitHub already told the author. A `kind: react` draft skips the
+     gate: confirm its claim (your review is on the PR at its head, or the PR
+     merged after it), then react the same way. WARN names lines that restate
+     inside a message that says more, or a thread reply over 60 words: it may
+     send, and reads better cut to what GitHub can't say.
    - `PY B/check_draft.py <file> --assert-fresh`, then send the file's text with
      the Slack send tool, `thread_ts` set for a reply.
    - Quiet hours: when the gate printed `send: schedule`, schedule it for that

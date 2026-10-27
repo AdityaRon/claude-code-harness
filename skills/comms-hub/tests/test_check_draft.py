@@ -48,8 +48,10 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   emoji-is-news: check_draft.py: `rest = EMOJI.sub(" ", rest)` => `pass`
   mention-is-news: check_draft.py: `MENTION.sub(" ", line)` => `line`
   react-on-reply-only: check_draft.py: `parents = sorted({args.reply, *args.answers}, key=ts_key) if args.reply else []` => `parents = [args.reply] if args.reply else []`
-  ack-hardcoded: check_draft.py: `{cfg['slack']['ack_reaction']}` => `white_check_mark`
+  ack-hardcoded: check_draft.py: `ack = cfg["slack"]["ack_reaction"]` => `ack = "white_check_mark"`
   ack-colons-kept: hub.py: `.strip(":")` => ``
+  long-reply-ok: check_draft.py: `if args.reply and not react and words > REPLY_WORDS:` => `if False:`
+  long-top-level-warned: check_draft.py: `if args.reply and not react and words > REPLY_WORDS:` => `if not react and words > REPLY_WORDS:`
 """
 import contextlib
 import io
@@ -278,7 +280,8 @@ class Restates(unittest.TestCase):
         self.assertIn("FAIL: line 3 restates", out)
         rc, out = self.check(f"Approved {LINK}, no asks.\n", mine, where=("--top-level",))
         self.assertEqual(rc, 1, out)
-        self.assertIn("send: none (a top-level message has no request to react to", out)
+        self.assertIn("send: react white_check_mark on the message that asked for each review; none in Slack: "
+                      "drop it", out)
 
     def test_every_message_answered_gets_the_configured_reaction(self):
         older = "1761037200.000050"
@@ -331,6 +334,18 @@ class Restates(unittest.TestCase):
                              state="MERGED")
         self.assertEqual(rc, 1, out)
         self.assertIn("FAIL: line 1 restates your review of acme/app#12 (APPROVED at 0123456)", out)
+
+
+class Length(unittest.TestCase):
+    def test_a_thread_reply_over_60_words_warns_and_still_passes(self):
+        with Env() as env:
+            rc, out = gate(env, " ".join(["word"] * 61) + "\n", "--reply", "1761040800.000100", gh=fake())
+            self.assertEqual(rc, 0, out)
+            self.assertIn("WARN: 61 words, over 60 for a thread reply", out)
+            rc, out = gate(env, " ".join(["word"] * 60) + "\n", "--reply", "1761040800.000100", gh=fake())
+            self.assertNotIn("WARN", out)
+            rc, out = gate(env, " ".join(["word"] * 61) + "\n", "--top-level", gh=fake())
+            self.assertNotIn("WARN", out, "a top-level message is not a reply to a request")
 
 
 class SendMode(unittest.TestCase):

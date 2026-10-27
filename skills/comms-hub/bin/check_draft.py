@@ -33,7 +33,12 @@ at the current head, or merged after one. A question or a review ask never
 restates; my review of an older head is news. When every line restates, the gate
 fails and prints `send: react <slack.ack_reaction> on <ts>` for each message the
 draft answers: the request gets a reaction, never a reply, in quiet hours too,
-since a reaction is not a message. Some lines restating is a WARN naming them.
+since a reaction is not a message. A top-level announcement reacts on the
+message that asked for each review, or, with none in Slack, is dropped: GitHub
+already told the author. Some lines restating is a WARN naming them.
+
+Length: a thread reply over 60 words is a WARN; the same reviewer read the
+replies as verbose, and the review on GitHub carries the detail.
 Exit 0 pass, 1 the draft fails a rule, 2 usage or config, 3 live state unknown.
 """
 from __future__ import annotations
@@ -62,6 +67,7 @@ TOKEN = re.compile(r"(?<!\w)(?:xox[abposr]-[\w-]{10,}|gh[pousr]_\w{30,}|github_p
                    r"|(?i:[a-z_]*(?:key|token|secret|password)\s*[=:]\s*[\"']?[\w./+-]{8,}))")  # key=..., token: ...
 MENTION = re.compile(r"<@([\w.-]+)(?:\|[^>]*)?>")
 MAX_AGE = 300
+REPLY_WORDS = 60
 EM_DASH = chr(0x2014)
 EN_DASH = chr(0x2013)
 AWAITING = re.compile(r"\b(?:awaiting|waiting (?:on|for)|pending (?:review|approval|merge)|still open|unmerged|"
@@ -279,8 +285,10 @@ def gate(args, cfg, gh) -> int:
     mode, post = hub.send_plan(cfg, hub.now())
     if react:
         parents = sorted({args.reply, *args.answers}, key=ts_key) if args.reply else []
-        print(f"send: react {cfg['slack']['ack_reaction']} on {' '.join(parents)}" if parents else
-              "send: none (a top-level message has no request to react to: drop it)")
+        ack = cfg["slack"]["ack_reaction"]
+        print(f"send: react {ack} on {' '.join(parents)}" if parents else
+              f"send: react {ack} on the message that asked for each review; none in Slack: drop it, "
+              "GitHub already told the author")
         problems += [f"{r}, which GitHub already shows: the request gets a reaction, not a reply" for r in restating]
     elif mode == "live":
         print("send: live")
@@ -289,6 +297,9 @@ def gate(args, cfg, gh) -> int:
               "(scheduled messages cannot be edited through the API: hold it instead if a fold-in is expected)")
     for r in [] if react else restating:
         print(f"WARN: {r}: cut it unless the message needs it")
+    words = len(text.split())
+    if args.reply and not react and words > REPLY_WORDS:
+        print(f"WARN: {words} words, over {REPLY_WORDS} for a thread reply: keep what GitHub cannot say")
     for p in problems:
         print(f"FAIL: {p}")
     if problems:

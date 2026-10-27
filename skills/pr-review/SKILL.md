@@ -28,8 +28,9 @@ description: How to write a PR review, answer review comments, and request revie
   the SHA, CI) puts the same message in two places, and the copy can go stale.
 - Slack carries only what GitHub can't: a decision, merge order, a hold, a
   question that is not on the PR, or a review not posted yet. Anything else
-  gets a reaction on the request; comms-hub's gate turns a reply that only
-  restates into one.
+  gets a reaction on the request, an approval announcement included: the check
+  mark on the message that asked is the announcement. comms-hub's gate turns a
+  message that only restates into one.
 
 ## Answering a review
 
