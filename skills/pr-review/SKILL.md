@@ -19,6 +19,15 @@ description: How to write a PR review, answer review comments, and request revie
   trim rather than re-post. A review submitted with an empty body cannot be
   edited, so post the review before any bodiless approval.
 
+## Announcing a review
+
+- The review on GitHub is the answer. Restating it in Slack (approved, no asks,
+  the SHA, CI) puts the same message in two places, and the copy can go stale.
+- Slack carries only what GitHub can't: a decision, merge order, a hold, a
+  question that is not on the PR, or a review not posted yet. Anything else
+  gets a reaction on the request; comms-hub's gate turns a reply that only
+  restates into one.
+
 ## Answering a review
 
 - Answer ON the PR. A pushed fix, an edited PR body, or a chat message does not

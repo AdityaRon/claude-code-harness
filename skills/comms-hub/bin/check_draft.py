@@ -24,6 +24,16 @@ and every <@id> the draft mentions that slack.github_logins maps to a login.
 It is the addressee's own review that counts, not the PR's decision: another
 reviewer's approval failed an ask once. An ask with no addressee fails, so it
 cannot slip by.
+
+Restating: a line that only restates my own review, which GitHub already shows,
+says nothing new and can go stale (a reviewer asked for approvals to stay out of
+Slack). It restates when it says only the verdict, "no asks", the SHA, CI or
+merged, and every PR it links (the draft's, for a line with none) has my review
+at the current head, or merged after one. A question or a review ask never
+restates; my review of an older head is news. When every line restates, the gate
+fails and prints `send: react <slack.ack_reaction> on <ts>` for each message the
+draft answers: the request gets a reaction, never a reply, in quiet hours too,
+since a reaction is not a message. Some lines restating is a WARN naming them.
 Exit 0 pass, 1 the draft fails a rule, 2 usage or config, 3 live state unknown.
 """
 from __future__ import annotations
@@ -60,6 +70,19 @@ ASK = re.compile(r"\b(?:ptal|please (?:review|take a look|have a look)|(?:could|
                  r"(?:review|take a look|have a look|look at)|mind (?:reviewing|taking a look)|"
                  r"(?:a |your )?review (?:please|when you (?:can|get a chance|have a minute))|"
                  r"review request|requesting (?:a |your )?review|ready for (?:your |a )?review)\b", re.I)
+EMOJI = re.compile(r":[\w+'-]+:")
+# What a line says when it only restates a review GitHub already shows: the verdict, "no asks", the SHA, CI, merged.
+RESTATED = re.compile(r"\b(?:re-?)?approv(?:ed?|es|ing|al)\b|\blgtm\b|\b(?:looks|all) good\b|\bgood to go\b|"
+                      r"\bship ?it\b|\b(?:re-?)?review(?:ed)?\b|\bnothing (?:else |more )?from me\b|"
+                      r"\bno (?:further |more |other )?(?:asks?|blockers?|comments?|concerns?|nits?)\b|"
+                      r"\bci\b|\bchecks?\b|\btests?\b|\bbuilds?\b|\bgreen\b|\bpass(?:es|ed|ing)?\b|"
+                      r"\bfailing\b|\bred\b|\bpending\b|\brunning\b"
+                      r"|\bmerged\b"
+                      r"|\b[0-9a-f]{7,40}\b", re.I)
+# Words that carry nothing on their own around a restatement.
+FILLER = frozenset("a an the and at on in of for to with from by is are was it its s this that all both now just "
+                   "here also too i ive ve me my we you your side up posted left done head commit sha current "
+                   "latest thanks thank ty thx cheers please".split())
 
 
 def ts_key(ts: str) -> tuple[int, int]:
@@ -175,6 +198,43 @@ def claim_problems(text: str, live: dict[tuple, dict], asks: list[str]) -> list[
     return out
 
 
+def my_review(d: dict, me: str) -> dict | None:
+    """My review GitHub already shows: one of the current head, or, once merged, my standing one."""
+    r = d["at_head"].get(me)
+    if not r and d.get("state") == "MERGED":
+        r = d["standing"].get(me)
+    return r
+
+
+def restatements(text: str, live: dict[tuple, dict], me: str) -> tuple[list[str], list[int]]:
+    """The lines that only restate my own posted review, and the lines that say more.
+    A blank line, a thank-you or a bare link is neither."""
+    restating, more = [], []
+    every = linked_prs(text)
+    for n, line in enumerate(text.splitlines(), 1):
+        rest = BARE_URL.sub(" ", MD_LINK.sub(" ", SLACK_LINK.sub(" ", MENTION.sub(" ", line))))
+        rest = EMOJI.sub(" ", rest)
+        if "?" in rest or ASK.search(rest):
+            more.append(n)
+            continue
+        said = RESTATED.findall(rest)
+        extra = [w for w in re.findall(r"\w+", RESTATED.sub(" ", rest).lower()) if w not in FILLER and not w.isdigit()]
+        if extra:
+            more.append(n)
+            continue
+        prs = linked_prs(line) or every
+        if not said or not prs:
+            continue
+        reviews = [my_review(live[pr], me) if pr in live else None for pr in prs]
+        if not all(reviews):
+            more.append(n)  # a review not posted yet is news
+            continue
+        restating.append(f"line {n} restates your review of " + ", ".join(
+            f"{o}/{r}#{k} ({v['state']} at {((v.get('commit') or {}).get('oid') or '?')[:7]})"
+            for (o, r, k), v in zip(prs, reviews)))
+    return restating, more
+
+
 def addressees(text: str, asks: list[str], logins: dict) -> tuple[list[str], list[str]]:
     """The GitHub logins a draft is addressed to: --asks, plus each <@id> it
     mentions that slack.github_logins maps; and the ids the config cannot map."""
@@ -209,17 +269,26 @@ def gate(args, cfg, gh) -> int:
     lines, known, live = live_state(gh, linked_prs(text))
     asks, unmapped = addressees(text, args.asks, cfg["slack"]["github_logins"])
     problems += claim_problems(text, live, asks)
+    restating, more = restatements(text, live, cfg["github"]["login"].lower())
+    react = bool(restating) and not more
     print(f"target: {target}")
     print(f"addressees: {','.join(asks) or '-'}"
           + (f" (no slack.github_logins entry for {' '.join('<@' + u + '>' for u in unmapped)})" if unmapped else ""))
     for line in lines:
         print(f"pr: {line}")
     mode, post = hub.send_plan(cfg, hub.now())
-    if mode == "live":
+    if react:
+        parents = sorted({args.reply, *args.answers}, key=ts_key) if args.reply else []
+        print(f"send: react {cfg['slack']['ack_reaction']} on {' '.join(parents)}" if parents else
+              "send: none (a top-level message has no request to react to: drop it)")
+        problems += [f"{r}, which GitHub already shows: the request gets a reaction, not a reply" for r in restating]
+    elif mode == "live":
         print("send: live")
     else:
         print(f"send: schedule post_at={post.isoformat()} epoch={int(post.timestamp())} "
               "(scheduled messages cannot be edited through the API: hold it instead if a fold-in is expected)")
+    for r in [] if react else restating:
+        print(f"WARN: {r}: cut it unless the message needs it")
     for p in problems:
         print(f"FAIL: {p}")
     if problems:

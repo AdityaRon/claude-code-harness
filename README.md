@@ -139,9 +139,10 @@ review requests and Slack for replies, and routes each event to the peer session
 that owns the PR or ticket. It is the only session that sends Slack. A peer hands
 it a draft and a target with SendMessage; it checks every claim against its
 source, runs the draft through a gate (every PR a link, no em or en dash, no `>`
-quote, no token-shaped string, a length cap, the linked PRs' live state, and no
-review ask to someone who already reviewed that head), then sends, or schedules
-for the morning in quiet hours. It resolves a review thread on your own PR only
+quote, no token-shaped string, a length cap, the linked PRs' live state, no
+review ask to someone who already reviewed that head, and no reply that only
+restates your own posted review, which goes as a reaction instead), then sends,
+or schedules for the morning in quiet hours. It resolves a review thread on your own PR only
 once you answered it and that reviewer approved after. It reviews a PR asked of
 you as a comment only. It never approves a PR or merges someone else's.
 

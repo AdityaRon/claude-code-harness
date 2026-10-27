@@ -140,6 +140,12 @@ def load_config(explicit: str | None = None) -> dict:
     KNOWN_BOTS.update(str(b).lower() for b in gh["bots"])
     cfg.setdefault("slack", {}).setdefault("max_chars", MAX_CHARS)
     cfg["slack"].setdefault("github_logins", {})
+    # Slack's API takes the name bare; a config copied from the client often has the colons.
+    ack = str(cfg["slack"].setdefault("ack_reaction", "white_check_mark")).strip(":")
+    if not re.fullmatch(r"[\w+'.-]+", ack):
+        raise ConfigError(f"{path}: slack.ack_reaction must be an emoji name such as white_check_mark, "
+                          f"not {cfg['slack']['ack_reaction']!r}")
+    cfg["slack"]["ack_reaction"] = ack
     q = cfg.setdefault("quiet_hours", {})
     q.setdefault("start", "19:00")
     q.setdefault("post_at", "08:00")
@@ -632,7 +638,7 @@ def main(argv=None, gh: Gh | None = None) -> int:
         print(f"bots: {','.join(cfg['github']['bots']) or '-'} max_chars: slack={s['max_chars']} "
               f"review={cfg['github']['review_max_chars']}")
         print(f"slack: primary_dm={s.get('primary_dm') or '-'} my_user_id={s.get('my_user_id') or '-'} "
-              f"watched={','.join(s.get('watched_channels') or []) or '-'}")
+              f"watched={','.join(s.get('watched_channels') or []) or '-'} ack={s['ack_reaction']}")
         print(f"quiet: {cfg['quiet_hours']['start']} to {cfg['quiet_hours']['post_at']} {cfg['quiet_hours']['tz']}")
         a = cfg["active_hours"]
         print(f"active: {','.join(a['days'])} {a['start']} to {a['end']}, every {a['every_minutes']} min: {cron(cfg)}")

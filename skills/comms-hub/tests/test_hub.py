@@ -47,6 +47,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   days-unvalidated: hub.py: `or any(d not in DAYS for d in a["days"]):` => `or False:`
   mid-hour-window: hub.py: `if not re.fullmatch(r"([01]\d|2[0-3]):00|24:00", str(a[k]))` => `if False`
   cadence-unvalidated: hub.py: `if a["every_minutes"] not in CADENCES:` => `if False:`
+  ack-unvalidated: hub.py: `if not re.fullmatch(r"[\w+'.-]+", ack):` => `if False:`
 """
 import contextlib
 import datetime as dt
@@ -235,7 +236,7 @@ class Config(unittest.TestCase):
             self.assertEqual(hub.main(["config"]), 0)
             lines = out.getvalue().splitlines()
             self.assertIn(f"tmp: {env.dir / 'job' / 'tmp'}", lines)
-            self.assertIn("slack: primary_dm=dm-primary my_user_id=user-me watched=chan-one", lines)
+            self.assertIn("slack: primary_dm=dm-primary my_user_id=user-me watched=chan-one ack=white_check_mark", lines)
             self.assertIn("bots: - max_chars: slack=2500 review=2500", lines)
             self.assertIn("quiet: 19:00 to 08:00 America/Los_Angeles", lines)
 
@@ -251,6 +252,11 @@ class Config(unittest.TestCase):
     def test_a_bad_zone_is_a_config_error(self):
         with Env(config='[github]\nlogin = "x"\nowners = ["a"]\n[quiet_hours]\ntz = "Mars/Olympus"\n'):
             with self.assertRaisesRegex(hub.ConfigError, "IANA"):
+                hub.load_config()
+
+    def test_the_ack_reaction_is_an_emoji_name(self):
+        with Env(config=CONFIG.replace('my_user_id = "user-me"', 'my_user_id = "user-me"\nack_reaction = "a b"')):
+            with self.assertRaisesRegex(hub.ConfigError, "slack.ack_reaction must be an emoji name"):
                 hub.load_config()
 
 
