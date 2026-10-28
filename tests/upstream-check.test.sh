@@ -50,6 +50,12 @@ elif [ -n "${STUB_REJECT_REAL:-}" ]; then
   echo "Invalid settings"
   echo "- $PWD/.claude/settings.json > ${STUB_REJECT_REAL}"
 fi
+# STUB_TRUST: 2.1.311's trust gate. A directory the config dir does not trust,
+# keyed by its physical path as the real CLI keys it, gets the warning.
+if [ -n "${STUB_TRUST:-}" ] && ! jq -e --arg d "$(pwd -P)" '.projects[$d].hasTrustDialogAccepted == true' \
+     "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" >/dev/null 2>&1; then
+  echo "- $PWD/.claude/settings.json > Ignoring permissions.allow entries: this workspace has not been trusted"
+fi
 echo "No installation issues found."
 STUB
 chmod +x "$TMP/stub.sh"
@@ -129,6 +135,19 @@ OUT=$(STUB_REJECT_REAL='permissions.defaultMode: Invalid value.' run "$ALL_EVENT
 [ "$ST" -eq 1 ] && pass "rejected settings exits 1" || fail "rejected settings exits 1" "exit=$ST"
 printf '%s' "$OUT" | grep -q "the CLI rejects part of settings.json" \
   && pass "reports the rejection" || fail "reports the rejection" "$OUT"
+
+echo ""
+echo "=== 2.1.311's trust gate: each probe trusts its directory in a config of its own ==="
+# TMPDIR behind a symlink, as macOS's /var is: the gate keys trust by the
+# physical path. The sentinel ~/.claude.json must come back byte for byte.
+mkdir -p "$TMP/home" "$TMP/realtmp" && ln -s "$TMP/realtmp" "$TMP/linktmp"
+printf '{"projects":{}}\n' > "$TMP/home/.claude.json" && cp "$TMP/home/.claude.json" "$TMP/home.before"
+OUT=$(STUB_TRUST=1 HOME="$TMP/home" TMPDIR="$TMP/linktmp/" run "$ALL_EVENTS" "$ALL_MODES")
+check_absent "the trust gate is not read as a rejection" "the CLI rejects part of settings.json" "$OUT"
+cmp -s "$TMP/home/.claude.json" "$TMP/home.before" && pass "the user's ~/.claude.json is untouched" \
+  || fail "the user's ~/.claude.json is untouched" "$(cat "$TMP/home/.claude.json")"
+[ -z "$(ls -A "$TMP/realtmp")" ] && pass "the probes' config goes with the run's temp dir" \
+  || fail "the probes' config goes with the run's temp dir" "$(ls -A "$TMP/realtmp")"
 
 echo ""
 echo "=== BREAKAGE: doctor's output format changes (no event list at all) ==="
