@@ -235,7 +235,8 @@ whole context.
    - `PY B/check_draft.py <file> --assert-fresh`, then send the file's text with
      the Slack send tool, `thread_ts` set for a reply.
    - Quiet hours: when the gate printed `send: schedule`, schedule it for that
-     `post_at` epoch instead. A scheduled message cannot be edited through the
+     `post_at` epoch instead, which is on the next active day, after its first
+     tick. A scheduled message cannot be edited through the
      API, so if the draft said `fold-in: expected`, or another draft for that
      thread is due, hold it and send it live, gated again, at the first tick
      after `post_at`.
@@ -247,10 +248,11 @@ whole context.
    - While step 1's header prints `scheduled-pending:` above 0, every tick:
      `PY B/check_draft.py --scheduled`, then gate each pending message's copy
      again (`check_draft.py <copy> --reply <ts>`, with the same `--asks`). A
-     message can be withdrawn only before its `post_at`, which is also when
-     quiet hours end, so the morning tick is too late. A FAIL means a claim
-     moved: withdraw it with the delete-scheduled tool step 0 recorded, else
-     tell the user now, before `post_at`; either way send the draft back to
+     message can be withdrawn only before its `post_at`; the config refuses a
+     `post_at` at or before the first tick, so that tick is the last chance. A
+     FAIL means a claim moved: withdraw it with the delete-scheduled tool step 0
+     recorded, else tell the user now, before `post_at`, so they delete it in
+     Slack; either way send the draft back to
      the peer with what changed. When the header prints `morning:`, what was
      scheduled has posted: read each target thread, confirm it landed, and
      log it.

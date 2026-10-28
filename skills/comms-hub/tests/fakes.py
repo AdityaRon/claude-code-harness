@@ -34,7 +34,7 @@ my_user_id = "user-me"
 
 [quiet_hours]
 start = "19:00"
-post_at = "08:00"
+post_at = "08:30"
 tz = "America/Los_Angeles"
 """
 

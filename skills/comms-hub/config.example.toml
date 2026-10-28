@@ -33,7 +33,7 @@ ack_reaction = "white_check_mark"  # the emoji a review request gets when your r
 
 [quiet_hours]
 start = "19:00"                # from this time, messages are scheduled instead of sent
-post_at = "08:00"              # for this time the next morning
+post_at = "08:30"              # for this time the next active day; after the first tick, which gates it again
 tz = "CHANGE-ME"               # required: an IANA zone such as "Europe/Berlin", so DST is right
 
 [active_hours]

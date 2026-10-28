@@ -9,6 +9,9 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   no-timeout: hub.py: `p = self.runner(args, self.timeout)` => `p = self.runner(args, None)`
   quiet-never: hub.py: `if not quiet:` => `if True:`
   next-day-always: hub.py: `day = local.date() if t < post else` => `day = local.date() if False else`
+  weekend-post: hub.py: `while DAYS[day.weekday()] not in cfg["active_hours"]["days"]:` => `while False:`
+  post-before-tick-ok: hub.py: `if q["post_at"] <= first:` => `if False:`
+  first-tick-on-the-hour: hub.py: `first = f"{a['start'][:2]}:{TICK_MINUTE:02d}"` => `first = a["start"]`
   placeholders-ok: hub.py: `if left:` => `if False:`
   tz-optional: hub.py: `if not q.get("tz"):` => `if False:`
   bad-time-ok: hub.py: `dt.time.fromisoformat(q[k])` => `pass`
@@ -156,7 +159,8 @@ class GhRunner(unittest.TestCase):
 
 
 class QuietHours(unittest.TestCase):
-    cfg = {"quiet_hours": {"start": "19:00", "post_at": "08:00", "tz": "America/Los_Angeles"}}
+    cfg = {"quiet_hours": {"start": "19:00", "post_at": "08:30", "tz": "America/Los_Angeles"},
+           "active_hours": {"days": ["Mon", "Tue", "Wed", "Thu", "Fri"]}}
 
     def at(self, s):
         return hub.send_plan(self.cfg, dt.datetime.fromisoformat(s))
@@ -166,20 +170,31 @@ class QuietHours(unittest.TestCase):
 
     def test_evening_schedules_next_morning(self):
         mode, post = self.at("2026-10-21T20:30:00-07:00")
-        self.assertEqual((mode, post.isoformat()), ("schedule", "2026-10-22T08:00:00-07:00"))
+        self.assertEqual((mode, post.isoformat()), ("schedule", "2026-10-22T08:30:00-07:00"))
 
     def test_small_hours_schedule_the_same_morning(self):
         mode, post = self.at("2026-10-22T02:00:00-07:00")
-        self.assertEqual((mode, post.isoformat()), ("schedule", "2026-10-22T08:00:00-07:00"))
+        self.assertEqual((mode, post.isoformat()), ("schedule", "2026-10-22T08:30:00-07:00"))
+
+    def test_the_first_tick_is_still_quiet(self):
+        # The 08:07 tick gates what was scheduled overnight again, before it posts.
+        mode, post = self.at("2026-10-22T08:07:00-07:00")
+        self.assertEqual((mode, post.isoformat()), ("schedule", "2026-10-22T08:30:00-07:00"))
+
+    def test_a_weekend_schedules_for_monday(self):
+        # No tick runs on Saturday or Sunday to gate it again before it posts.
+        for s in ("2026-10-23T20:30:00-07:00", "2026-10-24T02:00:00-07:00", "2026-10-25T20:30:00-07:00"):
+            mode, post = self.at(s)
+            self.assertEqual((mode, post.isoformat()), ("schedule", "2026-10-26T08:30:00-07:00"), s)
 
     def test_the_first_tick_after_quiet_hours_is_the_morning_one(self):
         t = dt.datetime.fromisoformat
-        morning = t("2026-10-22T08:07:00-07:00")
-        self.assertTrue(hub.first_tick_after_quiet(self.cfg, t("2026-10-22T07:37:00-07:00"), morning))
-        self.assertTrue(hub.first_tick_after_quiet(self.cfg, t("2026-10-21T18:37:00-07:00"), morning), "slept all night")
-        self.assertFalse(hub.first_tick_after_quiet(self.cfg, t("2026-10-22T08:07:00-07:00"), t("2026-10-22T08:37:00-07:00")))
-        self.assertFalse(hub.first_tick_after_quiet(self.cfg, t("2026-10-22T06:37:00-07:00"), t("2026-10-22T07:07:00-07:00")),
-                         "still quiet")
+        morning = t("2026-10-22T08:37:00-07:00")
+        self.assertTrue(hub.first_tick_after_quiet(self.cfg, t("2026-10-22T08:07:00-07:00"), morning))
+        self.assertTrue(hub.first_tick_after_quiet(self.cfg, t("2026-10-21T17:37:00-07:00"), morning), "slept all night")
+        self.assertFalse(hub.first_tick_after_quiet(self.cfg, t("2026-10-22T08:37:00-07:00"), t("2026-10-22T09:07:00-07:00")))
+        self.assertFalse(hub.first_tick_after_quiet(self.cfg, t("2026-10-21T17:37:00-07:00"), t("2026-10-22T08:07:00-07:00")),
+                         "still quiet: the 08:07 tick gates what is about to post")
         self.assertFalse(hub.first_tick_after_quiet(self.cfg, None, morning))
 
     def test_the_log_day_is_the_configured_zones_not_the_machines(self):
@@ -241,7 +256,7 @@ class Config(unittest.TestCase):
             self.assertIn(f"tmp: {env.dir / 'job' / 'tmp'}", lines)
             self.assertIn("slack: primary_dm=dm-primary my_user_id=user-me watched=chan-one ack=white_check_mark", lines)
             self.assertIn("bots: - max_chars: slack=2500 review=2500", lines)
-            self.assertIn("quiet: 19:00 to 08:00 America/Los_Angeles", lines)
+            self.assertIn("quiet: 19:00 to 08:30 America/Los_Angeles", lines)
 
     def test_a_zone_is_required_and_times_must_exist(self):
         base = '[github]\nlogin = "x"\nowners = ["a"]\n[quiet_hours]\n'
@@ -402,9 +417,21 @@ class ActiveHours(unittest.TestCase):
         self.assertEqual(hub.cron(self.cfg()), "7,37 8-17 * * 1-5")
 
     def test_the_trigger_follows_the_config(self):
-        c = self.cfg('\n[active_hours]\ndays = ["Mon", "Tue", "Wed", "Fri", "Sun"]\nstart = "09:00"\n'
-                     'end = "10:00"\nevery_minutes = 15\n')
+        with Env(config=CONFIG.replace('post_at = "08:30"', 'post_at = "09:30"')
+                 + '\n[active_hours]\ndays = ["Mon", "Tue", "Wed", "Fri", "Sun"]\nstart = "09:00"\n'
+                 'end = "10:00"\nevery_minutes = 15\n'):
+            c = hub.load_config()
         self.assertEqual(hub.cron(c), "7,22,37,52 9 * * 0-3,5")
+
+    def test_post_at_must_come_after_the_first_tick(self):
+        # The Slack tools cannot delete a scheduled message, so the morning tick gates it again first.
+        for post, start in (("08:00", "08:00"), ("08:07", "08:00"), ("09:30", "10:00")):
+            with Env(config=CONFIG.replace('post_at = "08:30"', f'post_at = "{post}"')
+                     + f'\n[active_hours]\nstart = "{start}"\n'):
+                with self.assertRaisesRegex(hub.ConfigError, f"post_at {post} must come after the first tick, {start[:2]}:07"):
+                    hub.load_config()
+        with Env(config=CONFIG.replace('post_at = "08:30"', 'post_at = "08:08"')):
+            self.assertEqual(hub.load_config()["quiet_hours"]["post_at"], "08:08")
 
     def test_bad_active_hours_are_refused_by_name(self):
         for extra, key in (('days = "Mon-Fri"', "days"), ('days = ["Funday"]', "days"), ("days = []", "days"),
