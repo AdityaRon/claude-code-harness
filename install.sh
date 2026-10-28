@@ -124,6 +124,17 @@ for skill in "$REPO"/skills/*/; do
       if [[ -f "$f" ]]; then cp "$f" ~/.claude/skills/"$name"/bin/; fi
     done
   fi
+  # A skill's panel/ is a mod its own session loads (comms-hub's: hub.py launch
+  # passes --plugin-dir); its tests stay, as do the types the engine writes.
+  if [[ -d "$skill"panel ]]; then
+    for f in "$skill"panel/.claude-plugin/plugin.json "$skill"panel/hooks/* "$skill"panel/types/*; do
+      if [[ -f "$f" ]]; then
+        rel=${f#"$skill"}
+        mkdir -p ~/.claude/skills/"$name"/"$(dirname "$rel")"
+        cp "$f" ~/.claude/skills/"$name"/"$rel"
+      fi
+    done
+  fi
   echo "  ✓ skills/$name"
 done
 if [[ -d "$REPO/skills/comms-hub" && ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/comms-hub/config.toml" ]]; then

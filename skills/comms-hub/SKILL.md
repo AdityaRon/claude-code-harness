@@ -61,7 +61,10 @@ Nothing here depends on which server it is: step 0 records the tool names.
    timeout for this session only. Every tick re-reads the whole context, and
    the tick's state is on disk, so a small context loses nothing. Exported in
    the shell instead, the window loses to the one `~/.claude/settings.json`
-   sets. Then step 0 below, then the trigger: `/loop` with the cron interval
+   sets. The command also loads the panel (`panel/`, `--plugin-dir`): a pane
+   with the held drafts and today's log, read from disk as each turn ends, so
+   it costs no tokens (`/comms` opens it again). Then step 0 below, then the
+   trigger: `/loop` with the cron interval
    `PY B/hub.py cron` prints (from `[active_hours]`: weekdays, 08:07 to 17:37,
    by default) and the prompt `comms-hub tick`, then
    `PY B/hub.py trigger --created "<that interval>"`. Never a self-paced
@@ -255,11 +258,13 @@ whole context.
      the parent thread and compare its reply count with the one read before
      the send; for a top-level message, re-read the channel's first page and
      find the ts. Then
-     `PY B/check_draft.py <file> --record-sent <message ts or scheduled id> --replies <before> <after>`
+     `PY B/check_draft.py <file> --record-sent <message ts or scheduled id> --replies <before> <after> --context "<who asked what>"`
      keeps a copy and logs it; it refuses a count that did not move. Answer
      the peer with the ts or id.
 5. **Log**: `PY B/hub.py log "<one line>"` for each item routed, each draft held
    and why, each question for the user (sends and resolves log themselves).
+   Each line, and each `--context`, carries the link and who asked what: the
+   panel shows the log, and the user has not read the thread.
    After a full scan, `PY B/hub.py window --full-done`. A tick that found
    nothing new anywhere, and holds and schedules nothing, reports one line.
    On the window's first tick (`scan: full (the window's first)`), also

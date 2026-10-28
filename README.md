@@ -158,6 +158,10 @@ you as a comment only. It never approves a PR or merges someone else's.
   Each script's lessons are in its docstring; `tests/comms-hub.test.sh` runs the
   tests and `skills/comms-hub/tests/run.py --mutate` checks that each rule's
   mutation turns a test red.
+- A panel beside the comms session's chat (`skills/comms-hub/panel/`, a mod
+  `hub.py launch` loads into that session alone): the held drafts and today's
+  log, each line with who asked what, read from disk as each turn ends, so it
+  calls no model. `claude plugin test skills/comms-hub/panel` runs its tests.
 
 ## Design choices
 

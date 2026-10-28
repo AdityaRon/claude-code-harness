@@ -29,6 +29,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   answers-unchecked: check_draft.py: `if args.answers and args.reply != max(args.answers, key=ts_key):` => `if False:`
   replies-optional: check_draft.py: `if stamp["target"].startswith("reply:") and not args.replies:` => `if False:`
   send-unconfirmed: check_draft.py: `if after <= before:` => `if False:`
+  context-unlogged: check_draft.py: `+ (f": {context}" if context else ""))` => `)`
   posted-still-listed: hub.py: `if parse_time(s.get("post_at")) <= now_:` => `if False:`
   cap-ignored: check_draft.py: `if len(text) > cap:` => `if False:`
   cap-hardcoded: check_draft.py: `problems = shape_problems(text, int(cfg["slack"]["max_chars"]))` => `problems = shape_problems(text)`
@@ -425,6 +426,16 @@ class Freshness(unittest.TestCase):
             self.assertFalse((env.state / "sent").exists(), "nothing recorded")
             rc, out = gate(env, None, "--record-sent", "1761044400.000200", "--replies", "3", "4")
             self.assertEqual(rc, 0, out)
+
+    def test_the_context_goes_on_the_log_line_in_one_line(self):
+        with Env() as env:
+            gate(env, "ok\n", "--reply", "1761040800.000100", gh=fake())
+            rc, out = gate(env, None, "--record-sent", "1761044400.000200", "--replies", "3", "4",
+                           "--context", "bob asked when\nacme/app#12 merges")
+            self.assertEqual(rc, 0, out)
+            log = "".join(p.read_text() for p in (env.state / "log").iterdir())
+            self.assertIn("sent 1761044400.000200 target=reply:1761040800.000100 sha256=", log)
+            self.assertIn(": bob asked when acme/app#12 merges\n", log)
 
     def test_the_sent_folder_is_the_day_in_the_configured_zone(self):
         # DAY is 10:00 on 2026-10-21 in Los Angeles, the config's zone, and 06:00 on the 22nd in Auckland.
