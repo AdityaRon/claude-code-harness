@@ -150,7 +150,7 @@ def load_config(explicit: str | None = None) -> dict:
     cfg["slack"]["ack_reaction"] = ack
     q = cfg.setdefault("quiet_hours", {})
     q.setdefault("start", "19:00")
-    q.setdefault("post_at", "08:00")
+    q.setdefault("post_at", "08:30")
     for k in ("start", "post_at"):
         try:
             if not re.fullmatch(r"\d{2}:\d{2}", str(q[k])):
@@ -184,6 +184,13 @@ def load_config(explicit: str | None = None) -> dict:
         raise ConfigError(f"{path}: active_hours.start {a['start']} must come before end {a['end']}")
     if a["every_minutes"] not in CADENCES:
         raise ConfigError(f"{path}: active_hours.every_minutes must be one of {CADENCES}, not {a['every_minutes']!r}")
+    # The Slack tools cannot delete a scheduled message, so the morning tick must
+    # gate an overnight one again before it posts.
+    first = f"{a['start'][:2]}:{TICK_MINUTE:02d}"
+    if q["post_at"] <= first:
+        raise ConfigError(f"{path}: quiet_hours.post_at {q['post_at']} must come after the first tick, {first}: "
+                          "a message scheduled overnight would post before any tick could gate it again, "
+                          "and the Slack tools cannot delete it")
     se = cfg.setdefault("session", {})
     se.setdefault("compact_window", 150_000)
     se.setdefault("mcp_timeout_ms", 120_000)
@@ -285,6 +292,9 @@ def send_plan(cfg: dict, at: dt.datetime) -> tuple[str, dt.datetime | None]:
     if not quiet:
         return "live", None
     day = local.date() if t < post else local.date() + dt.timedelta(days=1)
+    # No tick runs on an inactive day to gate it again before it posts.
+    while DAYS[day.weekday()] not in cfg["active_hours"]["days"]:
+        day += dt.timedelta(days=1)
     return "schedule", dt.datetime.combine(day, post, tzinfo=tz)
 
 

@@ -354,7 +354,7 @@ class SendMode(unittest.TestCase):
         with Env() as env:
             self.assertIn("send: live", gate(env, "ok\n", "--top-level", gh=fake())[1])
             rc, out = gate(env, "ok\n", "--top-level", gh=fake(), now=EVENING)
-            self.assertIn("send: schedule post_at=2026-10-22T08:00:00-07:00", out)
+            self.assertIn("send: schedule post_at=2026-10-22T08:30:00-07:00", out)
 
 
 class Scheduled(unittest.TestCase):
@@ -366,7 +366,7 @@ class Scheduled(unittest.TestCase):
             rc, out = gate(env, None, "--scheduled", now="2026-10-22T14:00:00+00:00")  # 07:00 there
             self.assertEqual(rc, 0, out)
             self.assertIn("scheduled: 1 pending", out)
-            self.assertIn(f"Q0001 post_at=2026-10-22T08:00:00-07:00 target=top-level copy={env.state}/sent/2026-10-21/Q0001.md", out)
+            self.assertIn(f"Q0001 post_at=2026-10-22T08:30:00-07:00 target=top-level copy={env.state}/sent/2026-10-21/Q0001.md", out)
             rc, out = gate(env, None, "--scheduled", now="2026-10-22T15:30:00+00:00")  # 08:30, posted
             self.assertIn("scheduled: 0 pending", out)
 

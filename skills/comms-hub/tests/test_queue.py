@@ -384,7 +384,7 @@ class Scan(unittest.TestCase):
         self.assertIn("morning: first tick since quiet hours ended; what was scheduled has posted, confirm each landed", out)
 
     def test_scheduled_messages_still_ahead_are_counted_every_tick(self):
-        stamp = {"send": "schedule", "sent_id": "Q0001", "post_at": "2026-10-22T08:00:00-07:00", "target": "top-level",
+        stamp = {"send": "schedule", "sent_id": "Q0001", "post_at": "2026-10-22T08:30:00-07:00", "target": "top-level",
                  "sha256": "0" * 64, "passed_at": 0}
         with Env(now=NOW) as env:  # 10:00 on the 21st there; Q0001 posts the next morning
             (env.state / "gate").mkdir(parents=True)
