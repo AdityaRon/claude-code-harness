@@ -182,12 +182,13 @@ More, including what fails closed: [docs/known-limitations.md](docs/known-limita
 
 ## Repo layout
 
-The install and test entry points and the changelog sit at the root; everything
-else is grouped by what it is.
+The install and test entry points, the changelog and the license sit at the root;
+everything else is grouped by what it is.
 
 ```
 install.sh  doctor.sh    ← install once per machine; run every suite in tests/
 CHANGELOG.md             ← one entry per release
+LICENSE                  ← MIT
 bin/                     ← installed to ~/.claude, or run from the clone
   statusline.sh  harness-update.sh  net-allowlist.sh  sandbox.sh  sandbox-trial.sh
   memory-verify.sh  memory-fix.sh  memory-index.sh  memory-provenance.sh
@@ -219,3 +220,7 @@ docs/
 Everything here is portable because the repo is public; machine-local rules and
 allow rules live in `~/.claude/rules/local-*.md` and `~/.claude/local-settings/`
 ([docs/customization.md](docs/customization.md)).
+
+## License
+
+MIT, in [LICENSE](LICENSE).
