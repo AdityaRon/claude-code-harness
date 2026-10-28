@@ -53,53 +53,27 @@ TMP=$(cd "$TMP" && pwd)   # macOS TMPDIR ends in /; the CLI prints the path with
 # the doctor probes below run inside $( ), so it would delete the temp directory
 # out from under the rest of the run. bash 3.2 (macOS) has no BASHPID to guard on,
 # so clean up explicitly through finish() instead.
-trap 'untrust_dirs; rm -rf "$TMP"; exit 130' INT TERM
-finish(){ untrust_dirs; rm -rf "$TMP"; exit "$1"; }
+trap 'rm -rf "$TMP"; exit 130' INT TERM
+finish(){ rm -rf "$TMP"; exit "$1"; }
 
 strip_ansi(){ sed $'s/\033\\[[0-9;]*m//g'; }
 
-# Each probe writes settings.json into a disposable directory nobody has ever
-# interactively trusted, so the CLI's workspace-trust gate ignores every
-# permissions.allow entry there and reports it ("this workspace has not been
-# trusted") -- noise that has nothing to do with whether the settings CONTENT
-# is valid, and would fire for any settings.json at all, including an empty
-# one. It is also not representative: this harness ships settings.json at USER
-# scope (~/.claude/settings.json, see install.sh), which the trust dialog does
-# not gate at all. Pre-trusting each probe directory the same way the CLI's own
-# message says to -- projects[dir].hasTrustDialogAccepted in ~/.claude.json --
-# keeps section 1 testing validity instead of a gate the real deployment never
-# hits. Skipped under test (CLAUDE_DOCTOR_CMD set): the stub doesn't consult
-# trust state, and this would otherwise mutate a real developer's ~/.claude.json
-# for no reason. Best-effort and reversed via untrust_dirs(): a machine with no
-# ~/.claude.json yet, or a jq failure, just leaves section 1 as noisy as before.
-GLOBAL_CONFIG=${CLAUDE_USER_CONFIG:-$HOME/.claude.json}
-TRUSTED_DIRS=""
+# Each probe writes settings.json into a directory nobody has trusted, and since
+# 2.1.311 the CLI ignores permissions.allow there and says so ("this workspace has
+# not been trusted"), which section 1 read as a rejection. This harness ships
+# settings.json at user scope, which the trust gate does not apply to. So every
+# probe runs with a Claude config dir of its own, under $TMP, that trusts the probe
+# directory. Trusting it in the user's ~/.claude.json instead (#142) raced the
+# sessions that write that file, and, set from inside $( ), was never undone.
+# The CLI keys trust by the physical path: on macOS $TMP is /var/..., which it
+# reads as /private/var/..., so the logical path alone left the warning.
+PROBE_CONFIG="$TMP/config"
+mkdir -p "$PROBE_CONFIG"
+printf '{}\n' > "$PROBE_CONFIG/.claude.json"
 trust_dir(){
-  [ -n "${CLAUDE_DOCTOR_CMD:-}" ] && return
-  [ -f "$GLOBAL_CONFIG" ] || return
-  local dir=$1 out
-  out=$(mktemp "${TMPDIR:-/tmp}/cch-cfg.XXXXXX") || return
-  if jq --arg d "$dir" '.projects[$d].hasTrustDialogAccepted = true' "$GLOBAL_CONFIG" >"$out" 2>/dev/null; then
-    mv "$out" "$GLOBAL_CONFIG"
-    TRUSTED_DIRS="$TRUSTED_DIRS$dir
-"
-  else
-    rm -f "$out"
-  fi
-}
-untrust_dirs(){
-  [ -n "${CLAUDE_DOCTOR_CMD:-}" ] && return
-  [ -f "$GLOBAL_CONFIG" ] || return
-  local dir out
-  printf '%s' "$TRUSTED_DIRS" | while IFS= read -r dir; do
-    [ -n "$dir" ] || continue
-    out=$(mktemp "${TMPDIR:-/tmp}/cch-cfg.XXXXXX") || continue
-    if jq --arg d "$dir" 'del(.projects[$d])' "$GLOBAL_CONFIG" >"$out" 2>/dev/null; then
-      mv "$out" "$GLOBAL_CONFIG"
-    else
-      rm -f "$out"
-    fi
-  done
+  local cfg="$PROBE_CONFIG/.claude.json" real
+  real=$(cd "$1" && pwd -P) || return
+  jq --arg d "$real" '.projects[$d].hasTrustDialogAccepted = true' "$cfg" > "$cfg.next" && mv "$cfg.next" "$cfg"
 }
 
 # `claude doctor` validates the settings file in its *current directory*
@@ -110,7 +84,7 @@ doctor_run(){
   mkdir -p "$dir/.claude"
   printf '%s' "$json" > "$dir/.claude/settings.json"
   trust_dir "$dir"
-  ( cd "$dir" && eval "$DOCTOR_CMD" 2>&1 ) | strip_ansi
+  ( cd "$dir" && export CLAUDE_CONFIG_DIR="$PROBE_CONFIG" && eval "$DOCTOR_CMD" 2>&1 ) | strip_ansi
 }
 
 # Upstream prints the full list of valid hook events only inside the warning for
