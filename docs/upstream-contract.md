@@ -70,6 +70,12 @@ approves its own PR's CI; a dispatched run does not count for those checks and i
 only the fallback when approval is refused. A new
 contract PR closes the older ones `github-actions` opened, with a link, and deletes
 their branches; one you opened is left alone. After any merge: `bash install.sh`.
+On exit 1, a breakage, Claude fixes the harness instead: it may edit the bin,
+hooks, tests, config, docs and rules folders and run the tests, and reviews the
+releases too. Its PR is always a **draft** for you, and the workflow refuses to
+publish a fix that touches `.github/`, drops a deny or ask rule, or adds a line
+holding a credential (`tests/workflow-gates.test.sh`). 2.1.311's breakage waited as
+an issue until a hand-tagged run fixed it (#142).
 Without a token the same run keeps one open issue with section 6 instead. Locally,
 `session-start` says when the installed CLI is past the contract. On push and PR
 the workflow fails only on exit 1 or 3; exit 2 is the scheduled run's to clear.

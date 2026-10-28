@@ -28,6 +28,8 @@ jobs:
       issues: read
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
+    outputs:
+      branch: ${{ steps.claude.outputs.branch_name }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -52,4 +54,66 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           # claude_args: '--allowed-tools Bash(gh pr *)'
+
+  # Tag mode pushes a branch and posts a "Create PR" link but never opens the PR
+  # (the action's FAQ, and its tag prompt at the pin): #142 waited on a click.
+  # This job opens it the way Upstream drift opens its PRs, with github.token, in
+  # a job of its own so the Claude job keeps read scopes. The title and body are
+  # the ones Claude put in its link.
+  open-pr:
+    needs: claude
+    if: needs.claude.outputs.branch != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: write
+      actions: write # approve-pr-ci.sh approves the PR's held CI run
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install jq
+        run: .github/install-apt-deps.sh jq
+
+      - name: Open the PR Claude linked
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.claude.outputs.branch }}
+          NUM: ${{ github.event.issue.number || github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          AHEAD=$(gh api "repos/$REPO/compare/main...$BRANCH" --jq .ahead_by 2>/dev/null || echo 0)
+          if [ "${AHEAD:-0}" = 0 ]; then echo "$BRANCH has no commits ahead of main: no PR."; exit 0; fi
+          if [ "$(gh pr list --head "$BRANCH" --state all --json number -q length)" != 0 ]; then
+            echo "$BRANCH already has a PR."; exit 0
+          fi
+          # The link's body holds raw parentheses, so a link ends at a ")" that
+          # whitespace or the end follows, not at the first one.
+          gh api "repos/$REPO/issues/$NUM/comments" --paginate \
+            --jq '.[] | select(.user.login | startswith("claude")) | .body' > comments.txt || true
+          python3 - "$BRANCH" <<'PY'
+          import re, sys, urllib.parse
+          links = [u for u in re.findall(r"\((https://github\.com/\S*?quick_pull=1\S*?)\)(?=\s|$)", open("comments.txt").read())
+                   if f"...{sys.argv[1]}?" in u]
+          q = urllib.parse.parse_qs(urllib.parse.urlsplit(links[-1]).query) if links else {}
+          open("title.txt", "w").write(q.get("title", [""])[0])
+          open("body.md", "w").write(q.get("body", [""])[0])
+          PY
+          TITLE=$(head -n1 title.txt)
+          [ -n "$TITLE" ] || TITLE=$(gh api "repos/$REPO/compare/main...$BRANCH" --jq '.commits[0].commit.message | split("\n")[0]')
+          [ -s body.md ] || echo "Claude's work for #$NUM; its comment there has the summary." > body.md
+          printf '\n\nOpened by the Claude Code workflow from the branch Claude pushed for #%s.\n' "$NUM" >> body.md
+          PR=$(gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file body.md \
+                 --assignee "$OWNER" | grep -oE '[0-9]+$' || true)
+          if [ -z "$PR" ]; then echo "::warning::could not open a PR for $BRANCH; the link in #$NUM still works."; exit 0; fi
+          SHA=$(gh api "repos/$REPO/commits/$BRANCH" --jq .sha)
+          if CI_RUN=$(.github/approve-pr-ci.sh "$PR" "$SHA") && [ -n "$CI_RUN" ]; then
+            echo "PR #$PR runs its own CI: ${{ github.server_url }}/$REPO/actions/runs/$CI_RUN"
+          else
+            echo "::warning::PR #$PR's CI was not approved; dispatched CI on $BRANCH instead, which main's required checks do not count."
+            gh workflow run ci.yml --ref "$BRANCH" || echo "::warning::could not dispatch CI on $BRANCH"
+          fi
 
