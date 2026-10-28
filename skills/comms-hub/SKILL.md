@@ -21,17 +21,22 @@ all the drafts you hold:
 ```
 comms-hub draft
 to: <channel id> reply <thread ts>      (or: to: <channel id> top-level)
+kind: reply | react
 claims:
 - <each fact the message states> | <its source: PR URL, ticket key, page URL and version>
 user-approved: <the user's words, quoted> | no
 fold-in: expected | none
 ---
-<the message, exactly as it should go out>
+<the message, exactly as it should go out; nothing for react>
 ```
 
-`fold-in: expected` means more is coming for the same thread (a CI run, an
-answer you are waiting on). The comms session replies with the sent ts, the
-scheduled id, or why it held the draft.
+`kind: react` acknowledges a request GitHub already answers, such as a review
+request your posted review covers: no message, and `to:` names the request's
+ts as for a reply. The review on GitHub is the answer; Slack carries only what
+GitHub can't (a decision, merge order, a hold, a question not on the PR, a
+review not posted yet). `fold-in: expected` means more is coming for the same
+thread (a CI run, an answer you are waiting on). The comms session replies with
+the sent ts, the scheduled id, the reaction, or why it held the draft.
 
 ## Setup, once per machine
 
@@ -79,8 +84,9 @@ which every job shares. Each script's `--help` gives its flags and exit codes.
 
 At session start, and when doctor calls the record old. Load each tool with
 ToolSearch: the Slack MCP's read channel, read thread, search, send message and
-schedule message tools; ListAgents; SendMessage; CronList, for the tick's
-trigger; optionally a Jira or Confluence tool. Then write
+schedule message tools, and its add-reaction tool if it has one; ListAgents;
+SendMessage; CronList, for the tick's trigger; optionally a Jira or Confluence
+tool. Then write
 `<state dir>/preflight.json` with the Write tool (`PY B/hub.py config` prints
 the state dir, the tmp dir, the Slack ids and the routes):
 
@@ -90,15 +96,16 @@ the state dir, the tmp dir, the Slack ids and the routes):
  "slack_search": "<tool name>", "slack_send": "<tool name>", "slack_schedule": "<tool name>",
  "list_agents": "ListAgents", "send_message": "SendMessage",
  "trigger": "<the tick's cron expression, from CronList>", "tickets": "<tool name, or empty>",
- "slack_delete_scheduled": "<tool name, or empty>"}
+ "slack_delete_scheduled": "<tool name, or empty>", "slack_react": "<tool name, or empty>"}
 ```
 
 Leave a key empty when its tool is missing, and tell the user: doctor fails on
 it, and the tick cannot run without it. Then `PY B/hub.py launch --check`: a
 failure means this session was not started with `hub.py launch`'s command, so
-tell the user to restart it with that command. `slack_delete_scheduled` and `tickets`
-are optional: without the first, a scheduled message whose claims moved can
-only be reported, not withdrawn.
+tell the user to restart it with that command. `slack_delete_scheduled`,
+`slack_react` and `tickets` are optional: without the first, a scheduled
+message whose claims moved can only be reported, not withdrawn; without
+`slack_react`, a draft that should go as a reaction is held, and the user told.
 
 ## The tick
 
@@ -137,7 +144,9 @@ whole context.
    `PY B/pr_transcript.py owner/repo#N -o <job tmp>/pr-N.md` (its first line
    is `head:`), then spawn a reviewer with the Agent tool: the pr-review
    skill, the transcript, `gh pr diff N --repo owner/repo`, and the ask to
-   write findings only, no verdict, to `<job tmp>/review-N.md`. Then one
+   write findings only, no verdict, to `<job tmp>/review-N.md`, leaving out
+   what another reviewer already raised (the transcript has every review and
+   thread). Then one
    command, the lint chained to the post with `&&`, never `;` (a `;` once let
    a refused body go out):
    `PY B/review_lint.py <job tmp>/review-N.md --pr owner/repo#N --head <sha> && gh pr review N --repo owner/repo --comment --body-file <job tmp>/review-N.md`.
@@ -168,7 +177,10 @@ whole context.
      `with:<@my_user_id> is:thread`, each `after:` two days back). Each of the
      last two once caught a reply the others missed, one under a week-old
      thread. Use the date filter: an epoch filter once returned 0, and an
-     empty result is ambiguous. The newest hit of each shows how far it
+     empty result is ambiguous. An empty search counts as quiet only when the
+     same query from `PY B/hub.py queries --control` (a week further back)
+     returns rows; ask for the smallest page, since one row proves it. Empty
+     too, the search is not working, so say mentions are unknown, never quiet. The newest hit of each shows how far it
      reached; if it is older than the last tick, say the search may not have
      reached.
 3. **Route** every event: a review, a comment, a Slack reply. The owner is the
@@ -207,6 +219,19 @@ whole context.
      review they gave at the current head, goes back to the peer (a review ask
      once went out minutes after the approval). BLOCKED: a linked PR's live
      state is unknown, so hold it.
+   - `send: react <emoji> on <ts>`, with a FAIL: every line restates your own
+     review, which GitHub already shows (a reviewer asked for approvals to stay
+     out of Slack). Never reply: add that reaction to each ts with the
+     `slack_react` tool, in quiet hours too, since a reaction is not a message;
+     log it (`PY B/hub.py log "reacted <emoji> on <ts>: <PR> review on GitHub"`),
+     and tell the peer. No `slack_react` tool: hold the draft and tell the user.
+     A top-level draft has no ts: find the message that asked for each review
+     (search Slack for the PR's link) and react there; with none in Slack, drop
+     it, since GitHub already told the author. A `kind: react` draft skips the
+     gate: confirm its claim (your review is on the PR at its head, or the PR
+     merged after it), then react the same way. WARN names lines that restate
+     inside a message that says more, or a thread reply over 60 words: it may
+     send, and reads better cut to what GitHub can't say.
    - `PY B/check_draft.py <file> --assert-fresh`, then send the file's text with
      the Slack send tool, `thread_ts` set for a reply.
    - Quiet hours: when the gate printed `send: schedule`, schedule it for that
@@ -249,7 +274,11 @@ whole context.
    `PY B/hub.py feedback "<what was corrected>"` for each correction the user
    made this tick to a message or to this protocol: `feedback.md` is the
    backlog for the next change to the skill. Then report to the user: sent,
-   scheduled, held, BLOCKED, and what needs them.
+   scheduled, reacted, held, BLOCKED, and what needs them. The user has not
+   read the threads, so each item stands alone: its link, who asked what in
+   one quoted line (20 words at most), and what went out or what is needed
+   from them. The thread is already in this session's context, so that is a
+   line per item, never a re-read.
 
 ## Hard rules
 

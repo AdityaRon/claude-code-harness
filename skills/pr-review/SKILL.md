@@ -14,10 +14,23 @@ description: How to write a PR review, answer review comments, and request revie
 - Shape: open on the sources actually read, not the diff. Bold lead-ins for what
   you chased down, each citing `file`:line. Asks numbered, ranked, non-blocking;
   "Nit:" for trivia; label what is inherited, not introduced. Close "Net: approving".
+- Read every review and inline thread already on the PR first. Leave out what
+  another reviewer raised; where you would add to it, reply on their thread
+  instead. A finding raised twice costs the author a second answer.
 - An ask the diff cannot be edited to satisfy is a rollout note for the ticket.
 - Edit a review in place to keep APPROVED (`gh api -X PUT .../reviews/<id>`);
   trim rather than re-post. A review submitted with an empty body cannot be
   edited, so post the review before any bodiless approval.
+
+## Announcing a review
+
+- The review on GitHub is the answer. Restating it in Slack (approved, no asks,
+  the SHA, CI) puts the same message in two places, and the copy can go stale.
+- Slack carries only what GitHub can't: a decision, merge order, a hold, a
+  question that is not on the PR, or a review not posted yet. Anything else
+  gets a reaction on the request, an approval announcement included: the check
+  mark on the message that asked is the announcement. comms-hub's gate turns a
+  message that only restates into one.
 
 ## Answering a review
 

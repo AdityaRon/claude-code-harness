@@ -48,6 +48,9 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   days-unvalidated: hub.py: `or any(d not in DAYS for d in a["days"]):` => `or False:`
   mid-hour-window: hub.py: `if not re.fullmatch(r"([01]\d|2[0-3]):00|24:00", str(a[k]))` => `if False`
   cadence-unvalidated: hub.py: `if a["every_minutes"] not in CADENCES:` => `if False:`
+  ack-unvalidated: hub.py: `if not re.fullmatch(r"[\w+'.-]+", ack):` => `if False:`
+  control-not-earlier: hub.py: `since -= dt.timedelta(days=CONTROL_DAYS)` => `pass`
+  queries-any-flag: hub.py: `if argv[1:] not in ([], ["--control"]):` => `if False:`
 """
 import contextlib
 import datetime as dt
@@ -236,7 +239,7 @@ class Config(unittest.TestCase):
             self.assertEqual(hub.main(["config"]), 0)
             lines = out.getvalue().splitlines()
             self.assertIn(f"tmp: {env.dir / 'job' / 'tmp'}", lines)
-            self.assertIn("slack: primary_dm=dm-primary my_user_id=user-me watched=chan-one", lines)
+            self.assertIn("slack: primary_dm=dm-primary my_user_id=user-me watched=chan-one ack=white_check_mark", lines)
             self.assertIn("bots: - max_chars: slack=2500 review=2500", lines)
             self.assertIn("quiet: 19:00 to 08:00 America/Los_Angeles", lines)
 
@@ -254,6 +257,11 @@ class Config(unittest.TestCase):
             with self.assertRaisesRegex(hub.ConfigError, "IANA"):
                 hub.load_config()
 
+    def test_the_ack_reaction_is_an_emoji_name(self):
+        with Env(config=CONFIG.replace('my_user_id = "user-me"', 'my_user_id = "user-me"\nack_reaction = "a b"')):
+            with self.assertRaisesRegex(hub.ConfigError, "slack.ack_reaction must be an emoji name"):
+                hub.load_config()
+
 
 class MentionQueries(unittest.TestCase):
     def test_three_searches_dated_two_days_back_in_the_configured_zone(self):
@@ -264,6 +272,15 @@ class MentionQueries(unittest.TestCase):
         self.assertEqual(out.getvalue().splitlines(), [
             "<@user-me> after:2026-10-19", "to:<@user-me> after:2026-10-19",
             "with:<@user-me> is:thread after:2026-10-19"])
+
+    def test_the_control_is_the_same_searches_a_week_further_back(self):
+        out = io.StringIO()
+        with Env(now="2026-10-22T03:00:00Z"), contextlib.redirect_stdout(out):
+            self.assertEqual(hub.main(["queries", "--control"]), 0)
+            self.assertEqual(hub.main(["queries", "--contrl"]), 2)
+        self.assertEqual(out.getvalue().splitlines()[:3], [
+            "<@user-me> after:2026-10-12", "to:<@user-me> after:2026-10-12",
+            "with:<@user-me> is:thread after:2026-10-12"])
 
 
 class Feedback(unittest.TestCase):

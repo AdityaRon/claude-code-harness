@@ -34,6 +34,25 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   cap-ignored: check_draft.py: `if len(text) > cap:` => `if False:`
   cap-hardcoded: check_draft.py: `problems = shape_problems(text, int(cfg["slack"]["max_chars"]))` => `problems = shape_problems(text)`
   thin-bullet-ok: check_draft.py: `if m and len(re.findall(r"\w+", m.group(1))) < 3:` => `if False:`
+  restate-sends: check_draft.py: `react = bool(restating) and not more` => `react = False`
+  restate-with-news-fails: check_draft.py: `react = bool(restating) and not more` => `react = bool(restating)`
+  extra-words-ignored: check_draft.py: `if extra:` => `if False:`
+  bare-link-restates: check_draft.py: `if not said or not prs:` => `if not prs:`
+  ask-restates: check_draft.py: `if "?" in rest or ASK.search(rest):` => `if "?" in rest:`
+  question-restates: check_draft.py: `if "?" in rest or ASK.search(rest):` => `if ASK.search(rest):`
+  restate-anyones-review: check_draft.py: `r = d["at_head"].get(me)` => `r = next(iter(d["at_head"].values()), None)`
+  restate-any-head: check_draft.py: `r = d["at_head"].get(me)` => `r = d["standing"].get(me)`
+  merged-not-restated: check_draft.py: `if not r and d.get("state") == "MERGED":` => `if False:`
+  sha-is-news: check_draft.py: `r"|\b[0-9a-f]{7,40}\b", re.I)` => `r"", re.I)`
+  merged-is-news: check_draft.py: `r"|\bmerged\b"` => `r""`
+  ci-is-news: check_draft.py: `r"\bci\b|\bchecks?\b|\btests?\b|\bbuilds?\b|\bgreen\b|\bpass(?:es|ed|ing)?\b|"` => `r""`
+  emoji-is-news: check_draft.py: `rest = EMOJI.sub(" ", rest)` => `pass`
+  mention-is-news: check_draft.py: `MENTION.sub(" ", line)` => `line`
+  react-on-reply-only: check_draft.py: `parents = sorted({args.reply, *args.answers}, key=ts_key) if args.reply else []` => `parents = [args.reply] if args.reply else []`
+  ack-hardcoded: check_draft.py: `ack = cfg["slack"]["ack_reaction"]` => `ack = "white_check_mark"`
+  ack-colons-kept: hub.py: `.strip(":")` => ``
+  long-reply-ok: check_draft.py: `if args.reply and not react and words > REPLY_WORDS:` => `if False:`
+  long-top-level-warned: check_draft.py: `if args.reply and not react and words > REPLY_WORDS:` => `if not react and words > REPLY_WORDS:`
 """
 import contextlib
 import io
@@ -41,7 +60,7 @@ import os
 import unittest
 from unittest import mock
 
-from fakes import CONFIG, Env, Fail, FakeGh, machine_zone
+from fakes import CONFIG, ME, Env, Fail, FakeGh, machine_zone
 
 import check_draft
 import hub
@@ -237,6 +256,97 @@ class Claims(unittest.TestCase):
         rc, out = self.check(f"Two for you, mind taking a look?\n- {LINK}\n", "--asks", "bob", state=approved)
         self.assertEqual(rc, 1, out)
         self.assertIn("line 1: asks bob to review acme/app#12", out)
+
+
+class Restates(unittest.TestCase):
+    """A reply that only restates my own posted review becomes a reaction on the request."""
+    PARENT = "1761040800.000100"
+    LATER = "<https://github.com/acme/app/pull/13|acme/app#13>"
+
+    def check(self, text, *reviews, state="OPEN", where=None, config=CONFIG):
+        pr = {**PR_JSON, "state": state, "reviews": list(reviews)}
+        with Env(config=config) as env:
+            return gate(env, text, *(where or ("--reply", self.PARENT)), gh=fake(pr))
+
+    def test_a_reply_that_only_restates_my_approval_becomes_a_reaction(self):
+        mine = review(ME, "APPROVED")
+        rc, out = self.check(f"Approved {LINK} at abcdef1, no asks. Thanks!\n", mine)
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"send: react white_check_mark on {self.PARENT}", out)
+        self.assertNotIn("send: live", out)
+        self.assertIn("FAIL: line 1 restates your review of acme/app#12 (APPROVED at abcdef1), which GitHub already "
+                      "shows", out)
+        rc, out = self.check(f"<@user-bob> {LINK}\n\nApproved at `abcdef1`, CI green :white_check_mark:\n", mine)
+        self.assertEqual(rc, 1, "the PR on one line, the restatement on another: " + out)
+        self.assertIn("FAIL: line 3 restates", out)
+        rc, out = self.check(f"Approved {LINK}, no asks.\n", mine, where=("--top-level",))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("send: react white_check_mark on the message that asked for each review; none in Slack: "
+                      "drop it", out)
+
+    def test_every_message_answered_gets_the_configured_reaction(self):
+        older = "1761037200.000050"
+        cfg = CONFIG.replace('my_user_id = "user-me"', 'my_user_id = "user-me"\nack_reaction = ":github-check-mark:"')
+        rc, out = self.check(f"Approved {LINK}, no asks.\n", review(ME, "APPROVED"), config=cfg,
+                             where=("--reply", self.PARENT, "--answers", self.PARENT, older))
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"send: react github-check-mark on {older} {self.PARENT}\n", out)
+
+    def test_a_restatement_that_carries_more_passes(self):
+        mine = review(ME, "APPROVED")
+        rc, out = self.check(f"Approved {LINK} at abcdef1, no asks. Please merge it after {self.LATER}. Thanks!\n", mine)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("send: live", out)
+        self.assertNotIn("restates", out)
+        rc, out = self.check(f"Approved {LINK}; good to go on your side?\n", mine)
+        self.assertEqual(rc, 0, "a question: " + out)
+        rc, out = self.check(f"Approved {LINK} at abcdef1, no asks.\nPlease merge it after {self.LATER}.\n", mine)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WARN: line 1 restates your review of acme/app#12 (APPROVED at abcdef1): cut it", out)
+        self.assertIn("PASS", out)
+        rc, out = self.check(f"Please merge these in order:\n1. {self.LATER}\n2. {LINK}\n", mine)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("restates", out, "a bare link says nothing either way")
+
+    def test_an_ask_to_another_reviewer_is_left_to_the_ask_check(self):
+        cfg = CONFIG + '\n[slack.github_logins]\n"user-bob" = "bob"\n'
+        mine = review(ME, "APPROVED")
+        rc, out = self.check(f"<@user-bob> please review {LINK} too, thanks\n", mine, config=cfg)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("restates", out)
+        rc, out = self.check(f"<@user-bob> please review {LINK} too, thanks\n", mine, review("bob", "APPROVED"), config=cfg)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("asks bob to review acme/app#12, which they already reviewed", out)
+        self.assertIn("send: live", out)
+
+    def test_without_a_review_of_mine_nothing_is_restated(self):
+        for reviews in ([review("carol", "APPROVED")], [review(ME, "COMMENTED")], []):
+            rc, out = self.check(f"Approved {LINK} at abcdef1, no asks.\n", *reviews)
+            self.assertEqual(rc, 0, f"{reviews}: {out}")
+            self.assertNotIn("restates", out)
+
+    def test_my_approval_of_an_older_head_is_news(self):
+        rc, out = self.check(f"Approved {LINK} at 0123456, no asks.\n", review(ME, "APPROVED", oid="0123456789"))
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("restates", out)
+
+    def test_a_pr_merged_after_my_review_is_restated(self):
+        rc, out = self.check(f"Approved {LINK}, merged. Thanks!\n", review(ME, "APPROVED", oid="0123456789"),
+                             state="MERGED")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("FAIL: line 1 restates your review of acme/app#12 (APPROVED at 0123456)", out)
+
+
+class Length(unittest.TestCase):
+    def test_a_thread_reply_over_60_words_warns_and_still_passes(self):
+        with Env() as env:
+            rc, out = gate(env, " ".join(["word"] * 61) + "\n", "--reply", "1761040800.000100", gh=fake())
+            self.assertEqual(rc, 0, out)
+            self.assertIn("WARN: 61 words, over 60 for a thread reply", out)
+            rc, out = gate(env, " ".join(["word"] * 60) + "\n", "--reply", "1761040800.000100", gh=fake())
+            self.assertNotIn("WARN", out)
+            rc, out = gate(env, " ".join(["word"] * 61) + "\n", "--top-level", gh=fake())
+            self.assertNotIn("WARN", out, "a top-level message is not a reply to a request")
 
 
 class SendMode(unittest.TestCase):

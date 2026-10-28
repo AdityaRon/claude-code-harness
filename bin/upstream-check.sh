@@ -53,10 +53,54 @@ TMP=$(cd "$TMP" && pwd)   # macOS TMPDIR ends in /; the CLI prints the path with
 # the doctor probes below run inside $( ), so it would delete the temp directory
 # out from under the rest of the run. bash 3.2 (macOS) has no BASHPID to guard on,
 # so clean up explicitly through finish() instead.
-trap 'rm -rf "$TMP"; exit 130' INT TERM
-finish(){ rm -rf "$TMP"; exit "$1"; }
+trap 'untrust_dirs; rm -rf "$TMP"; exit 130' INT TERM
+finish(){ untrust_dirs; rm -rf "$TMP"; exit "$1"; }
 
 strip_ansi(){ sed $'s/\033\\[[0-9;]*m//g'; }
+
+# Each probe writes settings.json into a disposable directory nobody has ever
+# interactively trusted, so the CLI's workspace-trust gate ignores every
+# permissions.allow entry there and reports it ("this workspace has not been
+# trusted") -- noise that has nothing to do with whether the settings CONTENT
+# is valid, and would fire for any settings.json at all, including an empty
+# one. It is also not representative: this harness ships settings.json at USER
+# scope (~/.claude/settings.json, see install.sh), which the trust dialog does
+# not gate at all. Pre-trusting each probe directory the same way the CLI's own
+# message says to -- projects[dir].hasTrustDialogAccepted in ~/.claude.json --
+# keeps section 1 testing validity instead of a gate the real deployment never
+# hits. Skipped under test (CLAUDE_DOCTOR_CMD set): the stub doesn't consult
+# trust state, and this would otherwise mutate a real developer's ~/.claude.json
+# for no reason. Best-effort and reversed via untrust_dirs(): a machine with no
+# ~/.claude.json yet, or a jq failure, just leaves section 1 as noisy as before.
+GLOBAL_CONFIG=${CLAUDE_USER_CONFIG:-$HOME/.claude.json}
+TRUSTED_DIRS=""
+trust_dir(){
+  [ -n "${CLAUDE_DOCTOR_CMD:-}" ] && return
+  [ -f "$GLOBAL_CONFIG" ] || return
+  local dir=$1 out
+  out=$(mktemp "${TMPDIR:-/tmp}/cch-cfg.XXXXXX") || return
+  if jq --arg d "$dir" '.projects[$d].hasTrustDialogAccepted = true' "$GLOBAL_CONFIG" >"$out" 2>/dev/null; then
+    mv "$out" "$GLOBAL_CONFIG"
+    TRUSTED_DIRS="$TRUSTED_DIRS$dir
+"
+  else
+    rm -f "$out"
+  fi
+}
+untrust_dirs(){
+  [ -n "${CLAUDE_DOCTOR_CMD:-}" ] && return
+  [ -f "$GLOBAL_CONFIG" ] || return
+  local dir out
+  printf '%s' "$TRUSTED_DIRS" | while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    out=$(mktemp "${TMPDIR:-/tmp}/cch-cfg.XXXXXX") || continue
+    if jq --arg d "$dir" 'del(.projects[$d])' "$GLOBAL_CONFIG" >"$out" 2>/dev/null; then
+      mv "$out" "$GLOBAL_CONFIG"
+    else
+      rm -f "$out"
+    fi
+  done
+}
 
 # `claude doctor` validates the settings file in its *current directory*
 # (the global --settings flag does not retarget it), so each probe needs its own
@@ -65,6 +109,7 @@ doctor_run(){
   local dir=$1 json=$2
   mkdir -p "$dir/.claude"
   printf '%s' "$json" > "$dir/.claude/settings.json"
+  trust_dir "$dir"
   ( cd "$dir" && eval "$DOCTOR_CMD" 2>&1 ) | strip_ansi
 }
 
