@@ -6,6 +6,20 @@ the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
 installed machine to the newest tag.
 
+## v1.1.7 (2026-10-28)
+
+Merged since v1.1.6: 4 PRs.
+
+### Other
+- upstream-check: probes trust their directory in a config dir of their own (#145)
+- Claude opens its own PRs, and Upstream drift sends a breakage to Claude to fix (#143)
+- fix: don't flag workspace-trust noise as upstream breakage; assess 2.1.311 (#142)
+- comms-hub: a panel beside the comms session with held drafts and today's log (#141)
+
+### Benchmark vs v1.1.6
+
+hooks/ and config/settings.json are unchanged since v1.1.6; benchmark skipped (both sides would run the same files).
+
 ## v1.1.6 (2026-10-27)
 
 Merged since v1.1.5: 1 PR.
