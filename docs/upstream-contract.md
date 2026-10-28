@@ -60,8 +60,15 @@ matches the section 6 filter (1 of the 21 releases 2.1.280 to 2.1.302), it moves
 `last_verified_version` itself. Otherwise Claude reviews the releases and edits only
 `upstream-contract.json`, once per release. A PR whose body starts with `Nothing to
 decide.` is opened ready and merged by the workflow once its CI passes; one that
-starts with `Decide:` is a **draft** assigned to you, with new
-settings and anything touching deny, ask or a guard as questions, never as changes.
+starts with `Decide:` is a **draft** assigned to you, with its questions, never
+changes. Not adopting is the default, so a review asks only when a release changes
+something a hook, a guard or `config/settings.json` relies on; adds a tool that can
+run commands, write files or reach the network with no PreToolUse matcher naming
+it; loosens a default the settings do not pin; or does something Claude cannot
+read. A new opt-in setting, environment variable or hook event is recorded as not
+set and listed under `Could adopt:` in the PR that lands. Until 2026-10-28 every
+new setting was a question, and all 6 reviews from 2.1.304 to 2.1.312 waited as
+drafts.
 Landing on its own needs a branch rule `github-actions` can satisfy; as of 2026-10-17
 `main` needs no approval and requires the `doctor.sh` and `shellcheck` checks.
 GitHub holds the `pull_request` runs on a PR `github-actions` opens, since the

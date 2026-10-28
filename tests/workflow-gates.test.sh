@@ -50,6 +50,37 @@ case_ "an app token in an added line is refused" 1 app_token_added
 case_ "a fixture token the fix left alone publishes" 0 fixture_kept
 
 echo ""
+echo "=== Upstream drift: a review lands unread only when it says Nothing to decide ==="
+# The block from `LAND=false` to the title it picks after.
+awk '/^          LAND=false$/{on=1} on && /^          if \[ "\$MODE" = bump \]; then$/{exit} on' "$DRIFT" \
+  | sed 's/^          //' > "$TMP/land.sh"
+echo 'echo "$LAND"' >> "$TMP/land.sh"
+if grep -q 'head -n1 pr-body.md' "$TMP/land.sh"; then pass "the land gate is in $DRIFT"; else fail "the land gate is in $DRIFT" "not found"; fi
+
+land_() {  # name, expected LAND, mode, check exit after, pr-body.md text ('' for none), a function that edits the contract
+  local d="$TMP/land.$PASS.$FAIL" got
+  mkdir -p "$d/config" && cd "$d" || return
+  git init -q && git config user.email t@t && git config user.name t
+  printf '{"acknowledged_hook_events":["Stop"],"acknowledged_surface":{"tools":{"Monitor":"x"},"settings_keys":{}},"upstream_features_that_overlap_this_harness":{},"notes_on_unused_events":{},"expected_default_mode":"auto","memory_index_limits":{"lines":200}}\n' > config/upstream-contract.json
+  git add -A && git commit -qm base
+  [ -z "$5" ] || printf '%s\n' "$5" > pr-body.md
+  "$6"
+  got=$(MODE=$3 AFTER=$4 bash "$TMP/land.sh" 2>/dev/null | tail -1)
+  cd "$ROOT" || return
+  if [ "$got" = "$2" ]; then pass "$1"; else fail "$1" "LAND=$got, want $2"; fi
+}
+entry_added(){ jq '.upstream_features_that_overlap_this_harness.new = "y"' config/upstream-contract.json > c && mv c config/upstream-contract.json; }
+entry_dropped(){ jq 'del(.acknowledged_surface.tools.Monitor)' config/upstream-contract.json > c && mv c config/upstream-contract.json; }
+land_ "a bump lands" true bump 0 "" entry_added
+land_ "a review that says Nothing to decide lands" true draft 0 "Nothing to decide." entry_added
+land_ "a review that says Decide waits" false draft 0 "Decide: whether Monitor needs a guard." entry_added
+land_ "a review the check still flags waits" false draft 2 "Nothing to decide." entry_added
+land_ "a fix waits whatever its body says" false fix 0 "Nothing to decide." entry_added
+land_ "a review that drops a recorded decision waits" false draft 0 "Nothing to decide." entry_dropped
+land_ "only the first line counts" false draft 0 "Decide: x
+Nothing to decide." entry_added
+
+echo ""
 echo "=== claude.yml: the PR takes the title and body from Claude's Create PR link ==="
 # The python between `python3 - "$BRANCH" <<'PY'` and `PY`.
 awk '/python3 - "\$BRANCH" <<'"'"'PY'"'"'$/{on=1; next} on && /^          PY$/{exit} on' "$CLAUDE_WF" \
