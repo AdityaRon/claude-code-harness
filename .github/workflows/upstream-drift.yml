@@ -174,6 +174,12 @@ jobs:
             --allowedTools "Read(./**),Edit(config/upstream-contract.json),Edit(pr-body.md),Bash(bash bin/upstream-check.sh)"
             --disallowedTools "WebFetch,WebSearch,mcp__github,mcp__github_comment,mcp__github_file_ops,mcp__github_inline_comment,mcp__github_ci"
             --setting-sources project
+          # Not adopting is the default, so "could the harness use this?" is not a
+          # question for the owner. The old rule made every new setting a Decide,
+          # and Claude Code adds one most days: all 6 reviews from 2.1.304 to
+          # 2.1.312 (#115 to #146) opened as drafts, and the 5 merged by
+          # 2026-10-28 waited 6.6 to 18.5 hours, then merged with no commit added
+          # (gh pr view).
           prompt: |
             Claude Code ${{ steps.plan.outputs.cur }} is newer than the release this
             harness was verified at. drift.log is the output of bin/upstream-check.sh;
@@ -195,19 +201,33 @@ jobs:
             listed release. Keep the file's existing formatting.
 
             Do not change anything else. Never loosen a deny rule, an ask rule or a
-            guard, and do not adopt a new setting; those are the owner's call. Put
-            them in the PR body as questions instead.
+            guard, and do not adopt a new setting; those are the owner's call.
 
             When done, `bash bin/upstream-check.sh` must exit 0.
 
-            Write pr-body.md. Its first line is exactly `Nothing to decide.` when no
-            question remains, or `Decide: <one sentence naming what the owner must
-            decide>` when one does. A PR that starts with `Nothing to decide.` is
-            merged without anyone reading it, so a setting the harness might adopt,
-            an overlap with a guard, or a hook event it might hook is always a
-            Decide. Then one line per release reviewed with its verdict, then the
-            numbered questions for the owner, each with the fact needed to decide.
-            No em dashes.
+            Write pr-body.md. A PR whose first line is exactly `Nothing to decide.`
+            is merged once CI passes, without anyone reading it; one whose first
+            line is `Decide: <one sentence naming what the owner must decide>`
+            waits for the owner. Not adopting is the default, so an option the
+            harness could take up is not, by itself, a decision. Decide only when:
+            - the release changes or removes something a hook, a guard or
+              config/settings.json relies on;
+            - a new tool, or a new mode of an existing one, can run commands, write
+              files or reach the network, and no PreToolUse matcher in
+              config/settings.json names it;
+            - an upstream default now lets a session do more without asking, and
+              config/settings.json does not pin it;
+            - you cannot tell what an entry does to this harness.
+            Everything else is recorded as not set: a new opt-in setting or
+            environment variable, a new hook event, a key that loosens something
+            only when set, an overlap with audit.sh, or a question the contract
+            already answers (no telemetry exporter, first-party only, no model
+            variables, autoMode.environment and the sandbox left off).
+
+            After the first line: one line per release reviewed with its verdict;
+            for a Decide, the numbered questions, each with the fact needed to
+            decide; then `Could adopt:`, one line per option recorded as not set
+            and why the owner might want it, or `none`. No em dashes.
 
       # Exit 1: something the harness relies on moved. Claude may edit the
       # harness's own code and tests as well as the contract, and run the tests,
