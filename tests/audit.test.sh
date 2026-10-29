@@ -171,6 +171,9 @@ grep -qF "| GUARD | deny | env-guard | cat .env |" "$CLAUDE_AUDIT_LOG" \
 guard network-guard.sh '{"tool_name":"WebFetch","tool_input":{"url":"https://evil.example/x"}}'
 grep -qF "| GUARD | ask | network-guard | https://evil.example/x |" "$CLAUDE_AUDIT_LOG" \
   && pass "ask logged with the URL" || fail "ask logged with the URL" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
+guard network-guard.sh '{"tool_name":"Monitor","tool_input":{"ws":{"url":"wss://evil.example/feed"}}}'
+grep -qF "| GUARD | ask | network-guard | wss://evil.example/feed |" "$CLAUDE_AUDIT_LOG" \
+  && pass "a monitor's ask logged with its ws URL" || fail "a monitor's ask logged with its ws URL" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
 SECRET="AKIA""Q3EGW7PZJ4XN2KHM"
 guard secret-scanner.sh "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/k.ts\",\"content\":\"$SECRET\"}}"
 grep -qF "| GUARD | deny | secret-scanner | /tmp/k.ts |" "$CLAUDE_AUDIT_LOG" \
@@ -219,6 +222,25 @@ run '{"hook_event_name":"PostToolUse","tool_name":"NotebookEdit","tool_input":{"
 grep -qF "| NotebookEdit | /tmp/n.ipynb |" "$CLAUDE_AUDIT_LOG" && pass "notebook path logged" || fail "notebook path logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
 jq -e '[.hooks.PostToolUse[] | select(any(.hooks[]; .command | test("audit.sh"))) | .matcher] | any(test("NotebookEdit") and test("MultiEdit"))' config/settings.json >/dev/null 2>&1 \
   && pass "audit is wired on MultiEdit and NotebookEdit" || fail "audit matcher" "$(jq -c '[.hooks.PostToolUse[].matcher]' config/settings.json)"
+
+echo ""
+echo "=== a monitor is logged by its command or its ws URL, ran or denied ==="
+run '{"hook_event_name":"PostToolUse","tool_name":"Monitor","tool_input":{"command":"tail -f build.log","description":"DESCSECRET3"}}'
+grep -qF "| Monitor | tail -f build.log |" "$CLAUDE_AUDIT_LOG" && pass "monitor command logged" || fail "monitor command logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+run '{"hook_event_name":"PostToolUse","tool_name":"Monitor","tool_input":{"ws":{"url":"wss://feed.example/events"}}}'
+grep -qF "| Monitor | ws wss://feed.example/events |" "$CLAUDE_AUDIT_LOG" && pass "monitor ws URL logged" || fail "monitor ws URL logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+run '{"hook_event_name":"PostToolUse","tool_name":"Monitor","tool_input":{}}'
+grep -qF "| Monitor | unknown |" "$CLAUDE_AUDIT_LOG" && pass "sourceless monitor still recorded" || fail "sourceless monitor still recorded" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+run '{"hook_event_name":"PermissionDenied","tool_name":"Monitor","tool_input":{"command":"sleep 9; rm -rf /tmp/x"},"denial_reason":"Blocked by classifier"}'
+grep -qF "| DENIED | Monitor | sleep 9; rm -rf /tmp/x | Blocked by classifier |" "$CLAUDE_AUDIT_LOG" \
+  && pass "denied monitor command logged" || fail "denied monitor command logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+run '{"hook_event_name":"PermissionDenied","tool_name":"Monitor","tool_input":{"ws":{"url":"wss://feed.example/x"}}}'
+grep -qF "| DENIED | Monitor | wss://feed.example/x |" "$CLAUDE_AUDIT_LOG" \
+  && pass "denied monitor ws URL logged" || fail "denied monitor ws URL logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+grep -qF DESCSECRET3 "$CLAUDE_AUDIT_LOG" && fail "monitor description stays out of the log" "" || pass "monitor description stays out of the log"
+jq -e '[.hooks.PostToolUse[] | select(any(.hooks[]; .command | test("audit.sh"))) | .matcher] | any(. as $m | "Monitor" | test("^(" + $m + ")$"))' \
+  config/settings.json >/dev/null 2>&1 \
+  && pass "audit is wired on Monitor" || fail "audit matcher" "$(jq -c '[.hooks.PostToolUse[].matcher]' config/settings.json)"
 
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

@@ -13,9 +13,10 @@ it is written before the session exits.
 |---|---|---|
 | `audit` | PostToolUse → Edit/MultiEdit/Write/NotebookEdit | Logs every file Claude touches |
 | `audit` | PostToolUse → Bash | Logs every Bash command Claude runs (sanitized to one line) |
+| `audit` | PostToolUse → Monitor | Logs each monitor's command, or `ws <url>` for a WebSocket one, never its description |
 | `audit` | PostToolUseFailure | Logs failed tool calls with error summary |
 | guards | PreToolUse deny / ask | Every guard decision is one line, `GUARD \| deny\|ask \| <hook> \| <command, path or URL>`, never file content. A denied call never reaches PostToolUse, so without it the harness's own blocks left no record: `grep ' | GUARD | ' ~/.claude/logs/audit.log`. A call a [mod](known-limitations.md) answers itself reaches neither the guards nor PostToolUse, so it leaves no line at all. |
-| `audit` | PermissionDenied | Logs a call auto mode refused: `DENIED \| <tool> \| <command or path> \| <reason>`. Log-only: it emits no `retry`, so the denial stands. |
+| `audit` | PermissionDenied | Logs a call auto mode refused: `DENIED \| <tool> \| <command, ws URL or path> \| <reason>`. Log-only: it emits no `retry`, so the denial stands. |
 | `audit` | PostModelSwitch | Logs `model_switch \| <from> -> <to>` when a session changes model, since no other line records which model was running. |
 | `audit` | ConfigChange | Logs any settings file modified mid-session |
 | `audit` | PostToolUse → `mcp__.*` | Logs every MCP tool call: the tool name and the *names* of the fields it was called with, never their values (a `send_message` payload carries the message body). No PreToolUse guard inspects MCP calls, so this line is the only record one happened. It is a census, not a control: read it with `grep ' | mcp__' ~/.claude/logs/audit.log` to see which connectors actually get used before deciding what to guard. |

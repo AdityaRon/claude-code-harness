@@ -111,6 +111,17 @@ file_is allow Write "$HOME/.claude/projects/x/memory/MEMORY.md"
 file_is allow Edit "$TMP/proj/hooks/env-guard.sh"
 file_is allow Write "$HOME/.claude/jobs/abc/tmp/x.sh"
 
+echo "=== a monitor's command is checked as a Bash command ==="
+monitor_is() {   # monitor_is WANT TOOL-INPUT-JSON
+  local got; got=$(verdict Monitor "$2")
+  if [[ "$got" == "$1" ]]; then echo "  OK ($1): Monitor $2"; PASS=$((PASS+1))
+  else echo "  FAIL: want $1, got $got: Monitor $2"; FAIL=$((FAIL+1)); fi
+}
+monitor_is ask '{"command":"sleep 300; cp /srv/x.sh ~/.claude/hooks/env-guard.sh"}'
+monitor_is ask '{"command":"echo export A=1 >> ~/.zshrc"}'
+monitor_is allow '{"command":"tail -f ~/.claude/audit.log"}'
+monitor_is allow '{"ws":{"url":"wss://github.com/o/r"}}'
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

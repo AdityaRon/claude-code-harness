@@ -420,7 +420,7 @@ head_utf8() {
 log_decision() {
   local target=""
   command -v jq &>/dev/null && target=$(printf '%s' "$INPUT" \
-    | jq -j '.tool_input | .command // .file_path // .path // .notebook_path // .url // ""' 2>/dev/null \
+    | jq -j '.tool_input | .command // .file_path // .path // .notebook_path // .url // .ws.url // ""' 2>/dev/null \
     | tr '\n\t' '  ' | head_utf8 200)
   log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | GUARD | $1 | $(basename "$0" .sh) | ${target:-unknown} | $PWD"
 }

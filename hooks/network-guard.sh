@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Network egress guard.
 #
-# Fires on: PreToolUse → Bash (for curl/wget), and PreToolUse → WebFetch.
+# Fires on: PreToolUse → Bash and Monitor (for curl/wget, and a monitor's ws
+# URL), and PreToolUse → WebFetch.
 #
 # Policy:
 #   • GET to an allowlisted domain   → silent allow
@@ -139,6 +140,19 @@ extract_host() {
     | tr '[:upper:]' '[:lower:]'
 }
 
+# A monitor's `ws` source opens a WebSocket itself: the WebFetch rule, for its
+# host. An allowed one falls through, so a command sent alongside is still checked.
+if [[ "$TOOL" == Monitor ]]; then
+  URL=$(jq_get '.tool_input.ws.url')
+  if [[ -n "$URL" ]]; then
+    HOST=$(extract_host "$URL")
+    if ! host_allowed "$HOST"; then
+      emit_ask "A monitor opening a WebSocket to $HOST is outside the default allowlist. Confirm the endpoint is safe (no secrets in the path/query).$(add_hint "$HOST")"
+      exit 0
+    fi
+  fi
+fi
+
 case "$TOOL" in
   WebFetch)
     URL=$(jq_get '.tool_input.url')
@@ -150,7 +164,7 @@ case "$TOOL" in
     emit_ask "WebFetch to $HOST is outside the default allowlist. Confirm the URL is safe (no secrets in the path/query).$(add_hint "$HOST")"
     exit 0
     ;;
-  Bash)
+  Bash|Monitor)
     CMD=$(jq_get '.tool_input.command')
     [[ -z "$CMD" ]] && exit 0
     # Every check below needs one of these words. Normalizing drops quotes,

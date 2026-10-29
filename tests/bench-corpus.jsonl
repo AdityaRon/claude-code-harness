@@ -485,3 +485,8 @@
 {"id": "webfetch-mdn", "tool_name": "WebFetch", "tool_input": {"url": "https://developer.mozilla.org/en-US/docs/Web/API/fetch", "prompt": "summarize the page"}, "source": "synthetic"}
 {"id": "webfetch-pypi", "tool_name": "WebFetch", "tool_input": {"url": "https://pypi.org/project/requests/", "prompt": "summarize the page"}, "source": "synthetic"}
 {"id": "webfetch-github-repo", "tool_name": "WebFetch", "tool_input": {"url": "https://github.com/org/repo/blob/main/README.md", "prompt": "summarize the page"}, "source": "synthetic"}
+{"id": "monitor-tail-log", "tool_name": "Monitor", "tool_input": {"command": "tail -f build.log | grep --line-buffered ERROR", "description": "build errors", "timeout_ms": 600000}, "source": "synthetic"}
+{"id": "monitor-rm-home", "tool_name": "Monitor", "tool_input": {"command": "sleep 60; rm -rf ~/", "description": "cleanup", "timeout_ms": 120000}, "source": "synthetic"}
+{"id": "monitor-curl-unlisted", "tool_name": "Monitor", "tool_input": {"command": "while true; do curl -s https://status.unlisted.example/poll; sleep 30; done", "description": "status poll", "timeout_ms": 600000}, "source": "synthetic"}
+{"id": "monitor-ws-unlisted", "tool_name": "Monitor", "tool_input": {"ws": {"url": "wss://feed.unlisted.example/events"}, "description": "event feed", "timeout_ms": 600000}, "source": "synthetic"}
+{"id": "monitor-ws-github", "tool_name": "Monitor", "tool_input": {"ws": {"url": "wss://github.com/org/repo/events"}, "description": "repo events", "timeout_ms": 600000}, "source": "synthetic"}
