@@ -256,7 +256,9 @@ whole context.
      are unknown. Use the date filter: an epoch filter once returned 0, and an
      empty result is ambiguous. An empty search counts as quiet only when the
      same query from `PY B/hub.py queries --control` (a week further back)
-     returns rows; ask for the smallest page, since one row proves it. Empty
+     returns rows that pass the same checks (its header names the query; for
+     the bare search, a row holds `<@my_user_id>`): a misfired control returns
+     rows too. Ask for the smallest page, since one such row proves it. Empty
      too, the search is not working, so say mentions are unknown, never quiet. The newest hit of each shows how far it
      reached; if it is older than the last tick, say the search may not have
      reached.

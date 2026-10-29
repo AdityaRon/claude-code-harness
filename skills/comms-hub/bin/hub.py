@@ -7,7 +7,9 @@ review state and CI state. Imported by the scripts beside it; run directly:
                       the config path, the state dir, the ids, or what is wrong with the config;
                       and how much context a compaction leaves the comms session, from its
                       transcript (found by its tick prompt, or FILE), with a WARN when the
-                      compact window leaves under 100k tokens to work in
+                      compact window leaves under 100k tokens to work in; a found transcript
+                      last written before this session passed `launch --check` is named as a
+                      stopped session's, not read as this one's
   hub.py log --kind KIND [--ref REF] [--target ID] [--who WHO] [--needs-user] [--corrects ID]
              [--at HH:MM] [--detail TEXT] TEXT
                       one event in today's log: a JSONL row the panel draws, and an .md line.
@@ -506,13 +508,20 @@ def compaction_baseline(path: Path) -> tuple[int, int | None, str]:
     return count, base, when
 
 
-def compaction_lines(cfg: dict, transcript: Path | None) -> list[str]:
+def compaction_lines(cfg: dict, transcript: Path | None, since: dt.datetime | None = None) -> list[str]:
+    """`since`: when this session passed `launch --check`. After a relaunch the
+    newest tick transcript is the stopped session's until the first tick fires,
+    and its figures once read as this session's."""
     window = cfg["session"]["compact_window"]
     if transcript is None:
         return [f"compact: window {window}; no transcript with a 'comms-hub tick' prompt in the last 2 days, "
                 "so what a compaction leaves is unknown (--transcript FILE names one)"]
-    count, base, when = compaction_baseline(transcript)
     where = f"session {transcript.stem[:8]}"
+    if since and dt.datetime.fromtimestamp(transcript.stat().st_mtime, dt.timezone.utc) < since:
+        return [f"compact: window {window}; the newest tick transcript, {where}, was last written before this "
+                f"session passed its launch check at {since.astimezone(zone(cfg)):%H:%M}, so it is a stopped "
+                "session's: what a compaction leaves waits for this session's first tick"]
+    count, base, when = compaction_baseline(transcript)
     if not count:
         return [f"compact: window {window}; {where} has not compacted yet"]
     if base is None:
@@ -1198,13 +1207,14 @@ def main(argv=None, gh: Gh | None = None) -> int:
             print(f"route: {r.get('session')} repos={','.join(r['repos']) or '-'} "
                   f"tickets={','.join(r['tickets']) or '-'} channels={','.join(r['channels']) or '-'}")
         if argv[1:2] == ["--transcript"] and len(argv) == 3:
-            transcript = Path(argv[2])
+            transcript, since = Path(argv[2]), None
         elif argv[1:]:
             print("usage: hub.py config [--transcript FILE]")
             return 2
         else:
             transcript = tick_transcript(projects_root())
-        for line in compaction_lines(cfg, transcript):
+            since = parse_time(_record(cfg, "launch.json").get("checked"))
+        for line in compaction_lines(cfg, transcript, since):
             print(line)
         return 0
     if argv[0] == "queries":
@@ -1334,6 +1344,10 @@ def schedule_cmd(cfg: dict, argv: list[str]) -> int:
         if problems:
             print("restart the comms session with the command `hub.py launch` prints")
             return 1
+        # Step 0 runs this as a session starts: `hub.py config` then knows a tick
+        # transcript last written before it is the stopped session's.
+        state_dir(cfg).mkdir(parents=True, exist_ok=True)
+        (state_dir(cfg) / "launch.json").write_text(json.dumps({"checked": at.isoformat()}) + "\n")
         print("launch: this session has the comms session's compact window and MCP timeout")
         return 0
     cmd = "claude --settings " + shlex_quote(json.dumps({"env": launch_env(cfg)}, separators=(",", ":")))
