@@ -6,6 +6,24 @@ the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
 installed machine to the newest tag.
 
+## v1.1.10 (2026-10-29)
+
+Merged since v1.1.9: 6 PRs.
+
+### Security
+- comms-hub: reviews as a decision list, routed asks, re-looks, PR status in the panel (#158)
+
+### Other
+- comms-hub skill: mention queries go in the search's query field (#161)
+- comms-hub: hub.py park keeps a PR off the panel and the status sections (#160)
+- comms-hub panel: expand to read everything, a text fallback for phones, a waiting PRS line (#159)
+- comms-hub panel: a held draft no longer crashes it; rows cut at 80 (#157)
+- comms-hub: 600k compact window, kindless log lines, cron ticks counted, review cap (#156)
+
+### Benchmark vs v1.1.9
+
+hooks/ and config/settings.json are unchanged since v1.1.9; benchmark skipped (both sides would run the same files).
+
 ## v1.1.9 (2026-10-29)
 
 Merged since v1.1.8: 4 PRs.
