@@ -57,9 +57,13 @@ Nothing here depends on which server it is: step 0 records the tool names.
 3. From the clone: `bash doctor.sh --skill comms-hub`. Every line but the
    session preflight can read ok before the comms session exists.
 4. Start the comms session with the command `PY B/hub.py launch` prints
-   (`claude --settings '…'`): a 150k-token compact window and a 2-minute MCP
-   timeout for this session only. Every tick re-reads the whole context, and
-   the tick's state is on disk, so a small context loses nothing. Exported in
+   (`claude --settings '…'`): a 600k-token compact window and a 2-minute MCP
+   timeout for this session only. A compaction leaves the system prompt,
+   tools, rules and memory behind: 77-94k tokens on one machine, so a 150k
+   window compacted ten times a day. `PY B/hub.py config` prints what the
+   latest compaction left and warns when the window leaves under 100k to work
+   in; `launch --check` fails a session started with any other window, so
+   restart one started before the change. Exported in
    the shell instead, the window loses to the one `~/.claude/settings.json`
    sets. The command also loads the panel (`panel/`, `--plugin-dir`): a pane
    with what needs the user, what goes out and when, what is with other
@@ -143,12 +147,14 @@ whole context.
    running while the laptop sleeps re-writes its whole cache on every wake:
    log `review of <PR> waits for the next window` and spawn nothing. The PR
    stays INBOUND, so a later tick reviews it. Otherwise
-   `PY B/pr_transcript.py owner/repo#N -o <job tmp>/pr-N.md` (its first line
-   is `head:`), then spawn a reviewer with the Agent tool: the pr-review
-   skill, the transcript, `gh pr diff N --repo owner/repo`, and the ask to
-   write findings only, no verdict, to `<job tmp>/review-N.md`, leaving out
-   what another reviewer already raised (the transcript has every review and
-   thread). Then one
+   `PY B/pr_transcript.py owner/repo#N -o <job tmp>/pr-N.md` (it prints
+   `head:` and `review-cap:`), then spawn a reviewer with the Agent tool: the
+   pr-review skill, the transcript, `gh pr diff N --repo owner/repo`, and the
+   ask to write findings only, no verdict, to `<job tmp>/review-N.md`, in at
+   most the `review-cap:` characters (3 of 9 bodies once ran over and were
+   trimmed by hand), leaving out what another reviewer already raised (the
+   transcript has every review and thread), and to hand back at most 5 lines:
+   the findings stay in the file, not in this session's context. Then one
    command, the lint chained to the post with `&&`, never `;` (a `;` once let
    a refused body go out):
    `PY B/review_lint.py <job tmp>/review-N.md --pr owner/repo#N --head <sha> && gh pr review N --repo owner/repo --comment --body-file <job tmp>/review-N.md`.
@@ -295,9 +301,12 @@ whole context.
    After a full scan, `PY B/hub.py window --full-done`. A tick that found
    nothing new anywhere, and holds and schedules nothing, reports one line.
    On the window's first tick (`scan: full (the window's first)`), also
-   `python3 ~/.claude/spend-report.py --since 24h --tick-prompt "comms-hub tick" --max-ticks 5 --max-rewrites 10 --top 3`
+   `python3 ~/.claude/spend-report.py --since 24h --tick-prompt "comms-hub tick" --max-ticks 40 --max-rewrites 10 --top 3 --rewrite-hint "raise session.compact_window, then restart with hub.py launch"`
    and put every ALERT line in the report: what the ticks and their
-   reviewers cost since yesterday.
+   reviewers cost since yesterday. The limit is a day well above normal: 20
+   ticks a day at the $1.36 to $1.42 a tick measured on 2026-10-28 and 10-29
+   come to about $28, so $40 means something ran away (a compaction loop, a
+   reviewer that would not stop), not that a day was busy.
    `PY B/hub.py feedback "<what was corrected>"` for each correction the user
    made this tick to a message or to this protocol: `feedback.md` is the
    backlog for the next change to the skill. Then report to the user: sent,

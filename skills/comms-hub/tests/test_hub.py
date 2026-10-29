@@ -48,7 +48,12 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   live-trigger-unchecked: hub.py: `if live is not None and " ".join(live.split()) != want:` => `if False:`
   trigger-zone-unchecked: hub.py: `if at.astimezone().utcoffset() != at.astimezone(tz).utcoffset():` => `if False:`
   created-expr-unchecked: hub.py: `elif rec.get("expr") != want:` => `elif False:`
-  launch-any-window: hub.py: `if have is None or have > int(want):` => `if have is None:`
+  launch-any-window: hub.py: `if have is None or (have != int(want) if exact else have > int(want)):` => `if have is None:`
+  launch-smaller-window-ok: hub.py: `have != int(want) if exact else` => `have > int(want) if exact else`
+  room-unwarned: hub.py: `if window - base < ROOM_MIN:` => `if False:`
+  baseline-of-the-first-compaction: hub.py: `count, base, when, after = count + 1, None, d.get("timestamp") or "", True` => `count, base, when, after = count + 1, base, when or d.get("timestamp") or "", base is None`
+  subagent-transcript-counts: hub.py: `root.glob("*/*.jsonl")` => `root.glob("**/*.jsonl")`
+  quoted-prompt-counts: hub.py: `if d.get("type") == "user" and isinstance(c, str) and c.strip().startswith(prompt):` => `if True:`
   launch-without-panel: hub.py: `print(cmd + (f" --plugin-dir {shlex_quote(str(panel))}" if panel else ""))` => `print(cmd)`
   days-unvalidated: hub.py: `or any(d not in DAYS for d in a["days"]):` => `or False:`
   mid-hour-window: hub.py: `if not re.fullmatch(r"([01]\d|2[0-3]):00|24:00", str(a[k]))` => `if False`
@@ -506,13 +511,17 @@ class ActiveHours(unittest.TestCase):
             self.assertEqual(len(zone), 1)
             self.assertIn("UTC+0000", zone[0])
 
-    def test_the_launch_check_wants_the_small_window_and_a_timeout(self):
+    def test_the_launch_check_wants_the_configured_window_and_a_timeout(self):
         c = self.cfg()
-        ok = {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150k", "MCP_TOOL_TIMEOUT": "60000"}
+        ok = {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "600k", "MCP_TOOL_TIMEOUT": "60000"}
         self.assertEqual(hub.launch_problems(c, ok), [])
-        self.assertEqual(len(hub.launch_problems(c, {**ok, "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "600000"})), 1)
-        self.assertEqual(len(hub.launch_problems(c, {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150000"})), 1)
-        settings = "claude --settings '{\"env\":{\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\":\"150000\",\"MCP_TOOL_TIMEOUT\":\"120000\"}}'"
+        # A session still at the old 150k compacted ten times a day and passed a `want or less` check.
+        self.assertEqual(hub.launch_problems(c, {**ok, "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150000"}),
+                         ["CLAUDE_CODE_AUTO_COMPACT_WINDOW is 150000 in this session, want 600000"])
+        self.assertEqual(len(hub.launch_problems(c, {**ok, "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "800000"})), 1)
+        self.assertEqual(len(hub.launch_problems(c, {**ok, "MCP_TOOL_TIMEOUT": "300000"})), 1)
+        self.assertEqual(len(hub.launch_problems(c, {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "600000"})), 1)
+        settings = "claude --settings '{\"env\":{\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\":\"600000\",\"MCP_TOOL_TIMEOUT\":\"120000\"}}'"
         with Env(), mock.patch.object(hub, "panel_dir", return_value=None):
             rc, out = main_out("launch")
         self.assertEqual(rc, 0)
@@ -521,6 +530,76 @@ class ActiveHours(unittest.TestCase):
             rc, out = main_out("launch")
         self.assertEqual(out.strip(), settings + " --plugin-dir /home/me/.claude/skills/comms-hub/panel",
                          "the panel loads into the comms session alone")
+
+
+class Compaction(unittest.TestCase):
+    """What a compaction leaves the comms session: 150k compacted at ~118k with
+    77-94k back each time, so ten compactions in a day."""
+
+    def transcripts(self, root):
+        import json as _json
+        import time as _time
+        root = root / "projects"
+
+        def write(rel, rows, age):
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("".join(_json.dumps(r) + "\n" for r in rows))
+            t = _time.time() - age
+            os.utime(p, (t, t))
+            return p
+
+        tick = {"type": "user", "isMeta": True, "scheduledFireId": "f1",
+                "message": {"role": "user", "content": "comms-hub tick"}}
+        boundary = lambda ts: {"type": "system", "subtype": "compact_boundary", "timestamp": ts,  # noqa: E731
+                               "compactMetadata": {"trigger": "auto", "postTokens": 9000}}
+        usage = lambda read, write_: {"type": "assistant", "message": {"id": "m", "usage": {  # noqa: E731
+            "input_tokens": 2, "cache_read_input_tokens": read, "cache_creation_input_tokens": write_}}}
+        old = write("proj/old.jsonl", [tick, boundary("2026-10-28T09:00:00Z"), usage(30_000, 20_000)], 3600)
+        new = write("proj/new.jsonl", [tick, boundary("2026-10-29T09:00:00Z"), usage(30_000, 20_000),
+                                       boundary("2026-10-29T10:00:00Z"), usage(60_000, 34_000), usage(90_000, 1_000)],
+                    600)
+        # Newer than both, and each holds the prompt: a reviewer's own transcript, and a
+        # tool result (a user record) quoting it, as a grep of a transcript would.
+        write("proj/new/subagents/agent-a1.jsonl", [tick], 60)
+        write("proj/quote.jsonl", [{"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "comms-hub tick"}]}}], 30)
+        return old, new
+
+    def test_the_comms_transcript_is_found_by_its_tick_prompt_alone(self):
+        with Env() as env:
+            old, new = self.transcripts(env.dir)
+            self.assertEqual(hub.tick_transcript(env.dir / "projects"), new)
+            self.assertIsNone(hub.tick_transcript(env.dir / "projects", days=0))
+
+    def test_the_latest_compaction_sets_the_baseline(self):
+        with Env() as env:
+            _, new = self.transcripts(env.dir)
+            self.assertEqual(hub.compaction_baseline(new), (2, 94_002, "2026-10-29T10:00:00Z"))
+
+    def test_a_window_that_leaves_under_100k_warns(self):
+        with Env() as env:
+            _, new = self.transcripts(env.dir)
+            env.config.write_text(env.config.read_text() + "\n[session]\ncompact_window = 150000\n")
+            small = hub.compaction_lines(hub.load_config(), new)
+            self.assertIn("left 94k, so 55k to work in", small[0])
+            self.assertTrue(small[1].startswith("WARN: under 100k to work in after a compaction"), small)
+            env.config.write_text(env.config.read_text().replace("150000", "600000"))
+            big = hub.compaction_lines(hub.load_config(), new)
+            self.assertEqual(len(big), 1, big)
+            self.assertIn("so 505k to work in", big[0])
+            self.assertIn("not compacted yet",
+                          hub.compaction_lines(hub.load_config(), env.dir / "projects" / "proj" / "quote.jsonl")[0])
+            self.assertIn("no transcript", hub.compaction_lines(hub.load_config(), None)[0])
+
+    def test_config_prints_it(self):
+        with Env() as env:
+            self.transcripts(env.dir)
+            out = io.StringIO()
+            with mock.patch.object(hub, "projects_root", return_value=env.dir / "projects"), \
+                    contextlib.redirect_stdout(out):
+                self.assertEqual(hub.main(["config"]), 0)
+            self.assertIn("compact: window 600000; session new compacted 2x", out.getvalue())
 
 
 if __name__ == "__main__":

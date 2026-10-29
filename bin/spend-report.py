@@ -106,15 +106,18 @@ def human(d):
 
 
 def prompt_of(d):
-    """(kind, text) of a user record that starts a turn, or None for a tool result."""
+    """(kind, text) of a user record that starts a turn, or None for a tool result.
+    A /loop or cron fire is recorded isMeta with a scheduledFireId: dropping every
+    isMeta prompt counted 0 ticks and $0.00 on every run, so the tick alert never fired."""
     c = (d.get('message') or {}).get('content')
     if isinstance(c, list):
         if not c or not isinstance(c[0], dict) or c[0].get('type') == 'tool_result':
             return None
         c = ' '.join(b.get('text', '') for b in c if isinstance(b, dict) and b.get('type') == 'text')
-    if not isinstance(c, str) or d.get('isMeta') or d.get('isCompactSummary'):
+    if not isinstance(c, str) or (d.get('isMeta') and not d.get('scheduledFireId')) or d.get('isCompactSummary'):
         return None
-    kind = (d.get('origin') or {}).get('kind') or d.get('turnOrigin') or 'unknown'
+    kind = ((d.get('origin') or {}).get('kind') or d.get('turnOrigin')
+            or ('scheduled' if d.get('scheduledFireId') else 'unknown'))
     return kind, ' '.join(c.split())
 
 
@@ -264,7 +267,8 @@ def report(args, now):
     for key, s in list(sessions.items()) + list(subs.items()):
         if args.max_rewrites is not None and s['rewrites'] > args.max_rewrites:
             name = key if isinstance(key, str) else '/'.join(k[:8] for k in key)
-            alerts.append(f"{name[:17]} rewrote its context {s['rewrites']} times, over --max-rewrites {args.max_rewrites}")
+            alerts.append(f"{name[:17]} rewrote its context {s['rewrites']} times, over --max-rewrites {args.max_rewrites}"
+                          + (f"; {args.rewrite_hint}" if args.rewrite_hint else ''))
 
     listed = []
     for (sid, j), tr in turns.items():
@@ -318,6 +322,7 @@ def main(argv=None):
     ap.add_argument('--max-ticks', type=float, metavar='USD')
     ap.add_argument('--max-write-share', type=int, metavar='PCT', help='for a subagent that cost $1 or more')
     ap.add_argument('--max-rewrites', type=int, metavar='N', help='for any one session or subagent')
+    ap.add_argument('--rewrite-hint', metavar='TEXT', help='what to change, appended to each rewrite ALERT')
     args = ap.parse_args(argv)
     try:
         return report(args, dt.datetime.now().astimezone())

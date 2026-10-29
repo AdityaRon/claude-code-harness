@@ -57,9 +57,10 @@ review_margin_minutes = 120    # an INBOUND reviewer does not start this close t
 full_scan_minutes = 120        # watched channels and mention searches: the window's first tick, then this often
 
 [session]
-# What `hub.py launch` starts the comms session with. Its state is on disk, so a
-# small context loses nothing, and every tick re-reads the whole context.
-compact_window = 150000        # tokens, 100000 to 1000000: auto-compaction fires at this size
+# What `hub.py launch` starts the comms session with. A compaction leaves the
+# system prompt, tools, rules and memory behind it: 77-94k tokens on one machine,
+# so 150000 compacted ten times a day. `hub.py config` says what one leaves.
+compact_window = 600000        # tokens, 100000 to 1000000: auto-compaction fires at this size
 mcp_timeout_ms = 120000        # an MCP call that hangs this long fails, and the tick ends
 
 # One table per peer session, once something routes. A PR in one of `repos`, a
