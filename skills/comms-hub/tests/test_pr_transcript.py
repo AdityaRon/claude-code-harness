@@ -5,7 +5,9 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   empty-body-silent: pr_transcript.py: `(body or "").strip() or "(no body)"` => `(body or "").strip()`
   inline-dropped: pr_transcript.py: `for i, c in enumerate(t["comments"]["nodes"]):` => `for i, c in ():`
   partial-ok: pr_transcript.py: `if pr[k]["pageInfo"].get("hasNextPage"):` => `if False:`
-  no-head-line: pr_transcript.py: `lines = [f"head: {pr['headRefOid']}", ` => `lines = [`
+  no-head-line: pr_transcript.py: `lines = [f"head: {pr['headRefOid']}",` => `lines = [`
+  no-cap-line: pr_transcript.py: `f"review-cap: {cap} characters for the review's body (github.review_max_chars); the lint refuses more",` => ``
+  cap-not-printed: pr_transcript.py: `print("\n".join(text.splitlines()[:2]))` => `print(text.splitlines()[0])`
 """
 import contextlib
 import io
@@ -47,6 +49,8 @@ class Transcript(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         lines = out.splitlines()
         self.assertEqual(lines[0], "head: abcdef1234567890")
+        # 3 of 9 reviewers wrote past the cap in one day; the reviewer now reads it here.
+        self.assertTrue(lines[1].startswith("review-cap: 2500 characters for the review's body"), lines[1])
         self.assertIn("# acme/app#7: retry with backoff", lines)
         self.assertIn("Adds backoff.", lines)
         heads = [l for l in lines if l.startswith("### ")]
@@ -60,6 +64,7 @@ class Transcript(unittest.TestCase):
             rc, out = run(env, {"repository": {"pullRequest": pr()}}, "-o", str(env.dir / "pr-7.md"))
             self.assertEqual(rc, 0, out)
             self.assertEqual(out.splitlines()[0], "head: abcdef1234567890")
+            self.assertTrue(out.splitlines()[1].startswith("review-cap: 2500 characters"), out)
             self.assertIn("### ", (env.dir / "pr-7.md").read_text())
 
     def test_more_than_one_page_or_an_unreadable_pr_blocks(self):

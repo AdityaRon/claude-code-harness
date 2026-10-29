@@ -7,8 +7,10 @@ the diff is `gh pr diff`.
   pr_transcript.py owner/repo#N [-o FILE]
 
 The first line is `head: <sha>`, the commit the review is of: pass it to
-review_lint.py --head. A PR with more than one page of comments, reviews or
-threads is refused: a partial transcript reads as complete.
+review_lint.py --head. The second is `review-cap:`, the body's character limit
+the lint holds it to: 3 of 9 reviewers wrote past it on one day, each trimmed
+by hand once the lint refused it. A PR with more than one page of comments,
+reviews or threads is refused: a partial transcript reads as complete.
 Exit 0, or 3 when the PR could not be read in full.
 """
 from __future__ import annotations
@@ -39,9 +41,11 @@ def partial(pr: dict) -> str | None:
     return None
 
 
-def render(ref: str, pr: dict) -> str:
+def render(ref: str, pr: dict, cap: int) -> str:
     who = lambda x: hub.login(x.get("author")) or "a deleted account"  # noqa: E731
-    lines = [f"head: {pr['headRefOid']}", f"# {ref}: {pr['title']}",
+    lines = [f"head: {pr['headRefOid']}",
+             f"review-cap: {cap} characters for the review's body (github.review_max_chars); the lint refuses more",
+             f"# {ref}: {pr['title']}",
              f"{pr['url']} {pr['state']}{' draft' if pr.get('isDraft') else ''} by {who(pr)} opened {pr['createdAt']}",
              "", "## Description", (pr.get("body") or "").strip() or "(no description)", "",
              "## Conversation, oldest first"]
@@ -67,7 +71,7 @@ def main(argv=None, gh=None) -> int:
     ap.add_argument("--config")
     args = ap.parse_args(argv)
     try:
-        hub.load_config(args.config)
+        cfg = hub.load_config(args.config)
         owner, name, number = hub.split_pr(args.pr)
     except (hub.ConfigError, ValueError) as e:
         print(f"config: {e}")
@@ -84,11 +88,11 @@ def main(argv=None, gh=None) -> int:
     if more:
         print(f"BLOCKED: {args.pr} has more than one page of {more}; a partial transcript reads as complete")
         return 3
-    text = render(args.pr, pr)
+    text = render(args.pr, pr, int(cfg["github"]["review_max_chars"]))
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(text)
-        print(text.splitlines()[0])
+        print("\n".join(text.splitlines()[:2]))
         print(f"{len(text.splitlines())} lines -> {args.out}")
     else:
         sys.stdout.write(text)
