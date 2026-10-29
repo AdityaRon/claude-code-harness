@@ -125,10 +125,11 @@ export const register: Register = on => {
             <Text dimColor>{`since ${w.since}`}</Text>
           </Text>
         ))}
-        {section('HELD', p.held, ROWS.held, h => (
+        {/* Never a binding named h: JSX compiles to h(...), and one shadowing it threw on every held draft. */}
+        {section('HELD', p.held, ROWS.held, d => (
           <Text wrap="truncate-end">
-            {`${words(h.ref, h.text, h.target)}  `}
-            <Text dimColor>{h.reason}</Text>
+            {`${words(d.ref, d.text, d.target)}  `}
+            <Text dimColor>{d.reason}</Text>
           </Text>
         ))}
         <Text weight="bold">{p.day ? `SINCE YOU LOOKED (${fresh} new) · ${p.day}` : 'SINCE YOU LOOKED'}</Text>

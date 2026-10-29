@@ -770,8 +770,16 @@ def going_out(cfg: dict) -> list[dict]:
             status, warn = f"gated {checked.astimezone(zone(cfg)):%H:%M} ✓", False
         ref = (s.get("prs") or [""])[0].split(" ")[0]
         out.append({"key": f"going:{p.stem}", "post": _when(cfg, post), "target": target_label(cfg, d.get("to", "")),
-                    "ref": short_ref(cfg, ref), "text": s.get("headline") or d["first"], "status": status, "warn": warn})
+                    "ref": short_ref(cfg, ref), "text": clip(s.get("headline") or d["first"]), "status": status,
+                    "warn": warn})
     return sorted(out, key=lambda g: g["post"])
+
+
+def clip(text: str) -> str:
+    """A draft's first line at the 80 characters a log row's text may hold: a
+    draft written as one paragraph once put ~700 characters in a held row."""
+    text = " ".join((text or "").split())
+    return text if len(text) <= TEXT_MAX else text[:TEXT_MAX - 1].rstrip() + "…"
 
 
 def panel(cfg: dict) -> dict:
@@ -782,7 +790,7 @@ def panel(cfg: dict) -> dict:
         h = _draft(str(p))
         since = dt.datetime.fromtimestamp(p.stat().st_mtime, dt.timezone.utc)
         row = {"key": f"held:{p.stem}", "ref": short_ref(cfg, h["claim"]), "target": target_label(cfg, h.get("to", "")),
-               "text": h["first"]}
+               "text": clip(h["first"])}
         if h.get("needs", "").strip() == "user":
             needs.append({**row, "note": "needs your go", "age": _age(since)})
         else:

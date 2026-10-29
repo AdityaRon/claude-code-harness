@@ -129,6 +129,22 @@ test('the unread dot clears after /comms', async ($, on) => {
   await again.unmount()
 })
 
+// v1.1.9 named the HELD row's parameter `h`, which shadowed the JSX factory:
+// every render with a held draft threw "h is not a function" and drew nothing.
+test('a held draft draws its row', async ($, on) => {
+  const held = { ...PANEL, held: [{ key: 'held:d', ref: 'app #18', target: 'Bob DM', text: 'Merged.',
+                                    reason: 'a fold-in from app-session is expected' }] }
+  world(on, { now: { exitCode: 0, stdout: JSON.stringify(held), stderr: '' } })
+  await $.command.run({ command: 'comms', args: '' })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const out = await texts($, surface)
+    expect(out.some(t => t.includes('HELD (1)'))).toBe(true)
+    expect(out.some(t => t.includes('app #18  Merged.  Bob DM') && t.includes('a fold-in from app-session is expected')))
+      .toBe(true)
+  }
+})
+
 test('a config the scripts refuse is said in the pane', async ($, on) => {
   world(on, { now: { exitCode: 2, stdout: 'config: no config at /home/me/.config/comms-hub/config.toml\n', stderr: '' } })
   await $.command.run({ command: 'comms', args: '' })
