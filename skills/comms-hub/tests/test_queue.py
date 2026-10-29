@@ -40,7 +40,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   reviewed-own-prs: queue.py: `reviewed-by:{me} -author:{me} ` => `reviewed-by:{me} `
   reviewed-unbounded: queue.py: `f"updated:>={cutoff:%Y-%m-%d} {scope(owners)}")` => `f"{scope(owners)}")`
   relook-at-head: queue.py: `if not last or sha == head:` => `if not last:`
-  watched-wins: queue.py: `if ref in details and ref not in reviewed_rows:` => `if ref in details:`
+  watched-wins: queue.py: `if ref in details and ref not in reviewed_rows and ref not in parked:` => `if ref in details and ref not in parked:`
   inbound-wins: queue.py: `for r in inbound if row_ref(r) not in reviewed_rows]),` => `for r in inbound]),`
   need-unchanged: queue.py: `need = 3 + len(authors)` => `need = 2 + len(authors)`
   route-todo-relogged: queue.py: `key = f"route:{r['ref']}:{r['who']}@{r['at']}"` => `key = f"route:{r['ref']}:{r['who']}@{r['at']}:{len(keys)}"`
