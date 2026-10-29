@@ -557,6 +557,7 @@ LOG_KINDS = ("sent", "scheduled", "withdrawn", "reacted", "routed", "returned", 
 # Shown, they would fill the day's events and make a quiet tick read "3 items".
 UNSHOWN = ("scan", "todo", "done")
 TEXT_MAX = 80
+FULL_MAX = 2000  # a draft's whole message in the panel's expanded view
 NOT_TEXT = (
     (re.compile(r"\b[CDGU](?=[A-Z0-9]*\d)[A-Z0-9]{8,}\b"), "a Slack id (pass it as --target)"),
     (re.compile(r"\b\d{10}\.\d{6}\b"), "a thread ts"),
@@ -721,7 +722,7 @@ def _when(cfg: dict, at: dt.datetime) -> str:
 
 
 def _draft(path: str) -> dict:
-    """A draft or sent copy's header fields, and its message's first line."""
+    """A draft or sent copy's header fields, its message's first line, and the message."""
     p = Path(path or "")
     text = p.read_text() if p.is_file() else ""
     head, sep, body = text.partition("\n---\n")
@@ -730,7 +731,7 @@ def _draft(path: str) -> dict:
     fields = dict(re.findall(r"^(to|kind|reason|needs):\s*(.+)$", head, re.M))
     claim = re.search(r"^- (\S+)", head.split("claims:", 1)[1], re.M) if "claims:" in head else None
     first = next((ln.strip() for ln in body.splitlines() if ln.strip()), "")
-    return {**fields, "claim": claim.group(1) if claim else "", "first": first}
+    return {**fields, "claim": claim.group(1) if claim else "", "first": first, "body": body}
 
 
 def next_tick(cfg: dict, at: dt.datetime) -> dt.datetime | None:
@@ -773,7 +774,8 @@ def going_out(cfg: dict) -> list[dict]:
             status, warn = f"gated {checked.astimezone(zone(cfg)):%H:%M} ✓", False
         ref = (s.get("prs") or [""])[0].split(" ")[0]
         out.append({"key": f"going:{p.stem}", "post": _when(cfg, post), "target": target_label(cfg, d.get("to", "")),
-                    "ref": short_ref(cfg, ref), "text": clip(s.get("headline") or d["first"]), "status": status,
+                    "ref": short_ref(cfg, ref), "text": clip(s.get("headline") or d["first"]),
+                    "full": whole(d["body"]), "status": status,
                     "warn": warn})
     return sorted(out, key=lambda g: g["post"])
 
@@ -783,6 +785,13 @@ def clip(text: str) -> str:
     draft written as one paragraph once put ~700 characters in a held row."""
     text = " ".join((text or "").split())
     return text if len(text) <= TEXT_MAX else text[:TEXT_MAX - 1].rstrip() + "…"
+
+
+def whole(text: str) -> str:
+    """A draft's whole message, for the panel's expanded view: read there, not
+    only in Slack. Blank lines kept single, and at most FULL_MAX characters."""
+    text = re.sub(r"\n\s*\n", "\n\n", (text or "").strip())
+    return text if len(text) <= FULL_MAX else text[:FULL_MAX - 1].rstrip() + "…"
 
 
 STATE_WORDS = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes requested", "COMMENTED": "commented",
@@ -870,7 +879,7 @@ def panel(cfg: dict) -> dict:
         h = _draft(str(p))
         since = dt.datetime.fromtimestamp(p.stat().st_mtime, dt.timezone.utc)
         row = {"key": f"held:{p.stem}", "ref": short_ref(cfg, h["claim"]), "target": target_label(cfg, h.get("to", "")),
-               "text": clip(h["first"])}
+               "text": clip(h["first"]), "full": whole(h["body"])}
         if h.get("needs", "").strip() == "user":
             needs.append({**row, "note": "needs your go", "age": _age(since)})
         else:

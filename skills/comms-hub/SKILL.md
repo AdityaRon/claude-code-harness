@@ -71,11 +71,18 @@ Nothing here depends on which server it is: step 0 records the tool names.
    what is held, reviewed, approved and merged over the last five active days,
    and the day's events with a dot on each since the user last looked, from
    `PY B/hub.py panel` as each turn ends, so it costs no tokens (`/comms`
-   opens it again and counts as a look). Keep the machine awake through active
+   opens it again and counts as a look). In expanded view (`e` with the pane
+   focused, or a `+k more` button) it shows every row and each message whole.
+   The phone app docks no pane: there `/comms` answers with the same state as
+   text, and while a phone is attached the counts ride the status line.
+   Keep the machine awake through active
    hours: one that slept ran no tick until 09:55, so nothing re-gated the
    messages scheduled for 08:30, and it woke to a lost login and a DNS
-   failure. On macOS, on power, prefix the launch command with `caffeinate -is`,
-   or set `sudo pmset -c sleep 0`. Then step 0 below, then the
+   failure. On macOS, on power: `sudo pmset -c sleep 0`. `caffeinate -is` in
+   front of a command keeps the machine awake only while that command runs,
+   so it serves a session launched in the foreground; a background launch
+   returns at once, so use `caffeinate -is -w <the session's pid>` there.
+   Then step 0 below, then the
    trigger: `/loop` with the cron interval
    `PY B/hub.py cron` prints (from `[active_hours]`: weekdays, 08:07 to 17:37,
    by default) and the prompt `comms-hub tick`, then

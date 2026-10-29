@@ -1,7 +1,7 @@
 r"""review_lint.py: the body's shape, the PR's live state, and that a review from here is a COMMENT.
 
 Mutations (run.py --mutate applies each and expects this file to fail):
-  posts-approve: review_lint.py: `--repo {owner}/{repo} --comment` => `--repo {owner}/{repo} --approve`
+  hint-hand-post: review_lint.py: `print(f"PASS: the body. Post the review with review_lint.py --post <review.json> --pr {owner}/{repo}#{n}, "` => `print(f"post: gh pr review {n} --repo {owner}/{repo} --comment --body-file {args.file} "`
   closed-ok: review_lint.py: `if d.get("state") != "OPEN":` => `if False:`
   draft-ok: review_lint.py: `if d.get("isDraft"):` => `if False:`
   head-unchecked: review_lint.py: `if now != head:` => `if False:`
@@ -45,11 +45,13 @@ def run(env, text, *flags, state=OPEN):
 
 
 class Lint(unittest.TestCase):
-    def test_a_clean_body_passes_and_the_post_is_a_comment(self):
+    def test_a_clean_body_passes_and_points_at_post(self):
+        # A printed hand-typed post command, followed, drops the inline comments.
         with Env() as env:
             rc, out = run(env, "One finding: the retry loop never backs off (src/a.py:3).\n")
             self.assertEqual(rc, 0, out)
-            self.assertIn(f"post: gh pr review 12 --repo acme/app --comment --body-file {env.dir / 'review.md'}", out)
+            self.assertIn("review_lint.py --post <review.json> --pr acme/app#12", out)
+            self.assertNotIn("gh pr review", out)
             self.assertNotIn("approve", out.lower())
 
     def test_shape_failures(self):

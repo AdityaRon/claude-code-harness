@@ -1,9 +1,19 @@
 // What `hub.py panel` prints: the sections already sorted and named, so the
-// pane only lays them out. Times are in quiet_hours.tz.
-export type Need = { key: string; ref: string; target: string; text: string; note: string; age: string }
-export type Going = { key: string; post: string; target: string; ref: string; text: string; status: string; warn: boolean }
+// pane only lays them out. Times are in quiet_hours.tz. `full` is a draft's
+// whole message, which the expanded view shows in place of `text`.
+export type Need = { key: string; ref: string; target: string; text: string; note: string; age: string; full?: string }
+export type Going = {
+  key: string
+  post: string
+  target: string
+  ref: string
+  text: string
+  status: string
+  warn: boolean
+  full?: string
+}
 export type WithSession = { key: string; who: string; ref: string; text: string; since: string }
-export type HeldDraft = { key: string; ref: string; target: string; text: string; reason: string }
+export type HeldDraft = { key: string; ref: string; target: string; text: string; reason: string; full?: string }
 export type LogEvent = {
   key: string
   ts: string
@@ -41,8 +51,12 @@ export type Snapshot = { panel: Panel | null; problem: string; readAt: number }
 // before it (`since`): an event logged after `since` carries a dot.
 export type Look = { since: number; last: number }
 
+// Compact (a glance: capped sections, rows cut at the edge) or expanded
+// (every row, each message whole).
+export type View = { full: boolean }
+
 declare module 'claude-code' {
   interface PluginState {
-    'comms-panel': { snapshot: Shaped<Snapshot>; look: Shaped<Look> }
+    'comms-panel': { snapshot: Shaped<Snapshot>; look: Shaped<Look>; view: Shaped<View> }
   }
 }
