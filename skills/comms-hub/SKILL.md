@@ -239,7 +239,15 @@ whole context.
      `PY B/hub.py queries` prints (`<@my_user_id>`, `to:<@my_user_id>` and
      `with:<@my_user_id> is:thread`, each `after:` two days back). Each of the
      last two once caught a reply the others missed, one under a week-old
-     thread. Use the date filter: an epoch filter once returned 0, and an
+     thread. Send each printed line whole as the search's query text (the
+     Slack MCP's `natural_language_query`), never in a filters field: a bare
+     `<@my_user_id>` sent as a filter ran an empty search, which came back
+     headed `Search Results for:` with nothing after it and listed the
+     workspace's newest posts, alerts and webhooks, none naming the user.
+     Rows prove the search returned something, not that it ran as asked:
+     check that the result's header names the query, and that every hit of
+     the bare search holds `<@my_user_id>`. Either one missing means mentions
+     are unknown. Use the date filter: an epoch filter once returned 0, and an
      empty result is ambiguous. An empty search counts as quiet only when the
      same query from `PY B/hub.py queries --control` (a week further back)
      returns rows; ask for the smallest page, since one row proves it. Empty
