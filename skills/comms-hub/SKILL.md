@@ -201,9 +201,11 @@ whole context.
    posts through the reviews API with the inline comments, and logs the review
    under Needs you with its verdict (`logged <id>: reviewed <verdict>`):
    approvable when every finding is a nit or a consider and nothing is
-   escalated, else needs your read. It closes the review's todo. Exit 1: fix
-   the file and run it again. Exit 3: nothing posted or logged, so the review
-   is still to do. Never `gh pr review` by hand: it drops the inline comments,
+   escalated, else needs your read. It closes the review's todo. Exit 1 is a
+   refusal, and the output says whether the file or the PR is the problem: fix
+   the file and run it again, but a moved head means review again, and a
+   closed or draft PR means no review. Exit 3: nothing posted or logged, so the
+   review is still to do. Never `gh pr review` by hand: it drops the inline comments,
    and a lint chained with `;` once let a refused body go out. COMMENT only:
    this session never approves or requests changes, whatever the findings say.
 2. **Slack**:

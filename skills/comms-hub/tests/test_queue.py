@@ -45,6 +45,8 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   need-unchanged: queue.py: `need = 3 + len(authors)` => `need = 2 + len(authors)`
   route-todo-relogged: queue.py: `key = f"route:{r['ref']}:{r['who']}@{r['at']}"` => `key = f"route:{r['ref']}:{r['who']}@{r['at']}:{len(keys)}"`
   review-todo-relogged: queue.py: `key = f"review:{ref}@{details[ref]['headRefOid'][:7]}"` => `key = f"review:{ref}@{details[ref]['headRefOid'][:7]}:{len(keys)}"`
+  logged-keys-folded: queue.py: `for r in hub.day_rows(cfg, hub.local_now(cfg).date() - dt.timedelta(days=back))` => `for r in (hub.folded(cfg, hub.OPEN_DAYS) if back == 0 else [])`
+  logged-keys-today-only: queue.py: `for back in range(hub.OPEN_DAYS)` => `for back in range(1)`
   in-flight-unnamed: queue.py: `emit(f"  {r['id']}  {r['text']}  {r['ref']}")` => `pass`
   todo-never-closed: queue.py: `closed.append(hub.log_event(cfg, "done", why, ref=pr["url"], corrects=r["id"]))` => `pass`
   route-todo-closed-early: queue.py: `elif key.startswith("route:") and key not in route_keys:` => `elif key.startswith("route:"):`
@@ -560,6 +562,29 @@ class InFlight(unittest.TestCase):
         self.assertIn(f"\n  {ask['id']}  route bob's question  https://github.com/acme/app/pull/2\n", outs[1],
                       "after a compaction an id alone says nothing")
         self.assertEqual([r for r in rows if r["kind"] == "done"], [], "the ask is still open, so its todo is too")
+
+    def test_a_routed_ask_is_not_logged_again(self):
+        def gh(i):
+            if i == 1:  # the session routes the ask between the two scans
+                cfg = hub.load_config()
+                todo = next(r for r in q.open_rows(cfg, "todo") if r["text"].startswith("route"))
+                hub.log_event(cfg, "routed", "routed to app-session", ref=todo["ref"], who="app-session",
+                              corrects=todo["id"])
+            return fake(details={**DETAILS, 2: self.ask()})
+        outs, rows, _, _ = scans(gh, n=2)
+        self.assertIn("logged: 0 in-flight", outs[1], "the ask is still in ROUTE until answered, and already logged")
+        self.assertEqual(sum(r["kind"] == "todo" and r["text"].startswith("route") for r in rows), 1)
+        self.assertNotIn("route bob's question", outs[1].split("== INBOUND")[0], "routed, so not in flight")
+
+    def test_a_todo_logged_yesterday_is_not_logged_again(self):
+        def seed(cfg, state):
+            hub.log_event(cfg, "todo", "route bob's question", ref="https://github.com/acme/app/pull/2", who="bob",
+                          detail="key=route:acme/app#2:bob@20261020T100000")
+            today = hub.local_now(cfg).date()
+            (state / "log" / f"{today:%Y-%m-%d}.jsonl").rename(
+                state / "log" / f"{today - hub.dt.timedelta(days=1):%Y-%m-%d}.jsonl")
+        outs, _, _, _ = scans(lambda i: fake(details={**DETAILS, 2: self.ask()}), before=seed)
+        self.assertIn("logged: 2 in-flight", outs[0], "the two reviews; the ask was logged yesterday")
 
     def test_github_closes_what_is_done(self):
         replied = detail(2, comments=[ev(ME, MINE_AT), ev(ME, "2026-10-21T09:00:00Z")],
