@@ -55,6 +55,11 @@ settings key arrives silently. Section 6 closes that: it reads the changelog
 field. Entries naming something the contract already has a decision for are
 included, because that decision may now be stale.
 
+Section 4e runs `claude plugin test` on every mod under `skills/` (today the comms
+panel), with no login. The mod API is early access, so a release can move it, and
+a moved API shows only as a blank or erroring pane. A failing mod is a breakage,
+exit 1, so the daily run hands it to Claude's fix mode, which may edit `skills/`.
+
 When the daily run finds a new release it triages first: if no entry since the pin
 matches the section 6 filter (1 of the 21 releases 2.1.280 to 2.1.302), it moves
 `last_verified_version` itself. Otherwise Claude reviews the releases and edits only
