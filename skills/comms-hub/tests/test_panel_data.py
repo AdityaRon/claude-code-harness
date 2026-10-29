@@ -25,6 +25,9 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   scans-in-events: hub.py: `for r in reversed(today) if r["kind"] != "scan"]` => `for r in reversed(today)]`
   events-oldest-first: hub.py: `for r in reversed(today) if` => `for r in today if`
   last-tick-counts-all: hub.py: `r in raw[scans[-1] + 1:]` => `r in raw`
+  kindless-refused: hub.py: `if args.kind is None:` => `if False:`
+  kindless-text-dropped: hub.py: `args.detail = " ".join(x for x in (text, args.detail) if x)` => `pass`
+  kindless-id-refused: hub.py: `text = "a note whose text is in the detail"` => `pass`
 """
 import contextlib
 import io
@@ -93,13 +96,32 @@ class LogEvents(unittest.TestCase):
     def test_an_unknown_kind_or_help_logs_nothing(self):
         # `hub.py log --help` once wrote "--help" into the log.
         with Env(now=NOW) as env:
-            for argv in (["--kind", "QUESTION", "may bob drop it"], ["--help"], ["free text with no kind"]):
+            for argv in (["--kind", "QUESTION", "may bob drop it"], ["--help"]):
                 with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
                     main_out("log", *argv)
             rc, out = main_out("feedback", "--help")
             self.assertEqual(rc, 2)
             self.assertEqual((rows(env), md(env)), ([], ""))
             self.assertFalse((env.state / "feedback.md").exists())
+
+    def test_text_with_no_kind_is_kept_as_a_note(self):
+        # After an in-place install, a session on the older skill logged nothing all day.
+        with Env(now=NOW) as env:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                for text in ("routed the conflict to the app session",
+                             "19:58 sent 1761040800.000100 to C0123ABCD9 https://github.com/acme/app/pull/12",
+                             "asked U0123ABCD9 about it"):
+                    rc, out = main_out("log", text)
+                    self.assertEqual(rc, 0, out)
+            got = rows(env)
+            self.assertEqual([r["kind"] for r in got], ["note", "note", "note"])
+            self.assertEqual((got[0]["text"], got[0]["detail"]), ("routed the conflict to the app session", ""))
+            self.assertNotRegex(got[1]["text"], r"\d{10}\.\d{6}|https?://|^19:58")
+            self.assertIn("1761040800.000100", got[1]["detail"], "what the text may not hold is kept, in the detail")
+            self.assertEqual(got[2]["text"], "a note whose text is in the detail")
+            self.assertIn("U0123ABCD9", got[2]["detail"])
+            self.assertIn("no --kind, so logged as a note", err.getvalue())
 
     def test_a_late_entry_keeps_one_time(self):
         # "21:40 19:58 held ...": the session wrote its own time into the text.

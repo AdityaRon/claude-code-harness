@@ -3,13 +3,19 @@ review state and CI state. Imported by the scripts beside it; run directly:
 
   hub.py init         write the config from the example, with the login, owners and
                       zone this machine knows; refuses to touch an existing one
-  hub.py config       the config path, the state dir, the ids, or what is wrong with the config
+  hub.py config [--transcript FILE]
+                      the config path, the state dir, the ids, or what is wrong with the config;
+                      and how much context a compaction leaves the comms session, from its
+                      transcript (found by its tick prompt, or FILE), with a WARN when the
+                      compact window leaves under 100k tokens to work in
   hub.py log --kind KIND [--ref REF] [--target ID] [--who WHO] [--needs-user] [--corrects ID]
              [--at HH:MM] [--detail TEXT] TEXT
                       one event in today's log: a JSONL row the panel draws, and an .md line.
                       TEXT is what the panel shows: 80 characters, words only. A link is --ref,
                       a channel --target, the rest --detail. --needs-user puts it under Needs
-                      you until a row --corrects it; --at is when it happened, if not now
+                      you until a row --corrects it; --at is when it happened, if not now.
+                      Without --kind, as a session on an older skill calls it: a note, with
+                      what TEXT may not hold moved to the detail, and a warning on stderr
   hub.py panel        what the comms panel draws, as JSON
   hub.py queries [--control]
                       the three Slack mention searches, dated two days back; --control: the
@@ -203,7 +209,8 @@ def load_config(explicit: str | None = None) -> dict:
                           "a message scheduled overnight would post before any tick could gate it again, "
                           "and the Slack tools cannot delete it")
     se = cfg.setdefault("session", {})
-    se.setdefault("compact_window", 150_000)
+    # 150k compacted at ~118k with 77-94k back after each: 10 compactions in a day.
+    se.setdefault("compact_window", 600_000)
     se.setdefault("mcp_timeout_ms", 120_000)
     if not isinstance(se["compact_window"], int) or not 100_000 <= se["compact_window"] <= 1_000_000:
         raise ConfigError(f"{path}: session.compact_window must be 100000 to 1000000 tokens, not {se['compact_window']!r}")
@@ -420,12 +427,98 @@ def _tokens(v: str | None) -> int | None:
 
 
 def launch_problems(cfg: dict, env) -> list[str]:
+    """The window must match: a smaller one compacts every few ticks, which a
+    `want or less` check let a session started at the old 150k pass."""
     out = []
     for k, want in launch_env(cfg).items():
         have = _tokens(env.get(k))
-        if have is None or have > int(want):
-            out.append(f"{k} is {env.get(k) or 'unset'} in this session, want {want} or less")
+        exact = k == "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+        if have is None or (have != int(want) if exact else have > int(want)):
+            out.append(f"{k} is {env.get(k) or 'unset'} in this session, want {want}" + ("" if exact else " or less"))
     return out
+
+
+# Room a compaction must leave to work in: below it, the session compacts again within a tick or two.
+ROOM_MIN = 100_000
+
+
+def projects_root() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+
+
+def tick_transcript(root: Path, prompt: str = "comms-hub tick", days: int = 2) -> Path | None:
+    """The newest session transcript, not a subagent's, with a user turn that
+    starts with the tick prompt. The prompt also appears in subagent
+    transcripts and in tool calls that quote it, so only a user record counts."""
+    cutoff = time.time() - days * 86400
+    found = []
+    for p in root.glob("*/*.jsonl") if root.is_dir() else []:
+        try:
+            if p.stat().st_mtime >= cutoff:
+                found.append((p.stat().st_mtime, p))
+        except OSError:
+            continue
+    for _, p in sorted(found, reverse=True):
+        with p.open(errors="replace") as f:
+            for line in f:
+                if prompt not in line or '"user"' not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                c = (d.get("message") or {}).get("content")
+                if isinstance(c, list):
+                    c = " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+                if d.get("type") == "user" and isinstance(c, str) and c.strip().startswith(prompt):
+                    return p
+    return None
+
+
+def compaction_baseline(path: Path) -> tuple[int, int | None, str]:
+    """(compactions, tokens the latest left, when): the context the first call
+    after the latest compact_boundary carried, input plus cache read and write."""
+    count, base, when, after = 0, None, "", False
+    with path.open(errors="replace") as f:
+        for line in f:
+            if "compact_boundary" in line:
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if d.get("type") == "system" and d.get("subtype") == "compact_boundary":
+                    count, base, when, after = count + 1, None, d.get("timestamp") or "", True
+                continue
+            if after and '"assistant"' in line and '"usage"' in line:
+                try:
+                    u = ((json.loads(line).get("message") or {}).get("usage")) or {}
+                except ValueError:
+                    continue
+                if u:
+                    base = sum(int(u.get(k) or 0) for k in
+                               ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+                    after = False
+    return count, base, when
+
+
+def compaction_lines(cfg: dict, transcript: Path | None) -> list[str]:
+    window = cfg["session"]["compact_window"]
+    if transcript is None:
+        return [f"compact: window {window}; no transcript with a 'comms-hub tick' prompt in the last 2 days, "
+                "so what a compaction leaves is unknown (--transcript FILE names one)"]
+    count, base, when = compaction_baseline(transcript)
+    where = f"session {transcript.stem[:8]}"
+    if not count:
+        return [f"compact: window {window}; {where} has not compacted yet"]
+    if base is None:
+        return [f"compact: window {window}; {where} compacted {count}x, nothing has run since the latest"]
+    lines = [f"compact: window {window}; {where} compacted {count}x, the latest at {when[:16]} left {base // 1000}k, "
+             f"so {max(0, window - base) // 1000}k to work in"]
+    if window - base < ROOM_MIN:
+        lines.append(f"WARN: under {ROOM_MIN // 1000}k to work in after a compaction: the session compacts again "
+                     "within a tick or two. Raise session.compact_window (600000 on a 1M-context model), then "
+                     "restart the session with the command `hub.py launch` prints")
+    return lines
 
 
 def mention_queries(uid: str, since: dt.date) -> list[str]:
@@ -951,6 +1044,15 @@ def main(argv=None, gh: Gh | None = None) -> int:
         for r in cfg["routing"]:
             print(f"route: {r.get('session')} repos={','.join(r['repos']) or '-'} "
                   f"tickets={','.join(r['tickets']) or '-'} channels={','.join(r['channels']) or '-'}")
+        if argv[1:2] == ["--transcript"] and len(argv) == 3:
+            transcript = Path(argv[2])
+        elif argv[1:]:
+            print("usage: hub.py config [--transcript FILE]")
+            return 2
+        else:
+            transcript = tick_transcript(projects_root())
+        for line in compaction_lines(cfg, transcript):
+            print(line)
         return 0
     if argv[0] == "queries":
         uid = cfg["slack"].get("my_user_id")
@@ -986,7 +1088,8 @@ def main(argv=None, gh: Gh | None = None) -> int:
 def log_cmd(cfg: dict, argv: list[str]) -> int:
     import argparse
     ap = argparse.ArgumentParser(prog="hub.py log")
-    ap.add_argument("--kind", required=True, choices=LOG_KINDS)
+    ap.add_argument("--kind", choices=LOG_KINDS, help="required; a call without it, from a session on an older "
+                                                      "skill, logs a note rather than nothing")
     ap.add_argument("--ref", default="", help="the PR or ticket link")
     ap.add_argument("--target", default="", help="the channel id, which the panel names from slack.channel_names")
     ap.add_argument("--who", default="", help="the person or session")
@@ -997,6 +1100,17 @@ def log_cmd(cfg: dict, argv: list[str]) -> int:
     ap.add_argument("text", nargs="+")
     args = ap.parse_args(argv)
     text = " ".join(" ".join(args.text).split())
+    if args.kind is None:
+        # A comms session still on the skill from before --kind gets exit 2 and
+        # logs nothing, all day, after an in-place install: keep what it said.
+        args.kind = "note"
+        if text_problem(text):
+            args.detail = " ".join(x for x in (text, args.detail) if x)
+            text = re.sub(r"^\d{1,2}:\d{2}\s*", "", scrub(cfg, text))[:TEXT_MAX].strip()
+            if text_problem(text):
+                text = "a note whose text is in the detail"
+        print("log: no --kind, so logged as a note; re-read ~/.claude/skills/comms-hub/SKILL.md, "
+              "whose step 5 names the kinds", file=sys.stderr)
     problem = text_problem(text)
     if not problem and args.at and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", args.at):
         problem = f"--at {args.at!r} is not HH:MM"
