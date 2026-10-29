@@ -301,9 +301,12 @@ whole context.
    After a full scan, `PY B/hub.py window --full-done`. A tick that found
    nothing new anywhere, and holds and schedules nothing, reports one line.
    On the window's first tick (`scan: full (the window's first)`), also
-   `python3 ~/.claude/spend-report.py --since 24h --tick-prompt "comms-hub tick" --max-ticks 5 --max-rewrites 10 --top 3 --rewrite-hint "raise session.compact_window, then restart with hub.py launch"`
+   `python3 ~/.claude/spend-report.py --since 24h --tick-prompt "comms-hub tick" --max-ticks 40 --max-rewrites 10 --top 3 --rewrite-hint "raise session.compact_window, then restart with hub.py launch"`
    and put every ALERT line in the report: what the ticks and their
-   reviewers cost since yesterday.
+   reviewers cost since yesterday. The limit is a day well above normal: 20
+   ticks a day at the $1.36 to $1.42 a tick measured on 2026-10-28 and 10-29
+   come to about $28, so $40 means something ran away (a compaction loop, a
+   reviewer that would not stop), not that a day was busy.
    `PY B/hub.py feedback "<what was corrected>"` for each correction the user
    made this tick to a message or to this protocol: `feedback.md` is the
    backlog for the next change to the skill. Then report to the user: sent,
