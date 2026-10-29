@@ -66,10 +66,16 @@ Nothing here depends on which server it is: step 0 records the tool names.
    restart one started before the change. Exported in
    the shell instead, the window loses to the one `~/.claude/settings.json`
    sets. The command also loads the panel (`panel/`, `--plugin-dir`): a pane
-   with what needs the user, what goes out and when, what is with other
-   sessions, what is held, and the day's events with a dot on each since the
-   user last looked, from `PY B/hub.py panel` as each turn ends, so it costs
-   no tokens (`/comms` opens it again and counts as a look). Then step 0 below, then the
+   with what needs the user, where their PRs stand (per repo, from the last
+   scan, with its age), what goes out and when, what is with other sessions,
+   what is held, reviewed, approved and merged over the last five active days,
+   and the day's events with a dot on each since the user last looked, from
+   `PY B/hub.py panel` as each turn ends, so it costs no tokens (`/comms`
+   opens it again and counts as a look). Keep the machine awake through active
+   hours: one that slept ran no tick until 09:55, so nothing re-gated the
+   messages scheduled for 08:30, and it woke to a lost login and a DNS
+   failure. On macOS, on power, prefix the launch command with `caffeinate -is`,
+   or set `sudo pmset -c sleep 0`. Then step 0 below, then the
    trigger: `/loop` with the cron interval
    `PY B/hub.py cron` prints (from `[active_hours]`: weekdays, 08:07 to 17:37,
    by default) and the prompt `comms-hub tick`, then
@@ -91,8 +97,8 @@ which every job shares. Each script's `--help` gives its flags and exit codes.
 At session start, and when doctor calls the record old. Load each tool with
 ToolSearch: the Slack MCP's read channel, read thread, search, send message and
 schedule message tools, and its add-reaction tool if it has one; ListAgents;
-SendMessage; CronList, for the tick's trigger; optionally a Jira or Confluence
-tool. Then write
+SendMessage; CronList, for the tick's trigger; optionally PushNotification and
+a Jira or Confluence tool. Then write
 `<state dir>/preflight.json` with the Write tool (`PY B/hub.py config` prints
 the state dir, the tmp dir, the Slack ids and the routes):
 
@@ -102,16 +108,19 @@ the state dir, the tmp dir, the Slack ids and the routes):
  "slack_search": "<tool name>", "slack_send": "<tool name>", "slack_schedule": "<tool name>",
  "list_agents": "ListAgents", "send_message": "SendMessage",
  "trigger": "<the tick's cron expression, from CronList>", "tickets": "<tool name, or empty>",
- "slack_delete_scheduled": "<tool name, or empty>", "slack_react": "<tool name, or empty>"}
+ "slack_delete_scheduled": "<tool name, or empty>", "slack_react": "<tool name, or empty>",
+ "push_notification": "<tool name, or empty>"}
 ```
 
 Leave a key empty when its tool is missing, and tell the user: doctor fails on
 it, and the tick cannot run without it. Then `PY B/hub.py launch --check`: a
 failure means this session was not started with `hub.py launch`'s command, so
 tell the user to restart it with that command. `slack_delete_scheduled`,
-`slack_react` and `tickets` are optional: without the first, a scheduled
-message whose claims moved can only be reported, not withdrawn; without
-`slack_react`, a draft that should go as a reaction is held, and the user told.
+`slack_react`, `push_notification` and `tickets` are optional: without the
+first, a scheduled message whose claims moved can only be reported, not
+withdrawn; without `slack_react`, a draft that should go as a reaction is
+held, and the user told; without `push_notification`, the report alone carries
+the reviews to approve.
 
 ## The tick
 
@@ -134,32 +143,69 @@ whole context.
 0. **A scan still running** from an earlier tick is killed by the next
    `queue.py scan`, which says so. A scan that slept with the laptop ends
    BLOCKED on its wall-clock watchdog: report it, do not retry in a loop.
-1. **GitHub**: `PY B/queue.py scan`. Read INBOUND, WATCHED, AWAITING, OUTBOUND,
-   DRIFT and UNKNOWN, and the header's `search-quota` and `my-open-xcheck`. If it
-   prints BLOCKED, the queue is unknown, not empty: say so, with the reason, and
-   never present the sections as complete.
+1. **GitHub**: `PY B/queue.py scan`. Read INBOUND, REVIEWED, WATCHED, AWAITING,
+   OUTBOUND, ROUTE, DRIFT and UNKNOWN, and the header's `search-quota` and
+   `my-open-xcheck`. If it prints BLOCKED, the queue is unknown, not empty: say
+   so, with the reason, and never present the sections as complete.
+   - REVIEWED is anyone's open PR whose head moved since my last review: a
+     re-look for step 1c, with the `compare` range. Four PRs once got commits
+     after my reviews and only the closing report noticed.
+   - ROUTE is each item on my PRs that asks something: a `[consider]`,
+     `[question]` or `[blocking]` tag, a question, or changes requested, an
+     approval's body and inline threads included (an approval carrying a
+     `[consider]` was once logged as status and routed nothing until the user
+     asked twice). A bare approval or "LGTM" is not in it. Route each at step 3.
+   - The scan logs the tick's GitHub work before you start it, a `todo` row per
+     ROUTE item and per review or re-look (`logged:`), so a compaction mid-tick
+     resumes from disk: `in-flight:` lists what an earlier tick left, each with
+     its id, what it is and its link. Finish each. The scan closes a todo once
+     GitHub shows it done.
+   - `morning-unchecked:` above 0 names scheduled messages that posted with no
+     re-gate since the window opened (the machine slept): re-check each claim
+     now and tell the user what moved. The scan logged each under Needs you.
+   - `prs:` says whether the panel's PR file was written; a BLOCKED scan keeps
+     the last one, which the panel shows with its age.
    1b. `PY B/resolve_threads.py` (a dry run); read every RESOLVE and SKIP. Then
    `PY B/resolve_threads.py --apply`. It re-reads each thread, prints what
    GitHub reports, and logs what was resolved.
-   1c. **INBOUND review**, for each INBOUND PR: first
+   1c. **Reviews**, for each INBOUND PR and each REVIEWED re-look: first
    `PY B/hub.py window --review`. Exit 1 means the window closes before a
    review could finish with someone there to read it, and a subagent left
    running while the laptop sleeps re-writes its whole cache on every wake:
    log `review of <PR> waits for the next window` and spawn nothing. The PR
-   stays INBOUND, so a later tick reviews it. Otherwise
+   stays in its section, so a later tick reviews it. Otherwise
    `PY B/pr_transcript.py owner/repo#N -o <job tmp>/pr-N.md` (it prints
    `head:` and `review-cap:`), then spawn a reviewer with the Agent tool: the
-   pr-review skill, the transcript, `gh pr diff N --repo owner/repo`, and the
-   ask to write findings only, no verdict, to `<job tmp>/review-N.md`, in at
-   most the `review-cap:` characters (3 of 9 bodies once ran over and were
-   trimmed by hand), leaving out what another reviewer already raised (the
-   transcript has every review and thread), and to hand back at most 5 lines:
-   the findings stay in the file, not in this session's context. Then one
-   command, the lint chained to the post with `&&`, never `;` (a `;` once let
-   a refused body go out):
-   `PY B/review_lint.py <job tmp>/review-N.md --pr owner/repo#N --head <sha> && gh pr review N --repo owner/repo --comment --body-file <job tmp>/review-N.md`.
-   The lint re-reads the head and the open state first. COMMENT only: this
-   session never approves or requests changes, whatever the findings say.
+   pr-review skill, the transcript, the diff, and the ask to write
+   `<job tmp>/review-N.json` and hand back at most 5 lines, since the findings
+   stay in the file, not in this session's context:
+
+   ```json
+   {"head": "<the head: line, all 40 characters>", "body": "<findings only, no verdict>",
+    "comments": [{"path": "src/a.py", "line": 3, "side": "RIGHT", "body": "<one finding>"}],
+    "findings": [{"kind": "nit"}, {"kind": "question"}], "escalate": "<why the user must read it; leave out if nothing>"}
+   ```
+
+   One `findings` entry per finding, its kind `nit`, `consider`, `question` or
+   `blocking`. The body and each comment at most the `review-cap:` characters
+   (3 of 9 bodies once ran over and were trimmed by hand), leaving out what
+   another reviewer already raised (the transcript has every review and
+   thread). For an INBOUND PR the diff is `gh pr diff N --repo owner/repo`.
+   For a re-look it is the REVIEWED line's range,
+   `gh api repos/owner/repo/compare/<my sha>...<head>`, read against my own
+   open threads in the transcript: each fixed, not fixed, or a new issue. A
+   re-look with every thread fixed and nothing new has no findings. A 404 means
+   a force-push dropped my sha: review the whole diff instead. Then
+   `PY B/review_lint.py --post <job tmp>/review-N.json --pr owner/repo#N`. It
+   lints the body and each comment, re-reads the head and the open state,
+   posts through the reviews API with the inline comments, and logs the review
+   under Needs you with its verdict (`logged <id>: reviewed <verdict>`):
+   approvable when every finding is a nit or a consider and nothing is
+   escalated, else needs your read. It closes the review's todo. Exit 1: fix
+   the file and run it again. Exit 3: nothing posted or logged, so the review
+   is still to do. Never `gh pr review` by hand: it drops the inline comments,
+   and a lint chained with `;` once let a refused body go out. COMMENT only:
+   this session never approves or requests changes, whatever the findings say.
 2. **Slack**:
    - The primary DM: read its first page in full, without `oldest`. Write the
      tool's output to `<job tmp>/dm.txt`, run
@@ -285,7 +331,10 @@ whole context.
    The text is at most 80 characters with no ids, ts, hashes, links or time:
    the link is `--ref`, the channel `--target` (named from
    `slack.channel_names`), everything else `--detail`. Sends and resolves log
-   themselves. Log each item routed (`--kind routed --who <session>`), each
+   themselves, as do the scan's `todo`, `done` and `blocked` rows and
+   `review_lint.py --post`'s `reviewed`. Log each item routed
+   (`--kind routed --who <session>`, with `--corrects <its todo id>` for a
+   ROUTE item, so it moves from in-flight to with-sessions), each
    draft held and why (`--kind held`), each question for the user and each
    BLOCKED scan or unknown mention search (`--kind asked` or `--kind blocked`,
    with `--needs-user`). The command prints the row's id. An entry made after
@@ -309,8 +358,17 @@ whole context.
    reviewer that would not stop), not that a day was busy.
    `PY B/hub.py feedback "<what was corrected>"` for each correction the user
    made this tick to a message or to this protocol: `feedback.md` is the
-   backlog for the next change to the skill. Then report to the user: sent,
-   scheduled, reacted, held, BLOCKED, and what needs them. The user has not
+   backlog for the next change to the skill. Then report to the user, reviews
+   first, unasked, in the tick each posts (the list of PRs to approve once came
+   20 minutes after nine reviews, and only when the user asked): each review's
+   link, its verdict and "read the comment and approve", approvable first.
+   Reviews from earlier ticks that still wait on the user stay under
+   `needs-you:`; one whose head has moved is a re-look, never approvable (two
+   PRs were once called approvable after new commits). When step 0 recorded
+   `push_notification`, a tick that posted an approvable review sends one
+   notification naming those PRs: the user is often not watching this
+   session. Then sent, scheduled, reacted, held, BLOCKED, and what else needs
+   them. The user has not
    read the threads, so each item stands alone: its link, who asked what in
    one quoted line (20 words at most), and what went out or what is needed
    from them. The thread is already in this session's context, so that is a
@@ -347,5 +405,8 @@ whole context.
 | `preflight.json` | step 0's record of this session's tools and trigger |
 | `trigger.json` | the tick's trigger and when it was created, for its 7-day expiry |
 | `tick.json` | when the last full scan finished |
+| `last-scan` | when the last scan started, BLOCKED or not; the panel calls an older `prs.json` stale |
+| `prs.json` | the last scan that did not end BLOCKED: each open PR I review or authored, which the panel's PRS section reads |
+| `prs-history.jsonl` | what changed between two `prs.json`, one row each (reviewed, approved, merged, by day), for the panel's last five days |
 | `feedback.md` | each correction the user makes to a message or to this protocol, dated, for the next change to this skill |
 | `queue.pid` | the scan in progress |
