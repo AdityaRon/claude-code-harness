@@ -25,6 +25,8 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   scans-in-events: hub.py: `for r in reversed(today) if r["kind"] != "scan"]` => `for r in reversed(today)]`
   events-oldest-first: hub.py: `for r in reversed(today) if` => `for r in today if`
   last-tick-counts-all: hub.py: `r in raw[scans[-1] + 1:]` => `r in raw`
+  held-text-uncut: hub.py: `"text": clip(h["first"])}` => `"text": h["first"]}`
+  clip-off-by-one: hub.py: `text[:TEXT_MAX - 1].rstrip() + "…"` => `text[:TEXT_MAX].rstrip() + "…"`
   kindless-refused: hub.py: `if args.kind is None:` => `if False:`
   kindless-text-dropped: hub.py: `args.detail = " ".join(x for x in (text, args.detail) if x)` => `pass`
   kindless-id-refused: hub.py: `text = "a note whose text is in the detail"` => `pass`
@@ -248,6 +250,36 @@ class Panel(unittest.TestCase):
             p = json.loads(main_out("panel")[1])
         self.assertEqual((p["needs"], p["going"], p["sessions"], p["held"], p["events"], p["day"], p["last_tick"]),
                          ([], [], [], [], [], "", "none yet"))
+
+    def test_a_draft_written_as_one_paragraph_is_cut_to_80(self):
+        # One held draft once put ~700 characters into its row.
+        with Env(now=NOW) as env:
+            (env.state / "held").mkdir(parents=True)
+            body = "Follow-up on the release: " + "configuration" * 52  # no space where the cut falls
+            (env.state / "held" / "app-session-1761040900.000100.md").write_text(
+                f"to: C0CHANONE1 top-level\nkind: reply\nneeds: user\n---\n\n{body}\n")
+            (env.state / "held" / "app-session-1761041000.000100.md").write_text(
+                f"to: C0CHANONE1 top-level\nkind: reply\n---\n\n{body}\n")
+            p = json.loads(main_out("panel")[1])
+        for row in (p["needs"][0], p["held"][0]):
+            self.assertEqual(len(row["text"]), 80, row["text"])
+            self.assertTrue(row["text"].startswith("Follow-up on the release: ") and row["text"].endswith("…"))
+
+
+class Lint(unittest.TestCase):
+    PANEL = hub.Path(__file__).resolve().parent.parent / "panel"
+
+    @unittest.skipUnless(PANEL.is_dir(), "the mutation runner copies bin/ and tests/ alone")
+    def test_no_binding_shadows_the_jsx_factory(self):
+        # JSX compiles to h(...): a HELD row's parameter named h threw "h is not a
+        # function" on every render with a held draft, in v1.1.9.
+        import re
+        found = []
+        for p in sorted(self.PANEL.rglob("*.tsx")):
+            code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", p.read_text(), flags=re.S)
+            code = re.sub(r"'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"|`(?:\\.|[^`\\])*`", "''", code)
+            found += [f"{p.name}: {m.group(0)!r}" for m in re.finditer(r"(?<![\w$.])h(?![\w$])", code)]
+        self.assertEqual(found, [], "no identifier h in the panel: it is the JSX factory")
 
 
 if __name__ == "__main__":
