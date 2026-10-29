@@ -35,8 +35,11 @@ rows = [
     # 150k read at $0.20 = $0.03; 100k 1h write at $8 = $0.80: not a rewrite (write < half).
     asst('09:01:00', 'm2', 'claude-opus-5-5', read=150_000, w1=100_000),
     # Two hours later, no prompt typed since: away. 10k read = $0.002; 200k 5m write at $5 = $1.00, a rewrite.
-    user('11:00:00', 'comms-hub tick', 'scheduled-task'),
+    # A cron fire, as Claude Code records one: isMeta, with a scheduledFireId and no origin.
+    {**user('11:00:00', 'comms-hub tick', None), 'isMeta': True, 'scheduledFireId': 'fire-1'},
     asst('11:00:05', 'm3', 'claude-opus-5-5', read=10_000, w5=200_000),
+    # Any other isMeta record starts no turn, even one quoting the prompt.
+    {**user('11:00:20', 'comms-hub tick, quoted in a caveat', None), 'isMeta': True},
     # Fast mode doubles: 100k output at $40 = $4.00.
     asst('11:00:30', 'm4', 'claude-opus-5-5', out=100_000, speed='fast'),
     # An advisor iteration, priced at its own model: 100k input at $10 = $1.00.
@@ -81,7 +84,7 @@ has 'away (no prompt typed in the 180 min before): $0.00' "--away widens the win
 echo "=== ticks and turns ==="
 run --tick-prompt 'comms-hub tick' --turns
 has "ticks whose prompt contains 'comms-hub tick': 1, \$6.00" "the tick is the turn its prompt started, subagents aside"
-has 'scheduled-task  comms-hub tick' "a turn shows what started it"
+has 'scheduled  comms-hub tick' "a cron fire is a scheduled turn"
 [[ "$OUT" != *'fix the build'* ]] && pass "--tick-prompt lists only the ticks" || fail "a non-tick turn was listed" "$OUT"
 
 echo "=== alerts ==="
@@ -90,6 +93,9 @@ run --max-away 5
   || fail "max-away" "rc=$RC $OUT"
 run --max-rewrites 0
 [[ $RC -eq 1 && "$OUT" == *'rewrote its context 1 times'* ]] && pass "rewrites over the limit alert" || fail "max-rewrites" "$OUT"
+run --max-rewrites 0 --rewrite-hint 'raise session.compact_window'
+[[ "$OUT" == *'over --max-rewrites 0; raise session.compact_window'* ]] && pass "the alert says what to change" \
+  || fail "rewrite hint" "$OUT"
 run --max-ticks 5 --tick-prompt 'comms-hub tick'
 [[ $RC -eq 1 && "$OUT" == *'ticks cost $6.00, over --max-ticks $5.00'* ]] && pass "ticks over the limit alert" || fail "max-ticks" "$OUT"
 run --max-away 10 --max-rewrites 5 --max-ticks 10 --tick-prompt tick
