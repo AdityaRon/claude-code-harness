@@ -22,7 +22,22 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   regate-going: hub.py: `or s.get("withdrawn_at") or s.get("regate_of") or not` => `or s.get("withdrawn_at") or not`
   claim-moved-hidden: hub.py: `if s.get("claim_moved_at"):` => `if False:`
   recheck-never-due: hub.py: `elif last_scan and last_scan > checked:` => `elif False:`
-  scans-in-events: hub.py: `for r in reversed(today) if r["kind"] != "scan"]` => `for r in reversed(today)]`
+  scans-in-events: hub.py: `for r in reversed(today) if r["kind"] not in UNSHOWN]` => `for r in reversed(today) if r["kind"] != "scan"]`
+  todo-counts-as-an-item: hub.py: `if r["kind"] not in UNSHOWN + ("tick", "setup")] if scans else []` => `if r["kind"] not in ("scan", "tick", "setup")] if scans else []`
+  moved-head-ignored: hub.py: `moved = bool(p.get("my_sha")) and p["my_sha"] != p["head"]` => `moved = False`
+  moved-still-approvable: hub.py: `"new commits" if moved else verdict` => `verdict or ("new commits" if moved else "")`
+  verdict-unshown: hub.py: `verdicts[f"{m.group(1)}/{m.group(2)}#{m.group(3)}"] = r["text"]` => `pass`
+  asked-not-needs: hub.py: `"needs": bool(moved or verdict or asked)` => `"needs": bool(moved or verdict)`
+  merge-not-needs: hub.py: `merge_me = p.get("decision") == "APPROVED" and p.get("merge") in MERGEABLE` => `merge_me = False`
+  needs-unsorted: hub.py: `rows.sort(key=lambda r: (not r["needs"], r["group"] != "reviewing", short_ref(cfg, r["ref"])))` => `rows.sort(key=lambda r: short_ref(cfg, r["ref"]))`
+  repo-needs-uncounted: hub.py: `c[0] += r["needs"]` => `pass`
+  old-file-live: hub.py: `stale = written is None or now() - written > dt.timedelta(minutes=2 * every) \` => `stale = written is None or False \`
+  blocked-scan-live: hub.py: `or bool(last_scan and last_scan - written > dt.timedelta(minutes=1))` => `or False`
+  bad-file-crashes: hub.py: `except (OSError, ValueError, KeyError, TypeError):
+        data, written = None, None` => `except OSError:
+        data, written = None, None`
+  strip-weekends: hub.py: `if DAYS[day.weekday()] in cfg["active_hours"]["days"]:` => `if True:`
+  strip-uncounted: hub.py: `counts[r["day"]][r["event"]] += 1` => `pass`
   events-oldest-first: hub.py: `for r in reversed(today) if` => `for r in today if`
   last-tick-counts-all: hub.py: `r in raw[scans[-1] + 1:]` => `r in raw`
   held-text-uncut: hub.py: `"text": clip(h["first"])}` => `"text": h["first"]}`
@@ -250,6 +265,94 @@ class Panel(unittest.TestCase):
             p = json.loads(main_out("panel")[1])
         self.assertEqual((p["needs"], p["going"], p["sessions"], p["held"], p["events"], p["day"], p["last_tick"]),
                          ([], [], [], [], [], "", "none yet"))
+        self.assertEqual((p["prs"]["rows"], p["prs"]["stale"], p["prs"]["as_of"]), ([], True, ""))
+
+    def test_the_scans_own_bookkeeping_stays_out_of_the_events(self):
+        with Env(now=NOW) as env:
+            main_out("log", "--kind", "scan", "scan started", now="2026-10-21T16:45:00+00:00")
+            main_out("log", "--kind", "todo", "review requested", now="2026-10-21T16:46:00+00:00")
+            main_out("log", "--kind", "done", "--corrects", "1021.2", "review posted at the head",
+                     now="2026-10-21T16:47:00+00:00")
+            p = json.loads(main_out("panel")[1])
+        self.assertEqual((p["events"], p["last_tick"]), ([], "quiet"), "a quiet tick does not read as 2 items")
+
+
+SHA1, SHA2 = "1" * 40, "2" * 40
+
+
+def pr(ref, **over):
+    return {"ref": ref, "url": "", "title": "t", "author": "dana", "head": SHA2, "ci": "green", "decision": None,
+            "merge": "CLEAN", "my_state": None, "my_sha": None, "approvals": [], "changes_requested": [],
+            "unresolved": 0, "requested": [], **over}
+
+
+class Prs(unittest.TestCase):
+    """Item 8: what can I approve, what waits on me, without asking the session."""
+
+    def write(self, env, written=NOW, reviewing=(), authored=(), last_scan=None):
+        env.state.mkdir(parents=True, exist_ok=True)
+        (env.state / "prs.json").write_text(json.dumps({"written_at": written, "reviewing": list(reviewing),
+                                                        "authored": list(authored)}))
+        (env.state / "last-scan").write_text((last_scan or written) + "\n")
+
+    def test_what_needs_me_comes_first_with_a_count_per_repo(self):
+        with Env(config=NAMES, now=NOW) as env:
+            self.write(env, reviewing=[
+                pr("acme/application-server#31", my_state="COMMENTED", my_sha=SHA1, approvals=["erin"]),  # moved
+                pr("acme/application-server#32", my_state="COMMENTED", my_sha=SHA2),                      # approvable
+                pr("acme/infra#7", requested_me=True),                                                     # asked
+                pr("acme/infra#8", my_state="COMMENTED", my_sha=SHA2),                                    # waiting
+            ], authored=[
+                pr("acme/application-server#40", decision="APPROVED"),
+                pr("acme/infra#9", decision="REVIEW_REQUIRED", merge="BLOCKED"),
+                pr("acme/infra#10", decision="CHANGES_REQUESTED", unresolved=2, ci="red"),
+            ])
+            main_out("log", "--kind", "reviewed", "--needs-user", "--ref",
+                     "https://github.com/acme/application-server/pull/32", "approvable")
+            p = json.loads(main_out("panel")[1])["prs"]
+        lines = [(r["needs"], r["line"]) for r in p["rows"]]
+        self.assertEqual(lines, [
+            (True, "app #31  dana  commented@1111111 · new commits · CI green · approved by erin"),
+            (True, "app #32  dana  commented@2222222 · approvable · CI green"),
+            (True, "infra #7  dana  not reviewed · CI green"),
+            (True, "app #40  approved, needs your merge · CI green"),
+            (True, "infra #10  changes requested · CI red · 2 unresolved"),
+            (False, "infra #8  dana  commented@2222222 · CI green"),
+            (False, "infra #9  review required · CI green"),
+        ])
+        self.assertEqual(p["repos"], [{"repo": "app", "needs": 3, "total": 3}, {"repo": "infra", "needs": 2, "total": 4}])
+        self.assertEqual((p["stale"], p["as_of"], p["age"]), (False, "10:00", "0m"))
+
+    def test_a_moved_head_is_never_approvable(self):
+        with Env(now=NOW) as env:
+            self.write(env, reviewing=[pr("acme/app#32", my_state="COMMENTED", my_sha=SHA1)])
+            main_out("log", "--kind", "reviewed", "--needs-user", "--ref", "acme/app#32", "approvable")
+            line = json.loads(main_out("panel")[1])["prs"]["rows"][0]["line"]
+        self.assertIn("new commits", line)
+        self.assertNotIn("approvable", line)
+
+    def test_an_old_or_unreplaced_file_is_stale_and_says_when(self):
+        with Env(now=NOW) as env:
+            self.write(env, written="2026-10-21T15:30:00+00:00")  # 90 min, three 30-minute ticks
+            p = json.loads(main_out("panel")[1])["prs"]
+            self.assertEqual((p["stale"], p["as_of"], p["age"]), (True, "08:30", "1h"))
+            self.write(env, written="2026-10-21T16:50:00+00:00", last_scan="2026-10-21T16:58:00+00:00")
+            self.assertTrue(json.loads(main_out("panel")[1])["prs"]["stale"], "a later scan ended BLOCKED")
+            (env.state / "prs.json").write_text("{half a file")
+            p = json.loads(main_out("panel")[1])["prs"]
+            self.assertEqual((p["stale"], p["rows"]), (True, []))
+
+    def test_the_strip_counts_five_days(self):
+        with Env(now=NOW) as env:
+            env.state.mkdir(parents=True)
+            rows = [("2026-10-21", "reviewed"), ("2026-10-21", "reviewed"), ("2026-10-21", "approved"),
+                    ("2026-10-20", "merged"), ("2026-10-14", "merged")]
+            (env.state / "prs-history.jsonl").write_text("".join(json.dumps({"day": d, "event": e}) + "\n" for d, e in rows))
+            days = json.loads(main_out("panel")[1])["prs"]["days"]
+        self.assertEqual([d["day"] for d in days], ["Thu 15", "Fri 16", "Mon 19", "Tue 20", "Wed 21"],
+                         "the last five active days: the weekend is skipped, the 14th is too far back")
+        self.assertEqual([(d["reviewed"], d["approved"], d["merged"]) for d in days],
+                         [(0, 0, 0), (0, 0, 0), (0, 0, 0), (0, 0, 1), (2, 1, 0)])
 
     def test_a_draft_written_as_one_paragraph_is_cut_to_80(self):
         # One held draft once put ~700 characters into its row.

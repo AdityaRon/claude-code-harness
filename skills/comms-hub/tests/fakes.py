@@ -94,6 +94,10 @@ class FakeGh:
             res, wrap = self._answer("search", v["q"], int(v["page"])), None
         elif args[:2] == ["pr", "view"]:
             res, wrap = self._answer("pr view", int(args[2]), args[args.index("--repo") + 1]), None
+        elif args[:3] == ["api", "-X", "POST"]:
+            # The payload is in the --input file, read now: the caller deletes it after.
+            with open(args[args.index("--input") + 1]) as f:
+                res, wrap = self._answer("post", args[3], json.load(f)), None
         else:
             raise AssertionError(f"unexpected gh call: {args}")
         if isinstance(res, BaseException):

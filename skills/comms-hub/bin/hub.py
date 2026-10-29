@@ -552,7 +552,10 @@ def append_log(cfg: dict | None, line: str) -> Path:
 # The panel draws the rows: as prose, with urls, channel ids, thread ts and
 # hashes, about 11 lines filled the pane and none could be scanned (2026-10-28).
 LOG_KINDS = ("sent", "scheduled", "withdrawn", "reacted", "routed", "returned", "resolved", "reviewed",
-             "held", "released", "asked", "answered", "blocked", "scan", "tick", "setup", "note")
+             "held", "released", "asked", "answered", "blocked", "scan", "tick", "setup", "note", "todo", "done")
+# The scan's own bookkeeping: work in flight (todo) and what closed it (done).
+# Shown, they would fill the day's events and make a quiet tick read "3 items".
+UNSHOWN = ("scan", "todo", "done")
 TEXT_MAX = 80
 NOT_TEXT = (
     (re.compile(r"\b[CDGU](?=[A-Z0-9]*\d)[A-Z0-9]{8,}\b"), "a Slack id (pass it as --target)"),
@@ -782,6 +785,83 @@ def clip(text: str) -> str:
     return text if len(text) <= TEXT_MAX else text[:TEXT_MAX - 1].rstrip() + "…"
 
 
+STATE_WORDS = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes requested", "COMMENTED": "commented",
+               "DISMISSED": "dismissed"}
+DECISION_WORDS = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes requested", "REVIEW_REQUIRED": "review required"}
+MERGEABLE = ("CLEAN", "HAS_HOOKS", "UNSTABLE")
+STRIP_DAYS = 5
+
+
+def prs_panel(cfg: dict, verdicts: dict[str, str]) -> dict:
+    """The PRS section from the last prs.json, which a scan that did not end
+    BLOCKED writes: what needs the user first, a count per repo, and how old it
+    is. A file older than two ticks, or one a later scan did not replace, is
+    stale and says so: never shown as live. `verdicts` maps owner/repo#N to an
+    open review row's text (approvable, needs your read, re-look)."""
+    d = state_dir(cfg)
+    try:
+        data = json.loads((d / "prs.json").read_text())
+        written = parse_time(data["written_at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        data, written = None, None
+    rows = []
+    for p in (data or {}).get("reviewing", []):
+        moved = bool(p.get("my_sha")) and p["my_sha"] != p["head"]
+        verdict = verdicts.get(p["ref"], "")
+        asked = p.get("requested_me") and not p.get("my_sha")
+        parts = [f"{STATE_WORDS.get(p.get('my_state'), 'reviewed')}@{p['my_sha'][:7]}" if p.get("my_sha")
+                 else "not reviewed", "new commits" if moved else verdict, f"CI {p['ci']}",
+                 f"approved by {','.join(p['approvals'])}" if p.get("approvals") else ""]
+        rows.append({"ref": p["ref"], "group": "reviewing", "needs": bool(moved or verdict or asked),
+                     "line": f"{short_ref(cfg, p['ref'])}  {p['author']}  " + " · ".join(x for x in parts if x)})
+    for p in (data or {}).get("authored", []):
+        merge_me = p.get("decision") == "APPROVED" and p.get("merge") in MERGEABLE
+        conflicts = p.get("merge") == "DIRTY"
+        parts = ["approved, needs your merge" if merge_me else DECISION_WORDS.get(p.get("decision"), "no decision"),
+                 f"CI {p['ci']}", f"{p['unresolved']} unresolved" if p.get("unresolved") else "",
+                 "conflicts" if conflicts else ""]
+        needs = merge_me or conflicts or p.get("decision") == "CHANGES_REQUESTED" or p["ci"] == "red" \
+            or bool(p.get("unresolved"))
+        rows.append({"ref": p["ref"], "group": "authored", "needs": needs,
+                     "line": f"{short_ref(cfg, p['ref'])}  " + " · ".join(x for x in parts if x)})
+    rows.sort(key=lambda r: (not r["needs"], r["group"] != "reviewing", short_ref(cfg, r["ref"])))
+    repos: dict[str, list[int]] = {}
+    for r in rows:
+        c = repos.setdefault(short_ref(cfg, r["ref"]).rsplit(" #", 1)[0], [0, 0])
+        c[0] += r["needs"]
+        c[1] += 1
+    last_scan = parse_time((d / "last-scan").read_text().strip()) if (d / "last-scan").is_file() else None
+    every = cfg["active_hours"]["every_minutes"]
+    stale = written is None or now() - written > dt.timedelta(minutes=2 * every) \
+        or bool(last_scan and last_scan - written > dt.timedelta(minutes=1))
+    return {"as_of": _when(cfg, written) if written else "", "age": _age(written) if written else "", "stale": stale,
+            "repos": [{"repo": k, "needs": v[0], "total": v[1]} for k, v in sorted(repos.items(), key=lambda kv: (-kv[1][0], kv[0]))],
+            "rows": [{"key": f"pr:{r['ref']}", **{k: r[k] for k in ("group", "needs", "line")}} for r in rows],
+            "days": strip(cfg)}
+
+
+def strip(cfg: dict) -> list[dict]:
+    """Reviewed, approved and merged per day over the last STRIP_DAYS active
+    days (a weekend is two zeros), oldest first, from prs-history.jsonl; days
+    before it began count zero."""
+    path = state_dir(cfg) / "prs-history.jsonl"
+    counts: dict[str, dict[str, int]] = {}
+    for ln in path.read_text().splitlines() if path.is_file() else []:
+        try:
+            r = json.loads(ln)
+        except ValueError:
+            continue
+        counts.setdefault(r.get("day", ""), {}).setdefault(r.get("event", ""), 0)
+        counts[r["day"]][r["event"]] += 1
+    day, out = local_now(cfg).date(), []
+    while len(out) < STRIP_DAYS:
+        if DAYS[day.weekday()] in cfg["active_hours"]["days"]:
+            c = counts.get(f"{day:%Y-%m-%d}", {})
+            out.append({"day": f"{day:%a %d}", **{e: c.get(e, 0) for e in ("reviewed", "approved", "merged")}})
+        day -= dt.timedelta(days=1)
+    return out[::-1]
+
+
 def panel(cfg: dict) -> dict:
     """What the panel draws, sorted here so run.py --mutate can test it."""
     d, tz = state_dir(cfg), zone(cfg)
@@ -807,12 +887,19 @@ def panel(cfg: dict) -> dict:
     today = [r for r in folded(cfg, OPEN_DAYS) if r["day"] == newest]
     events = [{"key": f"row:{r['id']}", "ts": r["ts"], "at": r["at"], "kind": r["kind"],
                "ref": short_ref(cfg, r["ref"]), "target": target_label(cfg, r["target"]), "text": r["text"],
-               "corrected": bool(r.get("corrected"))} for r in reversed(today) if r["kind"] != "scan"]
+               "corrected": bool(r.get("corrected"))} for r in reversed(today) if r["kind"] not in UNSHOWN]
     raw = day_rows(cfg, dt.date.fromisoformat(newest)) if newest else []
     scans = [i for i, r in enumerate(raw) if r["kind"] == "scan"]
-    since_scan = [r for r in raw[scans[-1] + 1:] if r["kind"] not in ("scan", "tick", "setup")] if scans else []
+    since_scan = [r for r in raw[scans[-1] + 1:] if r["kind"] not in UNSHOWN + ("tick", "setup")] if scans else []
     nxt = next_tick(cfg, now())
+    verdicts = {}
+    for r in asks:
+        m = re.search(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", r["ref"] or "") \
+            or re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", (r["ref"] or "").strip())
+        if r["kind"] == "reviewed" and m:
+            verdicts[f"{m.group(1)}/{m.group(2)}#{m.group(3)}"] = r["text"]
     return {"state": str(d), "day": f"{dt.date.fromisoformat(newest):%a %d %b}" if newest else "",
+            "prs": prs_panel(cfg, verdicts),
             "needs": needs, "going": going_out(cfg), "sessions": sessions, "held": held, "events": events,
             "next_tick": _when(cfg, nxt) if nxt else "none scheduled",
             "last_tick": ("quiet" if not since_scan else f"{len(since_scan)} item{'s' * (len(since_scan) != 1)}")

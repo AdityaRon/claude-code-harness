@@ -11,13 +11,13 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   below-cutoff-dropped: queue.py: `refs |= set(below)` => `pass`
   merged-window-ignored: queue.py: `if n["state"] == "OPEN" or (merged and merged >= cutoff):` => `if True:`
   unknown-not-blocking: queue.py: `blocked.append(f"{len(unknown)} PR(s) could not be read")` => `pass`
-  latest-reviews: queue.py: `hub.standing_reviews(pr["reviews"]["nodes"])` => `hub.standing_reviews(pr["latestReviews"]["nodes"])`
+  latest-reviews: queue.py: `for who, r in sorted(hub.standing_reviews(pr["reviews"]["nodes"]).items()):` => `for who, r in sorted(hub.standing_reviews(pr["latestReviews"]["nodes"]).items()):`
   drift-ignored: queue.py: `if oid != head:` => `if False:`
   bots-count: queue.py: `return not hub.is_me(actor, me) and not hub.is_bot(actor)` => `return not hub.is_me(actor, me)`
   deleted-dropped: queue.py: `return not hub.is_me(actor, me) and not hub.is_bot(actor)` => `return hub.login(actor) is not None and not hub.is_me(actor, me) and not hub.is_bot(actor)`
   case-sensitive-me: hub.py: `return (login(actor) or "").lower() == me.lower()` => `return login(actor) == me`
   archived-counted: queue.py: `if n["repository"].get("isArchived"):  # search's archived:false drops it too` => `if False:`
-  old-activity-counts: queue.py: `events = sorted(e for e in events if e[0] > last_reply)` => `events = sorted(events)`
+  old-activity-counts: queue.py: `events = sorted((e for e in events if e[0] > last_reply), key=lambda e: e[:3])` => `events = sorted(events, key=lambda e: e[:3])`
   no-previous-scan: queue.py: `stamp.write_text(at.isoformat() + "\n")` => `pass`
   main-thread-wall: queue.py: `if time.time() - wall0 > wall_limit:` => `if False:`
   monotonic-watchdog: queue.py: `clock = time.time` => `clock = time.monotonic`
@@ -28,7 +28,42 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   stdlib-queue-unbound: hub.py: `import queue  # noqa: F401` => `pass`
   team-requests-inbound: queue.py: `user-review-requested:{me} draft:false` => `review-requested:{me} draft:false`
   draft-requests-inbound: queue.py: `user-review-requested:{me} draft:false` => `user-review-requested:{me}`
-  empty-approval-owed: queue.py: `if r["state"] in ("APPROVED", "DISMISSED") and not (r.get("body") or "").strip():` => `if False:`
+  empty-approval-owed: queue.py: `if r["state"] in ("APPROVED", "DISMISSED") and acknowledgement(r.get("body") or ""):` => `if False:`
+  lgtm-owed: queue.py: `if r["state"] in ("APPROVED", "DISMISSED") and acknowledgement(r.get("body") or ""):` => `if r["state"] in ("APPROVED", "DISMISSED") and not (r.get("body") or "").strip():`
+  ask-tag-ignored: queue.py: `m = TAG.search(body)` => `m = None`
+  url-question: queue.py: `prose = re.sub(r"https?://\S+", " ", prose)` => `pass`
+  code-question: queue.py: `prose = re.sub(r"`[^`\n]*`", " ", prose)` => `pass`
+  quote-question: queue.py: `prose = re.sub(r"(?m)^\s*>.*$", " ", prose)` => `pass`
+  route-unlisted: queue.py: `out["route"].append(` => `out["route"].count(`
+  changes-requested-silent: queue.py: `ask = ask_kind(body) or ("blocking" if kind == "review CHANGES_REQUESTED" else "")` => `ask = ask_kind(body)`
+  reviewed-search-dropped: queue.py: `reviewed = sorted(rows, key=row_ref)` => `reviewed = []`
+  reviewed-own-prs: queue.py: `reviewed-by:{me} -author:{me} ` => `reviewed-by:{me} `
+  reviewed-unbounded: queue.py: `f"updated:>={cutoff:%Y-%m-%d} {scope(owners)}")` => `f"{scope(owners)}")`
+  relook-at-head: queue.py: `if not last or sha == head:` => `if not last:`
+  watched-wins: queue.py: `if ref in details and ref not in reviewed_rows:` => `if ref in details:`
+  inbound-wins: queue.py: `for r in inbound if row_ref(r) not in reviewed_rows]),` => `for r in inbound]),`
+  need-unchanged: queue.py: `need = 3 + len(authors)` => `need = 2 + len(authors)`
+  route-todo-relogged: queue.py: `key = f"route:{r['ref']}:{r['who']}@{r['at']}"` => `key = f"route:{r['ref']}:{r['who']}@{r['at']}:{len(keys)}"`
+  review-todo-relogged: queue.py: `key = f"review:{ref}@{details[ref]['headRefOid'][:7]}"` => `key = f"review:{ref}@{details[ref]['headRefOid'][:7]}:{len(keys)}"`
+  logged-keys-folded: queue.py: `for r in hub.day_rows(cfg, hub.local_now(cfg).date() - dt.timedelta(days=back))` => `for r in (hub.folded(cfg, hub.OPEN_DAYS) if back == 0 else [])`
+  logged-keys-today-only: queue.py: `for back in range(hub.OPEN_DAYS)` => `for back in range(1)`
+  in-flight-unnamed: queue.py: `emit(f"  {r['id']}  {r['text']}  {r['ref']}")` => `pass`
+  todo-never-closed: queue.py: `closed.append(hub.log_event(cfg, "done", why, ref=pr["url"], corrects=r["id"]))` => `pass`
+  route-todo-closed-early: queue.py: `elif key.startswith("route:") and key not in route_keys:` => `elif key.startswith("route:"):`
+  unregated-ignored: queue.py: `if f"unregated:{s['sent_id']}" not in keys:` => `if False:`
+  unregated-twice: queue.py: `if f"unregated:{s['sent_id']}" not in keys:` => `if True:`
+  regate-fail-unchecked: queue.py: `(hub.parse_time(s.get("regated_at")), hub.parse_time(s.get("claim_moved_at")))` => `(hub.parse_time(s.get("regated_at")),)`
+  morning-gate-unchecked: queue.py: `checked = max([dt.datetime.fromtimestamp(s.get("passed_at") or 0, dt.timezone.utc)]` => `checked = max([dt.datetime.fromtimestamp(0, dt.timezone.utc)]`
+  relook-never: queue.py: `elif sha and sha != pr["headRefOid"] and not r["text"].startswith("re-look"):` => `elif False:`
+  approval-never-closes: queue.py: `decided = (mine or {}).get("state") in ("APPROVED", "CHANGES_REQUESTED")` => `decided = False`
+  merge-never-closes: queue.py: `if pr["state"] != "OPEN" or decided:` => `if decided:`
+  prs-written-blocked: queue.py: `emit("prs: not written (BLOCKED); the panel keeps the last scan's, with its age")
+    else:` => `pass
+    if True:`
+  prs-watched-unreviewed: queue.py: `and (r in inbound_refs or my_last_review(details[r], me)))` => `)`
+  history-merge-missed: queue.py: `if p["ref"] not in now_refs and d and d.get("state") == "MERGED":` => `if False:`
+  merge-unfetched: queue.py: `extra = {pr_ref(r["ref"]) for r in waiting} | todo_refs | listed` => `extra = {pr_ref(r["ref"]) for r in waiting} | todo_refs`
+  history-review-missed: queue.py: `if p.get("my_sha") and (o.get("my_state"), o.get("my_sha")) != (p.get("my_state"), p.get("my_sha")):` => `if False:`
   watched-draft-listed: queue.py: `if pr["isDraft"]:` => `if False:`
   watched-reviewed-listed: queue.py: `if any(((r.get("commit") or {}).get("oid")) == head for r in mine):` => `if False:`
   watched-zero-trusted: queue.py: `if by_graph:` => `if False:`
@@ -130,11 +165,13 @@ def fake(**over):
                 rows.append(item(11, "teammate"))  # requested of a team I am on
             if "draft:false" not in query:
                 rows.append(item(12, "teammate", draft=True))
+        elif "reviewed-by:" in query:
+            rows = [item(n, a) for n, a in over.get("reviewed", [])]
         elif f"author:{ME}" in query:
             rows = [item(n, ME) for n in searched]
         else:
             rows = [item(n, "teammate") for n in over.get("watched", WATCHED)]
-        total = over.get("total", len(rows)) if f"author:{ME}" in query else len(rows)
+        total = over.get("total", len(rows)) if f"author:{ME}" in query and "reviewed-by:" not in query else len(rows)
         return {"total_count": total, "incomplete_results": over.get("incomplete", False),
                 "items": rows if pg == 1 else []}
 
@@ -189,13 +226,14 @@ class Scan(unittest.TestCase):
     def test_clean_scan(self):
         rc, out = scan(fake())
         self.assertEqual(rc, 0, out)
-        self.assertIn("search-quota: 30/30 left, need 3", out)
+        self.assertIn("search-quota: 30/30 left, need 4", out)
         self.assertIn("my-open-xcheck: search=4 graphql=4 agree", out)
         self.assertEqual([r.split()[0] for r in section(out, "INBOUND")], ["acme/app#9"])
         self.assertEqual([r.split()[:4] for r in section(out, "WATCHED")],
-                         [["acme/app#10", "by", "teammate", "requested=no"], ["acme/app#9", "by", "teammate", "requested=yes"]])
-        self.assertIn("acme/app#10 by teammate requested=no head=h2 my-review=COMMENTED@h1 updated 2026-10-20",
-                      section(out, "WATCHED")[0])
+                         [["acme/app#9", "by", "teammate", "requested=yes"]])
+        self.assertEqual(section(out, "REVIEWED"),
+                         ["acme/app#10 by teammate requested=no head=h2 my-review=COMMENTED@h1 compare=h1...h2 'pr 10'  "
+                          "https://github.com/acme/app/pull/10"], "reviewed at h1, head h2: a re-look, not WATCHED")
         awaiting = section(out, "AWAITING")
         self.assertIn("acme/app#1 waits-on=requested bob decision=NONE ci=green", awaiting[0])
         self.assertTrue(any(r.startswith("acme/app#5 waits-on=draft (yours)") for r in awaiting), awaiting)
@@ -219,7 +257,8 @@ class Scan(unittest.TestCase):
     def test_watched_skips_drafts_and_prs_reviewed_at_their_head(self):
         rc, out = scan(fake())
         self.assertEqual(rc, 0, out)
-        self.assertEqual([r.split()[0] for r in section(out, "WATCHED")], ["acme/app#10", "acme/app#9"])
+        self.assertEqual([r.split()[0] for r in section(out, "WATCHED")], ["acme/app#9"])
+        self.assertEqual([r.split()[0] for r in section(out, "REVIEWED")], ["acme/app#10"])
         self.assertNotIn("acme/app#13", out, "a draft")
         self.assertNotIn("acme/app#14", out, "reviewed at h2, its head")
 
@@ -265,7 +304,7 @@ class Scan(unittest.TestCase):
         gh = fake(quota=2)
         rc, out = scan(gh)
         self.assertEqual(rc, 3)
-        self.assertIn("search quota 2 is below the 3", out)
+        self.assertIn("search quota 2 is below the 4", out)
         self.assertEqual(gh.count("search/issues"), 0)
         self.assertIn("BLOCKED: the queue is unknown, not empty", out)
 
@@ -415,6 +454,221 @@ class Scan(unittest.TestCase):
             rc, out = scan(fake())
         self.assertEqual(rc, 3, out)
         self.assertIn("wall-clock time", out)
+
+
+MINE_AT = "2026-10-19T10:00:00Z"
+AFTER = "2026-10-20T10:00:00Z"
+
+
+def body_ev(name, at, body, bot=False):
+    return {**ev(name, at, bot=bot), "body": body}
+
+
+def scans(gh_fn, n=1, before=None):
+    """n scans in one state dir; `before(cfg, state)` seeds it first. Returns outputs, state dir rows and prs.json."""
+    outs = []
+    with Env(now=NOW) as env:
+        cfg = hub.load_config()
+        env.state.mkdir(parents=True, exist_ok=True)
+        if before:
+            before(cfg, env.state)
+        for i in range(n):
+            out = []
+            q.scan(cfg, hub.Gh(runner=gh_fn(i), pause=0), emit=out.append)
+            outs.append("\n".join(out))
+        rows = [r for p in sorted((env.state / "log").glob("*.jsonl")) for r in map(json.loads, p.read_text().splitlines())]
+        prs = json.loads((env.state / "prs.json").read_text()) if (env.state / "prs.json").is_file() else None
+        hist = (env.state / "prs-history.jsonl").read_text() if (env.state / "prs-history.jsonl").is_file() else ""
+    return outs, rows, prs, hist
+
+
+class Asks(unittest.TestCase):
+    """Item 2: an approval that carries an ask was logged as status and routed nothing."""
+
+    def test_what_asks_and_what_does_not(self):
+        for text, want in (("[consider] cache the token", "consider"), ("**[Question]** is this safe", "question"),
+                           ("[blocking] drops rows", "blocking"), ("why sleep a second here?", "question"),
+                           ("see https://ci.example/run?id=4 for the log", ""), ("`a ? b : c` reads fine", ""),
+                           ("> did you test it?\nyes, on staging", ""), ("```\nx = y ? 1 : 2\n```", ""),
+                           ("one nit: a typo in the log line", ""), ("", "")):
+            self.assertEqual(q.ask_kind(text), want, text)
+        for text in ("", "LGTM", "Looks good, thanks!", "lgtm 👍", "Approved.", ":shipit:"):
+            self.assertTrue(q.acknowledgement(text), text)
+        for text in ("one nit", "LGTM but why the sleep?", "LGTM [consider] a constant"):
+            self.assertFalse(q.acknowledgement(text), text)
+
+    def test_an_approval_with_a_consider_routes_and_an_lgtm_does_not(self):
+        d = detail(2, comments=[ev(ME, MINE_AT)], reviews=[rv("bob", "APPROVED", AFTER, body="[consider] name the constant")])
+        rc, out = scan(fake(details={**DETAILS, 2: d}))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(section(out, "ROUTE"), ["acme/app#2 bob review APPROVED [consider]: '[consider] name the constant'"
+                                                 "  https://github.com/acme/app/pull/2"])
+        self.assertIn("bob review APPROVED", section(out, "OUTBOUND")[0])
+        bare = detail(2, comments=[ev(ME, MINE_AT)], reviews=[rv("bob", "APPROVED", AFTER, body="LGTM, thanks!")])
+        rc, out = scan(fake(details={**DETAILS, 2: bare}))
+        self.assertEqual(section(out, "ROUTE"), [])
+        self.assertEqual([r.split()[0] for r in section(out, "OUTBOUND")], ["acme/app#4"], "an LGTM owes no reply")
+
+    def test_inline_questions_and_changes_requested_route_and_a_bots_question_does_not(self):
+        d = detail(2, comments=[ev(ME, MINE_AT), body_ev("ci[bot]", AFTER, "rerun?", bot=True)],
+                   reviews=[rv("carol", "CHANGES_REQUESTED", AFTER, body="see inline")],
+                   threads=[[body_ev("bob", AFTER, "does this hold on retry?")]])
+        rc, out = scan(fake(details={**DETAILS, 2: d}))
+        self.assertEqual([r.split("]")[0] for r in section(out, "ROUTE")],
+                         ["acme/app#2 bob thread comment [question", "acme/app#2 carol review CHANGES_REQUESTED [blocking"])
+
+
+class Reviewed(unittest.TestCase):
+    """Item 9: commits after my review waited for the author to come back."""
+
+    def test_anyones_pr_whose_head_moved_since_my_review_is_a_relook(self):
+        moved = detail(20, author="stranger", reviews=[rv(ME, "COMMENTED", OLD, oid="h1")])
+        same = detail(21, author="stranger", reviews=[rv(ME, "COMMENTED", RECENT, oid="h2")])
+        rc, out = scan(fake(details={**DETAILS, 20: moved, 21: same}, reviewed=[(20, "stranger"), (21, "stranger")]))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([r.split()[0] for r in section(out, "REVIEWED")], ["acme/app#10", "acme/app#20"])
+        self.assertIn("compare=h1...h2", section(out, "REVIEWED")[1])
+        self.assertNotIn("acme/app#21", out, "reviewed at its head")
+
+    def test_a_re_request_after_my_review_is_a_relook_not_inbound(self):
+        again = detail(9, author="teammate", requests=[ME], reviews=[rv(ME, "COMMENTED", OLD, oid="h1")])
+        rc, out = scan(fake(details={**DETAILS, 9: again}))
+        self.assertEqual(section(out, "INBOUND"), [])
+        self.assertTrue(section(out, "REVIEWED")[-1].startswith("acme/app#9 by teammate requested=yes"), out)
+
+    def test_the_search_reaches_every_author_within_merged_days(self):
+        gh = fake()
+        scan(gh)
+        q_ = next(" ".join(c) for c in gh.calls if "reviewed-by:" in " ".join(c))
+        self.assertIn(f"reviewed-by:{ME} -author:{ME} updated:>=2026-10-14", q_)
+
+
+class InFlight(unittest.TestCase):
+    """Item 3: a compaction between the scan and routing lost an ask."""
+
+    def ask(self):
+        return detail(2, comments=[ev(ME, MINE_AT)], reviews=[rv("bob", "APPROVED", AFTER, body="[question] safe on retry")])
+
+    def test_work_is_logged_once_before_it_starts(self):
+        outs, rows, _, _ = scans(lambda i: fake(details={**DETAILS, 2: self.ask()}), n=2)
+        todo = [r for r in rows if r["kind"] == "todo"]
+        self.assertEqual(sorted((r["text"], q.pr_ref(r["ref"])) for r in todo),
+                         [("re-look: new commits", "acme/app#10"), ("review requested", "acme/app#9"),
+                          ("route bob's question", "acme/app#2")])
+        self.assertIn("logged: 3 in-flight", outs[0])
+        self.assertIn("logged: 0 in-flight", outs[1], "a second scan with nothing new adds no row")
+        self.assertIn(f"in-flight: 3 ({' '.join(sorted(r['id'] for r in todo))})", outs[1])
+        ask = next(r for r in todo if r["text"].startswith("route"))
+        self.assertIn(f"\n  {ask['id']}  route bob's question  https://github.com/acme/app/pull/2\n", outs[1],
+                      "after a compaction an id alone says nothing")
+        self.assertEqual([r for r in rows if r["kind"] == "done"], [], "the ask is still open, so its todo is too")
+
+    def test_a_routed_ask_is_not_logged_again(self):
+        def gh(i):
+            if i == 1:  # the session routes the ask between the two scans
+                cfg = hub.load_config()
+                todo = next(r for r in q.open_rows(cfg, "todo") if r["text"].startswith("route"))
+                hub.log_event(cfg, "routed", "routed to app-session", ref=todo["ref"], who="app-session",
+                              corrects=todo["id"])
+            return fake(details={**DETAILS, 2: self.ask()})
+        outs, rows, _, _ = scans(gh, n=2)
+        self.assertIn("logged: 0 in-flight", outs[1], "the ask is still in ROUTE until answered, and already logged")
+        self.assertEqual(sum(r["kind"] == "todo" and r["text"].startswith("route") for r in rows), 1)
+        self.assertNotIn("route bob's question", outs[1].split("== INBOUND")[0], "routed, so not in flight")
+
+    def test_a_todo_logged_yesterday_is_not_logged_again(self):
+        def seed(cfg, state):
+            hub.log_event(cfg, "todo", "route bob's question", ref="https://github.com/acme/app/pull/2", who="bob",
+                          detail="key=route:acme/app#2:bob@20261020T100000")
+            today = hub.local_now(cfg).date()
+            (state / "log" / f"{today:%Y-%m-%d}.jsonl").rename(
+                state / "log" / f"{today - hub.dt.timedelta(days=1):%Y-%m-%d}.jsonl")
+        outs, _, _, _ = scans(lambda i: fake(details={**DETAILS, 2: self.ask()}), before=seed)
+        self.assertIn("logged: 2 in-flight", outs[0], "the two reviews; the ask was logged yesterday")
+
+    def test_github_closes_what_is_done(self):
+        replied = detail(2, comments=[ev(ME, MINE_AT), ev(ME, "2026-10-21T09:00:00Z")],
+                         reviews=[rv("bob", "APPROVED", AFTER, body="[question] safe on retry")])
+        reviewed9 = detail(9, author="teammate", requests=[ME], reviews=[rv(ME, "COMMENTED", NOW, oid="h2")])
+        states = [{**DETAILS, 2: self.ask()}, {**DETAILS, 2: replied, 9: reviewed9}]
+        outs, rows, _, _ = scans(lambda i: fake(details=states[i]), n=2)
+        done = [r for r in rows if r["kind"] == "done"]
+        self.assertEqual(sorted(r["text"] for r in done), ["answered on the PR", "review posted at the head"])
+        self.assertIn("2 closed", outs[1])
+
+
+class Morning(unittest.TestCase):
+    """Item 5: the machine slept, and nothing re-gated the overnight posts before 08:30."""
+
+    def gate(self, **over):
+        s = {"send": "schedule", "sent_id": "Q0009", "post_at": "2026-10-21T08:30:00-07:00", "target": "chan-one",
+             "prs": ["https://github.com/acme/app/pull/2 OPEN"], "passed_at": 1792540800}  # the evening before
+        s.update(over)
+
+        def seed(cfg, state):
+            (state / "gate").mkdir()
+            (state / "gate" / "q.json").write_text(json.dumps(s))
+        return seed
+
+    def test_a_post_with_no_morning_check_needs_the_user_once(self):
+        outs, rows, _, _ = scans(lambda i: fake(), n=2, before=self.gate())
+        blocked = [r for r in rows if r["kind"] == "blocked"]
+        self.assertEqual([(r["text"], r["needs_user"]) for r in blocked], [("posted without the morning re-gate", True)])
+        self.assertIn("morning-unchecked: 1 (Q0009)", outs[0])
+
+    def test_a_morning_regate_pass_or_fail_is_a_check(self):
+        for over in ({"regated_at": "2026-10-21T08:10:00-07:00"}, {"claim_moved_at": "2026-10-21T08:10:00-07:00"},
+                     {"passed_at": 1792602000 - 3600}, {"withdrawn_at": "2026-10-21T08:12:00-07:00"}):
+            _, rows, _, _ = scans(lambda i: fake(), before=self.gate(**over))
+            self.assertEqual([r for r in rows if r["kind"] == "blocked"], [], over)
+
+
+class ReviewRows(unittest.TestCase):
+    """Item 1: a posted review waits under Needs you until the user decides; a moved head demotes it."""
+
+    def seed(self, cfg, state):
+        hub.log_event(cfg, "reviewed", "approvable", ref="https://github.com/acme/app/pull/20", needs_user=True,
+                      detail="sha=" + "1" * 40)
+
+    def test_a_moved_head_turns_approvable_into_a_relook(self):
+        d = detail(20, author="stranger", head="2" * 40, reviews=[rv(ME, "COMMENTED", OLD, oid="1" * 40)])
+        _, rows, _, _ = scans(lambda i: fake(details={**DETAILS, 20: d}), before=self.seed)
+        self.assertEqual([r["text"] for r in rows if r["kind"] == "reviewed"],
+                         ["approvable", "re-look: new commits since the review"])
+
+    def test_the_users_approval_or_a_merge_closes_it(self):
+        for d, why in ((detail(20, author="stranger", head="1" * 40, reviews=[rv(ME, "APPROVED", RECENT, oid="1" * 40)]),
+                        "you approved"), (detail(20, author="stranger", state="MERGED", head="1" * 40), "merged")):
+            _, rows, _, _ = scans(lambda i: fake(details={**DETAILS, 20: d}), before=self.seed)
+            self.assertEqual([(r["kind"], r["text"]) for r in rows if r["corrects"]], [("answered", why)])
+
+
+class PrsFile(unittest.TestCase):
+    """Item 8: the panel's PRS section reads prs.json; a BLOCKED scan leaves the last one."""
+
+    def test_a_clean_scan_writes_it_and_a_blocked_one_does_not(self):
+        # #15: a watched author's PR I neither reviewed nor was asked on is not mine to track.
+        _, _, prs, _ = scans(lambda i: fake(watched=WATCHED + [15], details={**DETAILS, 15: detail(15, author="teammate")}))
+        self.assertEqual([p["ref"] for p in prs["authored"]], ["acme/app#1", "acme/app#2", "acme/app#3", "acme/app#5"])
+        self.assertEqual([(p["ref"], p["requested_me"], p["my_sha"]) for p in prs["reviewing"]],
+                         [("acme/app#10", False, "h1"), ("acme/app#14", False, "h2"), ("acme/app#9", True, None)],
+                         "my review or a request to me; #13, a draft, is left out")
+        self.assertEqual(prs["written_at"], NOW)
+        outs, _, prs, _ = scans(lambda i: fake(quota=30 if i == 0 else 2), n=2)
+        self.assertEqual(len(prs["reviewing"]), 3, "the first scan's file stays; a blocked one searched nothing")
+        self.assertIn("prs: not written (BLOCKED)", outs[1])
+
+    def test_the_history_counts_my_reviews_and_merges_from_the_second_scan(self):
+        relooked = detail(10, author="teammate", reviews=[rv(ME, "COMMENTED", OLD, oid="h1"), rv(ME, "COMMENTED", NOW, oid="h2")])
+        open22 = detail(22, author="stranger", reviews=[rv(ME, "COMMENTED", OLD, oid="h2")])
+        merged22 = {**detail(22, author="stranger", state="MERGED"), "mergedAt": "2026-10-21T16:00:00Z"}
+        states = [{**DETAILS, 22: open22}, {**DETAILS, 10: relooked, 22: merged22}]
+        # #22 leaves every search once it merges: only the last prs.json still names it.
+        searches = [{"reviewed": [(22, "stranger")]}, {}]
+        outs, _, _, hist = scans(lambda i: fake(details=states[i], **searches[i]), n=2)
+        self.assertIn("0 new in the history", outs[0], "the first scan has nothing to compare")
+        self.assertEqual(sorted((r["event"], r["ref"], r["day"]) for r in map(json.loads, hist.splitlines())),
+                         [("merged", "acme/app#22", "2026-10-21"), ("reviewed", "acme/app#10", "2026-10-21")])
 
 
 class Watchdog(unittest.TestCase):
