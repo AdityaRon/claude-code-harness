@@ -14,9 +14,16 @@ export type LogEvent = {
   text: string
   corrected: boolean
 }
+// The PRS section, from the last prs.json a scan wrote: one line a PR, what
+// needs the user first, a count per repo, and the last five active days.
+export type PrRow = { key: string; group: 'reviewing' | 'authored'; needs: boolean; line: string }
+export type PrRepo = { repo: string; needs: number; total: number }
+export type PrDay = { day: string; reviewed: number; approved: number; merged: number }
+export type Prs = { as_of: string; age: string; stale: boolean; repos: PrRepo[]; rows: PrRow[]; days: PrDay[] }
 export type Panel = {
   state: string
   day: string
+  prs?: Prs
   needs: Need[]
   going: Going[]
   sessions: WithSession[]
