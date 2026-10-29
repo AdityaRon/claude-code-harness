@@ -5,10 +5,12 @@ same turn.
   check_draft.py FILE (--reply TS | --top-level) [--asks LOGIN...] [--answers TS...]
                                                    shape, live PR state, send mode; records a pass
   check_draft.py FILE --assert-fresh [--max-age S]  the bytes are the ones that passed, recently
-  check_draft.py FILE --record-sent ID [--replies BEFORE AFTER] [--context TEXT]
+  check_draft.py FILE --record-sent ID [--replies BEFORE AFTER] [--context TEXT] [--post-at HH:MM]
                                                    after sending: keep a copy, log it, retire the pass;
-                                                   --context: who asked what, on the log line the panel shows
+                                                   --context: who asked what, the headline the panel shows
+                                                   (100 characters, names in words, no ids or links)
   check_draft.py --scheduled                       scheduled messages not yet posted, with the copy to re-gate
+  check_draft.py --withdrawn ID [--context WHY]    a scheduled message deleted before it posted
 
 A reply that answers several messages threads under the newest of them: name
 them all with --answers, and --reply must be the newest (six of seven answers
@@ -45,6 +47,7 @@ Exit 0 pass, 1 the draft fails a rule, 2 usage or config, 3 live state unknown.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import re
@@ -261,8 +264,20 @@ def stamp_path(cfg, path: str):
     return d / (hub.sha256(os.path.realpath(path).encode())[:16] + ".json")
 
 
+HEADER = re.compile(rb"\A(?:comms-hub draft\n)?to: .*?^---\n", re.S | re.M)
+
+
+def message(path) -> tuple[bytes, bool]:
+    """The bytes that go to Slack: a draft's message after its header's `---`, or
+    the whole file. The header once counted toward slack.max_chars, failing a
+    reply that passed without it (2026-10-28)."""
+    data = open(path, "rb").read()
+    m = HEADER.match(data)
+    return (data[m.end():].lstrip(b"\n"), True) if m else (data, False)
+
+
 def gate(args, cfg, gh) -> int:
-    data = open(args.file, "rb").read()
+    data, has_header = message(args.file)
     text = data.decode("utf-8")
     for ts in [args.reply] * bool(args.reply) + args.answers:
         if not TS.fullmatch(ts):
@@ -304,6 +319,9 @@ def gate(args, cfg, gh) -> int:
     for p in problems:
         print(f"FAIL: {p}")
     if problems:
+        regate_of = mark_regate(cfg, args.file, False)
+        if regate_of:
+            print(f"claim moved on scheduled message {regate_of}: withdraw it before post_at, or tell the user")
         return 1
     if not known:
         print("BLOCKED: a linked PR's live state is unknown; the claims cannot be checked")
@@ -311,9 +329,32 @@ def gate(args, cfg, gh) -> int:
     stamp = {"path": os.path.realpath(args.file), "sha256": hub.sha256(data),
              "passed_at": hub.now().timestamp(), "target": target, "send": mode,
              "post_at": post.isoformat() if post else None, "prs": lines, "asks": asks}
+    regate_of = mark_regate(cfg, args.file, True)
+    if regate_of:
+        stamp["regate_of"] = regate_of
     stamp_path(cfg, args.file).write_text(json.dumps(stamp, indent=1))
-    print(f"PASS sha256={stamp['sha256'][:12]}: send this file in the same turn, after --assert-fresh")
+    print(f"PASS sha256={stamp['sha256'][:12]}: send "
+          + ("the message after the header's `---`, not the header," if has_header else "this file")
+          + " in the same turn, after --assert-fresh")
     return 0
+
+
+def mark_regate(cfg, path, ok: bool) -> str | None:
+    """A gate run on a scheduled message's sent copy is its check before post_at:
+    the outcome goes on that message's record, which the panel's Going out reads."""
+    real = os.path.realpath(path)
+    for p in sorted((hub.state_dir(cfg) / "gate").glob("*.json")):
+        s = json.loads(p.read_text())
+        if s.get("send") != "schedule" or not s.get("sent_copy") or os.path.realpath(s["sent_copy"]) != real:
+            continue
+        if ok:
+            s["regated_at"] = hub.now().isoformat()
+            s.pop("claim_moved_at", None)
+        else:
+            s["claim_moved_at"] = hub.now().isoformat()
+        p.write_text(json.dumps(s, indent=1))
+        return s["sent_id"]
+    return None
 
 
 def read_stamp(cfg, path):
@@ -331,7 +372,7 @@ def assert_fresh(args, cfg) -> int:
     if stamp.get("sent_id"):
         print(f"STALE: this pass was already sent as {stamp['sent_id']}")
         return 1
-    if hub.sha256(open(args.file, "rb").read()) != stamp["sha256"]:
+    if hub.sha256(message(args.file)[0]) != stamp["sha256"]:
         print("STALE: the file changed since the gate passed; run the gate again")
         return 1
     age = hub.now().timestamp() - stamp["passed_at"]
@@ -345,11 +386,15 @@ def assert_fresh(args, cfg) -> int:
 
 def record_sent(args, cfg) -> int:
     stamp, p = read_stamp(cfg, args.file)
-    data = open(args.file, "rb").read()
+    data = message(args.file)[0]
     if not stamp or stamp.get("sent_id") or hub.sha256(data) != stamp["sha256"]:
         print("FAIL: no unsent gate pass for these bytes; nothing recorded")
         return 1
-    if stamp["target"].startswith("reply:") and not args.replies:
+    # A scheduled reply cannot move the count before post_at, so it records at
+    # once and the morning step confirms it landed. Refusing it left every
+    # scheduled reply without a sent_id, missing from --scheduled (1 of 3 shown
+    # on 2026-10-28).
+    if stamp["target"].startswith("reply:") and not args.replies and stamp["send"] != "schedule":
         print("FAIL: a reply is confirmed by its parent's reply count: re-read the thread and pass "
               "--replies BEFORE AFTER (the send tool says OK either way); nothing recorded")
         return 1
@@ -359,20 +404,74 @@ def record_sent(args, cfg) -> int:
             print(f"FAIL: the parent's reply count did not move ({before} -> {after}): the reply did not land "
                   "where the send tool said; nothing recorded")
             return 1
+    # The session may schedule later than the gate's post_at (09:00 for a
+    # reply, 2026-10-28); the record then said 08:30. Never earlier: that would
+    # post inside quiet hours, before the morning tick gates it again.
+    if args.post_at:
+        planned = hub.parse_time(stamp.get("post_at") or "")
+        if stamp["send"] != "schedule" or not planned:
+            print("FAIL: --post-at is for a message the gate scheduled; nothing recorded")
+            return 1
+        try:
+            t = dt.time.fromisoformat(args.post_at) if re.fullmatch(r"\d{2}:\d{2}", args.post_at) else None
+            post = dt.datetime.combine(planned.astimezone(hub.zone(cfg)).date(), t, tzinfo=hub.zone(cfg)) if t \
+                else hub.parse_time(args.post_at)
+        except ValueError:
+            post = None
+        if not post or post < planned:
+            print(f"FAIL: --post-at {args.post_at} is not HH:MM at or after the gate's post_at "
+                  f"{planned.astimezone(hub.zone(cfg)):%H:%M}; nothing recorded")
+            return 1
+        stamp["post_at"] = post.isoformat()
     day = hub.local_now(cfg).strftime("%Y-%m-%d")
     d = hub.state_dir(cfg) / "sent" / day
     d.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w.-]", "_", args.record_sent)
     shutil.copyfile(args.file, d / f"{safe}.md")
+    verb = "scheduled" if stamp["send"] == "schedule" else "sent"
+    # --context is the text the panel shows. The message has gone either way,
+    # so one that cannot be that text still records, as detail.
+    context = " ".join((args.context or "").split())
+    problem = hub.text_problem(context) if context else "no --context"
+    text = context if not problem else ("reply" if stamp["target"].startswith("reply:") else "message")
+    if problem and context:
+        print(f"WARN: --context is detail, not panel text ({problem}); the panel shows {text!r}")
     stamp["sent_id"] = args.record_sent
     stamp["sent_copy"] = str(d / f"{safe}.md")
+    stamp["headline"] = text
     p.write_text(json.dumps(stamp, indent=1))
-    verb = "scheduled" if stamp["send"] == "schedule" else "sent"
-    context = " ".join((args.context or "").split())
-    hub.append_log(cfg, f"{verb} {args.record_sent} target={stamp['target']} sha256={stamp['sha256'][:12]}"
-                   + (f": {context}" if context else ""))
+    detail = (f"id={args.record_sent} target={stamp['target']} sha256={stamp['sha256'][:12]}"
+              + (f" post_at={stamp['post_at']}" if stamp.get("post_at") else "")
+              + (f"; {context}" if problem and context else ""))
+    hub.log_event(cfg, verb, text, ref=first_ref(stamp), target=hub._draft(args.file).get("to", "").split(" ")[0],
+                  detail=detail)
     print(f"recorded {verb} {args.record_sent}: sent/{day}/{safe}.md")
     return 0
+
+
+def first_ref(stamp: dict) -> str:
+    """The first PR the message links, as the gate recorded it: `owner/repo#N state=...`."""
+    return (stamp.get("prs") or [""])[0].split(" ")[0]
+
+
+def withdraw(args, cfg) -> int:
+    """A scheduled message deleted in Slack before it posted: it no longer counts
+    as pending, so no tick gates it again and the panel stops showing it."""
+    for p in sorted((hub.state_dir(cfg) / "gate").glob("*.json")):
+        s = json.loads(p.read_text())
+        if s.get("send") != "schedule" or s.get("sent_id") != args.withdrawn:
+            continue
+        if not s.get("withdrawn_at"):
+            s["withdrawn_at"] = hub.now().isoformat()
+            p.write_text(json.dumps(s, indent=1))
+            why = " ".join((args.context or "").split())
+            hub.log_event(cfg, "withdrawn", s.get("headline") or "scheduled message", ref=first_ref(s),
+                          target=hub._draft(s.get("sent_copy")).get("to", "").split(" ")[0],
+                          detail=f"id={args.withdrawn} post_at={s['post_at']}" + (f"; {why}" if why else ""))
+        print(f"withdrawn {args.withdrawn}: no longer scheduled")
+        return 0
+    print(f"FAIL: no scheduled message {args.withdrawn} in the gate's records; nothing changed")
+    return 1
 
 
 def list_scheduled(cfg) -> int:
@@ -401,6 +500,8 @@ def main(argv=None, gh=None) -> int:
     ap.add_argument("--replies", nargs=2, type=int, metavar=("BEFORE", "AFTER"),
                     help="the parent's reply count re-read before and after the send")
     ap.add_argument("--context", metavar="TEXT", help="who asked what, in one line, for the log")
+    ap.add_argument("--withdrawn", metavar="ID", help="a scheduled message deleted before it posted")
+    ap.add_argument("--post-at", metavar="HH:MM", help="with --record-sent: the time it was scheduled for, if later")
     ap.add_argument("--config")
     args = ap.parse_args(argv)
     try:
@@ -410,6 +511,8 @@ def main(argv=None, gh=None) -> int:
         return 2
     if args.scheduled:
         return list_scheduled(cfg)
+    if args.withdrawn:
+        return withdraw(args, cfg)
     if not args.file or not os.path.isfile(args.file):
         print(f"no such file: {args.file}")
         return 2

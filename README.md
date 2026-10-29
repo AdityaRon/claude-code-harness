@@ -159,9 +159,10 @@ you as a comment only. It never approves a PR or merges someone else's.
   tests and `skills/comms-hub/tests/run.py --mutate` checks that each rule's
   mutation turns a test red.
 - A panel beside the comms session's chat (`skills/comms-hub/panel/`, a mod
-  `hub.py launch` loads into that session alone): the held drafts and today's
-  log, each line with who asked what, read from disk as each turn ends, so it
-  calls no model. `claude plugin test skills/comms-hub/panel` runs its tests,
+  `hub.py launch` loads into that session alone): what needs you, what goes
+  out and when, what is with other sessions, and what changed since you last
+  looked, one line each, from `hub.py panel` as each turn ends, so it calls no
+  model. `claude plugin test skills/comms-hub/panel` runs its tests,
   and `bin/upstream-check.sh` runs them against each new Claude Code release.
 
 ## Design choices

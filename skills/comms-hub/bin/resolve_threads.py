@@ -170,7 +170,7 @@ def main(argv=None, gh=None) -> int:
             continue
         print(f"{'resolved' if resolved else 'STILL OPEN'} {ref} {where} thread={tid} isResolved={str(resolved).lower()} (re-read)")
         if resolved:
-            hub.append_log(cfg, f"resolved thread {tid} on {ref} ({where})")
+            hub.log_event(cfg, "resolved", "review thread", ref=ref, detail=f"thread {tid} ({where})")
         else:
             rc = 3
     return rc
