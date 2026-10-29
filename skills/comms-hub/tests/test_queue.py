@@ -40,13 +40,20 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   reviewed-own-prs: queue.py: `reviewed-by:{me} -author:{me} ` => `reviewed-by:{me} `
   reviewed-unbounded: queue.py: `f"updated:>={cutoff:%Y-%m-%d} {scope(owners)}")` => `f"{scope(owners)}")`
   relook-at-head: queue.py: `if not last or sha == head:` => `if not last:`
-  watched-wins: queue.py: `if ref in details and ref not in reviewed_rows:` => `if ref in details:`
+  watched-wins: queue.py: `if ref in details and ref not in reviewed_rows and ref not in parked:` => `if ref in details and ref not in parked:`
   inbound-wins: queue.py: `for r in inbound if row_ref(r) not in reviewed_rows]),` => `for r in inbound]),`
   need-unchanged: queue.py: `need = 3 + len(authors)` => `need = 2 + len(authors)`
   route-todo-relogged: queue.py: `key = f"route:{r['ref']}:{r['who']}@{r['at']}"` => `key = f"route:{r['ref']}:{r['who']}@{r['at']}:{len(keys)}"`
   review-todo-relogged: queue.py: `key = f"review:{ref}@{details[ref]['headRefOid'][:7]}"` => `key = f"review:{ref}@{details[ref]['headRefOid'][:7]}:{len(keys)}"`
   logged-keys-folded: queue.py: `for r in hub.day_rows(cfg, hub.local_now(cfg).date() - dt.timedelta(days=back))` => `for r in (hub.folded(cfg, hub.OPEN_DAYS) if back == 0 else [])`
   logged-keys-today-only: queue.py: `for back in range(hub.OPEN_DAYS)` => `for back in range(1)`
+  parked-reviewed-shown: queue.py: `for ref in sorted((reviewed_refs | inbound_refs | set(watched_items)) - set(parked)):` => `for ref in sorted(reviewed_refs | inbound_refs | set(watched_items)):`
+  parked-watched-shown: queue.py: `if ref in details and ref not in reviewed_rows and ref not in parked:` => `if ref in details and ref not in reviewed_rows:`
+  parked-awaiting-shown: queue.py: `if rows["awaiting"] and ref not in parked:` => `if rows["awaiting"]:`
+  parked-drift-shown: queue.py: `drift += [] if ref in parked else rows["drift"]` => `drift += rows["drift"]`
+  parked-mine-in-panel: queue.py: `mine = sorted(r for r in refs - set(parked) if` => `mine = sorted(r for r in refs if`
+  parked-theirs-in-panel: queue.py: `theirs = sorted(r for r in (inbound_refs | reviewed_refs | set(watched_items)) - set(parked)` => `theirs = sorted(r for r in (inbound_refs | reviewed_refs | set(watched_items))`
+  parked-unsaid: queue.py: `emit(f"parked: {len(parked)}" + (` => `(lambda *a: None)(f"parked: {len(parked)}" + (`
   in-flight-unnamed: queue.py: `emit(f"  {r['id']}  {r['text']}  {r['ref']}")` => `pass`
   todo-never-closed: queue.py: `closed.append(hub.log_event(cfg, "done", why, ref=pr["url"], corrects=r["id"]))` => `pass`
   route-todo-closed-early: queue.py: `elif key.startswith("route:") and key not in route_keys:` => `elif key.startswith("route:"):`
@@ -595,6 +602,27 @@ class InFlight(unittest.TestCase):
         done = [r for r in rows if r["kind"] == "done"]
         self.assertEqual(sorted(r["text"] for r in done), ["answered on the PR", "review posted at the head"])
         self.assertIn("2 closed", outs[1])
+
+
+class Parked(unittest.TestCase):
+    """PRs the user parked: a local filter run after each scan let them flash back in between."""
+
+    def test_a_parked_pr_leaves_the_status_sections_and_the_panel_but_not_the_asks(self):
+        def seed(cfg, state):
+            (state / "parked.json").write_text(json.dumps({r: {"at": "2026-10-21T16:00:00+00:00", "why": "not mine"}
+                                                           for r in ("acme/app#10", "acme/app#3", "acme/app#2", "acme/app#9")}))
+        outs, rows, prs, _ = scans(lambda i: fake(details={**DETAILS, 2: InFlight().ask()}), before=seed)
+        out = outs[0]
+        self.assertIn("parked: 4 (acme/app#10 acme/app#2 acme/app#3 acme/app#9): left out of", out)
+        for name in ("REVIEWED", "WATCHED", "DRIFT"):
+            self.assertEqual(section(out, name), [], name)
+        self.assertEqual([r.split()[0] for r in section(out, "AWAITING")], ["acme/app#1", "acme/app#5"])
+        self.assertEqual([r.split()[0] for r in section(out, "INBOUND")], ["acme/app#9"], "a new ask still shows")
+        self.assertIn("acme/app#2", " ".join(section(out, "ROUTE")))
+        self.assertIn("acme/app#2", " ".join(section(out, "OUTBOUND")))
+        self.assertEqual([p["ref"] for p in prs["reviewing"]], ["acme/app#14"])
+        self.assertEqual([p["ref"] for p in prs["authored"]], ["acme/app#1", "acme/app#5"])
+        self.assertNotIn("re-look: new commits", [r["text"] for r in rows if r["kind"] == "todo"])
 
 
 class Morning(unittest.TestCase):

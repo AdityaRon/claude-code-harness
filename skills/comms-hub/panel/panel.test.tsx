@@ -221,6 +221,13 @@ test('PRS counts each repo, marks what needs the user, and colours what waits an
   await ui.unmount()
 })
 
+test('PRS says how many PRs are parked', async ($, on) => {
+  world(on, { now: json({ ...PANEL, prs: { ...PANEL.prs, parked: 2 } }) })
+  await $.command.run({ command: 'comms', args: '' })
+
+  expect(await texts($)).toContain('PRS · 5  as of 10:00 (0m ago)  2 parked')
+})
+
 test('the last five days line up in columns', async ($, on) => {
   world(on)
   await $.command.run({ command: 'comms', args: '' })

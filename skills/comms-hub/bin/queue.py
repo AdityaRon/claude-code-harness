@@ -502,11 +502,7 @@ def key_of(row: dict) -> str:
     return m.group(1) if m else ""
 
 
-def pr_ref(link: str) -> str:
-    """owner/repo#N from a PR link or ref, '' when it is neither."""
-    m = re.search(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", link or "") \
-        or re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", (link or "").strip())
-    return f"{m.group(1)}/{m.group(2)}#{m.group(3)}" if m else ""
+pr_ref = hub.pr_ref
 
 
 def unregated_posts(cfg: dict, at: dt.datetime) -> list[dict]:
@@ -584,6 +580,11 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
                                         "answered, then log the outcome with --corrects ID" if needs else ""))
     emit(f"with-sessions: {len(routed_)}" + (f" ({' '.join(r['id'] for r in routed_)}): when a peer answers, "
                                               "log --kind returned --corrects ID" if routed_ else ""))
+    # What the user parked stays out of the status sections and the panel;
+    # what asks something new of them still shows.
+    parked = hub.parked(cfg)
+    emit(f"parked: {len(parked)}" + (f" ({' '.join(sorted(parked))}): left out of REVIEWED, WATCHED, AWAITING, DRIFT "
+                                     "and the panel; INBOUND, OUTBOUND and ROUTE still show them" if parked else ""))
 
     need = 3 + len(authors)
     can_search = False
@@ -698,23 +699,23 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
         rows = classify(ref, details[ref], me)
         if rows["outbound"]:
             outbound.append(rows["outbound"])
-        if rows["awaiting"]:
+        if rows["awaiting"] and ref not in parked:
             awaiting.append(rows["awaiting"])
         route += rows["route"]
-        drift += rows["drift"]
+        drift += [] if ref in parked else rows["drift"]
     if unknown:
         blocked.append(f"{len(unknown)} PR(s) could not be read")
 
     # A PR in REVIEWED is a re-look, whether or not it was requested again or
     # its author is watched: one row, there.
     reviewed_rows = {}
-    for ref in sorted(reviewed_refs | inbound_refs | set(watched_items)):
+    for ref in sorted((reviewed_refs | inbound_refs | set(watched_items)) - set(parked)):
         row = reviewed_row(ref, details[ref], me, ref in inbound_refs) if ref in details else None
         if row:
             reviewed_rows[ref] = row
     watched_rows = []
     for ref, r in watched_items.items():
-        if ref in details and ref not in reviewed_rows:
+        if ref in details and ref not in reviewed_rows and ref not in parked:
             row = watched_row(ref, details[ref], me, ref in inbound_refs, r["updated_at"])
             if row:
                 watched_rows.append(row)
@@ -738,8 +739,8 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     if blocked:
         emit("prs: not written (BLOCKED); the panel keeps the last scan's, with its age")
     else:
-        mine = sorted(r for r in refs if r in details and details[r]["state"] == "OPEN")
-        theirs = sorted(r for r in (inbound_refs | reviewed_refs | set(watched_items))
+        mine = sorted(r for r in refs - set(parked) if r in details and details[r]["state"] == "OPEN")
+        theirs = sorted(r for r in (inbound_refs | reviewed_refs | set(watched_items)) - set(parked)
                         if r in details and details[r]["state"] == "OPEN" and not details[r]["isDraft"]
                         and not hub.is_me(details[r].get("author"), me)
                         and (r in inbound_refs or my_last_review(details[r], me)))

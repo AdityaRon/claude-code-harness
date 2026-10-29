@@ -40,6 +40,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   strip-uncounted: hub.py: `counts[r["day"]][r["event"]] += 1` => `pass`
   events-oldest-first: hub.py: `for r in reversed(today) if` => `for r in today if`
   last-tick-counts-all: hub.py: `r in raw[scans[-1] + 1:]` => `r in raw`
+  parked-uncounted: hub.py: `"parked": len(parked(cfg))}` => `"parked": 0}`
   held-text-uncut: hub.py: `"text": clip(h["first"]), "full"` => `"text": h["first"], "full"`
   held-full-first-line: hub.py: `"full": whole(h["body"])}` => `"full": h["first"]}`
   going-full-first-line: hub.py: `"full": whole(d["body"]), "status"` => `"full": d["first"], "status"`
@@ -336,6 +337,14 @@ class Prs(unittest.TestCase):
             line = json.loads(main_out("panel")[1])["prs"]["rows"][0]["line"]
         self.assertIn("new commits", line)
         self.assertNotIn("approvable", line)
+
+    def test_it_counts_what_is_parked(self):
+        with Env(now=NOW) as env:
+            self.write(env)
+            self.assertEqual(json.loads(main_out("panel")[1])["prs"]["parked"], 0)
+            main_out("park", "acme/app#7")
+            main_out("park", "https://github.com/acme/infra/pull/8", "not mine to track")
+            self.assertEqual(json.loads(main_out("panel")[1])["prs"]["parked"], 2)
 
     def test_an_old_or_unreplaced_file_is_stale_and_says_when(self):
         with Env(now=NOW) as env:
