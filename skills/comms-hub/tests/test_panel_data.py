@@ -40,7 +40,11 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   strip-uncounted: hub.py: `counts[r["day"]][r["event"]] += 1` => `pass`
   events-oldest-first: hub.py: `for r in reversed(today) if` => `for r in today if`
   last-tick-counts-all: hub.py: `r in raw[scans[-1] + 1:]` => `r in raw`
-  held-text-uncut: hub.py: `"text": clip(h["first"])}` => `"text": h["first"]}`
+  held-text-uncut: hub.py: `"text": clip(h["first"]), "full"` => `"text": h["first"], "full"`
+  held-full-first-line: hub.py: `"full": whole(h["body"])}` => `"full": h["first"]}`
+  going-full-first-line: hub.py: `"full": whole(d["body"]), "status"` => `"full": d["first"], "status"`
+  full-uncapped: hub.py: `return text if len(text) <= FULL_MAX else` => `return text if True else`
+  full-blank-runs: hub.py: `text = re.sub(r"\n\s*\n", "\n\n", (text or "").strip())` => `text = (text or "").strip()`
   clip-off-by-one: hub.py: `text[:TEXT_MAX - 1].rstrip() + "…"` => `text[:TEXT_MAX].rstrip() + "…"`
   kindless-refused: hub.py: `if args.kind is None:` => `if False:`
   kindless-text-dropped: hub.py: `args.detail = " ".join(x for x in (text, args.detail) if x)` => `pass`
@@ -210,7 +214,7 @@ class Panel(unittest.TestCase):
                    "unrecorded": {"sent_id": None}, "copy": {"regate_of": "Q0001"}}
         for name, extra in records.items():
             copy = s / "sent" / "2026-10-21" / f"{name}.md"
-            copy.write_text("to: D0DMBOBXX1 top-level\nkind: reply\n---\n\nBob, could you review #15?\n")
+            copy.write_text("to: D0DMBOBXX1 top-level\nkind: reply\n---\n\nBob, could you review #15?\n\nThe tables move first.\n")
             (s / "gate" / f"{name}.json").write_text(json.dumps({
                 "send": "schedule", "sent_id": name, "sent_copy": str(copy), "path": str(copy), "target": "top-level",
                 "post_at": "2026-10-22T08:30:00-07:00", "passed_at": passed, "headline": f"review ask {name}",
@@ -259,6 +263,8 @@ class Panel(unittest.TestCase):
             (env.state / "last-scan").write_text("2026-10-21T16:40:00+00:00\n")
             p = json.loads(main_out("panel")[1])
         self.assertEqual(p["going"][0]["status"], "gated 09:50 ✓")
+        self.assertEqual(p["going"][0]["full"], "Bob, could you review #15?\n\nThe tables move first.",
+                         "the whole draft, not its headline or first line")
 
     def test_an_empty_state_dir_draws_empty_sections(self):
         with Env(now=NOW):
@@ -367,6 +373,20 @@ class Prs(unittest.TestCase):
         for row in (p["needs"][0], p["held"][0]):
             self.assertEqual(len(row["text"]), 80, row["text"])
             self.assertTrue(row["text"].startswith("Follow-up on the release: ") and row["text"].endswith("…"))
+            self.assertEqual(row["full"], body, "the expanded view reads it whole")
+
+    def test_the_expanded_view_gets_the_whole_draft_within_a_cap(self):
+        with Env(now=NOW) as env:
+            (env.state / "held").mkdir(parents=True)
+            (env.state / "held" / "app-session-1761041000.000100.md").write_text(
+                "to: C0CHANONE1 top-level\nkind: reply\n---\n\nFirst paragraph.\n\n\n\nSecond, after three blank lines.\n")
+            (env.state / "held" / "app-session-1761041100.000100.md").write_text(
+                "to: C0CHANONE1 top-level\nkind: reply\n---\n\n" + "word " * 1000 + "\n")
+            held = json.loads(main_out("panel")[1])["held"]
+        self.assertEqual((held[0]["text"], held[0]["full"]),
+                         ("First paragraph.", "First paragraph.\n\nSecond, after three blank lines."))
+        self.assertEqual(len(held[1]["full"]), 2000)
+        self.assertTrue(held[1]["full"].endswith("…"))
 
 
 class Lint(unittest.TestCase):

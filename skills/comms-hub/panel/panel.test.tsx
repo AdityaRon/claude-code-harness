@@ -63,13 +63,25 @@ const PANEL = {
   read: '10:00',
 }
 
+// Fifteen events, three past the compact cap, and drafts with more than their first line.
+const BUSY = {
+  ...PANEL,
+  events: [...PANEL.events, ...Array.from({ length: 12 }, (_, i) => ({
+    key: `row:1021.${20 + i}`, ts: '2026-10-21T15:00:00+00:00', at: '08:00', kind: 'note', ref: '', target: '',
+    text: `older note ${i}`, corrected: false }))],
+  going: [{ ...PANEL.going[0], full: 'Bob, could you review #15?\n\nThe tables move first.' }],
+  held: [{ key: 'held:d', ref: 'app #18', target: 'Bob DM', text: 'Merged.', reason: 'a fold-in is expected',
+           full: 'Merged.\n\nIt ships in the next release.' }],
+}
+
 const json = (panel: object) => ({ exitCode: 0, stdout: JSON.stringify(panel), stderr: '' })
 
 // Each hook here stands for the engine: a call on `$` is answered `{ value }`.
 // `hub.py panel` answers with whatever `out.now` holds when it is asked.
-function world(on, out = { now: json(PANEL) }) {
+// `opened` is what `$.ui.open` answers: a surface that docks no pane answers false.
+function world(on, out = { now: json(PANEL) }, opened: object = { isPlaced: true }) {
   on('command.register', () => ({ value: { command: 'comms' } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', () => ({ value: opened }))
   on('clock.now', () => ({ value: NOW }))
   on('process.run', (_, e) =>
     ({ value: e.argv[0] === 'bash' ? { exitCode: 0, stdout: '/usr/bin/python3.12\n', stderr: '' } : out.now }))
@@ -104,6 +116,15 @@ async function colorOf($, text: string | RegExp) {
 
   return found?.props.color
 }
+
+// The person pressing a button the pane drew.
+async function press($, key: string) {
+  const ui = await mounted($)
+  await ui.press({ key })
+  await ui.unmount()
+}
+
+const EVENT_ROW = /^(● | {2})\d\d:\d\d {2}/
 
 test('the summary counts each section, then what needs the user comes first', async ($, on) => {
   world(on)
@@ -165,6 +186,16 @@ test('a hub.py from before the PRS section draws the rest as it did', async ($, 
   expect(out).toContain('GOING OUT · 2')
 })
 
+test('before a scan writes the PR file, PRS says it is waiting', async ($, on) => {
+  const none = { ...PANEL, prs: { as_of: '', age: '', stale: true, repos: [], rows: [], days: [] } }
+  world(on, { now: json(none) })
+  await $.command.run({ command: 'comms', args: '' })
+
+  const out = await texts($)
+  expect(out).toContain('PRS  waiting for a scan to write them')
+  expect(out.some(t => t.startsWith('PRS ·'))).toBe(false)
+})
+
 test('PRS counts each repo, marks what needs the user, and colours what waits and what is ready', async ($, on) => {
   world(on)
   await $.command.run({ command: 'comms', args: '' })
@@ -216,15 +247,96 @@ test('a stale PR file says when it is from, and a quiet week draws no table', as
   expect((await texts($)).some(t => t.startsWith('last 5 days'))).toBe(false)
 })
 
-test('PRS shows ten rows, then a count of the rest', async ($, on) => {
+test('PRS shows ten rows, then a button for the rest', async ($, on) => {
   const rows = Array.from({ length: 12 }, (_, i) => ({ key: `pr:acme/app#${i}`, group: 'reviewing', needs: false,
                                                        line: `app #${i}  dana  not reviewed · CI green` }))
   world(on, { now: json({ ...PANEL, prs: { ...PANEL.prs, rows } }) })
   await $.command.run({ command: 'comms', args: '' })
 
-  const out = await texts($)
-  expect(out.filter(t => /^  app #\d+  dana/.test(t))).toHaveLength(10)
-  expect(out).toContain('  +2 more')
+  expect((await texts($)).filter(t => /^  app #\d+  dana/.test(t))).toHaveLength(10)
+  const ui = await mounted($)
+  expect((await ui.find({ type: 'Button', key: 'more:prs' }))?.text).toBe('+2 more')
+  await ui.unmount()
+})
+
+test('expand shows every row and every message whole, and compact cuts them again', async ($, on) => {
+  world(on, { now: json(BUSY) })
+  await $.command.run({ command: 'comms', args: '' })
+
+  const compact = await mounted($)
+  expect((await compact.findAll({ type: 'Text', text: EVENT_ROW })).length).toBe(12)
+  expect((await compact.find({ type: 'Button', key: 'more:events' }))?.text).toBe('+3 more')
+  const toggle = await compact.find({ type: 'Button', key: 'view' })
+  expect([toggle?.text, toggle?.props.hotkey]).toEqual(['expand', 'e'])
+  expect((await compact.find({ type: 'Text', text: LONG }))?.props.wrap).toBe('truncate-end')
+  expect(await compact.find({ type: 'Text', text: /next release/ })).toBeUndefined()
+  await compact.unmount()
+
+  await press($, 'view')
+  const full = await mounted($)
+  expect((await full.findAll({ type: 'Text', text: EVENT_ROW })).length).toBe(15)
+  expect(await full.find({ type: 'Button', key: 'more:events' })).toBeUndefined()
+  expect((await full.find({ type: 'Button', key: 'view' }))?.text).toBe('compact')
+  expect((await full.find({ type: 'Text', text: LONG }))?.props.wrap).toBe('wrap')
+  expect((await full.find({ type: 'Text', text: /^ {4}Merged\./ }))?.text).toBe('    Merged.\n\nIt ships in the next release.')
+  expect((await full.find({ type: 'Text', text: /^ {4}Bob, could/ }))?.text)
+    .toBe('    Bob, could you review #15?\n\nThe tables move first.')
+  await full.unmount()
+
+  await press($, 'view')
+  expect((await texts($)).filter(t => EVENT_ROW.test(t))).toHaveLength(12)
+})
+
+test('a "+k more" button expands the pane', async ($, on) => {
+  world(on, { now: json(BUSY) })
+  await $.command.run({ command: 'comms', args: '' })
+
+  await press($, 'more:events')
+  const ui = await mounted($)
+  expect((await ui.findAll({ type: 'Text', text: EVENT_ROW })).length).toBe(15)
+  expect((await ui.find({ type: 'Button', key: 'view' }))?.text).toBe('compact')
+  await ui.unmount()
+})
+
+test('the pane draws on the mobile surface, and /comms says it opened', async ($, on) => {
+  world(on)
+  const r = await $.command.run({ command: 'comms', args: '' })
+
+  expect(r.text).toBe('Comms pane opened.')
+  const out = await texts($, 'mobile')
+  expect(out).toContain('NEEDS YOU · 1')
+  expect(out).toContain('PRS · 5  as of 10:00 (0m ago)')
+})
+
+// The phone app docks no pane: /comms there once said "opened" and nothing drew.
+test('/comms where no pane draws answers with the state as text', async ($, on) => {
+  world(on, undefined, { isPlaced: false, reason: 'the attached surfaces place no panes: mobile' })
+  const r = await $.command.run({ command: 'comms', args: '' })
+
+  expect(r.text).toBe([
+    'Comms · Wed 21 Oct: 1 need you · 3 PRs need you · 2 going out · 1 with sessions · 0 held · next tick 10:07',
+    '● app #14  #team-reviews  needs your go: Carol, could you review #14?',
+    '● app #31  dana  commented@1111111 · new commits · CI green · approved by erin',
+    '● app #32  dana  commented@2222222 · approvable · CI pending',
+    '● app #40  approved, needs your merge · CI green',
+    '(no pane here: the attached surfaces place no panes: mobile)',
+  ].join('\n'))
+})
+
+test('a phone joining pins the counts on the status line, and its leaving clears them', async ($, on) => {
+  const statuses: (string | undefined)[] = []
+  world(on)
+  on('ui.status', (_, e) => { statuses.push(e.text); return { value: undefined } })
+  on('session.attach', (_, e) => ({ clientId: e.clientId }))
+  on('session.detach', (_, e) => ({ clientId: e.clientId }))
+  await $.command.run({ command: 'comms', args: '' })
+  expect(statuses).toEqual([])
+
+  await $.session.attach({ surface: 'mobile', clientId: 'mobile:1', viewport: { columns: 40, rows: 80, isFullscreen: false } })
+  expect(statuses.at(-1))
+    .toBe('Comms: 1 need you · 3 PRs need you · 2 going out · 1 with sessions · 0 held · next tick 10:07 · /comms for the list')
+  await $.session.detach({ surface: 'mobile', clientId: 'mobile:1', reason: 'detach' })
+  expect(statuses.at(-1)).toBeUndefined()
 })
 
 test('a long line is one row cut at the pane edge', async ($, on) => {

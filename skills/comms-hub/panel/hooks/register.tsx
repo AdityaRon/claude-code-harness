@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Look, Panel, Prs, Snapshot } from '../types'
+import type { Look, Panel, Prs, Snapshot, View } from '../types'
 
 // The comms session's state beside the chat, for a glance after time away:
 // what needs the user, where their PRs stand, what goes out and when, what is
@@ -16,11 +16,16 @@ const EMPTY: Snapshot = { panel: null, problem: '', readAt: 0 }
 // stored, which outlives a reload.
 const snapshot = atom({ plugin: 'comms-panel', key: 'snapshot' } as const, EMPTY, { shape: 'snapshot-3' })
 const look = atom({ plugin: 'comms-panel', key: 'look' } as const, { since: 0, last: 0 } as Look, { shape: 'look-1' })
-// The most rows each section shows before "+k more"; the pane scrolls past that.
+const view = atom({ plugin: 'comms-panel', key: 'view' } as const, { full: false } as View, { shape: 'view-1' })
+// The most rows each section shows compact; the rest wait behind a "+k more"
+// button, which expands the pane: every row, each message whole.
 const ROWS = { needs: 8, prs: 10, going: 6, sessions: 6, held: 6, events: 12 }
 
 // The interpreter the scripts use, found once; a failure is asked again.
 let python: string | undefined
+// The phones attached now. The mobile app docks no pane, so while one is here
+// the counts also ride the status line, which a remote surface draws.
+const phones = new Set<string>()
 
 async function hub($: EngineInterface, args: string[]) {
   const bin = `${$.plugin.root}/../bin`
@@ -43,9 +48,11 @@ async function snapshotOf($: EngineInterface): Promise<Snapshot> {
   }
 }
 
-async function refresh($: EngineInterface): Promise<void> {
+async function refresh($: EngineInterface): Promise<Snapshot> {
   const next = await snapshotOf($)
   await update($, snapshot, () => next)
+  if (phones.size) $.ui.status(statusLine(next))
+  return next
 }
 
 // Opening the pane or running /comms is a look: what was logged before the
@@ -57,6 +64,31 @@ async function looked($: EngineInterface): Promise<void> {
 
 function words(...parts: string[]): string {
   return parts.filter(Boolean).join('  ')
+}
+
+function counts(p: Panel): string {
+  const prNeeds = (p.prs?.rows ?? []).filter(r => r.needs).length
+  return [`${p.needs.length} need you`, `${prNeeds} PRs need you`, `${p.going.length} going out`,
+          `${p.sessions.length} with sessions`, `${p.held.length} held`].join(' · ')
+}
+
+// One line for the status line while a phone is attached.
+function statusLine(s: Snapshot): string {
+  if (s.problem) return s.problem
+  if (!s.panel) return 'Comms: reading the state'
+  return `Comms: ${counts(s.panel)} · next tick ${s.panel.next_tick} · /comms for the list`
+}
+
+// The panel as text, for /comms where no pane draws: the counts, what needs
+// the user, then the PRs that do.
+function summary(s: Snapshot): string {
+  if (s.problem || !s.panel) return statusLine(s)
+  const p = s.panel
+  return [
+    `Comms${p.day ? ` · ${p.day}` : ''}: ${counts(p)} · next tick ${p.next_tick}`,
+    ...p.needs.map(n => `● ${words(n.ref, n.target, n.note)}: ${n.text}`),
+    ...(p.prs?.rows ?? []).filter(r => r.needs).map(r => `● ${r.line}`),
+  ].join('\n')
 }
 
 const CI_COLOR: Record<string, string> = { green: 'success', red: 'error', pending: 'warning' }
@@ -74,18 +106,41 @@ function tone(part: string): string | undefined {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'comms', description: 'Show what needs you, your PRs, what goes out, and what changed' })
+    // Unasked, a pane waits undrawn on a narrow terminal or a surface that docks none: say why, off screen.
     void $.ui.open({ id: PANE, title: TITLE })
+      .then(o => { if (!o.isPlaced) $.ui.log(`comms panel not drawn: ${o.reason}`, { to: 'debug' }) })
     void looked($).then(() => refresh($))
 
     return next(e)
   })
 
   on('command.run', { command: 'comms' }, async $ => {
-    await $.ui.open({ id: PANE, title: TITLE })
+    const opened = await $.ui.open({ id: PANE, title: TITLE })
     await looked($)
+    const s = await refresh($)
+    if (opened.isPlaced) return { text: 'Comms pane opened.' }
+
+    // No pane here (the phone app docks none): the state as text instead, and why.
+    return { text: `${summary(s)}\n(no pane here: ${opened.reason})` }
+  })
+
+  // A phone joining: open the pane for it, and keep the counts on the status
+  // line, in case its app draws no pane at all.
+  on('session.attach', { surface: 'mobile' }, async ($, e, next) => {
+    const done = await next(e)
+    phones.add(e.clientId)
+    await $.ui.open({ id: PANE, title: TITLE })
     await refresh($)
 
-    return { text: 'Comms pane opened.' }
+    return done
+  })
+
+  on('session.detach', { surface: 'mobile' }, async ($, e, next) => {
+    const done = await next(e)
+    phones.delete(e.clientId)
+    if (!phones.size) $.ui.status(undefined)
+
+    return done
   })
 
   // The comms session changes its state dir in its own turns, so a read as
@@ -98,12 +153,15 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const s = await read($, snapshot)
     if (s.problem) return <Text color="error">{s.problem}</Text>
     const p = s.panel
     if (!p) return <Text dimColor>Reading the comms-hub state.</Text>
     const { since } = await read($, look)
+    const { full } = await read($, view)
+    // Compact cuts a row at the pane's edge; expanded wraps it, so all of it reads.
+    const cut = full ? 'wrap' : 'truncate-end'
     const fresh = p.events.filter(ev => Date.parse(ev.ts) > since).length
     // A hub.py from before the PRS section prints no `prs`.
     const prs: Prs = p.prs ?? { as_of: '', age: '', stale: true, repos: [], rows: [], days: [] }
@@ -114,19 +172,33 @@ export const register: Register = on => {
       return n ? <Text><Text weight="bold" color={color}>{`${n}`}</Text>{` ${label}`}</Text>
                : <Text dimColor>{`0 ${label}`}</Text>
     }
+    // A section's rows: all of them expanded, else the first `max`.
+    function shown<T>(items: T[], max: number): T[] {
+      return full ? items : items.slice(0, max)
+    }
+    // What `shown` left out, as a button that expands the pane.
+    function more(name: string, total: number, max: number) {
+      return !full && total > max
+        ? [<Button key={`more:${name}`} label={`+${total - max} more`} dimColor
+                   onPress={() => update($, view, () => ({ full: true }))} />]
+        : []
+    }
     // A section only when it has rows: the summary already says which are empty.
-    function section<T>(title: string, items: T[], max: number, row: (item: T) => unknown[], color = 'claude') {
+    function section<T>(title: string, name: string, items: T[], max: number, row: (item: T) => unknown[],
+                        color = 'claude') {
       if (!items.length) return []
       return [
         <Text weight="bold" color={color}>{`${title} · ${items.length}`}</Text>,
-        ...items.slice(0, max).flatMap(row),
-        ...(items.length > max ? [<Text dimColor>{`  +${items.length - max} more`}</Text>] : []),
+        ...shown(items, max).flatMap(row),
+        ...more(name, items.length, max),
       ]
     }
     // What a row is about on its own line, so a long message never pushes it off the edge.
     function two(head: unknown, sub: string) {
-      return [head, ...(sub ? [<Text dimColor wrap="truncate-end">{`    ${sub}`}</Text>] : [])]
+      return [head, ...(sub ? [<Text dimColor wrap={cut}>{`    ${sub}`}</Text>] : [])]
     }
+    // A draft's message: its first line compact, the whole of it expanded.
+    const msg = (r: { text: string; full?: string }) => (full && r.full) || r.text
     // The strip only once something happened in it; mono so the columns line up on a desktop too.
     const days = prs.days.some(d => d.reviewed || d.approved || d.merged) ? prs.days : []
     const col = (v: string | number) => `${v}`.padStart(7)
@@ -145,6 +217,8 @@ export const register: Register = on => {
             {chip(p.going.length, 'going out', 'suggestion')}
             {chip(p.sessions.length, 'with sessions', 'suggestion')}
             {chip(p.held.length, 'held', 'suggestion')}
+            <Button key="view" hotkey="e" plain label={full ? 'compact' : 'expand'}
+                    onPress={() => update($, view, v => ({ full: !v.full }))} />
           </Box>
         </Box>
 
@@ -153,17 +227,24 @@ export const register: Register = on => {
           <Box flexDirection="column">
             {p.needs.length === 0
               ? <Text color="success">nothing needs you ✓</Text>
-              : section('NEEDS YOU', p.needs, ROWS.needs, n => two(
-                  <Text color="warning" wrap="truncate-end">
+              : section('NEEDS YOU', 'needs', p.needs, ROWS.needs, n => two(
+                  <Text color="warning" wrap={cut}>
                     {`● ${words(n.ref, n.target, n.note)}  `}
                     <Text dimColor>{n.age}</Text>
-                  </Text>, n.text), 'warning')}
+                  </Text>, msg(n)), 'warning')}
           </Box>
         )}
 
+        {/* No file yet (a first scan, or one that could not be read): said, never left blank. */}
+        {p.prs && !prs.as_of && !prs.rows.length && (
+          <Text wrap={cut}>
+            <Text weight="bold" color="claude">PRS</Text>
+            <Text dimColor>  waiting for a scan to write them</Text>
+          </Text>
+        )}
         {(prs.rows.length > 0 || prs.as_of) && (
           <Box flexDirection="column">
-            <Text wrap="truncate-end">
+            <Text wrap={cut}>
               <Text weight="bold" color="claude">{`PRS · ${prs.rows.length}`}</Text>
               {prs.stale ? <Text color="warning">{`  stale, as of ${prs.as_of || 'never'}${prs.age ? ` (${prs.age} ago)` : ''}`}</Text>
                          : <Text dimColor>{`  as of ${prs.as_of} (${prs.age} ago)`}</Text>}
@@ -180,15 +261,15 @@ export const register: Register = on => {
                 ))}
               </Box>
             )}
-            {prs.rows.slice(0, ROWS.prs).map(r => (
-              <Text wrap="truncate-end" dimColor={!r.needs}>
+            {shown(prs.rows, ROWS.prs).map(r => (
+              <Text wrap={cut} dimColor={!r.needs}>
                 {r.needs ? <Text color="warning">● </Text> : '  '}
                 {r.line.split(' · ').map((part, i) => (
                   <Text color={tone(part)}>{i ? ` · ${part}` : part}</Text>
                 ))}
               </Text>
             ))}
-            {prs.rows.length > ROWS.prs && <Text dimColor>{`  +${prs.rows.length - ROWS.prs} more`}</Text>}
+            {more('prs', prs.rows.length, ROWS.prs)}
             {days.length > 0 && [
               <Text mono dimColor>{`${'last 5 days'.padEnd(11)}${days.map(d => col(d.day)).join('')}`}</Text>,
               ...(['reviewed', 'approved', 'merged'] as const).map(k => (
@@ -200,19 +281,18 @@ export const register: Register = on => {
 
         {p.going.length > 0 && (
           <Box flexDirection="column">
-            {section('GOING OUT', p.going, ROWS.going, g => [
-              <Text wrap="truncate-end">
+            {section('GOING OUT', 'going', p.going, ROWS.going, g => two(
+              <Text wrap={cut}>
                 <Text dimColor>{g.post}</Text>
-                {`  ${words(g.target, g.ref, g.text)}  `}
+                {`  ${words(g.target, g.ref, full ? '' : g.text)}  `}
                 {g.warn ? <Text color="warning">{g.status}</Text> : <Text color="success">{g.status}</Text>}
-              </Text>,
-            ])}
+              </Text>, full ? msg(g) : ''))}
           </Box>
         )}
         {p.sessions.length > 0 && (
           <Box flexDirection="column">
-            {section('WITH SESSIONS', p.sessions, ROWS.sessions, w => two(
-              <Text wrap="truncate-end">
+            {section('WITH SESSIONS', 'sessions', p.sessions, ROWS.sessions, w => two(
+              <Text wrap={cut}>
                 {`${words(w.who, w.ref)}  `}
                 <Text dimColor>{`since ${w.since}`}</Text>
               </Text>, w.text))}
@@ -220,11 +300,11 @@ export const register: Register = on => {
         )}
         {p.held.length > 0 && (
           <Box flexDirection="column">
-            {section('HELD', p.held, ROWS.held, d => two(
-              <Text wrap="truncate-end">
+            {section('HELD', 'held', p.held, ROWS.held, d => two(
+              <Text wrap={cut}>
                 {`${words(d.ref, d.target)}  `}
                 <Text dimColor>{d.reason}</Text>
-              </Text>, d.text))}
+              </Text>, msg(d)))}
           </Box>
         )}
 
@@ -234,15 +314,15 @@ export const register: Register = on => {
             <Text color={fresh ? 'warning' : undefined}>{` · ${fresh} new`}</Text>
           </Text>
           {p.events.length === 0 && <Text dimColor>nothing logged yet</Text>}
-          {p.events.slice(0, ROWS.events).map(ev => (
-            <Text wrap="truncate-end">
+          {shown(p.events, ROWS.events).map(ev => (
+            <Text wrap={cut}>
               {Date.parse(ev.ts) > since ? <Text color="warning">● </Text> : '  '}
               <Text dimColor>{ev.at}</Text>
               {`  ${words(ev.kind, ev.ref, ev.target, ev.text)}`}
               {ev.corrected ? <Text dimColor>  corrected</Text> : ''}
             </Text>
           ))}
-          {p.events.length > ROWS.events && <Text dimColor>{`  +${p.events.length - ROWS.events} more`}</Text>}
+          {more('events', p.events.length, ROWS.events)}
         </Box>
       </Box>
     )

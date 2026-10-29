@@ -2,7 +2,7 @@
 """Lint a review and confirm the PR before the review posts, as a COMMENT.
 
   review_lint.py --post REVIEW.json --pr owner/repo#N   lint, then post it, inline comments included
-  review_lint.py FILE --pr owner/repo#N --head SHA      lint a body; pass: prints the post command
+  review_lint.py FILE --pr owner/repo#N --head SHA      lint a body only; posts nothing
 
 REVIEW.json, which the reviewer writes:
   {"head": "<the 40-character sha it read>", "body": "...",
@@ -186,8 +186,10 @@ def main(argv=None, gh=None) -> int:
         return 3
     if problems or stops:
         return 1
-    print(f"PASS: post it as a comment, in one command with && (never ;):")
-    print(f"post: gh pr review {n} --repo {owner}/{repo} --comment --body-file {args.file}")
+    # The way out is --post: a session that followed a printed hand-typed post
+    # command would drop the review's inline comments.
+    print(f"PASS: the body. Post the review with review_lint.py --post <review.json> --pr {owner}/{repo}#{n}, "
+          "which carries its inline comments")
     return 0
 
 
