@@ -20,11 +20,14 @@ on:
       - 'config/upstream-contract.json'
       - 'bin/upstream-check.sh'
       - '.github/workflows/upstream-drift.yml'
+      # A mod: section 4e runs its own tests on the installed CLI.
+      - 'skills/comms-hub/panel/**'
   pull_request:
     paths:
       - 'config/settings.json'
       - 'config/upstream-contract.json'
       - 'bin/upstream-check.sh'
+      - 'skills/comms-hub/panel/**'
 
 # Write scopes are for the scheduled path: the PR and its merge, or the issue
 # when no token is set. id-token lets claude-code-action mint the Claude GitHub
@@ -245,7 +248,7 @@ jobs:
           path_to_claude_code_executable: ${{ steps.cli.outputs.path }}
           claude_args: >-
             --max-turns 100
-            --allowedTools "Read(./**),Edit(bin/**),Edit(hooks/**),Edit(tests/**),Edit(config/**),Edit(docs/**),Edit(rules/**),Edit(pr-body.md),Bash(bash bin/upstream-check.sh),Bash(bash tests/:*)"
+            --allowedTools "Read(./**),Edit(bin/**),Edit(hooks/**),Edit(tests/**),Edit(config/**),Edit(docs/**),Edit(rules/**),Edit(skills/**),Edit(pr-body.md),Bash(bash bin/upstream-check.sh),Bash(bash tests/:*)"
             --disallowedTools "WebFetch,WebSearch,mcp__github,mcp__github_comment,mcp__github_file_ops,mcp__github_inline_comment,mcp__github_ci"
             --setting-sources project
           prompt: |
@@ -257,7 +260,10 @@ jobs:
             For each line drift.log marks with ✗, find why. If the harness depends
             on behaviour upstream changed, make the smallest change to the harness
             that restores it. If the check misreads a new upstream behaviour, fix the
-            check and its test in tests/upstream-check.test.sh. Edit existing files
+            check and its test in tests/upstream-check.test.sh. When section 4e
+            names a mod, the fix belongs in that mod's folder under skills/: its
+            hooks module, and its *.test.tsx only where the test misreads the new
+            API; `bash bin/upstream-check.sh` runs the mod's tests. Edit existing files
             only, never anything under .github/. Never loosen a deny rule, an ask
             rule or a guard, and do not adopt a new setting; those are the owner's
             call, so put them in the PR body as questions.
