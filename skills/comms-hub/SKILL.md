@@ -172,6 +172,12 @@ whole context.
      now and tell the user what moved. The scan logged each under Needs you.
    - `prs:` says whether the panel's PR file was written; a BLOCKED scan keeps
      the last one, which the panel shows with its age.
+   - `parked:` names the PRs the user parked. When the user asks to drop a PR
+     from the panel: `PY B/hub.py park owner/repo#N "<why>"`. It leaves the
+     panel and REVIEWED, WATCHED, AWAITING and DRIFT from the next scan on;
+     INBOUND, OUTBOUND and ROUTE still show it, since each asks something new.
+     `PY B/hub.py unpark owner/repo#N` brings it back, and `PY B/hub.py park`
+     lists them. Never filter the PR file after a scan: it flashes back.
    1b. `PY B/resolve_threads.py` (a dry run); read every RESOLVE and SKIP. Then
    `PY B/resolve_threads.py --apply`. It re-reads each thread, prints what
    GitHub reports, and logs what was resolved.
@@ -417,5 +423,6 @@ whole context.
 | `last-scan` | when the last scan started, BLOCKED or not; the panel calls an older `prs.json` stale |
 | `prs.json` | the last scan that did not end BLOCKED: each open PR I review or authored, which the panel's PRS section reads |
 | `prs-history.jsonl` | what changed between two `prs.json`, one row each (reviewed, approved, merged, by day), for the panel's last five days |
+| `parked.json` | the PRs the user parked with `hub.py park`, with when and why |
 | `feedback.md` | each correction the user makes to a message or to this protocol, dated, for the next change to this skill |
 | `queue.pid` | the scan in progress |

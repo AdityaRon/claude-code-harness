@@ -248,6 +248,7 @@ export const register: Register = on => {
               <Text weight="bold" color="claude">{`PRS · ${prs.rows.length}`}</Text>
               {prs.stale ? <Text color="warning">{`  stale, as of ${prs.as_of || 'never'}${prs.age ? ` (${prs.age} ago)` : ''}`}</Text>
                          : <Text dimColor>{`  as of ${prs.as_of} (${prs.age} ago)`}</Text>}
+              {prs.parked ? <Text dimColor>{`  ${prs.parked} parked`}</Text> : ''}
             </Text>
             {prs.repos.length > 0 && (
               <Box flexDirection="row" flexWrap="wrap" columnGap={2}>

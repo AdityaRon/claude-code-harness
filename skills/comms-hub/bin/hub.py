@@ -22,6 +22,11 @@ review state and CI state. Imported by the scripts beside it; run directly:
                       same a week further back, which an empty search needs before it is quiet
   hub.py routed TEXT  the log lines of the last two days that mention TEXT (a link, a key); exit 1 if none
   hub.py feedback TEXT  append a dated correction to feedback.md, for the next change to the skill
+  hub.py park [REF [WHY]]
+                      keep a PR (owner/repo#N or its link) off the panel and out of the scan's
+                      REVIEWED, WATCHED, AWAITING and DRIFT; INBOUND, OUTBOUND and ROUTE still
+                      show it, since they ask something new. Without REF: the parked PRs
+  hub.py unpark REF   show a parked PR again; exit 1 if it was not parked
   hub.py cron         the tick's cron expression, made from active_hours
   hub.py window [--margin MIN | --review] [--full-done]
                       open (exit 0) or closed (exit 1) for active_hours, and whether this tick
@@ -846,7 +851,7 @@ def prs_panel(cfg: dict, verdicts: dict[str, str]) -> dict:
     return {"as_of": _when(cfg, written) if written else "", "age": _age(written) if written else "", "stale": stale,
             "repos": [{"repo": k, "needs": v[0], "total": v[1]} for k, v in sorted(repos.items(), key=lambda kv: (-kv[1][0], kv[0]))],
             "rows": [{"key": f"pr:{r['ref']}", **{k: r[k] for k in ("group", "needs", "line")}} for r in rows],
-            "days": strip(cfg)}
+            "days": strip(cfg), "parked": len(parked(cfg))}
 
 
 def strip(cfg: dict) -> list[dict]:
@@ -937,6 +942,50 @@ def append_feedback(cfg: dict, text: str) -> Path:
     with p.open("a") as f:
         f.write(f"- {local_now(cfg):%Y-%m-%d %H:%M} {text}\n")
     return p
+
+
+def pr_ref(link: str) -> str:
+    """owner/repo#N from a PR link or ref, '' when it is neither."""
+    m = re.search(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", link or "") \
+        or re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", (link or "").strip())
+    return f"{m.group(1)}/{m.group(2)}#{m.group(3)}" if m else ""
+
+
+def parked(cfg: dict) -> dict[str, dict]:
+    """The PRs the user parked, owner/repo#N to when and why: off the panel and
+    out of the scan's status sections until unparked. A local filter run after
+    each scan once let them flash back in between."""
+    try:
+        data = json.loads((state_dir(cfg) / "parked.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def park_cmd(cfg: dict, argv: list[str]) -> int:
+    marks = parked(cfg)
+    if argv == ["park"]:
+        for ref, m in sorted(marks.items()):
+            print(f"{ref}  since {str(m.get('at', '?'))[:10]}  {m.get('why', '')}".rstrip())
+        print(f"parked: {len(marks)}")
+        return 0
+    ref = pr_ref(argv[1])
+    if not ref:
+        print(f"usage: hub.py {argv[0]} owner/repo#N (or the PR's link); {argv[1]!r} is neither")
+        return 2
+    if argv[0] == "unpark":
+        if marks.pop(ref, None) is None:
+            print(f"{ref} was not parked")
+            return 1
+    else:
+        marks[ref] = {"at": now().isoformat(timespec="seconds"), "why": " ".join(argv[2:])}
+    path = state_dir(cfg) / "parked.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(marks, indent=1, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+    print(f"{argv[0]}ed {ref}" + ("" if argv[0] == "unpark" else ": the next scan leaves it out"))
+    return 0
 
 
 def routed(cfg: dict, text: str, days: int = 2) -> list[str]:
@@ -1117,8 +1166,8 @@ def init(gh: Gh | None = None, example: Path | None = None) -> int:
 def main(argv=None, gh: Gh | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if (argv[:1] not in (["init"], ["config"], ["log"], ["panel"], ["queries"], ["routed"], ["feedback"],
-                         ["cron"], ["window"], ["trigger"], ["launch"])
-            or (argv[0] in ("log", "routed", "feedback") and len(argv) < 2)):
+                         ["cron"], ["window"], ["trigger"], ["launch"], ["park"], ["unpark"])
+            or (argv[0] in ("log", "routed", "feedback", "unpark") and len(argv) < 2)):
         print(__doc__.split("run directly:", 1)[1].rstrip())
         return 2
     # `hub.py feedback --help` once wrote "--help" into feedback.md: these take text, no flags.
@@ -1181,6 +1230,8 @@ def main(argv=None, gh: Gh | None = None) -> int:
     if argv[0] == "feedback":
         print(f"noted in {append_feedback(cfg, ' '.join(argv[1:]))}")
         return 0
+    if argv[0] in ("park", "unpark"):
+        return park_cmd(cfg, argv)
     if argv[0] in ("cron", "window", "trigger", "launch"):
         return schedule_cmd(cfg, argv)
     if argv[0] == "panel":

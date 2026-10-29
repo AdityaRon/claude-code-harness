@@ -61,6 +61,12 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   ack-unvalidated: hub.py: `if not re.fullmatch(r"[\w+'.-]+", ack):` => `if False:`
   control-not-earlier: hub.py: `since -= dt.timedelta(days=CONTROL_DAYS)` => `pass`
   queries-any-flag: hub.py: `if argv[1:] not in ([], ["--control"]):` => `if False:`
+  park-unnormalized: hub.py: `ref = pr_ref(argv[1])` => `ref = argv[1]`
+  unpark-noop: hub.py: `if marks.pop(ref, None) is None:` => `if marks.get(ref) is None:`
+  park-why-dropped: hub.py: `"why": " ".join(argv[2:])}` => `"why": ""}`
+  parked-bad-file-crashes: hub.py: `/ "parked.json").read_text())
+    except (OSError, ValueError):` => `/ "parked.json").read_text())
+    except OSError:`
 """
 import contextlib
 import datetime as dt
@@ -312,6 +318,31 @@ class Feedback(unittest.TestCase):
             self.assertEqual(hub.main(["feedback", "lead with the ask"]), 0)
             self.assertEqual((env.state / "feedback.md").read_text(),
                              "- 2026-10-21 10:00 no 'quick' in a status line\n- 2026-10-21 10:00 lead with the ask\n")
+
+
+class Park(unittest.TestCase):
+    def test_park_lists_and_unparks_by_ref_or_link(self):
+        out = io.StringIO()
+        with Env(now="2026-10-21T17:00:00Z") as env, contextlib.redirect_stdout(out):
+            self.assertEqual(hub.main(["park", "https://github.com/acme/app/pull/12", "not", "mine"]), 0)
+            self.assertEqual(hub.main(["park", "acme/infra#3"]), 0)
+            self.assertEqual(hub.main(["park", "app#12"]), 2)
+            self.assertEqual(hub.main(["park"]), 0)
+            self.assertEqual(hub.main(["unpark", "acme/infra#3"]), 0)
+            self.assertEqual(hub.main(["unpark", "acme/infra#3"]), 1)
+            self.assertEqual(hub.main(["unpark"]), 2)
+            self.assertEqual(set(hub.parked(hub.load_config())), {"acme/app#12"})
+            self.assertEqual(hub.json.loads((env.state / "parked.json").read_text())["acme/app#12"]["why"], "not mine")
+        lines = out.getvalue().splitlines()
+        for line in ("parked acme/app#12: the next scan leaves it out", "acme/app#12  since 2026-10-21  not mine",
+                     "acme/infra#3  since 2026-10-21", "parked: 2", "unparked acme/infra#3", "acme/infra#3 was not parked"):
+            self.assertIn(line, lines)
+
+    def test_a_bad_file_parks_nothing(self):
+        with Env(now="2026-10-21T17:00:00Z") as env:
+            env.state.mkdir(parents=True, exist_ok=True)
+            (env.state / "parked.json").write_text("{half a file")
+            self.assertEqual(hub.parked(hub.load_config()), {})
 
 
 class Routed(unittest.TestCase):
