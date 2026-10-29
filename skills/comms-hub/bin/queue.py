@@ -359,10 +359,16 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
          + (f" ({' '.join(s['sent_id'] for s in pending)}): gate each copy again this tick (check_draft.py --scheduled)"
             if pending else ""))
     stamp.write_text(at.isoformat() + "\n")
-    hub.append_log(cfg, f"scan started {at:%Y-%m-%dT%H:%M:%SZ}")
+    hub.log_event(cfg, "scan", "scan started", detail=f"{at:%Y-%m-%dT%H:%M:%SZ}")
     # A held draft lives in a file, not in the session's memory, so a compaction cannot lose it.
     held = sorted(p.name for p in (hub.state_dir(cfg) / "held").glob("*.md"))
     emit(f"held-drafts: {len(held)}" + (f" ({' '.join(held)}): gate and send each, or say why it still waits" if held else ""))
+    # What waits on the user or on a peer stays open across days until a row corrects it.
+    needs, routed_ = hub.open_items(cfg)
+    emit(f"needs-you: {len(needs)}" + (f" ({' '.join(r['id'] for r in needs)}): carry each in the report until "
+                                        "answered, then log the outcome with --corrects ID" if needs else ""))
+    emit(f"with-sessions: {len(routed_)}" + (f" ({' '.join(r['id'] for r in routed_)}): when a peer answers, "
+                                              "log --kind returned --corrects ID" if routed_ else ""))
 
     need = 2 + len(authors)
     can_search = False

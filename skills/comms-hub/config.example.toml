@@ -31,6 +31,16 @@ ack_reaction = "white_check_mark"  # the emoji a review request gets when your r
 # [slack.github_logins]
 # "U-member-id" = "octocat"
 
+# What the comms panel calls each channel: `#name`, or `<name> DM` for a D id.
+# An id with no name here is shown as the id.
+# [slack.channel_names]
+# "C-channel-id" = "team-reviews"
+# "D-dm-id" = "Alex"
+
+# What the panel calls a repo in `<repo> #N`; the repo's own name otherwise.
+# [github.repo_aliases]
+# "owner/a-long-repository-name" = "short"
+
 [quiet_hours]
 start = "19:00"                # from this time, messages are scheduled instead of sent
 post_at = "08:30"              # for this time the next active day; after the first tick, which gates it again

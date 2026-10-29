@@ -62,8 +62,10 @@ Nothing here depends on which server it is: step 0 records the tool names.
    the tick's state is on disk, so a small context loses nothing. Exported in
    the shell instead, the window loses to the one `~/.claude/settings.json`
    sets. The command also loads the panel (`panel/`, `--plugin-dir`): a pane
-   with the held drafts and today's log, read from disk as each turn ends, so
-   it costs no tokens (`/comms` opens it again). Then step 0 below, then the
+   with what needs the user, what goes out and when, what is with other
+   sessions, what is held, and the day's events with a dot on each since the
+   user last looked, from `PY B/hub.py panel` as each turn ends, so it costs
+   no tokens (`/comms` opens it again and counts as a look). Then step 0 below, then the
    trigger: `/loop` with the cron interval
    `PY B/hub.py cron` prints (from `[active_hours]`: weekdays, 08:07 to 17:37,
    by default) and the prompt `comms-hub tick`, then
@@ -121,7 +123,7 @@ weekly). With `scan: quick`, step 2 reads the DM only.
 
 **Fail fast.** If the tick's first call out (the scan, or the first Slack
 read) fails, times out, or gets no permission verdict, run
-`PY B/hub.py log "tick ended: <why>"` and end the tick. Never retry inside the
+`PY B/hub.py log --kind tick "ended: <why>"` and end the tick. Never retry inside the
 tick: the next fire is the retry, and every call re-reads this session's
 whole context.
 
@@ -223,7 +225,7 @@ whole context.
      review, which GitHub already shows (a reviewer asked for approvals to stay
      out of Slack). Never reply: add that reaction to each ts with the
      `slack_react` tool, in quiet hours too, since a reaction is not a message;
-     log it (`PY B/hub.py log "reacted <emoji> on <ts>: <PR> review on GitHub"`),
+     log it (`PY B/hub.py log --kind reacted --ref <PR link> --target <channel id> "review on GitHub"`),
      and tell the peer. No `slack_react` tool: hold the draft and tell the user.
      A top-level draft has no ts: find the message that asked for each review
      (search Slack for the PR's link) and react there; with none in Slack, drop
@@ -232,8 +234,9 @@ whole context.
      merged after it), then react the same way. WARN names lines that restate
      inside a message that says more, or a thread reply over 60 words: it may
      send, and reads better cut to what GitHub can't say.
-   - `PY B/check_draft.py <file> --assert-fresh`, then send the file's text with
-     the Slack send tool, `thread_ts` set for a reply.
+   - `PY B/check_draft.py <file> --assert-fresh`, then send the message with
+     the Slack send tool, `thread_ts` set for a reply. A draft with its header
+     is gated, and sent, as the message after the header's `---` alone.
    - Quiet hours: when the gate printed `send: schedule`, schedule it for that
      `post_at` epoch instead, which is on the next active day, after its first
      tick. A scheduled message cannot be edited through the
@@ -244,29 +247,51 @@ whole context.
      is written with its header to `<state dir>/held/<peer>-<thread ts>.md`
      with the Write tool, never kept in this session's memory: a compaction
      loses memory, and step 1's header counts the files (`held-drafts:`).
-     Delete the file once sent or returned to the peer.
+     Add `reason: <why, in words>` to the header, and `needs: user` when it
+     waits for the user's own go: the panel shows those under Needs you, the
+     rest under Held. Delete the file once sent or returned to the peer.
    - While step 1's header prints `scheduled-pending:` above 0, every tick:
      `PY B/check_draft.py --scheduled`, then gate each pending message's copy
      again (`check_draft.py <copy> --reply <ts>`, with the same `--asks`). A
      message can be withdrawn only before its `post_at`; the config refuses a
      `post_at` at or before the first tick, so that tick is the last chance. A
-     FAIL means a claim moved: withdraw it with the delete-scheduled tool step 0
-     recorded, else tell the user now, before `post_at`, so they delete it in
-     Slack; either way send the draft back to
-     the peer with what changed. When the header prints `morning:`, what was
-     scheduled has posted: read each target thread, confirm it landed, and
-     log it.
+     FAIL means a claim moved (the panel shows it): withdraw it with the
+     delete-scheduled tool step 0 recorded, else tell the user now, before
+     `post_at`, so they delete it in Slack; either way send the draft back to
+     the peer with what changed. Once it is deleted, by you or the user,
+     `PY B/check_draft.py --withdrawn <scheduled id> --context "<why>"`, so no
+     tick gates it again. When the header prints `morning:`, what was
+     scheduled has posted: read each target thread, confirm it landed (a
+     reply: the thread's reply count moved since it was scheduled), and log
+     `--kind sent` for each, or report one that did not land.
    - Confirm the send: the send tool says OK either way. For a reply, re-read
      the parent thread and compare its reply count with the one read before
      the send; for a top-level message, re-read the channel's first page and
      find the ts. Then
      `PY B/check_draft.py <file> --record-sent <message ts or scheduled id> --replies <before> <after> --context "<who asked what>"`
-     keeps a copy and logs it; it refuses a count that did not move. Answer
-     the peer with the ts or id.
-5. **Log**: `PY B/hub.py log "<one line>"` for each item routed, each draft held
-   and why, each question for the user (sends and resolves log themselves).
-   Each line, and each `--context`, carries the link and who asked what: the
-   panel shows the log, and the user has not read the thread.
+     keeps a copy and logs it; it refuses a count that did not move. A
+     scheduled reply cannot move the count before it posts: record it without
+     `--replies`, and with `--post-at HH:MM` when you scheduled it later than
+     the gate's `post_at`. `--context` is the panel's text for it: 80
+     characters, names in words. Answer the peer with the ts or id.
+5. **Log**: one event per item, which the panel shows as one line:
+   `PY B/hub.py log --kind <kind> [--ref <PR or ticket link>] [--target <channel id>] [--who <person or session>] [--detail "<the rest>"] "<what, in words>"`.
+   The text is at most 80 characters with no ids, ts, hashes, links or time:
+   the link is `--ref`, the channel `--target` (named from
+   `slack.channel_names`), everything else `--detail`. Sends and resolves log
+   themselves. Log each item routed (`--kind routed --who <session>`), each
+   draft held and why (`--kind held`), each question for the user and each
+   BLOCKED scan or unknown mention search (`--kind asked` or `--kind blocked`,
+   with `--needs-user`). The command prints the row's id. An entry made after
+   the fact passes `--at HH:MM`, never a time in the text. A row with
+   `--corrects <id>` replaces that row in the panel: use it for a correction,
+   for the user's answer to a question (`--kind answered`), and for a
+   session's reply to an item routed to it (`--kind returned`). Step 1's
+   header lists what is still open (`needs-you:`, `with-sessions:`). Before
+   reporting a question as waiting on the user, read its thread for the user's
+   own reply: the mention searches skip the user's messages, and a question
+   answered at 17:40 was reported open three ticks running. Answered: log it
+   with `--corrects` instead.
    After a full scan, `PY B/hub.py window --full-done`. A tick that found
    nothing new anywhere, and holds and schedules nothing, reports one line.
    On the window's first tick (`scan: full (the window's first)`), also
@@ -304,7 +329,8 @@ whole context.
 
 | Path | Holds |
 |---|---|
-| `log/YYYY-MM-DD.md` | the daily log: sends, scheduled ids, resolves, routing, holds |
+| `log/YYYY-MM-DD.jsonl` | the day's events, one row each, which the panel draws |
+| `log/YYYY-MM-DD.md` | the same events as lines to read: sends, scheduled ids, resolves, routing, holds |
 | `sent/YYYY-MM-DD/<id>.md` | each message as it was sent or scheduled |
 | `slack/<channel>.tsv` | the committed snapshot `slack_diff.py` compares against |
 | `gate/` | `check_draft.py`'s pass records |

@@ -23,7 +23,9 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   init-tz-unfilled: hub.py: `text = text.replace(f'tz = "{PLACEHOLDER}"', f'tz = "{tz}"', 1)` => `pass`
   zone-unvalidated: hub.py: `and _valid_zone(n):` => `and True:`
   job-tmp-ignored: hub.py: `if os.environ.get("CLAUDE_JOB_DIR"):` => `if False:`
-  log-machine-zone: hub.py: `stamp = local_now(cfg)` => `stamp = now().astimezone()`
+  log-machine-zone: hub.py: `    stamp = local_now(cfg)
+    p = d / f"{stamp:%Y-%m-%d}.md"` => `    stamp = now().astimezone()
+    p = d / f"{stamp:%Y-%m-%d}.md"`
   local-now-machine: hub.py: `return t.astimezone(zone(cfg)) if` => `return t.astimezone() if`
   thread-search-dropped: hub.py: `f"with:<@{uid}> is:thread {day}"` => `f"with:<@{uid}> {day}"`
   to-search-dropped: hub.py: `f"to:<@{uid}> {day}", ` => ``

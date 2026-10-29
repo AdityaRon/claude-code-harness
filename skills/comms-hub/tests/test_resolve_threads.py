@@ -162,7 +162,7 @@ class Apply(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(fake.count("resolveReviewThread"), 1)
         self.assertIn(f"resolved {REF} src/a.py:3 thread=t1 isResolved=true (re-read)", out)
-        self.assertIn("resolved thread t1", log)
+        self.assertIn(f"resolved {REF}: review thread | thread t1 (src/a.py:3)", log)
 
     def test_signed_in_as_someone_else_blocks_before_reading(self):
         rc, out, fake, _ = self.run_main("--apply", viewer="other-account")
@@ -174,7 +174,7 @@ class Apply(unittest.TestCase):
         rc, out, _, log = self.run_main("--apply", reread=False)
         self.assertEqual(rc, 3)
         self.assertIn("STILL OPEN", out)
-        self.assertNotIn("resolved thread t1", log)
+        self.assertNotIn("thread t1", log)
 
 
 if __name__ == "__main__":

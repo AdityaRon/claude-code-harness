@@ -4,7 +4,13 @@ review state and CI state. Imported by the scripts beside it; run directly:
   hub.py init         write the config from the example, with the login, owners and
                       zone this machine knows; refuses to touch an existing one
   hub.py config       the config path, the state dir, the ids, or what is wrong with the config
-  hub.py log TEXT     append a line to today's log in the state dir
+  hub.py log --kind KIND [--ref REF] [--target ID] [--who WHO] [--needs-user] [--corrects ID]
+             [--at HH:MM] [--detail TEXT] TEXT
+                      one event in today's log: a JSONL row the panel draws, and an .md line.
+                      TEXT is what the panel shows: 80 characters, words only. A link is --ref,
+                      a channel --target, the rest --detail. --needs-user puts it under Needs
+                      you until a row --corrects it; --at is when it happened, if not now
+  hub.py panel        what the comms panel draws, as JSON
   hub.py queries [--control]
                       the three Slack mention searches, dated two days back; --control: the
                       same a week further back, which an empty search needs before it is quiet
@@ -142,6 +148,11 @@ def load_config(explicit: str | None = None) -> dict:
     KNOWN_BOTS.update(str(b).lower() for b in gh["bots"])
     cfg.setdefault("slack", {}).setdefault("max_chars", MAX_CHARS)
     cfg["slack"].setdefault("github_logins", {})
+    # The panel's names for what the log holds as ids and links.
+    for table, key in ((gh, "repo_aliases"), (cfg["slack"], "channel_names")):
+        names = table.setdefault(key, {})
+        if not isinstance(names, dict) or not all(isinstance(v, str) for v in names.values()):
+            raise ConfigError(f"{path}: {'github' if table is gh else 'slack'}.{key} must map strings to names")
     # Slack's API takes the name bare; a config copied from the client often has the colons.
     ack = str(cfg["slack"].setdefault("ack_reaction", "white_check_mark")).strip(":")
     if not re.fullmatch(r"[\w+'.-]+", ack):
@@ -442,6 +453,271 @@ def append_log(cfg: dict | None, line: str) -> Path:
     return p
 
 
+# ---- log events, and what the panel shows -----------------------------------
+
+# Each event is a JSONL row in log/<day>.jsonl, beside the .md line people read.
+# The panel draws the rows: as prose, with urls, channel ids, thread ts and
+# hashes, about 11 lines filled the pane and none could be scanned (2026-10-28).
+LOG_KINDS = ("sent", "scheduled", "withdrawn", "reacted", "routed", "returned", "resolved", "reviewed",
+             "held", "released", "asked", "answered", "blocked", "scan", "tick", "setup", "note")
+TEXT_MAX = 80
+NOT_TEXT = (
+    (re.compile(r"\b[CDGU](?=[A-Z0-9]*\d)[A-Z0-9]{8,}\b"), "a Slack id (pass it as --target)"),
+    (re.compile(r"\b\d{10}\.\d{6}\b"), "a thread ts"),
+    (re.compile(r"\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{12,}\b"), "a hash"),
+    (re.compile(r"https?://"), "a link (pass it as --ref)"),
+    (re.compile(r"^\d{1,2}:\d{2}\b"), "a time (pass it as --at)"),
+)
+OPEN_DAYS = 7   # how far back a question or a routed item stays open
+
+
+def text_problem(text: str) -> str:
+    """Why `text` cannot be an event's text, or '' when it can."""
+    if not text:
+        return "the text is empty"
+    if len(text) > TEXT_MAX:
+        return f"the text is {len(text)} characters, over {TEXT_MAX}: put the rest in --detail"
+    for rx, what in NOT_TEXT:
+        if rx.search(text):
+            return f"the text holds {what}; name people and places in words"
+    return ""
+
+
+def _log_paths(cfg: dict | None, day: dt.date) -> tuple[Path, Path]:
+    d = state_dir(cfg) / "log"
+    return d / f"{day:%Y-%m-%d}.md", d / f"{day:%Y-%m-%d}.jsonl"
+
+
+def log_event(cfg: dict, kind: str, text: str, ref: str = "", target: str = "", who: str = "",
+              needs_user: bool = False, corrects: str = "", at: str = "", detail: str = "") -> dict:
+    """Append one event: a JSONL row the panel reads and the .md line people read."""
+    stamp = local_now(cfg)
+    md, jl = _log_paths(cfg, stamp.date())
+    md.parent.mkdir(exist_ok=True)
+    n = len(jl.read_text().splitlines()) + 1 if jl.is_file() else 1
+    row = {"id": f"{stamp:%m%d}.{n}", "ts": now().isoformat(), "at": at or f"{stamp:%H:%M}", "kind": kind,
+           "text": " ".join(text.split()), "ref": ref, "target": target, "who": who,
+           "needs_user": needs_user, "corrects": corrects or None, "detail": " ".join(detail.split())}
+    with jl.open("a") as f:
+        f.write(json.dumps(row) + "\n")
+    with md.open("a") as f:
+        f.write(f"- {row['at']} {kind}" + "".join(f" {v}" for v in (ref, target) if v)
+                + (f" ({who})" if who else "") + f": {row['text']}" + (f" | {row['detail']}" if row["detail"] else "")
+                + f" [{row['id']}" + (f", corrects {corrects}" if corrects else "") + "]\n")
+    return row
+
+
+# What the panel never shows (spec, 2026-10-28): ids, ts, hashes, paths. Only
+# the .md lines from before the JSONL need it; a JSONL row's text is checked.
+_SCRUB = (
+    re.compile(r"\b(?:sha256|target|epoch|id|copy)=\S+"),
+    re.compile(r"\b\d{10}\.\d{6}\b"),
+    re.compile(r"\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{12,}\b"),
+    re.compile(r"\b(?=\w*[A-Z])(?=\w*[a-z])(?=\w*\d)[A-Za-z0-9]{10,}\b"),   # a scheduled message's id
+    re.compile(r"(?:~|/)[\w.-]*(?:/[\w.@-]+){2,}"),
+)
+_URL = re.compile(r"https?://\S+")
+_CHANNEL = re.compile(r"\b[CDG](?=[A-Z0-9]*\d)[A-Z0-9]{8,}\b")
+
+
+def short_ref(cfg: dict, ref: str) -> str:
+    """A PR as `<repo> #N` (github.repo_aliases, else the repo's name), a ticket as its key."""
+    ref = ref.strip().rstrip(".,;)")
+    m = re.search(r"github\.com/([\w.-]+)/([\w.-]+)/(?:pull|issues)/(\d+)", ref) \
+        or re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", ref)
+    if m:
+        return f"{cfg['github']['repo_aliases'].get(f'{m.group(1)}/{m.group(2)}', m.group(2))} #{m.group(3)}"
+    m = re.search(r"/browse/([A-Z][A-Z0-9]+-\d+)", ref)
+    if m:
+        return m.group(1)
+    if ref.startswith("http"):
+        return ref.rstrip("/").rsplit("/", 1)[-1][:40]
+    return ref
+
+
+def target_label(cfg: dict, target: str) -> str:
+    """A channel id as its name from slack.channel_names: `#name`, or `<name> DM` for a DM."""
+    cid = (target.split() or [""])[0]
+    name = cfg["slack"]["channel_names"].get(cid)
+    if name:
+        return f"{name} DM" if cid.startswith("D") else f"#{name}"
+    if cid and cid == cfg["slack"].get("primary_dm"):
+        return "primary DM"
+    return cid
+
+
+def scrub(cfg: dict, text: str) -> str:
+    text = _URL.sub(lambda m: short_ref(cfg, m.group(0)), text)
+    text = _CHANNEL.sub(lambda m: target_label(cfg, m.group(0)), text)
+    for rx in _SCRUB:
+        text = rx.sub("", text)
+    return re.sub(r"\s+([,;:.)])", r"\1", " ".join(text.split()))
+
+
+_LEGACY = re.compile(r"(\d{2}:\d{2}) (.*)")
+_LEGACY_SENT = re.compile(r"(sent|scheduled) \S+ target=\S+ sha256=\w+(?:: (.*))?")
+_LEGACY_WORD = re.compile(r"([A-Za-z]+)[:,]?\s+(.*)")
+
+
+def _legacy_row(cfg: dict, day: dt.date, i: int, line: str) -> dict:
+    """A .md line from a day with no JSONL, read as well as prose allows."""
+    m = _LEGACY.fullmatch(line[2:])
+    at, rest = (m.group(1), m.group(2)) if m else ("", line[2:])
+    s = _LEGACY_SENT.fullmatch(rest)
+    w = _LEGACY_WORD.fullmatch(rest)
+    if s:
+        kind, text = s.group(1), s.group(2) or s.group(1)
+    elif w and w.group(1).lower() in LOG_KINDS:
+        kind, text = w.group(1).lower(), w.group(2)
+    else:
+        kind, text = "note", rest
+    when = dt.datetime.combine(day, dt.time.fromisoformat(at) if at else dt.time(0), tzinfo=zone(cfg))
+    return {"id": f"{day:%m%d}.md{i}", "ts": when.isoformat(), "at": at, "kind": kind, "text": scrub(cfg, text),
+            "ref": "", "target": "", "who": "", "needs_user": False, "corrects": None, "detail": ""}
+
+
+def day_rows(cfg: dict, day: dt.date) -> list[dict]:
+    md, jl = _log_paths(cfg, day)
+    if jl.is_file():
+        rows = [json.loads(ln) for ln in jl.read_text().splitlines() if ln.strip()]
+    elif md.is_file():
+        rows = [_legacy_row(cfg, day, i, ln) for i, ln in enumerate(md.read_text().splitlines()) if ln.startswith("- ")]
+    else:
+        rows = []
+    return [{**r, "day": f"{day:%Y-%m-%d}"} for r in rows]
+
+
+def folded(cfg: dict, days: int) -> list[dict]:
+    """The last `days` days' rows, oldest first, each correction folded into the
+    row it corrects: it takes that row's place, marked corrected, never a new line."""
+    today = local_now(cfg).date()
+    rows = [r for back in reversed(range(days)) for r in day_rows(cfg, today - dt.timedelta(days=back))]
+    by_id: dict[str, dict] = {}
+    alias: dict[str, str] = {}
+    order = []
+    for r in rows:
+        target = alias.get(r.get("corrects") or "", r.get("corrects"))
+        if target and target in by_id:
+            old = by_id[target]
+            by_id[target] = {**r, "id": target, "at": old["at"], "day": old["day"], "corrected": True}
+            alias[r["id"]] = target
+        else:
+            by_id[r["id"]] = r
+            order.append(r["id"])
+    return [by_id[i] for i in order]
+
+
+def open_items(cfg: dict) -> tuple[list[dict], list[dict]]:
+    """Rows still needing the user, and items routed to a session not yet back."""
+    rows = folded(cfg, OPEN_DAYS)
+    return [r for r in rows if r.get("needs_user")], [r for r in rows if r["kind"] == "routed"]
+
+
+def _age(at: dt.datetime) -> str:
+    s = max(0, int((now() - at).total_seconds()))
+    return f"{s // 60}m" if s < 3600 else f"{s // 3600}h" if s < 86400 else f"{s // 86400}d"
+
+
+def _when(cfg: dict, at: dt.datetime) -> str:
+    """HH:MM within a day of now, else the weekday too, in quiet_hours.tz."""
+    t = at.astimezone(zone(cfg))
+    return f"{t:%H:%M}" if abs(at - now()) < dt.timedelta(hours=24) else f"{t:%a %H:%M}"
+
+
+def _draft(path: str) -> dict:
+    """A draft or sent copy's header fields, and its message's first line."""
+    p = Path(path or "")
+    text = p.read_text() if p.is_file() else ""
+    head, sep, body = text.partition("\n---\n")
+    if not sep:
+        head, body = text, ""
+    fields = dict(re.findall(r"^(to|kind|reason|needs):\s*(.+)$", head, re.M))
+    claim = re.search(r"^- (\S+)", head.split("claims:", 1)[1], re.M) if "claims:" in head else None
+    first = next((ln.strip() for ln in body.splitlines() if ln.strip()), "")
+    return {**fields, "claim": claim.group(1) if claim else "", "first": first}
+
+
+def next_tick(cfg: dict, at: dt.datetime) -> dt.datetime | None:
+    a, tz = cfg["active_hours"], zone(cfg)
+    local = at.astimezone(tz)
+    for d in range(8):
+        day = local.date() + dt.timedelta(days=d)
+        if DAYS[day.weekday()] not in a["days"]:
+            continue
+        for h in range(int(a["start"][:2]), int(a["end"][:2])):
+            for m in range(TICK_MINUTE, 60, a["every_minutes"]):
+                t = dt.datetime.combine(day, dt.time(h, m), tzinfo=tz)
+                if t > local:
+                    return t
+    return None
+
+
+def going_out(cfg: dict) -> list[dict]:
+    """Scheduled messages still ahead of post_at, from the gate's records: one the
+    session has not recorded yet (no sent_id) is going out all the same."""
+    at = now()
+    last_scan = parse_time((state_dir(cfg) / "last-scan").read_text().strip()) \
+        if (state_dir(cfg) / "last-scan").is_file() else None
+    out = []
+    for p in sorted((state_dir(cfg) / "gate").glob("*.json")) if (state_dir(cfg) / "gate").is_dir() else []:
+        s = json.loads(p.read_text())
+        if s.get("send") != "schedule" or s.get("withdrawn_at") or s.get("regate_of") or not s.get("post_at"):
+            continue
+        post = parse_time(s["post_at"])
+        if post <= at:
+            continue
+        d = _draft(s.get("sent_copy") or s.get("path"))
+        checked = parse_time(s["regated_at"]) if s.get("regated_at") else \
+            dt.datetime.fromtimestamp(s.get("passed_at") or 0, dt.timezone.utc)
+        if s.get("claim_moved_at"):
+            status, warn = "claim moved ⚠", True
+        elif last_scan and last_scan > checked:
+            status, warn = "re-check due", False
+        else:
+            status, warn = f"gated {checked.astimezone(zone(cfg)):%H:%M} ✓", False
+        ref = (s.get("prs") or [""])[0].split(" ")[0]
+        out.append({"key": f"going:{p.stem}", "post": _when(cfg, post), "target": target_label(cfg, d.get("to", "")),
+                    "ref": short_ref(cfg, ref), "text": s.get("headline") or d["first"], "status": status, "warn": warn})
+    return sorted(out, key=lambda g: g["post"])
+
+
+def panel(cfg: dict) -> dict:
+    """What the panel draws, sorted here so run.py --mutate can test it."""
+    d, tz = state_dir(cfg), zone(cfg)
+    needs, held = [], []
+    for p in sorted((d / "held").glob("*.md")) if (d / "held").is_dir() else []:
+        h = _draft(str(p))
+        since = dt.datetime.fromtimestamp(p.stat().st_mtime, dt.timezone.utc)
+        row = {"key": f"held:{p.stem}", "ref": short_ref(cfg, h["claim"]), "target": target_label(cfg, h.get("to", "")),
+               "text": h["first"]}
+        if h.get("needs", "").strip() == "user":
+            needs.append({**row, "note": "needs your go", "age": _age(since)})
+        else:
+            held.append({**row, "reason": h.get("reason", "")})
+    asks, routed_ = open_items(cfg)
+    needs += [{"key": f"row:{r['id']}", "ref": short_ref(cfg, r["ref"]), "target": target_label(cfg, r["target"]),
+               "text": r["text"], "note": "" if r["kind"] == "asked" else r["kind"], "age": _age(parse_time(r["ts"]))}
+              for r in asks]
+    sessions = [{"key": f"row:{r['id']}", "who": r["who"], "ref": short_ref(cfg, r["ref"]), "text": r["text"],
+                 "since": _when(cfg, parse_time(r["ts"]))} for r in routed_]
+    logs = sorted(p.stem for p in (d / "log").glob("*.md") if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.stem)) \
+        if (d / "log").is_dir() else []
+    newest = logs[-1] if logs else ""
+    today = [r for r in folded(cfg, OPEN_DAYS) if r["day"] == newest]
+    events = [{"key": f"row:{r['id']}", "ts": r["ts"], "at": r["at"], "kind": r["kind"],
+               "ref": short_ref(cfg, r["ref"]), "target": target_label(cfg, r["target"]), "text": r["text"],
+               "corrected": bool(r.get("corrected"))} for r in reversed(today) if r["kind"] != "scan"]
+    raw = day_rows(cfg, dt.date.fromisoformat(newest)) if newest else []
+    scans = [i for i, r in enumerate(raw) if r["kind"] == "scan"]
+    since_scan = [r for r in raw[scans[-1] + 1:] if r["kind"] not in ("scan", "tick", "setup")] if scans else []
+    nxt = next_tick(cfg, now())
+    return {"state": str(d), "day": f"{dt.date.fromisoformat(newest):%a %d %b}" if newest else "",
+            "needs": needs, "going": going_out(cfg), "sessions": sessions, "held": held, "events": events,
+            "next_tick": _when(cfg, nxt) if nxt else "none scheduled",
+            "last_tick": ("quiet" if not since_scan else f"{len(since_scan)} item{'s' * (len(since_scan) != 1)}")
+            if scans else "none yet", "read": f"{local_now(cfg):%H:%M}"}
+
+
 def pending_scheduled(cfg: dict) -> list[dict]:
     """The gate's records of scheduled messages whose post_at is still ahead:
     each can be gated again from its sent copy and withdrawn before it posts."""
@@ -449,7 +725,8 @@ def pending_scheduled(cfg: dict) -> list[dict]:
     out = []
     for p in sorted((state_dir(cfg) / "gate").glob("*.json")):
         s = json.loads(p.read_text())
-        if s.get("send") != "schedule" or not s.get("sent_id"):
+        # A withdrawn one was deleted in Slack: gating it again would check a message that will never post.
+        if s.get("send") != "schedule" or not s.get("sent_id") or s.get("withdrawn_at"):
             continue
         if parse_time(s.get("post_at")) <= now_:
             continue
@@ -642,10 +919,14 @@ def init(gh: Gh | None = None, example: Path | None = None) -> int:
 
 def main(argv=None, gh: Gh | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if (argv[:1] not in (["init"], ["config"], ["log"], ["queries"], ["routed"], ["feedback"], ["cron"],
-                         ["window"], ["trigger"], ["launch"])
+    if (argv[:1] not in (["init"], ["config"], ["log"], ["panel"], ["queries"], ["routed"], ["feedback"],
+                         ["cron"], ["window"], ["trigger"], ["launch"])
             or (argv[0] in ("log", "routed", "feedback") and len(argv) < 2)):
         print(__doc__.split("run directly:", 1)[1].rstrip())
+        return 2
+    # `hub.py feedback --help` once wrote "--help" into feedback.md: these take text, no flags.
+    if argv[0] in ("routed", "feedback") and argv[1].startswith("-"):
+        print(f"usage: hub.py {argv[0]} TEXT; it takes no flags, so {argv[1]!r} would be read as the text")
         return 2
     if argv[0] == "init":
         return init(gh)
@@ -696,7 +977,35 @@ def main(argv=None, gh: Gh | None = None) -> int:
         return 0
     if argv[0] in ("cron", "window", "trigger", "launch"):
         return schedule_cmd(cfg, argv)
-    print(f"logged to {append_log(cfg, ' '.join(argv[1:]))}")
+    if argv[0] == "panel":
+        print(json.dumps(panel(cfg)))
+        return 0
+    return log_cmd(cfg, argv[1:])
+
+
+def log_cmd(cfg: dict, argv: list[str]) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(prog="hub.py log")
+    ap.add_argument("--kind", required=True, choices=LOG_KINDS)
+    ap.add_argument("--ref", default="", help="the PR or ticket link")
+    ap.add_argument("--target", default="", help="the channel id, which the panel names from slack.channel_names")
+    ap.add_argument("--who", default="", help="the person or session")
+    ap.add_argument("--needs-user", action="store_true", help="kept under Needs you until a row corrects it")
+    ap.add_argument("--corrects", default="", metavar="ID", help="the row this one replaces")
+    ap.add_argument("--at", default="", metavar="HH:MM", help="when it happened, if not now")
+    ap.add_argument("--detail", default="", help="ids, links and the rest, kept off the panel")
+    ap.add_argument("text", nargs="+")
+    args = ap.parse_args(argv)
+    text = " ".join(" ".join(args.text).split())
+    problem = text_problem(text)
+    if not problem and args.at and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", args.at):
+        problem = f"--at {args.at!r} is not HH:MM"
+    if problem:
+        print(f"log: {problem}. Nothing logged.")
+        return 2
+    row = log_event(cfg, args.kind, text, ref=args.ref, target=args.target, who=args.who, needs_user=args.needs_user,
+                    corrects=args.corrects, at=args.at, detail=args.detail)
+    print(f"logged {row['id']}: {row['kind']} {row['text']}")
     return 0
 
 

@@ -2,12 +2,21 @@ r"""check_draft.py: shape, live state, send mode, freshness, the sent record.
 
 Mutations (run.py --mutate applies each and expects this file to fail):
   em-dash-ok: check_draft.py: `if EM_DASH in line:` => `if False:`
+  header-counted: check_draft.py: `return (data[m.end():].lstrip(b"\n"), True) if m else (data, False)` => `return data, bool(m)`
+  scheduled-reply-refused: check_draft.py: `and not args.replies and stamp["send"] != "schedule":` => `and not args.replies:`
+  regate-unmarked: check_draft.py: `regate_of = mark_regate(cfg, args.file, True)` => `regate_of = None`
+  claim-move-unmarked: check_draft.py: `regate_of = mark_regate(cfg, args.file, False)` => `regate_of = None`
+  withdraw-logs-again: check_draft.py: `if not s.get("withdrawn_at"):` => `if True:`
+  withdrawn-still-pending: hub.py: `or not s.get("sent_id") or s.get("withdrawn_at"):` => `or not s.get("sent_id"):`
+  bad-context-is-text: check_draft.py: `text = context if not problem else` => `text = context if True else`
+  post-at-ignored: check_draft.py: `stamp["post_at"] = post.isoformat()` => `pass`
+  post-at-earlier-ok: check_draft.py: `if not post or post < planned:` => `if not post:`
   quote-ok: check_draft.py: `if line.lstrip().startswith(">"):` => `if False:`
   code-gt-ok: check_draft.py: `if ">" in m.group(0):` => `if False:`
   unlinked-ok: check_draft.py: `out.append(f"PR reference {m.group(0)!r} is not a link")` => `pass`
   links-not-stripped: check_draft.py: `rest = BARE_URL.sub(" ", MD_LINK.sub(" ", SLACK_LINK.sub(" ", text)))` => `rest = text`
   unknown-state-passes: check_draft.py: `ok = False` => `ok = True`
-  bytes-unchecked: check_draft.py: `if hub.sha256(open(args.file, "rb").read()) != stamp["sha256"]:` => `if False:`
+  bytes-unchecked: check_draft.py: `if hub.sha256(message(args.file)[0]) != stamp["sha256"]:` => `if False:`
   age-unchecked: check_draft.py: `if age > args.max_age or age < 0:` => `if False:`
   resend-ok: check_draft.py: `if stamp.get("sent_id"):` => `if False:`
   quiet-ignored: check_draft.py: `mode, post = hub.send_plan(cfg, hub.now())` => `mode, post = "live", None`
@@ -27,9 +36,9 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   assignment-missed: check_draft.py: `|(?i:[a-z_]*(?:key|token|secret|password)\s*[=:]\s*[\"']?[\w./+-]{8,})` => ``
   mention-map-ignored: check_draft.py: `login = logins.get(sid)` => `login = None`
   answers-unchecked: check_draft.py: `if args.answers and args.reply != max(args.answers, key=ts_key):` => `if False:`
-  replies-optional: check_draft.py: `if stamp["target"].startswith("reply:") and not args.replies:` => `if False:`
+  replies-optional: check_draft.py: `if stamp["target"].startswith("reply:") and not args.replies and stamp["send"] != "schedule":` => `if False:`
   send-unconfirmed: check_draft.py: `if after <= before:` => `if False:`
-  context-unlogged: check_draft.py: `+ (f": {context}" if context else ""))` => `)`
+  context-unlogged: check_draft.py: `hub.log_event(cfg, verb, text,` => `hub.log_event(cfg, verb, "message",`
   posted-still-listed: hub.py: `if parse_time(s.get("post_at")) <= now_:` => `if False:`
   cap-ignored: check_draft.py: `if len(text) > cap:` => `if False:`
   cap-hardcoded: check_draft.py: `problems = shape_problems(text, int(cfg["slack"]["max_chars"]))` => `problems = shape_problems(text)`
@@ -56,6 +65,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
 """
 import contextlib
 import io
+import json
 import os
 import unittest
 from unittest import mock
@@ -80,6 +90,13 @@ def gate(env, text, *flags, gh=None, now=DAY):
     path = env.dir / "draft.md"
     if text is not None:
         path.write_bytes(text.encode())
+    out = io.StringIO()
+    with mock.patch.dict(os.environ, {"COMMS_HUB_NOW": now}), contextlib.redirect_stdout(out):
+        rc = check_draft.main([str(path), *flags], gh=hub.Gh(runner=gh, pause=0) if gh else None)
+    return rc, out.getvalue()
+
+
+def gate_file(path, *flags, gh=None, now=DAY):
     out = io.StringIO()
     with mock.patch.dict(os.environ, {"COMMS_HUB_NOW": now}), contextlib.redirect_stdout(out):
         rc = check_draft.main([str(path), *flags], gh=hub.Gh(runner=gh, pause=0) if gh else None)
@@ -370,6 +387,88 @@ class Scheduled(unittest.TestCase):
             rc, out = gate(env, None, "--scheduled", now="2026-10-22T15:30:00+00:00")  # 08:30, posted
             self.assertIn("scheduled: 0 pending", out)
 
+    def test_a_withdrawn_message_is_no_longer_pending(self):
+        # One deleted in Slack still counted, so the morning tick would gate a message that never posts.
+        with Env() as env:
+            gate(env, "ok\n", "--top-level", gh=fake(), now=EVENING)
+            gate(env, None, "--record-sent", "Q0001", "--context", "carol's review ask", now=EVENING)
+            rc, out = gate(env, None, "--withdrawn", "Q0001", "--context", "the user deleted it", now=EVENING)
+            self.assertEqual((rc, out.strip()), (0, "withdrawn Q0001: no longer scheduled"))
+            self.assertIn("scheduled: 0 pending", gate(env, None, "--scheduled", now=EVENING)[1])
+            log = (env.state / "log" / "2026-10-21.md").read_text()
+            self.assertIn("withdrawn: carol's review ask | id=Q0001 post_at=2026-10-22T08:30:00-07:00; "
+                          "the user deleted it [1021.2]\n", log)
+            self.assertEqual(gate(env, None, "--withdrawn", "Q0001", now=EVENING)[0], 0, "again is a no-op")
+            self.assertEqual(log, (env.state / "log" / "2026-10-21.md").read_text(), "logged once")
+            rc, out = gate(env, None, "--withdrawn", "Q0009", now=EVENING)
+            self.assertEqual(rc, 1)
+            self.assertIn("FAIL: no scheduled message Q0009", out)
+
+
+    def test_a_scheduled_reply_records_at_once_and_is_listed_for_the_recheck(self):
+        # A scheduled reply cannot move the reply count before post_at; refusing it left
+        # every scheduled reply out of --scheduled (1 of 3 listed on 2026-10-28).
+        with Env() as env:
+            rc, out = gate(env, "ok\n", "--reply", "1761040800.000100", gh=fake(), now=EVENING)
+            self.assertIn("send: schedule", out)
+            rc, out = gate(env, None, "--record-sent", "Q0001", now=EVENING)
+            self.assertEqual(rc, 0, out)
+            rc, out = gate(env, None, "--scheduled", now="2026-10-22T14:00:00+00:00")
+            self.assertIn("scheduled: 1 pending", out)
+            self.assertIn("Q0001 post_at=2026-10-22T08:30:00-07:00 target=reply:1761040800.000100", out)
+
+    def test_a_later_post_time_is_recorded_and_an_earlier_one_refused(self):
+        with Env() as env:
+            gate(env, "ok\n", "--top-level", gh=fake(), now=EVENING)
+            rc, out = gate(env, None, "--record-sent", "Q0001", "--post-at", "08:00", now=EVENING)
+            self.assertEqual(rc, 1)
+            self.assertIn("FAIL: --post-at 08:00 is not HH:MM at or after the gate's post_at 08:30", out)
+            rc, out = gate(env, None, "--record-sent", "Q0001", "--post-at", "09:00", now=EVENING)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("Q0001 post_at=2026-10-22T09:00:00-07:00", gate(env, None, "--scheduled", now=EVENING)[1])
+
+    def test_a_recheck_of_the_sent_copy_marks_the_message_record(self):
+        merged = {**PR_JSON, "state": "MERGED"}
+        morning = "2026-10-22T15:07:00+00:00"  # 08:07 there, before the 08:30 post
+        with Env() as env:
+            gate(env, f"{LINK} is still awaiting review.\n", "--top-level", gh=fake(), now=EVENING)
+            gate(env, None, "--record-sent", "Q0001", now=EVENING)
+            copy = env.state / "sent" / "2026-10-21" / "Q0001.md"
+
+            def record():
+                return next(s for s in (json.loads(p.read_text()) for p in (env.state / "gate").glob("*.json"))
+                            if s.get("sent_id") == "Q0001")
+            rc, out = gate_file(copy, "--top-level", gh=fake(), now=morning)
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(record()["regated_at"], morning)
+            rc, out = gate_file(copy, "--top-level", gh=fake(merged), now=morning)
+            self.assertEqual(rc, 1)
+            self.assertIn("claim moved on scheduled message Q0001", out)
+            self.assertEqual(record()["claim_moved_at"], morning)
+
+
+class Header(unittest.TestCase):
+    HEAD = ("comms-hub draft\nto: chan-one reply 1761040800.000100\nkind: reply\nclaims:\n"
+            "- acme/app#12 is open | its PR\nuser-approved: no\nfold-in: none\n---\n")
+
+    def test_only_the_message_counts_and_is_checked(self):
+        body = "word " * 499 + "end\n"   # 2499 characters, under the 2500 cap only without the header
+        with Env() as env:
+            rc, out = gate(env, self.HEAD + body, "--reply", "1761040800.000100", gh=fake())
+            self.assertEqual(rc, 0, out)
+            self.assertIn("send the message after the header's `---`, not the header", out)
+            self.assertIn("FRESH", gate(env, None, "--assert-fresh")[1])
+            rc, out = gate(env, None, "--record-sent", "1761044400.000200", "--replies", "3", "4")
+            self.assertEqual(rc, 0, out)
+            rc, out = gate(env, self.HEAD + body + "x" * 10, "--reply", "1761040800.000100", gh=fake())
+            self.assertIn("2509 characters, over the 2500 cap", out)
+
+    def test_a_file_with_no_header_is_the_message(self):
+        with Env() as env:
+            rc, out = gate(env, "to: whoever reads this\nthanks\n", "--top-level", gh=fake())
+            self.assertEqual(rc, 0, out)
+            self.assertIn("send this file", out)
+
 
 class Freshness(unittest.TestCase):
     def test_pass_then_fresh(self):
@@ -399,7 +498,7 @@ class Freshness(unittest.TestCase):
             rc, out = gate(env, None, "--record-sent", "1761040800.000100")
             self.assertEqual(rc, 0, out)
             self.assertTrue(list((env.state / "sent").rglob("*.md")))
-            self.assertIn("sent 1761040800.000100", "".join(p.read_text() for p in (env.state / "log").iterdir()))
+            self.assertIn("sent: message | id=1761040800.000100", "".join(p.read_text() for p in (env.state / "log").iterdir()))
             rc, out = gate(env, None, "--assert-fresh")
             self.assertEqual(rc, 1)
             self.assertIn("already sent", out)
@@ -427,15 +526,27 @@ class Freshness(unittest.TestCase):
             rc, out = gate(env, None, "--record-sent", "1761044400.000200", "--replies", "3", "4")
             self.assertEqual(rc, 0, out)
 
-    def test_the_context_goes_on_the_log_line_in_one_line(self):
+    def test_the_context_is_the_headline_and_the_ids_are_detail(self):
         with Env() as env:
             gate(env, "ok\n", "--reply", "1761040800.000100", gh=fake())
             rc, out = gate(env, None, "--record-sent", "1761044400.000200", "--replies", "3", "4",
                            "--context", "bob asked when\nacme/app#12 merges")
             self.assertEqual(rc, 0, out)
             log = "".join(p.read_text() for p in (env.state / "log").iterdir())
-            self.assertIn("sent 1761044400.000200 target=reply:1761040800.000100 sha256=", log)
-            self.assertIn(": bob asked when acme/app#12 merges\n", log)
+            self.assertIn("sent: bob asked when acme/app#12 merges | id=1761044400.000200 "
+                          "target=reply:1761040800.000100 sha256=", log)
+
+    def test_a_context_that_cannot_be_a_headline_still_records_as_detail(self):
+        # The message has gone, so the record must not be refused over its wording.
+        with Env() as env:
+            gate(env, "ok\n", "--reply", "1761040800.000100", gh=fake())
+            rc, out = gate(env, None, "--record-sent", "1761044400.000200", "--replies", "3", "4",
+                           "--context", "bob in chan-one thread 1761040800.000100")
+            self.assertEqual(rc, 0, out)
+            self.assertIn("WARN: --context is detail, not panel text (the text holds a thread ts", out)
+            log = (env.state / "log" / "2026-10-21.md").read_text()
+            self.assertIn("sent: reply | id=1761044400.000200", log)
+            self.assertIn("; bob in chan-one thread 1761040800.000100 [1021.1]\n", log)
 
     def test_the_sent_folder_is_the_day_in_the_configured_zone(self):
         # DAY is 10:00 on 2026-10-21 in Los Angeles, the config's zone, and 06:00 on the 22nd in Auckland.

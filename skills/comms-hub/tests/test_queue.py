@@ -2,6 +2,7 @@ r"""queue.py: the two instruments, the search quota, paging, UNKNOWN, review and
 activity state, the watchdog, the previous scan.
 
 Mutations (run.py --mutate applies each and expects this file to fail):
+  open-items-unsaid: queue.py: `needs, routed_ = hub.open_items(cfg)` => `needs, routed_ = [], []`
   xcheck-ignored: queue.py: `blocked.append("my open PRs differ between search and graphql")` => `pass`
   short-search-ok: queue.py: `if len(items) != total:` => `if False:`
   incomplete-ok: queue.py: `if d.get("incomplete_results"):` => `if False:`
@@ -359,7 +360,7 @@ class Scan(unittest.TestCase):
                 out = []
                 q.scan(hub.load_config(), hub.Gh(runner=fake(), pause=0), emit=out.append)
                 outs.append("\n".join(out))
-            log = "".join(p.read_text() for p in (env.state / "log").iterdir())
+            log = "".join(p.read_text() for p in (env.state / "log").glob("*.md"))
         self.assertIn("previous-scan: none", outs[0])
         self.assertIn("previous-scan: 2026-10-21T17:00:00+00:00 epoch=1792602000", outs[1])
         self.assertEqual(log.count("scan started"), 2)
@@ -374,6 +375,18 @@ class Scan(unittest.TestCase):
         self.assertIn("held-drafts: 1 (app-session-1761040800.000100.md): gate and send each, or say why it still waits",
                       out)
         self.assertIn("held-drafts: 0", scan(fake())[1])
+
+    def test_what_waits_on_the_user_or_a_peer_is_counted_every_tick(self):
+        with Env(now=NOW) as env:
+            cfg = hub.load_config()
+            hub.log_event(cfg, "asked", "may bob drop the tables?", needs_user=True)
+            hub.log_event(cfg, "routed", "acme/app#12 conflicts", who="app-session")
+            out = []
+            q.scan(cfg, hub.Gh(runner=fake(), pause=0), emit=out.append)
+        self.assertIn("needs-you: 1 (1021.1): carry each in the report until answered, then log the outcome with "
+                      "--corrects ID", out)
+        self.assertIn("with-sessions: 1 (1021.2): when a peer answers, log --kind returned --corrects ID", out)
+        self.assertIn("needs-you: 0", scan(fake())[1])
 
     def test_the_first_scan_after_quiet_hours_says_morning(self):
         with Env(now=NOW) as env:
