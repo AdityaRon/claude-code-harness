@@ -20,7 +20,7 @@ require_parsable_or_deny
 H=$HOME
 # Most commands name none of these and are not run from inside ~/.claude. A
 # symlink into ~/.claude/hooks has to be made first, and ln is checked below.
-[[ "$TOOL" == Bash ]] && case "$TARGET" in
+[[ "$TOOL" == Bash || "$TOOL" == Monitor ]] && case "$TARGET" in
   *.claude*|*.zsh*|*.zprofile*|*.zlog*|*.bashrc*|*.bash_profile*|*.bash_login*|*.profile*|*gitconfig*|*git/config*|*LaunchAgents*|*--global*) ;;
   *) case "$CWD" in "$H/.claude"|"$H/.claude/"*|*/.claude|"$H/Library/LaunchAgents") ;; *) exit 0 ;; esac ;;
 esac
@@ -201,7 +201,7 @@ drop_data_heredocs() {
 
 case "$TOOL" in
   Edit|Write|MultiEdit|NotebookEdit) check_word "$TARGET" 0 ;;
-  Bash)
+  Bash|Monitor)
     # Quoted separators hidden, groups opened, wrappers and /bin/ paths gone (lib.sh).
     NORM=$(normalize_command "$(neutralize_quoted_separators "$(drop_data_heredocs "$TARGET")")")
     REDIR='[0-9&]*>>?\|?[[:space:]]*[^[:space:];&|<>()]+'

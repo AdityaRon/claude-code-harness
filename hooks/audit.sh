@@ -62,6 +62,8 @@ case "$EVENT" in
     WHY=$(sanitize "$(jq_get '.denial_reason')")
     if [[ "$TOOL" == "Bash" ]]; then
       TARGET=$(sanitize "$(jq_get '.tool_input.command')")
+    elif [[ "$TOOL" == "Monitor" ]]; then
+      TARGET=$(sanitize "$(jq_get '.tool_input.command // .tool_input.ws.url')")
     else
       TARGET=$(sanitize "$(jq_get '.tool_input.file_path')")
       [[ -z "$TARGET" ]] && TARGET=$(sanitize "$(jq_get '.tool_input.path')")
@@ -127,6 +129,10 @@ case "$EVENT" in
     elif [[ "$TOOL" == "Bash" ]]; then
       CMD=$(sanitize "$(jq_get '.tool_input.command')")
       log_audit "$TS | Bash | ${CMD:-unknown} | $DIR"
+    elif [[ "$TOOL" == "Monitor" ]]; then
+      # A monitor runs a shell command or opens a WebSocket for up to 30 min.
+      SRC=$(sanitize "$(jq_get '.tool_input.command // (.tool_input.ws.url | values | "ws " + .)')")
+      log_audit "$TS | Monitor | ${SRC:-unknown} | $DIR"
     else
       FILE=$(sanitize "$(jq_get '.tool_input.file_path')")
       [[ -z "$FILE" ]] && FILE=$(sanitize "$(jq_get '.tool_input.path')")

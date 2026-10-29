@@ -157,7 +157,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Monitor",
         "hooks": [
           { "type": "command", "command": "~/.claude/hooks/env-guard.sh", "onFailure": "block" },
           { "type": "command", "command": "~/.claude/hooks/git-guard.sh", "onFailure": "block" },
@@ -195,7 +195,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash",
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash|Monitor",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
       },
       {

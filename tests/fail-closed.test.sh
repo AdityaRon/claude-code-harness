@@ -114,6 +114,13 @@ done < <(jq -r '.hooks.PreToolUse[] | (if (.matcher // "") == "" then "(all)" el
   | .hooks[] | select(.async | not)
   | [$m, .command, (.onFailure // "unset")] | @tsv' config/settings.json)
 
+# A monitor runs a shell command for up to 30 minutes, so it meets every Bash guard.
+echo ""
+echo "=== Every PreToolUse hook on Bash also fires on Monitor ==="
+MISSING=$(jq -r 'def on($t): [.hooks.PreToolUse[] | . as $e | select($t | test("^(" + ($e.matcher // "") + ")$")) | .hooks[].command];
+  (on("Bash") - on("Monitor"))[]' config/settings.json)
+[[ -z "$MISSING" ]] && { echo "  OK"; PASS=$((PASS+1)); } || { echo "  FAIL, Bash only: ${MISSING//$'\n'/ }"; FAIL=$((FAIL+1)); }
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

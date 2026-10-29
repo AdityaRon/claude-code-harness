@@ -341,7 +341,8 @@ def main():
             if b['decision'] == h['decision']:
                 same += 1
             else:
-                cmd = row['tool_input'].get('command') or row['tool_input'].get('file_path') or row['tool_input'].get('url') or ''
+                ti = row['tool_input']
+                cmd = ti.get('command') or ti.get('file_path') or ti.get('url') or (ti.get('ws') or {}).get('url') or ''
                 changed.append({'id': row['id'], 'base': b['decision'], 'head': h['decision'], 'base_by': b['by'],
                                 'head_by': h['by'], 'preview': cmd.replace('\n', ' ')[:60]})
 
