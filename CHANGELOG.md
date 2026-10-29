@@ -6,6 +6,56 @@ the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
 installed machine to the newest tag.
 
+## v1.1.9 (2026-10-29)
+
+Merged since v1.1.8: 4 PRs.
+
+### Security
+- Guard and audit the Monitor tool like Bash (#154)
+- upstream-check: run each shipped mod's tests against the CLI (#152)
+
+### Other
+- comms-hub: a panel to read at a glance, from structured log events (#153)
+- license: MIT (#150)
+
+### Benchmark vs v1.1.8
+
+
+2026-10-29T13:16:16Z, Linux 7.0.0-1017-azure x86_64, AMD EPYC 7763 64-Core Processor, python 3.12.3. Corpus tests/bench-corpus.jsonl: 492 payloads (372 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 NotebookEdit, 2 MultiEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, run one at a time. Wait is the slowest hook of a call (Claude Code runs them in parallel); CPU is the sum. Process start here: `bash -c :` 1.5 ms, `jq -n 1` 2.5 ms (p50 of 20), so only same-run comparisons are meaningful.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 372 | 61.2 → 61.0 ms (-0%) | 62.1 → 62.1 ms (-0%) | 104.3 → 103.9 ms (-0%) | 195.1 → 195.0 ms (-0%) |
+| WebFetch | 11 | 19.4 → 19.7 ms (+1%) | 24.9 → 24.9 ms (+0%) | 40.2 → 39.8 ms (-1%) | 35.2 → 35.4 ms (+0%) |
+| Read/Grep | 41 | 50.3 → 50.3 ms (-0%) | 53.1 → 52.8 ms (-0%) | 78.2 → 77.3 ms (-1%) | 63.8 → 63.5 ms (-0%) |
+| Write/Edit | 63 | 50.2 → 50.4 ms (+0%) | 51.1 → 51.0 ms (-0%) | 77.2 → 78.5 ms (+2%) | 116.0 → 115.9 ms (-0%) |
+| Monitor | 5 | 5.9 → 40.5 ms (+585%) | 5.9 → 52.8 ms (+796%) | 6.0 → 102.7 ms (+1601%) | 5.7 → 165.7 ms (+2807%) |
+| All | 492 | 54.8 → 55.0 ms (+0%) | 58.5 → 59.0 ms (+1%) | 102.3 → 102.5 ms (+0%) | 168.5 → 170.1 ms (+1%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean |
+|---|---:|---|---|---|
+| config-guard.sh | 435 | 12.0 → 12.0 ms (+0%) | 32.9 → 33.0 ms (+0%) | 12.9 → 12.8 ms (-0%) |
+| env-guard.sh | 372 | 14.8 → 14.8 ms (-0%) | 88.7 → 88.2 ms (-1%) | 34.4 → 34.3 ms (-0%) |
+| git-guard.sh | 372 | 14.2 → 14.2 ms (-0%) | 99.9 → 99.9 ms (+0%) | 31.3 → 31.1 ms (-1%) |
+| interpreter-guard.sh | 372 | 14.3 → 14.3 ms (+0%) | 95.6 → 96.1 ms (+0%) | 36.3 → 36.0 ms (-1%) |
+| kubectl-guard.sh | 372 | 14.1 → 14.1 ms (-0%) | 65.5 → 65.5 ms (+0%) | 28.9 → 28.7 ms (-1%) |
+| mod-gate.sh | 63 | 3.0 → 3.0 ms (-0%) | 12.8 → 13.0 ms (+2%) | 3.5 → 3.5 ms (-0%) |
+| network-guard.sh | 383 | 18.2 → 18.2 ms (+0%) | 80.9 → 80.6 ms (-0%) | 31.0 → 31.3 ms (+1%) |
+| rm-guard.sh | 372 | 12.3 → 12.3 ms (-0%) | 13.1 → 13.4 ms (+2%) | 16.2 → 16.4 ms (+1%) |
+| secret-scanner.sh | 63 | 24.8 → 24.8 ms (+0%) | 77.2 → 78.5 ms (+2%) | 30.9 → 31.0 ms (+0%) |
+| sensitive-file-guard.sh | 104 | 50.2 → 50.3 ms (+0%) | 63.4 → 62.1 ms (-2%) | 55.0 → 54.8 ms (-0%) |
+| subagent-cache-guard.sh | 492 | 5.8 → 5.8 ms (-0%) | 6.1 → 6.1 ms (+0%) | 5.6 → 5.6 ms (+0%) |
+
+Decisions: 489 of 492 payloads got the same answer on both sides.
+
+| Payload | base | head |
+|---|---|---|
+| monitor-rm-home `sleep 60; rm -rf ~/` | allow (silent) | deny (rm-guard.sh) |
+| monitor-curl-unlisted `while true; do curl -s https://status.unlisted.example/poll;` | allow (silent) | ask (network-guard.sh) |
+| monitor-ws-unlisted `wss://feed.unlisted.example/events` | allow (silent) | ask (network-guard.sh) |
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended).
+
 ## v1.1.8 (2026-10-28)
 
 Merged since v1.1.7: 3 PRs.
