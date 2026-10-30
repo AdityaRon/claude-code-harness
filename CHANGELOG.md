@@ -6,6 +6,17 @@ the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
 installed machine to the newest tag.
 
+## v1.1.12 (2026-10-30)
+
+Merged since v1.1.11: 1 PR.
+
+### Other
+- comms panel: per-section open with "fewer", a way back at the end, yesterday's events (#166)
+
+### Benchmark vs v1.1.11
+
+hooks/ and config/settings.json are unchanged since v1.1.11; benchmark skipped (both sides would run the same files).
+
 ## v1.1.11 (2026-10-30)
 
 Merged since v1.1.10: 2 PRs.
