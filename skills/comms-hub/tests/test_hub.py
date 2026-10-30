@@ -61,6 +61,10 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   ack-unvalidated: hub.py: `if not re.fullmatch(r"[\w+'.-]+", ack):` => `if False:`
   control-not-earlier: hub.py: `since -= dt.timedelta(days=CONTROL_DAYS)` => `pass`
   queries-any-flag: hub.py: `if argv[1:] not in ([], ["--control"]):` => `if False:`
+  launch-check-unrecorded: hub.py: `(state_dir(cfg) / "launch.json").write_text(` => `(state_dir(cfg) / "launch-unread.json").write_text(`
+  stopped-transcript-trusted: hub.py: `if since and dt.datetime.fromtimestamp(transcript.stat().st_mtime, dt.timezone.utc) < since:` => `if False:`
+  live-transcript-distrusted: hub.py: `transcript.stat().st_mtime, dt.timezone.utc) < since:` => `transcript.stat().st_mtime, dt.timezone.utc) > since:`
+  named-transcript-guarded: hub.py: `transcript, since = Path(argv[2]), None` => `transcript, since = Path(argv[2]), parse_time(_record(cfg, "launch.json").get("checked"))`
   park-unnormalized: hub.py: `ref = pr_ref(argv[1])` => `ref = argv[1]`
   unpark-noop: hub.py: `if marks.pop(ref, None) is None:` => `if marks.get(ref) is None:`
   park-why-dropped: hub.py: `"why": " ".join(argv[2:])}` => `"why": ""}`
@@ -626,6 +630,35 @@ class Compaction(unittest.TestCase):
     def test_config_prints_it(self):
         with Env() as env:
             self.transcripts(env.dir)
+            out = io.StringIO()
+            with mock.patch.object(hub, "projects_root", return_value=env.dir / "projects"), \
+                    contextlib.redirect_stdout(out):
+                self.assertEqual(hub.main(["config"]), 0)
+            self.assertIn("compact: window 600000; session new compacted 2x", out.getvalue())
+
+    def test_after_a_relaunch_the_stopped_sessions_transcript_is_named_as_such(self):
+        # A relaunched session has no tick until the first cron fire, so the newest
+        # tick transcript was the stopped one's, and config read it as this one's.
+        with Env() as env:
+            _, new = self.transcripts(env.dir)  # last written ten minutes ago
+            launched = {k: str(v) for k, v in hub.launch_env(hub.load_config()).items()}
+            out = io.StringIO()
+            with mock.patch.object(hub, "projects_root", return_value=env.dir / "projects"), \
+                    mock.patch.dict(os.environ, launched), contextlib.redirect_stdout(out):
+                self.assertEqual(hub.main(["launch", "--check"]), 0)
+                self.assertEqual(hub.main(["config"]), 0)
+                self.assertEqual(hub.main(["config", "--transcript", str(new)]), 0)
+            lines = [ln for ln in out.getvalue().splitlines() if ln.startswith("compact:")]
+            self.assertIn("session new, was last written before this session passed its launch check", lines[0])
+            self.assertIn("waits for this session's first tick", lines[0])
+            self.assertIn("session new compacted 2x", lines[1], "a named transcript is read as asked")
+
+    def test_a_transcript_written_since_the_launch_check_is_this_sessions(self):
+        with Env() as env:
+            self.transcripts(env.dir)
+            hour_ago = hub.dt.datetime.now(hub.dt.timezone.utc) - hub.dt.timedelta(hours=1)
+            (env.state).mkdir(parents=True, exist_ok=True)
+            (env.state / "launch.json").write_text(hub.json.dumps({"checked": hour_ago.isoformat()}))
             out = io.StringIO()
             with mock.patch.object(hub, "projects_root", return_value=env.dir / "projects"), \
                     contextlib.redirect_stdout(out):
