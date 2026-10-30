@@ -22,7 +22,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   regate-going: hub.py: `or s.get("withdrawn_at") or s.get("regate_of") or not` => `or s.get("withdrawn_at") or not`
   claim-moved-hidden: hub.py: `if s.get("claim_moved_at"):` => `if False:`
   recheck-never-due: hub.py: `elif last_scan and last_scan > checked:` => `elif False:`
-  scans-in-events: hub.py: `for r in reversed(today) if r["kind"] not in UNSHOWN]` => `for r in reversed(today) if r["kind"] != "scan"]`
+  scans-in-events: hub.py: `for r in reversed(recent) if r["kind"] not in UNSHOWN]` => `for r in reversed(recent) if r["kind"] != "scan"]`
   todo-counts-as-an-item: hub.py: `if r["kind"] not in UNSHOWN + ("tick", "setup")] if scans else []` => `if r["kind"] not in ("scan", "tick", "setup")] if scans else []`
   moved-head-ignored: hub.py: `moved = bool(p.get("my_sha")) and p["my_sha"] != p["head"]` => `moved = False`
   moved-still-approvable: hub.py: `"new commits" if moved else verdict` => `verdict or ("new commits" if moved else "")`
@@ -38,8 +38,11 @@ Mutations (run.py --mutate applies each and expects this file to fail):
         data, written = None, None`
   strip-weekends: hub.py: `if DAYS[day.weekday()] in cfg["active_hours"]["days"]:` => `if True:`
   strip-uncounted: hub.py: `counts[r["day"]][r["event"]] += 1` => `pass`
-  events-oldest-first: hub.py: `for r in reversed(today) if` => `for r in today if`
+  events-oldest-first: hub.py: `for r in reversed(recent) if` => `for r in recent if`
+  events-yesterday-dropped: hub.py: `if r["day"] in logs[-2:]]` => `if r["day"] in logs[-1:]]`
+  events-yesterday-undated: hub.py: `"at": r["at"] if r["day"] == newest else` => `"at": r["at"] if True else`
   last-tick-counts-all: hub.py: `r in raw[scans[-1] + 1:]` => `r in raw`
+  last-tick-untimed: hub.py: `"last_tick": f"{raw[scans[-1]]['at']}, " + (` => `"last_tick": "" + (`
   parked-uncounted: hub.py: `"parked": len(parked(cfg))}` => `"parked": 0}`
   held-text-uncut: hub.py: `"text": clip(h["first"]), "full"` => `"text": h["first"], "full"`
   held-full-first-line: hub.py: `"full": whole(h["body"])}` => `"full": h["first"]}`
@@ -256,7 +259,8 @@ class Panel(unittest.TestCase):
                           ("09:20", "routed", "conflicts", False),
                           ("09:10", "asked", "may bob drop the tables?", False)])
         self.assertEqual(p["events"][0]["target"], "#team-reviews")
-        self.assertEqual((p["day"], p["last_tick"], p["next_tick"], p["read"]), ("Wed 21 Oct", "1 item", "10:07", "10:00"))
+        self.assertEqual((p["day"], p["last_tick"], p["next_tick"], p["read"]),
+                         ("Wed 21 Oct", "09:45, 1 event", "10:07", "10:00"))
 
     def test_a_gate_after_the_last_scan_reads_as_gated(self):
         with Env(now=NOW) as env:
@@ -281,7 +285,19 @@ class Panel(unittest.TestCase):
             main_out("log", "--kind", "done", "--corrects", "1021.2", "review posted at the head",
                      now="2026-10-21T16:47:00+00:00")
             p = json.loads(main_out("panel")[1])
-        self.assertEqual((p["events"], p["last_tick"]), ([], "quiet"), "a quiet tick does not read as 2 items")
+        self.assertEqual((p["events"], p["last_tick"]), ([], "09:45, quiet"), "a quiet tick does not read as 2 events")
+
+    def test_the_evening_before_stays_past_the_first_scan_of_a_new_day(self):
+        with Env(config=NAMES, now=NOW):
+            main_out("log", "--kind", "note", "a row two log days back", now="2026-10-19T20:00:00+00:00")
+            main_out("log", "--kind", "sent", "--target", "C0CHANONE1", "reply to carol", now="2026-10-20T23:30:00+00:00")
+            main_out("log", "--kind", "scan", "scan started", now="2026-10-21T16:00:00+00:00")
+            main_out("log", "--kind", "sent", "--target", "D0DMBOBXX1", "reply to bob", now="2026-10-21T16:10:00+00:00")
+            p = json.loads(main_out("panel")[1])
+        self.assertEqual([(e["at"], e["kind"], e["text"]) for e in p["events"]],
+                         [("09:10", "sent", "reply to bob"), ("Tue 16:30", "sent", "reply to carol")],
+                         "the day before keeps its rows, dated; two log days back has gone")
+        self.assertEqual(p["day"], "Wed 21 Oct")
 
 
 SHA1, SHA2 = "1" * 40, "2" * 40
