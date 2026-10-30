@@ -69,12 +69,15 @@ Nothing here depends on which server it is: step 0 records the tool names.
    with what needs the user, where their PRs stand (per repo, from the last
    scan, with its age), what goes out and when, what is with other sessions,
    what is held, reviewed, approved and merged over the last five active days,
-   and the day's events with a dot on each since the user last looked, from
-   `PY B/hub.py panel` as each turn ends, so it costs no tokens (`/comms`
-   opens it again and counts as a look). In expanded view (`e` with the pane
-   focused, or a `+k more` button) it shows every row and each message whole.
-   The phone app docks no pane: there `/comms` answers with the same state as
-   text, and while a phone is attached the counts ride the status line.
+   and the last two log days' events with a dot on each since the user last
+   looked, from `PY B/hub.py panel` as each turn ends, so it costs no tokens
+   (`/comms` opens it again and counts as a look). A `+k more` button opens
+   its section alone, and `fewer` in its place closes it; a look closes it
+   too. Expanded view (`e` with the pane focused, or the `expand` button)
+   shows every row and each message whole, with `compact` at the top and at
+   the end. The phone app docks no pane: there `/comms` answers with the
+   same state as text, and while a phone is attached the counts ride the
+   status line.
    Keep the machine awake through active
    hours: one that slept ran no tick until 09:55, so nothing re-gated the
    messages scheduled for 08:30, and it woke to a lost login and a DNS

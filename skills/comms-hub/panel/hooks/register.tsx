@@ -16,9 +16,10 @@ const EMPTY: Snapshot = { panel: null, problem: '', readAt: 0 }
 // stored, which outlives a reload.
 const snapshot = atom({ plugin: 'comms-panel', key: 'snapshot' } as const, EMPTY, { shape: 'snapshot-3' })
 const look = atom({ plugin: 'comms-panel', key: 'look' } as const, { since: 0, last: 0 } as Look, { shape: 'look-1' })
-const view = atom({ plugin: 'comms-panel', key: 'view' } as const, { full: false } as View, { shape: 'view-1' })
-// The most rows each section shows compact; the rest wait behind a "+k more"
-// button, which expands the pane: every row, each message whole.
+const view = atom({ plugin: 'comms-panel', key: 'view' } as const, { full: false, open: [] } as View, { shape: 'view-2' })
+// The most rows each section shows compact. A "+k more" button opens that
+// section alone, and "fewer" in its place closes it; expand (e) shows every
+// section's rows, each message whole.
 const ROWS = { needs: 8, prs: 10, going: 6, sessions: 6, held: 6, events: 12 }
 
 // The interpreter the scripts use, found once; a failure is asked again.
@@ -56,10 +57,12 @@ async function refresh($: EngineInterface): Promise<Snapshot> {
 }
 
 // Opening the pane or running /comms is a look: what was logged before the
-// previous one loses its dot.
+// previous one loses its dot, and a section opened at the last look closes.
+// Expand is a preference, so it stays.
 async function looked($: EngineInterface): Promise<void> {
   const at = await $.clock.now()
   await update($, look, l => ({ since: l.last, last: at }))
+  await update($, view, v => ({ ...v, open: [] }))
 }
 
 function words(...parts: string[]): string {
@@ -79,15 +82,30 @@ function statusLine(s: Snapshot): string {
   return `Comms: ${counts(s.panel)} · next tick ${s.panel.next_tick} · /comms for the list`
 }
 
+// A section of the text below: its title, then at most its compact rows.
+function lines<T>(title: string, items: T[], max: number, line: (item: T) => string): string[] {
+  if (!items.length) return []
+  return [title, ...items.slice(0, max).map(item => `  ${line(item)}`),
+          ...(items.length > max ? [`  +${items.length - max} more`] : [])]
+}
+
 // The panel as text, for /comms where no pane draws: the counts, what needs
-// the user, then the PRs that do.
-function summary(s: Snapshot): string {
+// the user, the PRs that do, then what goes out, what is with sessions, and
+// what was logged since the look before this one.
+function summary(s: Snapshot, since: number): string {
   if (s.problem || !s.panel) return statusLine(s)
   const p = s.panel
+  const fresh = p.events.filter(ev => Date.parse(ev.ts) > since)
   return [
     `Comms${p.day ? ` · ${p.day}` : ''}: ${counts(p)} · next tick ${p.next_tick}`,
     ...p.needs.map(n => `● ${words(n.ref, n.target, n.note)}: ${n.text}`),
     ...(p.prs?.rows ?? []).filter(r => r.needs).map(r => `● ${r.line}`),
+    ...lines(`GOING OUT · ${p.going.length}`, p.going, ROWS.going,
+             g => words(g.post, g.target, g.ref, g.text, g.status)),
+    ...lines(`WITH SESSIONS · ${p.sessions.length}`, p.sessions, ROWS.sessions,
+             w => words(w.who, w.ref, w.text, `since ${w.since}`)),
+    ...lines(`SINCE YOU LOOKED · ${fresh.length} new`, fresh, ROWS.events,
+             ev => words(ev.at, ev.kind, ev.ref, ev.target, ev.text)),
   ].join('\n')
 }
 
@@ -121,7 +139,8 @@ export const register: Register = on => {
     if (opened.isPlaced) return { text: 'Comms pane opened.' }
 
     // No pane here (the phone app docks none): the state as text instead, and why.
-    return { text: `${summary(s)}\n(no pane here: ${opened.reason})` }
+    const { since } = await read($, look)
+    return { text: `${summary(s, since)}\n(no pane here: ${opened.reason})` }
   })
 
   // A phone joining: open the pane for it, and keep the counts on the status
@@ -159,7 +178,7 @@ export const register: Register = on => {
     const p = s.panel
     if (!p) return <Text dimColor>Reading the comms-hub state.</Text>
     const { since } = await read($, look)
-    const { full } = await read($, view)
+    const { full, open } = await read($, view)
     // Compact cuts a row at the pane's edge; expanded wraps it, so all of it reads.
     const cut = full ? 'wrap' : 'truncate-end'
     const fresh = p.events.filter(ev => Date.parse(ev.ts) > since).length
@@ -172,16 +191,18 @@ export const register: Register = on => {
       return n ? <Text><Text weight="bold" color={color}>{`${n}`}</Text>{` ${label}`}</Text>
                : <Text dimColor>{`0 ${label}`}</Text>
     }
-    // A section's rows: all of them expanded, else the first `max`.
-    function shown<T>(items: T[], max: number): T[] {
-      return full ? items : items.slice(0, max)
+    // A section's rows: all of them expanded or opened, else the first `max`.
+    function shown<T>(name: string, items: T[], max: number): T[] {
+      return full || open.includes(name) ? items : items.slice(0, max)
     }
-    // What `shown` left out, as a button that expands the pane.
+    // What `shown` left out, as a button that opens that section alone. Once
+    // open, "fewer" in the same place closes it, where the eye already is.
     function more(name: string, total: number, max: number) {
-      return !full && total > max
-        ? [<Button key={`more:${name}`} label={`+${total - max} more`} dimColor
-                   onPress={() => update($, view, () => ({ full: true }))} />]
-        : []
+      if (full || total <= max) return []
+      const isOpen = open.includes(name)
+      return [<Button key={`${isOpen ? 'fewer' : 'more'}:${name}`} label={isOpen ? 'fewer' : `+${total - max} more`}
+                      dimColor onPress={() => update($, view, v => ({
+                        ...v, open: v.open.includes(name) ? v.open.filter(o => o !== name) : [...v.open, name] }))} />]
     }
     // A section only when it has rows: the summary already says which are empty.
     function section<T>(title: string, name: string, items: T[], max: number, row: (item: T) => unknown[],
@@ -189,7 +210,7 @@ export const register: Register = on => {
       if (!items.length) return []
       return [
         <Text weight="bold" color={color}>{`${title} · ${items.length}`}</Text>,
-        ...shown(items, max).flatMap(row),
+        ...shown(name, items, max).flatMap(row),
         ...more(name, items.length, max),
       ]
     }
@@ -218,7 +239,7 @@ export const register: Register = on => {
             {chip(p.sessions.length, 'with sessions', 'suggestion')}
             {chip(p.held.length, 'held', 'suggestion')}
             <Button key="view" hotkey="e" plain label={full ? 'compact' : 'expand'}
-                    onPress={() => update($, view, v => ({ full: !v.full }))} />
+                    onPress={() => update($, view, v => ({ ...v, full: !v.full }))} />
           </Box>
         </Box>
 
@@ -262,7 +283,7 @@ export const register: Register = on => {
                 ))}
               </Box>
             )}
-            {shown(prs.rows, ROWS.prs).map(r => (
+            {shown('prs', prs.rows, ROWS.prs).map(r => (
               <Text wrap={cut} dimColor={!r.needs}>
                 {r.needs ? <Text color="warning">● </Text> : '  '}
                 {r.line.split(' · ').map((part, i) => (
@@ -315,7 +336,7 @@ export const register: Register = on => {
             <Text color={fresh ? 'warning' : undefined}>{` · ${fresh} new`}</Text>
           </Text>
           {p.events.length === 0 && <Text dimColor>nothing logged yet</Text>}
-          {shown(p.events, ROWS.events).map(ev => (
+          {shown('events', p.events, ROWS.events).map(ev => (
             <Text wrap={cut}>
               {Date.parse(ev.ts) > since ? <Text color="warning">● </Text> : '  '}
               <Text dimColor>{ev.at}</Text>
@@ -325,6 +346,9 @@ export const register: Register = on => {
           ))}
           {more('events', p.events.length, ROWS.events)}
         </Box>
+
+        {/* Expanded, the pane outgrows its window and the toggle at the top scrolls away: a way back here too. */}
+        {full && <Button key="view-end" plain label="compact" onPress={() => update($, view, v => ({ ...v, full: false }))} />}
       </Box>
     )
   })

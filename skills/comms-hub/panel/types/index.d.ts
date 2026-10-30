@@ -53,8 +53,9 @@ export type Snapshot = { panel: Panel | null; problem: string; readAt: number }
 export type Look = { since: number; last: number }
 
 // Compact (a glance: capped sections, rows cut at the edge) or expanded
-// (every row, each message whole).
-export type View = { full: boolean }
+// (every row, each message whole), and the sections opened past their cap
+// while compact, by name. A look closes those; expanded stays.
+export type View = { full: boolean; open: string[] }
 
 declare module 'claude-code' {
   interface PluginState {

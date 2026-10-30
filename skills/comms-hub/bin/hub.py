@@ -907,10 +907,14 @@ def panel(cfg: dict) -> dict:
     logs = sorted(p.stem for p in (d / "log").glob("*.md") if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.stem)) \
         if (d / "log").is_dir() else []
     newest = logs[-1] if logs else ""
-    today = [r for r in folded(cfg, OPEN_DAYS) if r["day"] == newest]
-    events = [{"key": f"row:{r['id']}", "ts": r["ts"], "at": r["at"], "kind": r["kind"],
-               "ref": short_ref(cfg, r["ref"]), "target": target_label(cfg, r["target"]), "text": r["text"],
-               "corrected": bool(r.get("corrected"))} for r in reversed(today) if r["kind"] not in UNSHOWN]
+    # The log day before too: the first scan after midnight starts a new file,
+    # and the evening the user has not looked at yet once went with the old one.
+    recent = [r for r in folded(cfg, OPEN_DAYS) if r["day"] in logs[-2:]]
+    events = [{"key": f"row:{r['id']}", "ts": r["ts"],
+               "at": r["at"] if r["day"] == newest else f"{dt.date.fromisoformat(r['day']):%a} {r['at']}",
+               "kind": r["kind"], "ref": short_ref(cfg, r["ref"]), "target": target_label(cfg, r["target"]),
+               "text": r["text"], "corrected": bool(r.get("corrected"))}
+              for r in reversed(recent) if r["kind"] not in UNSHOWN]
     raw = day_rows(cfg, dt.date.fromisoformat(newest)) if newest else []
     scans = [i for i, r in enumerate(raw) if r["kind"] == "scan"]
     since_scan = [r for r in raw[scans[-1] + 1:] if r["kind"] not in UNSHOWN + ("tick", "setup")] if scans else []
@@ -925,7 +929,9 @@ def panel(cfg: dict) -> dict:
             "prs": prs_panel(cfg, verdicts),
             "needs": needs, "going": going_out(cfg), "sessions": sessions, "held": held, "events": events,
             "next_tick": _when(cfg, nxt) if nxt else "none scheduled",
-            "last_tick": ("quiet" if not since_scan else f"{len(since_scan)} item{'s' * (len(since_scan) != 1)}")
+            # When the last scan started, and what it logged: "1 item" once read as sends, or problems.
+            "last_tick": f"{raw[scans[-1]]['at']}, " + (
+                "quiet" if not since_scan else f"{len(since_scan)} event{'s' * (len(since_scan) != 1)}")
             if scans else "none yet", "read": f"{local_now(cfg):%H:%M}"}
 
 

@@ -59,7 +59,7 @@ const PANEL = {
       text: LONG, corrected: false },
   ],
   next_tick: '10:07',
-  last_tick: '1 item',
+  last_tick: '09:45, 1 event',
   read: '10:00',
 }
 
@@ -134,7 +134,7 @@ test('the summary counts each section, then what needs the user comes first', as
     const out = await texts($, surface)
     const at = (s: string) => out.findIndex(t => t.includes(s))
     expect(at('Comms · Wed 21 Oct')).toBe(0)
-    expect(out).toContain('next tick 10:07 · last tick: 1 item · read 10:00')
+    expect(out).toContain('next tick 10:07 · last tick: 09:45, 1 event · read 10:00')
     for (const c of ['1 need you', '3 PRs need you', '2 going out', '1 with sessions', '0 held']) expect(out).toContain(c)
     const needs = at('NEEDS YOU · 1')
     expect(needs).toBeGreaterThan(at('0 held'))
@@ -288,20 +288,57 @@ test('expand shows every row and every message whole, and compact cuts them agai
   expect((await full.find({ type: 'Text', text: /^ {4}Merged\./ }))?.text).toBe('    Merged.\n\nIt ships in the next release.')
   expect((await full.find({ type: 'Text', text: /^ {4}Bob, could/ }))?.text)
     .toBe('    Bob, could you review #15?\n\nThe tables move first.')
+  // Expanded, the toggle at the top scrolls away: the way back is at the end too, with no second hotkey.
+  const end = await full.find({ type: 'Button', key: 'view-end' })
+  expect([end?.text, end?.props.hotkey]).toEqual(['compact', undefined])
   await full.unmount()
 
+  await press($, 'view-end')
+  const back = await mounted($)
+  expect((await back.findAll({ type: 'Text', text: EVENT_ROW })).length).toBe(12)
+  expect(await back.find({ type: 'Button', key: 'view-end' })).toBeUndefined()
+  await back.unmount()
+
+  await press($, 'view')
   await press($, 'view')
   expect((await texts($)).filter(t => EVENT_ROW.test(t))).toHaveLength(12)
 })
 
-test('a "+k more" button expands the pane', async ($, on) => {
+test('a "+k more" button opens that section alone, and "fewer" in its place closes it', async ($, on) => {
   world(on, { now: json(BUSY) })
   await $.command.run({ command: 'comms', args: '' })
 
   await press($, 'more:events')
+  const opened = await mounted($)
+  expect((await opened.findAll({ type: 'Text', text: EVENT_ROW })).length).toBe(15)
+  expect(await opened.find({ type: 'Button', key: 'more:events' })).toBeUndefined()
+  expect((await opened.find({ type: 'Button', key: 'fewer:events' }))?.text).toBe('fewer')
+  // The section alone: the pane stays compact, its rows still cut at the edge.
+  expect((await opened.find({ type: 'Button', key: 'view' }))?.text).toBe('expand')
+  expect((await opened.find({ type: 'Text', text: LONG }))?.props.wrap).toBe('truncate-end')
+  await opened.unmount()
+
+  await press($, 'fewer:events')
+  const closed = await mounted($)
+  expect((await closed.findAll({ type: 'Text', text: EVENT_ROW })).length).toBe(12)
+  expect((await closed.find({ type: 'Button', key: 'more:events' }))?.text).toBe('+3 more')
+  expect(await closed.find({ type: 'Button', key: 'fewer:events' })).toBeUndefined()
+  await closed.unmount()
+})
+
+test('a look closes an opened section, and leaves expand as it was', async ($, on) => {
+  world(on, { now: json(BUSY) })
+  await $.command.run({ command: 'comms', args: '' })
+
+  await press($, 'more:events')
+  await $.command.run({ command: 'comms', args: '' })
+  expect((await texts($)).filter(t => EVENT_ROW.test(t))).toHaveLength(12)
+
+  await press($, 'view')
+  await $.command.run({ command: 'comms', args: '' })
   const ui = await mounted($)
-  expect((await ui.findAll({ type: 'Text', text: EVENT_ROW })).length).toBe(15)
   expect((await ui.find({ type: 'Button', key: 'view' }))?.text).toBe('compact')
+  expect((await ui.findAll({ type: 'Text', text: EVENT_ROW })).length).toBe(15)
   await ui.unmount()
 })
 
@@ -326,8 +363,33 @@ test('/comms where no pane draws answers with the state as text', async ($, on) 
     '● app #31  dana  commented@1111111 · new commits · CI green · approved by erin',
     '● app #32  dana  commented@2222222 · approvable · CI pending',
     '● app #40  approved, needs your merge · CI green',
+    'GOING OUT · 2',
+    '  08:30  Bob DM  app #15  review ask  gated 09:50 ✓',
+    '  08:30  Bob DM  app #16  a review ask not yet recorded  claim moved ⚠',
+    'WITH SESSIONS · 1',
+    '  app-session  app #16  conflicts  since 09:20',
+    'SINCE YOU LOOKED · 3 new',
+    '  09:46  sent  #team-reviews  reply to carol',
+    '  09:30  note  the thread had 19 replies',
+    `  09:00  note  ${LONG}`,
     '(no pane here: the attached surfaces place no panes: mobile)',
   ].join('\n'))
+
+  // A second look has nothing new since the first.
+  const again = await $.command.run({ command: 'comms', args: '' })
+  expect(again.text.includes('SINCE YOU LOOKED')).toBe(false)
+  expect(again.text.includes('GOING OUT · 2')).toBe(true)
+})
+
+test('/comms as text caps each section at the pane\'s compact rows', async ($, on) => {
+  world(on, { now: json(BUSY) }, { isPlaced: false, reason: 'the attached surfaces place no panes: mobile' })
+  const r = await $.command.run({ command: 'comms', args: '' })
+
+  const out = r.text.split('\n')
+  const at = out.indexOf('SINCE YOU LOOKED · 15 new')
+  expect(at).toBeGreaterThan(0)
+  expect(out.slice(at + 1, at + 13).every(t => /^ {2}\d\d:\d\d {2}/.test(t))).toBe(true)
+  expect(out[at + 13]).toBe('  +3 more')
 })
 
 test('a phone joining pins the counts on the status line, and its leaving clears them', async ($, on) => {
