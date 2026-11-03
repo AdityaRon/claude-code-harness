@@ -51,6 +51,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   missed-without-grace: hub.py: `now() - lag - LATE_GRACE, rows)` => `now() - lag, rows)`
   missed-without-lag: hub.py: `now() - lag - LATE_GRACE, rows)` => `now() - LATE_GRACE, rows)`
   age-hours-only: hub.py: `return (f"{h}h{m}m" if m else f"{h}h")` => `return f"{h}h"`
+  torn-row-read: hub.py: `if lines and not text.endswith("\n"):` => `if False:`
   parked-uncounted: hub.py: `"parked": len(parked(cfg))}` => `"parked": 0}`
   held-text-uncut: hub.py: `"text": clip(h["first"]), "full"` => `"text": h["first"], "full"`
   held-full-first-line: hub.py: `"full": whole(h["body"])}` => `"full": h["first"]}`
@@ -306,6 +307,15 @@ class Panel(unittest.TestCase):
                          [("09:10", "sent", "reply to bob"), ("Tue 16:30", "sent", "reply to carol")],
                          "the day before keeps its rows, dated; two log days back has gone")
         self.assertEqual(p["day"], "Wed 21 Oct")
+
+    def test_a_row_still_being_written_waits_for_the_next_read(self):
+        with Env(config=NAMES, now=NOW) as env:
+            main_out("log", "--kind", "sent", "--target", "D0DMBOBXX1", "reply to bob", now="2026-10-21T16:10:00+00:00")
+            with (env.state / "log" / "2026-10-21.jsonl").open("a") as f:
+                f.write('{"id": "1021.2", "ts": "2026-10-21T16:20:00+00:00", "at": "09:2')
+            rc, out = main_out("panel")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([e["text"] for e in json.loads(out)["events"]], ["reply to bob"])
 
     def scans_7_minutes_late(self):
         # The 08:07, 08:37 and 09:07 ticks scanned 7:00, 6:30 and 6:41 late, and one by hand at 09:30 23 minutes late.

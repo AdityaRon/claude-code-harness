@@ -698,7 +698,13 @@ def _legacy_row(cfg: dict, day: dt.date, i: int, line: str) -> dict:
 def day_rows(cfg: dict, day: dt.date) -> list[dict]:
     md, jl = _log_paths(cfg, day)
     if jl.is_file():
-        rows = [json.loads(ln) for ln in jl.read_text().splitlines() if ln.strip()]
+        text = jl.read_text()
+        lines = text.splitlines()
+        # The pane reads each minute, so it can meet a row log_event is still
+        # writing: one with no newline yet waits for the next read.
+        if lines and not text.endswith("\n"):
+            lines.pop()
+        rows = [json.loads(ln) for ln in lines if ln.strip()]
     elif md.is_file():
         rows = [_legacy_row(cfg, day, i, ln) for i, ln in enumerate(md.read_text().splitlines()) if ln.startswith("- ")]
     else:
