@@ -128,6 +128,14 @@ export const register: Register = on => {
     void $.ui.open({ id: PANE, title: TITLE })
       .then(o => { if (!o.isPlaced) $.ui.log(`comms panel not drawn: ${o.reason}`, { to: 'debug' }) })
     void looked($).then(() => refresh($))
+    // Ages, "stale" and missed ticks are worked out as hub.py reads, so they froze
+    // while the session idled: a read each minute keeps them true (0.26s a read,
+    // timed on the hub machine), while the pane is drawn or a phone is here.
+    $.clock.every(60_000, () => {
+      void $.ui.panes().then(panes => {
+        if (phones.size || panes.some(p => p.id === PANE && p.isPlaced)) return refresh($)
+      })
+    })
 
     return next(e)
   })
@@ -163,7 +171,7 @@ export const register: Register = on => {
   })
 
   // The comms session changes its state dir in its own turns, so a read as
-  // each ends keeps the pane current without polling.
+  // each ends shows what the turn did at once.
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId === undefined) await refresh($)
@@ -230,7 +238,8 @@ export const register: Register = on => {
              paddingX={1}>
           <Box flexDirection="row" justifyContent="space-between" flexWrap="wrap" columnGap={2}>
             <Text weight="bold">{p.day ? `Comms · ${p.day}` : 'Comms'}</Text>
-            <Text dimColor>{`next tick ${p.next_tick} · last tick: ${p.last_tick} · read ${p.read}`}</Text>
+            {/* `last_tick` is the last scan, by hand outside the window too, so it says so. */}
+            <Text dimColor>{`next tick ${p.next_tick} · last scan: ${p.last_tick} · read ${p.read}`}</Text>
           </Box>
           <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
             {chip(p.needs.length, 'need you', 'warning')}

@@ -70,8 +70,11 @@ Nothing here depends on which server it is: step 0 records the tool names.
    scan, with its age), what goes out and when, what is with other sessions,
    what is held, reviewed, approved and merged over the last five active days,
    and the last two log days' events with a dot on each since the user last
-   looked, from `PY B/hub.py panel` as each turn ends, so it costs no tokens
-   (`/comms` opens it again and counts as a look). A `+k more` button opens
+   looked, from `PY B/hub.py panel` as each turn ends and each minute while
+   it is drawn, so it costs no tokens and its ages stay true while the
+   session idles (`/comms` opens it again and counts as a look). Its foot
+   gives the next tick with how late ticks have started lately, and the last
+   scan with the ticks due since that did not run. A `+k more` button opens
    its section alone, and `fewer` in its place closes it; a look closes it
    too. Expanded view (`e` with the pane focused, or the `expand` button)
    shows every row and each message whole, with `compact` at the top and at
@@ -173,8 +176,15 @@ whole context.
    - `morning-unchecked:` above 0 names scheduled messages that posted with no
      re-gate since the window opened (the machine slept): re-check each claim
      now and tell the user what moved. The scan logged each under Needs you.
+   - `missed-ticks:` above 0 names scheduled ticks since the last scan that
+     left no scan or tick row: the machine slept, or a fire failed before this
+     session could act (three "Not logged in" fires once logged nothing, and
+     the panel read them as quiet). The scan logged them; say so in the report.
    - `prs:` says whether the panel's PR file was written; a BLOCKED scan keeps
      the last one, which the panel shows with its age.
+   - `full-scan: recorded` follows a full scan that did not end BLOCKED, so
+     the next tick is quick; the scan records it, as a session that skipped
+     `window --full-done` scanned in full on every tick.
    - `parked:` names the PRs the user parked. When the user asks to drop a PR
      from the panel: `PY B/hub.py park owner/repo#N "<why>"`. It leaves the
      panel and REVIEWED, WATCHED, AWAITING and DRIFT from the next scan on;
@@ -375,7 +385,7 @@ whole context.
    own reply: the mention searches skip the user's messages, and a question
    answered at 17:40 was reported open three ticks running. Answered: log it
    with `--corrects` instead.
-   After a full scan, `PY B/hub.py window --full-done`. A tick that found
+   A tick that found
    nothing new anywhere, and holds and schedules nothing, reports one line.
    On the window's first tick (`scan: full (the window's first)`), also
    `python3 ~/.claude/spend-report.py --since 24h --tick-prompt "comms-hub tick" --max-ticks 40 --max-rewrites 10 --top 3 --rewrite-hint "raise session.compact_window, then restart with hub.py launch"`
@@ -432,7 +442,7 @@ whole context.
 | `held/<peer>-<thread ts>.md` | each draft held between ticks, with its header; the scan counts them |
 | `preflight.json` | step 0's record of this session's tools and trigger |
 | `trigger.json` | the tick's trigger and when it was created, for its 7-day expiry |
-| `tick.json` | when the last full scan finished |
+| `tick.json` | when the last full scan finished: `queue.py scan` records it, or `window --full-done` by hand |
 | `last-scan` | when the last scan started, BLOCKED or not; the panel calls an older `prs.json` stale |
 | `prs.json` | the last scan that did not end BLOCKED: each open PR I review or authored, which the panel's PRS section reads |
 | `prs-history.jsonl` | what changed between two `prs.json`, one row each (reviewed, approved, merged, by day), for the panel's last five days |

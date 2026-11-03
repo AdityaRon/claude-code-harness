@@ -34,6 +34,7 @@ review state and CI state. Imported by the scripts beside it; run directly:
                       open (exit 0) or closed (exit 1) for active_hours, and whether this tick
                       scans in full; --margin: closed too when it closes within MIN minutes,
                       --review within review_margin_minutes; --full-done records a full scan
+                      by hand (queue.py scan records its own)
   hub.py trigger [--live EXPR] [--created EXPR]
                       what is wrong with the tick's trigger: not the cron above, no record of
                       its creation, or due for renewal before Claude Code expires it (exit 1)
@@ -392,6 +393,13 @@ def scan_plan(cfg: dict, at: dt.datetime) -> str:
     return "quick"
 
 
+def record_full(cfg: dict, at: dt.datetime) -> None:
+    """A full scan done at `at`. The scan records its own: a session that skipped
+    `window --full-done` scanned in full every tick, each "the window's first"."""
+    p = state_dir(cfg) / "tick.json"
+    p.write_text(json.dumps({**_record(cfg, "tick.json"), "full": at.isoformat()}) + "\n")
+
+
 def trigger_problems(cfg: dict, at: dt.datetime, live: str | None = None) -> list[str]:
     """What is wrong with the tick's trigger, each line naming the fix; [] when nothing."""
     want, out = cron(cfg), []
@@ -726,7 +734,11 @@ def open_items(cfg: dict) -> tuple[list[dict], list[dict]]:
 
 def _age(at: dt.datetime) -> str:
     s = max(0, int((now() - at).total_seconds()))
-    return f"{s // 60}m" if s < 3600 else f"{s // 3600}h" if s < 86400 else f"{s // 86400}d"
+    if s < 3600:
+        return f"{s // 60}m"
+    # Hours alone read 2h58m as "2h".
+    h, m = divmod(s // 60, 60)
+    return (f"{h}h{m}m" if m else f"{h}h") if s < 86400 else f"{s // 86400}d"
 
 
 def _when(cfg: dict, at: dt.datetime) -> str:
@@ -761,6 +773,46 @@ def next_tick(cfg: dict, at: dt.datetime) -> dt.datetime | None:
                 if t > local:
                     return t
     return None
+
+
+def rows_since(cfg: dict, since: dt.datetime) -> list[dict]:
+    """Every log row from `since`'s day on, oldest first, OPEN_DAYS back at most."""
+    today = local_now(cfg).date()
+    first = max(since.astimezone(zone(cfg)).date(), today - dt.timedelta(days=OPEN_DAYS))
+    return [r for back in reversed(range((today - first).days + 1)) for r in day_rows(cfg, today - dt.timedelta(days=back))]
+
+
+def untraced(cfg: dict, after: dt.datetime, until: dt.datetime, rows: list[dict]) -> list[dt.datetime]:
+    """The tick's scheduled times after `after`, up to `until`, with no scan or
+    tick row in the period after each. A fire that fails before the session can
+    act ("Not logged in") writes nothing, so a quiet log read the same as a tick
+    that ran and found nothing."""
+    every = dt.timedelta(minutes=cfg["active_hours"]["every_minutes"])
+    ran = [parse_time(r["ts"]) for r in rows if r["kind"] in ("scan", "tick")]
+    out, t = [], max(after, until - dt.timedelta(days=OPEN_DAYS))
+    while (t := next_tick(cfg, t)) is not None and t <= until:
+        if not any(t <= r < t + every for r in ran):
+            out.append(t)
+    return out
+
+
+def tick_lag(cfg: dict, rows: list[dict]) -> dt.timedelta | None:
+    """How long after its scheduled time a scan starts: the median of the last 20
+    scans within a period of one, None under 3. Claude Code fires a recurring task
+    at an offset of its own (one landed 6.7 minutes after each :07 and :37)."""
+    every = dt.timedelta(minutes=cfg["active_hours"]["every_minutes"])
+    lags = []
+    for r in rows:
+        t = parse_time(r["ts"]) if r["kind"] == "scan" else None
+        slot = next_tick(cfg, t - every) if t else None
+        if slot and slot <= t:
+            lags.append(t - slot)
+    lags = sorted(lags[-20:])
+    return lags[len(lags) // 2] if len(lags) >= 3 else None
+
+
+# How late past its usual lag a tick may start before the panel counts it missed.
+LATE_GRACE = dt.timedelta(minutes=5)
 
 
 def going_out(cfg: dict) -> list[dict]:
@@ -918,7 +970,13 @@ def panel(cfg: dict) -> dict:
     raw = day_rows(cfg, dt.date.fromisoformat(newest)) if newest else []
     scans = [i for i, r in enumerate(raw) if r["kind"] == "scan"]
     since_scan = [r for r in raw[scans[-1] + 1:] if r["kind"] not in UNSHOWN + ("tick", "setup")] if scans else []
-    nxt = next_tick(cfg, now())
+    rows = [r for day in logs[-2:] for r in day_rows(cfg, dt.date.fromisoformat(day))]
+    lag = tick_lag(cfg, rows) or dt.timedelta(0)
+    # From now less the lag: at 08:10 the 08:07 tick is still to come.
+    nxt = next_tick(cfg, now() - lag)
+    lag_m = round(lag.total_seconds() / 60)
+    # Ticks due since the last scan that have not run by their usual lag and a grace.
+    late = untraced(cfg, parse_time(raw[scans[-1]]["ts"]), now() - lag - LATE_GRACE, rows) if scans else []
     verdicts = {}
     for r in asks:
         m = re.search(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", r["ref"] or "") \
@@ -928,10 +986,14 @@ def panel(cfg: dict) -> dict:
     return {"state": str(d), "day": f"{dt.date.fromisoformat(newest):%a %d %b}" if newest else "",
             "prs": prs_panel(cfg, verdicts),
             "needs": needs, "going": going_out(cfg), "sessions": sessions, "held": held, "events": events,
-            "next_tick": _when(cfg, nxt) if nxt else "none scheduled",
-            # When the last scan started, and what it logged: "1 item" once read as sends, or problems.
+            # The schedule's time, and how late scans have started after it lately.
+            "next_tick": _when(cfg, nxt) + (f" (+{lag_m}m lately)" if lag_m else "") if nxt else "none scheduled",
+            # When the last scan started (the pane says "last scan": one run by hand
+            # outside the window counts too), what it logged ("1 item" once read as
+            # sends, or problems), and the ticks due since that did not run.
             "last_tick": f"{raw[scans[-1]]['at']}, " + (
                 "quiet" if not since_scan else f"{len(since_scan)} event{'s' * (len(since_scan) != 1)}")
+            + (f" · {len(late)} missed since" if late else "")
             if scans else "none yet", "read": f"{local_now(cfg):%H:%M}"}
 
 
@@ -1314,8 +1376,7 @@ def schedule_cmd(cfg: dict, argv: list[str]) -> int:
         return 0
     if argv[0] == "window":
         if args.full_done:
-            p = state_dir(cfg) / "tick.json"
-            p.write_text(json.dumps({**_record(cfg, "tick.json"), "full": at.isoformat()}) + "\n")
+            record_full(cfg, at)
             print(f"full scan recorded at {at.astimezone(tz):%H:%M}")
             return 0
         margin = cfg["active_hours"]["review_margin_minutes"] if args.review else args.margin

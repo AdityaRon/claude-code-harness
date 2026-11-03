@@ -43,6 +43,14 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   events-yesterday-undated: hub.py: `"at": r["at"] if r["day"] == newest else` => `"at": r["at"] if True else`
   last-tick-counts-all: hub.py: `r in raw[scans[-1] + 1:]` => `r in raw`
   last-tick-untimed: hub.py: `"last_tick": f"{raw[scans[-1]]['at']}, " + (` => `"last_tick": "" + (`
+  next-tick-ignores-lag: hub.py: `nxt = next_tick(cfg, now() - lag)` => `nxt = next_tick(cfg, now())`
+  lag-unshown: hub.py: `+ (f" (+{lag_m}m lately)" if lag_m else "")` => `+ ""`
+  lag-the-latest: hub.py: `return lags[len(lags) // 2] if len(lags) >= 3 else None` => `return lags[-1] if len(lags) >= 3 else None`
+  lag-from-one-scan: hub.py: `return lags[len(lags) // 2] if len(lags) >= 3 else None` => `return lags[len(lags) // 2] if lags else None`
+  missed-unshown: hub.py: `+ (f" · {len(late)} missed since" if late else "")` => `+ ""`
+  missed-without-grace: hub.py: `now() - lag - LATE_GRACE, rows)` => `now() - lag, rows)`
+  missed-without-lag: hub.py: `now() - lag - LATE_GRACE, rows)` => `now() - LATE_GRACE, rows)`
+  age-hours-only: hub.py: `return (f"{h}h{m}m" if m else f"{h}h")` => `return f"{h}h"`
   parked-uncounted: hub.py: `"parked": len(parked(cfg))}` => `"parked": 0}`
   held-text-uncut: hub.py: `"text": clip(h["first"]), "full"` => `"text": h["first"], "full"`
   held-full-first-line: hub.py: `"full": whole(h["body"])}` => `"full": h["first"]}`
@@ -299,6 +307,29 @@ class Panel(unittest.TestCase):
                          "the day before keeps its rows, dated; two log days back has gone")
         self.assertEqual(p["day"], "Wed 21 Oct")
 
+    def scans_7_minutes_late(self):
+        # The 08:07, 08:37 and 09:07 ticks scanned 7:00, 6:30 and 6:41 late, and one by hand at 09:30 23 minutes late.
+        for t in ("15:14:00", "15:43:30", "16:13:41", "16:30:00"):
+            main_out("log", "--kind", "scan", "scan started", now=f"2026-10-21T{t}+00:00")
+
+    def test_next_tick_says_how_late_ticks_have_started_and_waits_for_the_late_one(self):
+        with Env(now=NOW):
+            self.scans_7_minutes_late()
+            p = json.loads(main_out("panel", now="2026-10-21T16:40:00+00:00")[1])
+        self.assertEqual(p["next_tick"], "09:37 (+7m lately)",
+                         "at 09:40 the 09:37 tick is still to come; the median, not the scan by hand")
+
+    def test_last_scan_counts_the_ticks_due_since_that_did_not_run(self):
+        with Env(now=NOW):
+            self.scans_7_minutes_late()
+            # After the 09:30 scan nothing ran: a lost login logs nothing.
+            soon = json.loads(main_out("panel", now="2026-10-21T16:47:00+00:00")[1])
+            later = json.loads(main_out("panel", now="2026-10-21T17:30:00+00:00")[1])
+        self.assertEqual(soon["last_tick"], "09:30, quiet",
+                         "09:47: the 09:37 tick is due about 09:44, and gets five minutes past that")
+        self.assertEqual(later["last_tick"], "09:30, quiet · 2 missed since", "10:30: the 09:37 and 10:07 ticks")
+        self.assertEqual(later["next_tick"], "10:37 (+7m lately)")
+
 
 SHA1, SHA2 = "1" * 40, "2" * 40
 
@@ -366,7 +397,7 @@ class Prs(unittest.TestCase):
         with Env(now=NOW) as env:
             self.write(env, written="2026-10-21T15:30:00+00:00")  # 90 min, three 30-minute ticks
             p = json.loads(main_out("panel")[1])["prs"]
-            self.assertEqual((p["stale"], p["as_of"], p["age"]), (True, "08:30", "1h"))
+            self.assertEqual((p["stale"], p["as_of"], p["age"]), (True, "08:30", "1h30m"))
             self.write(env, written="2026-10-21T16:50:00+00:00", last_scan="2026-10-21T16:58:00+00:00")
             self.assertTrue(json.loads(main_out("panel")[1])["prs"]["stale"], "a later scan ended BLOCKED")
             (env.state / "prs.json").write_text("{half a file")

@@ -43,6 +43,16 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   watched-wins: queue.py: `if ref in details and ref not in reviewed_rows and ref not in parked:` => `if ref in details and ref not in parked:`
   inbound-wins: queue.py: `for r in inbound if row_ref(r) not in reviewed_rows]),` => `for r in inbound]),`
   need-unchanged: queue.py: `need = 3 + len(authors)` => `need = 2 + len(authors)`
+  untraced-unlogged: queue.py: `    if untraced:
+        hub.log_event(` => `    if False:
+        hub.log_event(`
+  untraced-unsaid: queue.py: `emit(f"missed-ticks: {len(untraced)}" + (` => `emit("missed-ticks: 0" or (`
+  untraced-list-uncut: queue.py: `if len(when) <= 3 else` => `if True else`
+  tick-rows-no-trace: hub.py: `if r["kind"] in ("scan", "tick")]` => `if r["kind"] == "scan"]`
+  trace-on-the-minute: hub.py: `if not any(t <= r < t + every for r in ran):` => `if not any(t <= r < t + dt.timedelta(minutes=1) for r in ran):`
+  full-unrecorded: queue.py: `        hub.record_full(cfg, hub.now())` => `        pass`
+  full-recorded-when-blocked: queue.py: `if plan == "full" and blocked:` => `if False:`
+  full-recorded-on-quick: queue.py: `elif plan == "full":` => `else:`
   route-todo-relogged: queue.py: `key = f"route:{r['ref']}:{r['who']}@{r['at']}"` => `key = f"route:{r['ref']}:{r['who']}@{r['at']}:{len(keys)}"`
   review-todo-relogged: queue.py: `key = f"review:{ref}@{details[ref]['headRefOid'][:7]}"` => `key = f"review:{ref}@{details[ref]['headRefOid'][:7]}:{len(keys)}"`
   logged-keys-folded: queue.py: `for r in hub.day_rows(cfg, hub.local_now(cfg).date() - dt.timedelta(days=back))` => `for r in (hub.folded(cfg, hub.OPEN_DAYS) if back == 0 else [])`
@@ -433,6 +443,47 @@ class Scan(unittest.TestCase):
                       "--corrects ID", out)
         self.assertIn("with-sessions: 1 (1021.2): when a peer answers, log --kind returned --corrects ID", out)
         self.assertIn("needs-you: 0", scan(fake())[1])
+
+    def test_ticks_that_left_no_trace_are_logged_when_the_next_scan_starts(self):
+        def scan_at(env):
+            out = []
+            q.scan(hub.load_config(), hub.Gh(runner=fake(), pause=0), emit=out.append)
+            rows = [json.loads(ln) for ln in (env.state / "log" / "2026-10-21.jsonl").read_text().splitlines()]
+            return out, [r["text"] for r in rows if r["kind"] == "tick"]
+
+        with Env(now=NOW) as env:  # 10:00 there
+            env.state.mkdir(parents=True)
+            # A scan by hand at 07:50. The 08:37 tick failed fast, which its row records; this scan is the
+            # 09:37 tick, late. The 08:07 and 09:07 ticks left nothing.
+            (env.state / "last-scan").write_text("2026-10-21T14:50:00+00:00\n")
+            with mock.patch.dict(os.environ, {"COMMS_HUB_NOW": "2026-10-21T15:44:00+00:00"}):
+                hub.log_event(hub.load_config(), "tick", "ended: the Slack read timed out")
+            out, ticks = scan_at(env)
+            self.assertIn("missed-ticks: 2 (08:07, 09:07): no scan or tick row; the machine slept, or the session "
+                          "failed before it could act (\"Not logged in\" logs nothing). Logged; say so in the report", out)
+            self.assertEqual(ticks, ["ended: the Slack read timed out", "2 ticks left no trace: 08:07, 09:07"])
+            out, ticks = scan_at(env)
+            self.assertIn("missed-ticks: 0", out, "a second scan finds nothing new")
+            self.assertEqual(len(ticks), 2)
+        with Env(now=NOW) as env:
+            env.state.mkdir(parents=True)
+            (env.state / "last-scan").write_text("2026-10-20T15:13:00+00:00\n")  # 08:13 the day before
+            out, ticks = scan_at(env)
+        self.assertEqual(ticks, ["22 ticks left no trace: Tue 08:37 to 09:07"])
+
+    def test_a_full_scan_records_itself_unless_blocked(self):
+        with Env(now=NOW):
+            cfg = hub.load_config()
+            outs = []
+            for quota in (2, 30, 30):
+                out = []
+                q.scan(cfg, hub.Gh(runner=fake(quota=quota), pause=0), emit=out.append)
+                outs.append([ln for ln in out if ln.startswith("full-scan:")])
+                if len(outs) == 1:
+                    self.assertEqual(hub.scan_plan(cfg, hub.now()), "full")
+            self.assertEqual(hub.scan_plan(cfg, hub.now()), "quick", "with no `window --full-done`")
+        self.assertEqual(outs, [["full-scan: not recorded (BLOCKED); the next tick scans in full again"],
+                                ["full-scan: recorded"], []], "a quick scan records nothing")
 
     def test_the_first_scan_after_quiet_hours_says_morning(self):
         with Env(now=NOW) as env:
