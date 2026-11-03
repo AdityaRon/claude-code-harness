@@ -21,7 +21,10 @@ The scan writes to the log itself, each row once (`key=` in its detail): a
 work; a `blocked` row needing the user for a scheduled message that posted with
 no re-gate since the window opened. It closes a todo GitHub shows is done, and a
 `reviewed` row once the user approves or the PR merges, or turns it into a
-re-look when the head moves.
+re-look when the head moves. It logs a `tick` row naming the scheduled ticks
+since the previous scan that left no scan or tick row (a fire that fails
+before the session can act writes nothing), and records a full scan in
+tick.json when the plan is full and it does not end BLOCKED.
 
 A scan that does not end BLOCKED replaces <state dir>/prs.json, which the panel
 reads: {"written_at": ISO, "reviewing": [PR], "authored": [PR]}, each PR
@@ -554,6 +557,16 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
             if pending else ""))
     stamp.write_text(at.isoformat() + "\n")
     hub.log_event(cfg, "scan", "scan started", detail=f"{at:%Y-%m-%dT%H:%M:%SZ}")
+    plan = hub.scan_plan(cfg, at)
+    # A fire that failed before the session could act left nothing in the log: say so for it.
+    untraced = hub.untraced(cfg, prev, at, hub.rows_since(cfg, prev)) if prev else []
+    when = [hub._when(cfg, t) for t in untraced]
+    when = ", ".join(when) if len(when) <= 3 else f"{when[0]} to {when[-1]}"
+    if untraced:
+        hub.log_event(cfg, "tick", f"{len(untraced)} tick{'s' * (len(untraced) != 1)} left no trace: {when}")
+    emit(f"missed-ticks: {len(untraced)}" + (
+        f" ({when}): no scan or tick row; the machine slept, or the session failed before it could act "
+        "(\"Not logged in\" logs nothing). Logged; say so in the report" if untraced else ""))
     # Every tick, not only the morning's: that tick can end before it re-gates.
     keys = logged_keys(cfg)
     missed = unregated_posts(cfg, at)
@@ -749,6 +762,11 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
         changed = history(cfg, prev, reviewing, authored, details)
         write_prs(cfg, at, reviewing, authored)
         emit(f"prs: wrote {len(theirs)} reviewing, {len(mine)} authored; {changed} new in the history")
+    if plan == "full" and blocked:
+        emit("full-scan: not recorded (BLOCKED); the next tick scans in full again")
+    elif plan == "full":
+        hub.record_full(cfg, hub.now())
+        emit("full-scan: recorded")
     for name, rows in sections:
         emit(f"== {name} ({len(rows)}) ==")
         for row in rows:

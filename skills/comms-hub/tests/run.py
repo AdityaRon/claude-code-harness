@@ -8,6 +8,7 @@
 A docstring mutation line reads
   name: script.py: `old text` => `new text`
 and `name (may survive): ...` marks one a reason in the line allows to stay green.
+Either text may run on over the lines that follow, for code that spans lines.
 `old text` must occur exactly once in the script, so a mutation cannot go stale.
 Exit status is the failure count.
 """
@@ -25,7 +26,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
-LINE = re.compile(r"^\s+([\w-]+)( \(may survive\))?: ([\w.]+): `(.+?)` => `(.*?)`\s*$")
+LINE = re.compile(r"^\s+([\w-]+)( \(may survive\))?: ([\w.]+): `(.+?)` => `(.*?)`\s*$", re.S)
+START = re.compile(r"^\s+([\w-]+)( \(may survive\))?: ([\w.]+): `")
 
 
 def run_tests() -> int:
@@ -38,11 +40,26 @@ def run_tests() -> int:
 
 
 def mutations(test_file: Path):
+    """Each (name, may survive, script, old, new); old is None for a line that
+    starts a mutation and never parses. Read a line at a time, the seven that
+    spanned lines were skipped without a word, and their rules went untested."""
     doc = ast.get_docstring(ast.parse(test_file.read_text())) or ""
-    for line in doc.splitlines():
-        m = LINE.match("  " + line if not line.startswith(" ") else line)
-        if m:
-            yield m.group(1), bool(m.group(2)), m.group(3), m.group(4), m.group(5)
+    raw = doc.splitlines()
+    lines = [ln if ln.startswith(" ") else "  " + ln for ln in raw]
+    i = 0
+    while i < len(lines):
+        start = START.match(lines[i])
+        if not start:
+            i += 1
+            continue
+        text = lines[i]
+        while not LINE.match(text) and i + 1 < len(lines) and not START.match(lines[i + 1]):
+            i += 1
+            text += "\n" + raw[i]
+        m = LINE.match(text)
+        yield (m.group(1), bool(m.group(2)), m.group(3), m.group(4), m.group(5)) if m \
+            else (start.group(1), False, start.group(3), None, None)
+        i += 1
 
 
 def run_file(root: Path, test_file: str) -> int:
@@ -65,6 +82,10 @@ def run_mutations() -> int:
             stale += 1
             continue
         for name, may, script, old, new in listed:
+            if old is None:
+                print(f"STALE {tf.name} {name}: the line does not parse as `old` => `new`")
+                stale += 1
+                continue
             work = Path(tempfile.mkdtemp(prefix="comms-hub-mutate."))
             try:
                 for sub in ("bin", "tests"):

@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const PANE = {
   plugin: 'comms-panel',
@@ -134,7 +134,7 @@ test('the summary counts each section, then what needs the user comes first', as
     const out = await texts($, surface)
     const at = (s: string) => out.findIndex(t => t.includes(s))
     expect(at('Comms · Wed 21 Oct')).toBe(0)
-    expect(out).toContain('next tick 10:07 · last tick: 09:45, 1 event · read 10:00')
+    expect(out).toContain('next tick 10:07 · last scan: 09:45, 1 event · read 10:00')
     for (const c of ['1 need you', '3 PRs need you', '2 going out', '1 with sessions', '0 held']) expect(out).toContain(c)
     const needs = at('NEEDS YOU · 1')
     expect(needs).toBeGreaterThan(at('0 held'))
@@ -149,6 +149,42 @@ test('the summary counts each section, then what needs the user comes first', as
   }
   expect(await border($)).toBe('warning')
   expect(await colorOf($, /^claim moved ⚠$/)).toBe('warning')
+})
+
+// Ages and "stale" come from hub.py as it reads, so with no turn ending they froze.
+test('the pane reads again each minute while it is drawn or a phone is here, and not while it waits undrawn', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const out = { now: json(PANEL) }
+  const panes = { placed: true }
+  let reads = 0
+  on('command.register', () => ({ value: { command: 'comms' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [{ id: 'comms', title: 'Comms', isShown: panes.placed, isFocused: false,
+                                    isPlaced: panes.placed }] }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.attach', (_, e) => ({ clientId: e.clientId }))
+  on('process.run', (_, e) => {
+    if (e.argv[0] === 'bash') return { value: { exitCode: 0, stdout: '/usr/bin/python3.12\n', stderr: '' } }
+    reads += 1
+    return { value: out.now }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(0)
+  const first = reads
+
+  out.now = json({ ...PANEL, prs: { ...PANEL.prs, age: '1m' } })
+  await clock.advance(60_000)
+  expect(reads).toBe(first + 1)
+  expect((await texts($)).some(t => t.includes('as of 10:00 (1m ago)'))).toBe(true)
+
+  panes.placed = false
+  await clock.advance(60_000)
+  expect(reads).toBe(first + 1)
+
+  await $.session.attach({ surface: 'mobile', clientId: 'phone-1' })
+  const attached = reads
+  await clock.advance(60_000)
+  expect(reads).toBe(attached + 1)
 })
 
 test('with nothing waiting, the summary is quiet and says so', async ($, on) => {
