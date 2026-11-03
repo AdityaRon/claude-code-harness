@@ -6,6 +6,20 @@ the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
 installed machine to the newest tag.
 
+## v1.1.14 (2026-11-03)
+
+Merged since v1.1.13: 2 PRs.
+
+### Compatibility
+- contract: review Claude Code releases up to 2.1.317 (#171)
+
+### Other
+- comms-hub: trace missed ticks, record full scans, minute panel reads (#170)
+
+### Benchmark vs v1.1.13
+
+hooks/ and config/settings.json are unchanged since v1.1.13; benchmark skipped (both sides would run the same files).
+
 ## v1.1.13 (2026-10-31)
 
 Merged since v1.1.12: 1 PR.
