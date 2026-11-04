@@ -14,6 +14,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   envelope-missed: slack_listing.py: `return parse_text("\n".join(inner), ts_re, replies_re)` => `raise Unreadable("JSON")`
   second-document-dropped: slack_listing.py: `found.update(page)` => `found = page`
   full-object-not-a-signal: slack_listing.py: `or ("type" in m and "text" in m):` => `or False:`
+  bare-ts-read-as-json: slack_listing.py: `if not isinstance(obj, (dict, list)):` => `if False:`
   second-dump-dropped: slack_listing.py: `page.update(parse(open(dump).read(), *patterns(args), no_threads=args.no_threads))` => `page = parse(open(dump).read(), *patterns(args), no_threads=args.no_threads)`
 """
 import base64
@@ -67,6 +68,18 @@ class Shapes(unittest.TestCase):
     def test_one_line_dump(self):
         dump = f"[{A}] alice: hi (3 replies)\n[{B}] bob: hey\n[{C}] (thread_ts: {A}) alice: a reply\n"
         self.assertEqual(sl.parse(dump), {A: 3, B: 0})
+
+    def test_the_compact_page_a_session_writes_from_its_read(self):
+        # The whole read is about 100 KB a channel to write out, so ticks skipped
+        # the diff: the session writes a line per top-level message instead.
+        page = f"{C}\n{B} 4 replies\n{A} 1 reply\nnext_cursor: {cursor('1760999999.000900')}\n"
+        self.assertEqual(sl.parse(page), {C: 0, B: 4, A: 1})
+        with self.assertRaisesRegex(sl.Unreadable, "read with oldest"):
+            sl.parse(f"{A} 1 reply\nnext_cursor: {cursor(D)}\n")
+        # No count on any line is a concise read, as in a dump, until the page is read for threads.
+        with self.assertRaisesRegex(sl.Unreadable, "concise"):
+            sl.parse(f"{B}\n{A}\n")
+        self.assertEqual(sl.parse(f"{B}\n{A}\n", no_threads=True), {B: 0, A: 0})
 
     def test_the_tools_json_envelope_around_a_text_dump(self):
         dump = json.dumps({"content": [{"type": "text", "text": f"ts: {A}\nreplies: 2\nhello\nts: {B}\nhey\n"}]})

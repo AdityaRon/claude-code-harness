@@ -41,7 +41,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   context-unlogged: check_draft.py: `hub.log_event(cfg, verb, text,` => `hub.log_event(cfg, verb, "message",`
   posted-still-listed: hub.py: `if parse_time(s.get("post_at")) <= now_:` => `if False:`
   cap-ignored: check_draft.py: `if len(text) > cap:` => `if False:`
-  cap-hardcoded: check_draft.py: `problems = shape_problems(text, int(cfg["slack"]["max_chars"]))` => `problems = shape_problems(text)`
+  cap-hardcoded: check_draft.py: `problems = shape_problems(text, int(cfg["slack"]["max_chars"]),` => `problems = shape_problems(text, hub.MAX_CHARS,`
   thin-bullet-ok: check_draft.py: `if m and len(re.findall(r"\w+", m.group(1))) < 3:` => `if False:`
   restate-sends: check_draft.py: `react = bool(restating) and not more` => `react = False`
   restate-with-news-fails: check_draft.py: `react = bool(restating) and not more` => `react = bool(restating)`
@@ -60,6 +60,17 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   react-on-reply-only: check_draft.py: `parents = sorted({args.reply, *args.answers}, key=ts_key) if args.reply else []` => `parents = [args.reply] if args.reply else []`
   ack-hardcoded: check_draft.py: `ack = cfg["slack"]["ack_reaction"]` => `ack = "white_check_mark"`
   ack-colons-kept: hub.py: `.strip(":")` => ``
+  tickets-unchecked: check_draft.py: `    for m in tickets.finditer(rest) if tickets else []:` => `    for m in []:`
+  tickets-unconfigured: check_draft.py: `ticket_ref([t for r in cfg["routing"] for t in r["tickets"]]))` => `None)`
+  commits-unchecked: check_draft.py: `    for m in COMMIT.finditer(CODE.sub(" ", rest)):` => `    for m in []:`
+  commit-in-a-link: check_draft.py: `    for m in COMMIT.finditer(CODE.sub(" ", rest)):` => `    for m in COMMIT.finditer(text):`
+  commit-without-a-digit: check_draft.py: `(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])` => `(?=[0-9a-f]*[a-f])`
+  commit-without-a-letter: check_draft.py: `(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])` => `(?=[0-9a-f]*[0-9])`
+  schedule-thread-unsaid: check_draft.py: `f" thread_ts={args.reply} (pass it to the schedule tool too, or the reply posts top-level)"` => `""`
+  held-kept-on-send: check_draft.py: `    for h in covered(cfg, stamp, data):` => `    for h in []:`
+  held-answers-ignored: check_draft.py: `"prs": lines, "asks": asks, "answers": args.answers}` => `"prs": lines, "asks": asks}`
+  held-any-thread: check_draft.py: `if thread in threads or message(h)[0] == data:` => `if True:`
+  held-same-bytes-ignored: check_draft.py: `if thread in threads or message(h)[0] == data:` => `if thread in threads:`
   long-reply-ok: check_draft.py: `if args.reply and not react and words > REPLY_WORDS:` => `if False:`
   long-top-level-warned: check_draft.py: `if args.reply and not react and words > REPLY_WORDS:` => `if not react and words > REPLY_WORDS:`
 """
@@ -164,6 +175,27 @@ class Shape(unittest.TestCase):
             rc, out = self.check(f"See {ref} please\n")
             self.assertEqual(rc, 1, ref)
             self.assertIn("is not a link", out, ref)
+
+    def test_unlinked_tickets_and_commits_fail(self):
+        # A reviewer's rule: a ticket or a commit a message names is a link, as a PR is.
+        routed = CONFIG + '[[routing]]\nsession = "app-session"\nrepos = ["acme/app"]\ntickets = ["PROJ", "OPS"]\n'
+        for text, bad in (("PROJ-12 is fixed", "ticket 'PROJ-12'"), ("see OPS-3.", "ticket 'OPS-3'"),
+                          ("fixed in 1a2b3c4", "commit '1a2b3c4'"), ("at deadbeef0123, then", "commit 'deadbeef0123'"),
+                          ("head is " + "a1" * 20 + ".", "commit '" + "a1" * 20 + "'")):
+            with Env(config=routed) as env:
+                rc, out = gate(env, text + "\n", "--top-level", gh=fake())
+            self.assertEqual(rc, 1, text)
+            self.assertIn(f"FAIL: {bad} is not a link", out, text)
+        for text in ("<https://jira.example/browse/PROJ-12|PROJ-12> is fixed", "[1a2b3c4](https://github.com/acme/app/commit/1a2b3c4)",
+                     "https://github.com/acme/app/commit/1a2b3c4 has it", "SHA-256 and UTF-8, not tickets",
+                     "XPROJ-12 and PROJ-12a are no keys here", "1234567 rows, a defaced cafe", "`0a1b2c3` is a request id",
+                     "release-1a2b3c4 and v1.2.3a4b5c6 and sha256:" + "ab12" * 16, "file 1a2b3c4.txt",
+                     "uuid 1a2b3c4d-0000-0000-0000-000000000000"):
+            with Env(config=routed) as env:
+                rc, out = gate(env, text + "\n", "--top-level", gh=fake())
+            self.assertEqual(rc, 0, f"{text}: {out}")
+        with Env() as env:
+            self.assertEqual(gate(env, "PROJ-12 is fixed\n", "--top-level", gh=fake())[0], 0, "no routing tickets, no keys")
 
     def test_token_shape_fails(self):
         rc, out = self.check("token xoxb-" + "1" * 12 + "-abcdefghij\n")
@@ -287,7 +319,7 @@ class Restates(unittest.TestCase):
 
     def test_a_reply_that_only_restates_my_approval_becomes_a_reaction(self):
         mine = review(ME, "APPROVED")
-        rc, out = self.check(f"Approved {LINK} at abcdef1, no asks. Thanks!\n", mine)
+        rc, out = self.check(f"Approved {LINK} at `abcdef1`, no asks. Thanks!\n", mine)
         self.assertEqual(rc, 1, out)
         self.assertIn(f"send: react white_check_mark on {self.PARENT}", out)
         self.assertNotIn("send: live", out)
@@ -311,13 +343,13 @@ class Restates(unittest.TestCase):
 
     def test_a_restatement_that_carries_more_passes(self):
         mine = review(ME, "APPROVED")
-        rc, out = self.check(f"Approved {LINK} at abcdef1, no asks. Please merge it after {self.LATER}. Thanks!\n", mine)
+        rc, out = self.check(f"Approved {LINK} at `abcdef1`, no asks. Please merge it after {self.LATER}. Thanks!\n", mine)
         self.assertEqual(rc, 0, out)
         self.assertIn("send: live", out)
         self.assertNotIn("restates", out)
         rc, out = self.check(f"Approved {LINK}; good to go on your side?\n", mine)
         self.assertEqual(rc, 0, "a question: " + out)
-        rc, out = self.check(f"Approved {LINK} at abcdef1, no asks.\nPlease merge it after {self.LATER}.\n", mine)
+        rc, out = self.check(f"Approved {LINK} at `abcdef1`, no asks.\nPlease merge it after {self.LATER}.\n", mine)
         self.assertEqual(rc, 0, out)
         self.assertIn("WARN: line 1 restates your review of acme/app#12 (APPROVED at abcdef1): cut it", out)
         self.assertIn("PASS", out)
@@ -338,7 +370,7 @@ class Restates(unittest.TestCase):
 
     def test_without_a_review_of_mine_nothing_is_restated(self):
         for reviews in ([review("carol", "APPROVED")], [review(ME, "COMMENTED")], []):
-            rc, out = self.check(f"Approved {LINK} at abcdef1, no asks.\n", *reviews)
+            rc, out = self.check(f"Approved {LINK} at `abcdef1`, no asks.\n", *reviews)
             self.assertEqual(rc, 0, f"{reviews}: {out}")
             self.assertNotIn("restates", out)
 
@@ -372,6 +404,11 @@ class SendMode(unittest.TestCase):
             self.assertIn("send: live", gate(env, "ok\n", "--top-level", gh=fake())[1])
             rc, out = gate(env, "ok\n", "--top-level", gh=fake(), now=EVENING)
             self.assertIn("send: schedule post_at=2026-10-22T08:30:00-07:00", out)
+            self.assertNotIn("thread_ts", out)
+            rc, out = gate(env, "ok\n", "--reply", "1761040800.000100", gh=fake(), now=EVENING)
+            # A scheduled reply once posted top-level: the schedule call had no thread_ts.
+            self.assertIn("send: schedule post_at=2026-10-22T08:30:00-07:00 epoch=1792683000 thread_ts=1761040800.000100 "
+                          "(pass it to the schedule tool too", out)
 
 
 class Scheduled(unittest.TestCase):
@@ -556,6 +593,35 @@ class Freshness(unittest.TestCase):
             self.assertEqual(rc, 0, out)
             self.assertTrue((env.state / "sent" / "2026-10-21" / "1761040800.000100.md").is_file(), out)
 
+
+
+class Held(unittest.TestCase):
+    """A held reply stayed under Held after it went out."""
+
+    def hold(self, env, name, to, body):
+        (env.state / "held").mkdir(parents=True, exist_ok=True)
+        (env.state / "held" / name).write_text(f"comms-hub draft\nto: {to}\nkind: reply\nreason: fold-in expected\n---\n{body}")
+
+    def test_a_send_releases_the_held_drafts_it_covers_and_no_other(self):
+        answered, parent, other = "1761040700.000100", "1761040800.000100", "1761040900.000100"
+        with Env() as env:
+            self.hold(env, f"app-{parent}.md", f"chan-one reply {parent}", "the first half\n")
+            self.hold(env, f"ops-{answered}.md", f"chan-one reply {answered}", "an older ask\n")
+            self.hold(env, f"app-{other}.md", f"chan-one reply {other}", "another thread\n")
+            self.hold(env, "app-top.md", "chan-one top-level", "ok\n")
+            self.assertEqual(gate(env, "both halves\n", "--reply", parent, "--answers", answered, parent, gh=fake())[0], 0)
+            rc, out = gate(env, None, "--record-sent", "1761044400.000200", "--replies", "3", "4")
+            self.assertEqual(rc, 0, out)
+            self.assertIn(f"released held/app-{parent}.md: it went out with this message", out)
+            self.assertEqual(sorted(p.name for p in (env.state / "held").iterdir()), [f"app-{other}.md", "app-top.md"])
+            self.assertTrue((env.state / "sent" / "2026-10-21" / f"held-ops-{answered}.md").is_file(), "kept, not lost")
+            # A top-level message: the held draft whose message it is.
+            self.assertEqual(gate(env, "ok\n", "--top-level", gh=fake())[0], 0)
+            self.assertEqual(gate(env, None, "--record-sent", "1761044500.000300")[0], 0)
+            self.assertEqual([p.name for p in (env.state / "held").iterdir()], [f"app-{other}.md"])
+            rows = [json.loads(ln) for ln in (env.state / "log" / "2026-10-21.jsonl").read_text().splitlines()]
+            self.assertEqual([(r["text"], r["target"]) for r in rows if r["kind"] == "released"],
+                             [("held draft went out", "chan-one")] * 3)
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,7 +24,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   recheck-never-due: hub.py: `elif last_scan and last_scan > checked:` => `elif False:`
   scans-in-events: hub.py: `for r in reversed(recent) if r["kind"] not in UNSHOWN]` => `for r in reversed(recent) if r["kind"] != "scan"]`
   todo-counts-as-an-item: hub.py: `if r["kind"] not in UNSHOWN + ("tick", "setup")] if scans else []` => `if r["kind"] not in ("scan", "tick", "setup")] if scans else []`
-  moved-head-ignored: hub.py: `moved = bool(p.get("my_sha")) and p["my_sha"] != p["head"]` => `moved = False`
+  moved-head-ignored: hub.py: `behind = bool(p.get("my_sha")) and p["my_sha"] != p["head"]` => `behind = False`
   moved-still-approvable: hub.py: `"new commits" if moved else verdict` => `verdict or ("new commits" if moved else "")`
   verdict-unshown: hub.py: `verdicts[f"{m.group(1)}/{m.group(2)}#{m.group(3)}"] = r["text"]` => `pass`
   asked-not-needs: hub.py: `"needs": bool(moved or verdict or asked)` => `"needs": bool(moved or verdict)`

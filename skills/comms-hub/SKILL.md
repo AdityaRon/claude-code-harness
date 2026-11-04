@@ -162,7 +162,14 @@ whole context.
    so, with the reason, and never present the sections as complete.
    - REVIEWED is anyone's open PR whose head moved since my last review: a
      re-look for step 1c, with the `compare` range. Four PRs once got commits
-     after my reviews and only the closing report noticed.
+     after my reviews and only the closing report noticed. A re-look read with
+     nothing to post: `PY B/hub.py relooked owner/repo#N <head> "<why>"`, the
+     head the compare range ends with, all 40 characters. That head then
+     counts as reviewed (two PRs stayed flagged "new commits" after re-looks
+     done by hand): the todo closes, the PR leaves REVIEWED and the panel's
+     flags, and its review row under Needs you moves to that head, still
+     waiting on the user's approval. A review posted at the head any other
+     way moves the row at the next scan.
    - ROUTE is each item on my PRs that asks something: a `[consider]`,
      `[question]` or `[blocking]` tag, a question, or changes requested, an
      approval's body and inline threads included (an approval carrying a
@@ -220,7 +227,8 @@ whole context.
    For a re-look it is the REVIEWED line's range,
    `gh api repos/owner/repo/compare/<my sha>...<head>`, read against my own
    open threads in the transcript: each fixed, not fixed, or a new issue. A
-   re-look with every thread fixed and nothing new has no findings. A 404 means
+   re-look with every thread fixed and nothing new has no findings; with
+   nothing to post, record it with `hub.py relooked` (REVIEWED above). A 404 means
    a force-push dropped my sha: review the whole diff instead. Then
    `PY B/review_lint.py --post <job tmp>/review-N.json --pr owner/repo#N`. It
    lints the body and each comment, re-reads the head and the open state,
@@ -235,19 +243,25 @@ whole context.
    and a lint chained with `;` once let a refused body go out. COMMENT only:
    this session never approves or requests changes, whatever the findings say.
 2. **Slack**:
-   - The primary DM: read its first page in full, without `oldest`. Write the
-     tool's output to `<job tmp>/dm.txt`, run
+   - The primary DM: read its first page in full, without `oldest`. Write
+     `<job tmp>/dm.txt` with the Write tool, one line per top-level message
+     on the page: its ts, then `N replies` where the read shows a reply count
+     (`1761000100.000200 4 replies`), and the page's `next_cursor: <value>`
+     line when it has one. Not the read itself: about 100 KB a channel to
+     write out, so ticks skipped this step and the snapshots went stale. Run
      `PY B/slack_listing.py <job tmp>/dm.txt -o <job tmp>/dm.tsv`, then
      `PY B/slack_diff.py <job tmp>/dm.tsv --channel <primary_dm>`. Read every NEW
      and MOVED thread in full. Only then
      `PY B/slack_diff.py <job tmp>/dm.tsv --channel <primary_dm> --commit --read <every NEW and MOVED ts>`.
      The first run takes `--commit --baseline` instead; say nothing before it
      was checked. UNREADABLE, UNTRUSTED or STALE means the read failed: no
-     commit, say so. The listing refuses a short (concise) read, which drops
-     reply counts, and a page read with `oldest`; read again in full. The
+     commit, say so. The listing refuses a page with no reply count on any
+     line, which is what a short (concise) read gives (`--no-threads` once
+     you have read that no message on it has a thread), and a page read with
+     `oldest`; read again in full. The
      diff refuses a listing older than 15 minutes: last tick's page diffs as
      nothing new. Several pages of one read go to one listing (`DUMP...`).
-   - With `scan: full` only, each watched channel: the same as the DM, with its own dump, listing and
+   - With `scan: full` only, each watched channel: the same as the DM, with its own page file, listing and
      `--channel <id>`: the first page in full, never with `oldest` (with it,
      Slack returns the oldest messages first, and a DM once looked quiet with
      four unread). Read in full every NEW and MOVED thread, not only those
@@ -260,18 +274,19 @@ whole context.
      last two once caught a reply the others missed, one under a week-old
      thread. Send each printed line whole as the search's query text (the
      Slack MCP's `natural_language_query`), never in a filters field: a bare
-     `<@my_user_id>` sent as a filter ran an empty search, which came back
-     headed `Search Results for:` with nothing after it and listed the
+     `<@my_user_id>` sent as a filter ran an empty search, which listed the
      workspace's newest posts, alerts and webhooks, none naming the user.
      Rows prove the search returned something, not that it ran as asked:
-     check that the result's header names the query, and that every hit of
-     the bare search holds `<@my_user_id>`. Either one missing means mentions
-     are unknown. Use the date filter: an epoch filter once returned 0, and an
-     empty result is ambiguous. An empty search counts as quiet only when the
-     same query from `PY B/hub.py queries --control` (a week further back)
-     returns rows that pass the same checks (its header names the query; for
-     the bare search, a row holds `<@my_user_id>`): a misfired control returns
-     rows too. Ask for the smallest page, since one such row proves it. Empty
+     every hit of the bare search must hold `<@my_user_id>`, which shows the
+     query went through the query field, and the other two go the same way.
+     A hit without it means mentions are unknown. The result's header proves
+     nothing: one connector leaves it empty (`Search Results for:`) on every
+     search, the right ones too, so a check on it failed every tick. Use the
+     date filter: an epoch filter once returned 0, and an empty result is
+     ambiguous. An empty search counts as quiet only when the same query from
+     `PY B/hub.py queries --control` (a week further back) returns rows (for
+     the bare search, rows holding `<@my_user_id>`): a misfired control
+     returns rows too. Ask for the smallest page, since one such row proves it. Empty
      too, the search is not working, so say mentions are unknown, never quiet. The newest hit of each shows how far it
      reached; if it is older than the last tick, say the search may not have
      reached.
@@ -281,7 +296,8 @@ whole context.
    `channels` holds the Slack channel of a post that names nobody. Run ListAgents
    now, at routing time, and confirm the owner is listed. Before messaging an
    item, check the owner is not already on it: `PY B/hub.py routed <link>`
-   prints what the last two days' log routed, held or asked about it, and
+   prints what the last seven days' log routed, held or asked about it (with
+   two, asks answered days before were routed again), and
    ListAgents shows what each session is on; an item routed with nothing new
    since is not routed again. For a review, read the whole conversation, not
    the summary: the review's inline threads too (an empty-bodied approval
@@ -306,7 +322,9 @@ whole context.
      `PY B/check_draft.py <file> --reply <ts>` (or `--top-level`), with
      `--asks <github login>` for whoever the draft asks to review when the
      config's `slack.github_logins` does not map their `<@id>`. Only PASS
-     sends. FAIL: fix the shape (an unlinked PR, a dash, a `>`) or send it
+     sends. FAIL: fix the shape (an unlinked PR, ticket or commit, a dash, a
+     `>`; a ticket is a key in a project some `routing` entry's `tickets`
+     names, and a hex string that is no commit goes in backticks) or send it
      back; a line that calls a merged PR awaiting, or asks a reviewer for a
      review they gave at the current head, goes back to the peer (a review ask
      once went out minutes after the approval). BLOCKED: a linked PR's live
@@ -329,7 +347,9 @@ whole context.
      is gated, and sent, as the message after the header's `---` alone.
    - Quiet hours: when the gate printed `send: schedule`, schedule it for that
      `post_at` epoch instead, which is on the next active day, after its first
-     tick. A scheduled message cannot be edited through the
+     tick. A reply passes the `thread_ts` that line prints to the schedule
+     tool too, as a live reply does: one scheduled without it posted as a new
+     message. A scheduled message cannot be edited through the
      API, so if the draft said `fold-in: expected`, or another draft for that
      thread is due, hold it and send it live, gated again, at the first tick
      after `post_at`.
@@ -339,7 +359,10 @@ whole context.
      loses memory, and step 1's header counts the files (`held-drafts:`).
      Add `reason: <why, in words>` to the header, and `needs: user` when it
      waits for the user's own go: the panel shows those under Needs you, the
-     rest under Held. Delete the file once sent or returned to the peer.
+     rest under Held. `--record-sent` moves each held file the send covers
+     (its thread, a message it answers, or the same message) to `sent/` and
+     says so (a held reply once stayed under Held after it went out); delete
+     one returned to the peer.
    - While step 1's header prints `scheduled-pending:` above 0, every tick:
      `PY B/check_draft.py --scheduled`, then gate each pending message's copy
      again (`check_draft.py <copy> --reply <ts>`, with the same `--asks`). A
@@ -447,5 +470,6 @@ whole context.
 | `prs.json` | the last scan that did not end BLOCKED: each open PR I review or authored, which the panel's PRS section reads |
 | `prs-history.jsonl` | what changed between two `prs.json`, one row each (reviewed, approved, merged, by day), for the panel's last five days |
 | `parked.json` | the PRs the user parked with `hub.py park`, with when and why |
+| `relooked.json` | the head each PR was re-looked at by hand with `hub.py relooked`, with when and why |
 | `feedback.md` | each correction the user makes to a message or to this protocol, dated, for the next change to this skill |
 | `queue.pid` | the scan in progress |
