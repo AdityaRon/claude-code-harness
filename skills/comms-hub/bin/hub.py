@@ -22,13 +22,18 @@ review state and CI state. Imported by the scripts beside it; run directly:
   hub.py queries [--control]
                       the three Slack mention searches, dated two days back; --control: the
                       same a week further back, which an empty search needs before it is quiet
-  hub.py routed TEXT  the log lines of the last two days that mention TEXT (a link, a key); exit 1 if none
+  hub.py routed TEXT  the log lines of the last seven days (as long as an item stays open) that
+                      mention TEXT (a link, a key); exit 1 if none
   hub.py feedback TEXT  append a dated correction to feedback.md, for the next change to the skill
   hub.py park [REF [WHY]]
                       keep a PR (owner/repo#N or its link) off the panel and out of the scan's
                       REVIEWED, WATCHED, AWAITING and DRIFT; INBOUND, OUTBOUND and ROUTE still
                       show it, since they ask something new. Without REF: the parked PRs
   hub.py unpark REF   show a parked PR again; exit 1 if it was not parked
+  hub.py relooked REF HEAD [WHY]
+                      a re-look done by hand with nothing to post, at HEAD (all 40 characters):
+                      the scan reads that head as reviewed, its re-look todo closes, and an open
+                      review row moves to it, still waiting on the user's approval
   hub.py cron         the tick's cron expression, made from active_hours
   hub.py window [--margin MIN | --review] [--full-done]
                       open (exit 0) or closed (exit 1) for active_hours, and whether this tick
@@ -885,13 +890,17 @@ def prs_panel(cfg: dict, verdicts: dict[str, str]) -> dict:
         written = parse_time(data["written_at"])
     except (OSError, ValueError, KeyError, TypeError):
         data, written = None, None
-    rows = []
+    rows, marks = [], relooked(cfg)
     for p in (data or {}).get("reviewing", []):
-        moved = bool(p.get("my_sha")) and p["my_sha"] != p["head"]
+        # A head re-looked by hand counts as reviewed, from the moment it is recorded.
+        behind = bool(p.get("my_sha")) and p["my_sha"] != p["head"]
+        looked = behind and (marks.get(p["ref"]) or {}).get("sha") == p["head"]
+        moved = behind and not looked
         verdict = verdicts.get(p["ref"], "")
         asked = p.get("requested_me") and not p.get("my_sha")
         parts = [f"{STATE_WORDS.get(p.get('my_state'), 'reviewed')}@{p['my_sha'][:7]}" if p.get("my_sha")
-                 else "not reviewed", "new commits" if moved else verdict, f"CI {p['ci']}",
+                 else "not reviewed", "re-looked" if looked else "", "new commits" if moved else verdict,
+                 f"CI {p['ci']}",
                  f"approved by {','.join(p['approvals'])}" if p.get("approvals") else ""]
         rows.append({"ref": p["ref"], "group": "reviewing", "needs": bool(moved or verdict or asked),
                      "line": f"{short_ref(cfg, p['ref'])}  {p['author']}  " + " · ".join(x for x in parts if x)})
@@ -1071,9 +1080,70 @@ def park_cmd(cfg: dict, argv: list[str]) -> int:
     return 0
 
 
-def routed(cfg: dict, text: str, days: int = 2) -> list[str]:
+def relooked(cfg: dict) -> dict[str, dict]:
+    """PRs re-looked by hand with nothing to post, owner/repo#N to the head looked
+    at (sha), when and why: the scan and the panel read that head as reviewed. A
+    re-look done by hand once left two PRs flagged "new commits", their todos
+    open, until a review sat at the head."""
+    try:
+        data = json.loads((state_dir(cfg) / "relooked.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def looked_again(cfg: dict, row: dict, sha: str, how: str) -> dict:
+    """A review row whose PR moved, read again at `sha`: it stays under Needs you,
+    at that head, until the user approves or it merges."""
+    return log_event(cfg, "reviewed", f"looked again: {how}", ref=row["ref"], needs_user=True, corrects=row["id"],
+                     detail=f"sha={sha}")
+
+
+def relooked_cmd(cfg: dict, argv: list[str], gh: Gh | None = None) -> int:
+    ref, sha = pr_ref(argv[1]), argv[2].lower() if len(argv) > 2 else ""
+    if not ref or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        print("usage: hub.py relooked owner/repo#N HEAD [WHY]: HEAD is the full 40-character head, as the "
+              "REVIEWED line's compare range ends with it")
+        return 2
+    # The head as GitHub has it now: an older one would move a review row back.
+    owner, repo, n = split_pr(ref)
+    try:
+        live = (gh or Gh()).json(["pr", "view", str(n), "--repo", f"{owner}/{repo}", "--json", "state,headRefOid"])
+    except GhError as e:
+        print(f"BLOCKED: the PR's head is unknown, so nothing was recorded: {e}")
+        return 3
+    if live.get("state") != "OPEN" or live.get("headRefOid") != sha:
+        print(f"FAIL: {ref} is {str(live.get('state')).lower()} at {str(live.get('headRefOid'))[:7]}, not open at "
+              f"{sha[:7]}: re-look the head it has; nothing recorded")
+        return 1
+    marks = relooked(cfg)
+    marks[ref] = {"sha": sha, "at": now().isoformat(timespec="seconds"), "why": " ".join(argv[3:])}
+    path = state_dir(cfg) / "relooked.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(marks, indent=1, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+    print(f"relooked {ref} at {sha[:7]}: the scan reads that head as reviewed until it moves")
+    # Closed now, not at the next scan, so the panel shows it at once.
+    for r in folded(cfg, OPEN_DAYS):
+        if pr_ref(r.get("ref") or "") != ref:
+            continue
+        key = re.search(r"\bkey=review:\S+@([0-9a-f]+)", r.get("detail") or "")
+        row_sha = re.search(r"\bsha=([0-9a-f]{40})\b", r.get("detail") or "")
+        if r["kind"] == "todo" and key and sha.startswith(key.group(1)):
+            log_event(cfg, "done", "re-looked by hand", ref=r["ref"], corrects=r["id"])
+            print(f"closed {r['id']}: the re-look it was waiting on")
+        elif r["kind"] == "reviewed" and r.get("needs_user") and row_sha and row_sha.group(1) != sha:
+            looked_again(cfg, r, sha, "nothing new")
+            print(f"moved {r['id']} to {sha[:7]}: still needs the user's approval")
+    return 0
+
+
+def routed(cfg: dict, text: str, days: int = OPEN_DAYS) -> list[str]:
     """Log lines from the last `days` days that mention `text`: what was already
-    routed, held or asked about, so an item is not sent to its owner twice."""
+    routed, held or asked about, so an item is not sent to its owner twice. As
+    far back as an item stays open: with two days, asks answered days before
+    were routed again."""
     d = state_dir(cfg) / "log"
     today = local_now(cfg).date()
     out = []
@@ -1249,8 +1319,8 @@ def init(gh: Gh | None = None, example: Path | None = None) -> int:
 def main(argv=None, gh: Gh | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if (argv[:1] not in (["init"], ["config"], ["log"], ["panel"], ["queries"], ["routed"], ["feedback"],
-                         ["cron"], ["window"], ["trigger"], ["launch"], ["park"], ["unpark"])
-            or (argv[0] in ("log", "routed", "feedback", "unpark") and len(argv) < 2)):
+                         ["cron"], ["window"], ["trigger"], ["launch"], ["park"], ["unpark"], ["relooked"])
+            or (argv[0] in ("log", "routed", "feedback", "unpark", "relooked") and len(argv) < 2)):
         print(__doc__.split("run directly:", 1)[1].rstrip())
         return 2
     # `hub.py feedback --help` once wrote "--help" into feedback.md: these take text, no flags.
@@ -1309,13 +1379,15 @@ def main(argv=None, gh: Gh | None = None) -> int:
         lines = routed(cfg, " ".join(argv[1:]))
         for line in lines:
             print(line)
-        print(f"routed: {len(lines)} line(s) in the last 2 days mention {' '.join(argv[1:])!r}")
+        print(f"routed: {len(lines)} line(s) in the last {OPEN_DAYS} days mention {' '.join(argv[1:])!r}")
         return 0 if lines else 1
     if argv[0] == "feedback":
         print(f"noted in {append_feedback(cfg, ' '.join(argv[1:]))}")
         return 0
     if argv[0] in ("park", "unpark"):
         return park_cmd(cfg, argv)
+    if argv[0] == "relooked":
+        return relooked_cmd(cfg, argv, gh)
     if argv[0] in ("cron", "window", "trigger", "launch"):
         return schedule_cmd(cfg, argv)
     if argv[0] == "panel":

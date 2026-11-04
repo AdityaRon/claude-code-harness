@@ -63,6 +63,9 @@ MD_LINK = re.compile(r"\[[^\]]*\]\((https?://[^)\s]+)\)")
 BARE_URL = re.compile(r"https?://[^\s,;)\]>]+")
 PR_REF = re.compile(r"(?<![\w/#&])(?:[\w.-]+/[\w.-]+#\d+|#\d+\b|\bPR[\s-]*#?\d+\b|\bpull request\s+#?\d+\b)", re.I)
 CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+# A commit: 7 to 40 lowercase hex holding a digit and a letter ("defaced" is a word,
+# "1234567" a number), not part of a word, a path, a version or a longer digest.
+COMMIT = re.compile(r"(?<![\w/.:-])(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w/-]|\.\w)")
 TS = re.compile(r"\d{10}\.\d{6}")
 TOKEN = re.compile(r"(?<!\w)(?:xox[abposr]-[\w-]{10,}|gh[pousr]_\w{30,}|github_pat_\w{30,}|sk-[\w-]{30,}"
                    r"|(?:AKIA|ASIA)[0-9A-Z]{16}"  # an AWS key, temporary ones included
@@ -113,7 +116,13 @@ def thin_bullets(text: str) -> list[str]:
     return out
 
 
-def shape_problems(text: str, cap: int = hub.MAX_CHARS) -> list[str]:
+def ticket_ref(prefixes) -> re.Pattern | None:
+    """A ticket key in one of the routing table's projects. From the config: a bare
+    [A-Z]+-N pattern would fail SHA-256 and UTF-8."""
+    return re.compile(rf"(?<![\w/.-])(?:{'|'.join(map(re.escape, prefixes))})-\d+(?![\w-])") if prefixes else None
+
+
+def shape_problems(text: str, cap: int = hub.MAX_CHARS, tickets: re.Pattern | None = None) -> list[str]:
     out = []
     if len(text) > cap:
         out.append(f"{len(text)} characters, over the {cap} cap (slack.max_chars): split it, or cut")
@@ -132,6 +141,11 @@ def shape_problems(text: str, cap: int = hub.MAX_CHARS) -> list[str]:
     rest = BARE_URL.sub(" ", MD_LINK.sub(" ", SLACK_LINK.sub(" ", text)))
     for m in PR_REF.finditer(rest):
         out.append(f"PR reference {m.group(0)!r} is not a link")
+    # A reviewer's rule: every ticket and commit a message names is a link too.
+    for m in tickets.finditer(rest) if tickets else []:
+        out.append(f"ticket {m.group(0)!r} is not a link")
+    for m in COMMIT.finditer(CODE.sub(" ", rest)):
+        out.append(f"commit {m.group(0)!r} is not a link (in backticks if it is not a commit)")
     if TOKEN.search(text):
         out.append("a token-shaped string: no secrets in a message")
     return out
@@ -271,7 +285,8 @@ def message(path) -> tuple[bytes, bool]:
     """The bytes that go to Slack: a draft's message after its header's `---`, or
     the whole file. The header once counted toward slack.max_chars, failing a
     reply that passed without it (2026-10-28)."""
-    data = open(path, "rb").read()
+    with open(path, "rb") as f:
+        data = f.read()
     m = HEADER.match(data)
     return (data[m.end():].lstrip(b"\n"), True) if m else (data, False)
 
@@ -284,7 +299,8 @@ def gate(args, cfg, gh) -> int:
             print(f"FAIL: {ts!r} is not a Slack ts (1234567890.123456)")
             return 2
     target = f"reply:{args.reply}" if args.reply else "top-level"
-    problems = shape_problems(text, int(cfg["slack"]["max_chars"]))
+    problems = shape_problems(text, int(cfg["slack"]["max_chars"]),
+                              ticket_ref([t for r in cfg["routing"] for t in r["tickets"]]))
     if args.answers and args.reply != max(args.answers, key=ts_key):
         problems.append(f"--reply {args.reply} is not the newest message the draft answers "
                         f"({max(args.answers, key=ts_key)}): a combined reply threads under the newest")
@@ -309,8 +325,11 @@ def gate(args, cfg, gh) -> int:
     elif mode == "live":
         print("send: live")
     else:
-        print(f"send: schedule post_at={post.isoformat()} epoch={int(post.timestamp())} "
-              "(scheduled messages cannot be edited through the API: hold it instead if a fold-in is expected)")
+        # A scheduled reply once posted top-level: the schedule call was made without thread_ts.
+        print(f"send: schedule post_at={post.isoformat()} epoch={int(post.timestamp())}"
+              + (f" thread_ts={args.reply} (pass it to the schedule tool too, or the reply posts top-level)"
+                 if args.reply else "")
+              + " (scheduled messages cannot be edited through the API: hold it instead if a fold-in is expected)")
     for r in [] if react else restating:
         print(f"WARN: {r}: cut it unless the message needs it")
     words = len(text.split())
@@ -328,7 +347,7 @@ def gate(args, cfg, gh) -> int:
         return 3
     stamp = {"path": os.path.realpath(args.file), "sha256": hub.sha256(data),
              "passed_at": hub.now().timestamp(), "target": target, "send": mode,
-             "post_at": post.isoformat() if post else None, "prs": lines, "asks": asks}
+             "post_at": post.isoformat() if post else None, "prs": lines, "asks": asks, "answers": args.answers}
     regate_of = mark_regate(cfg, args.file, True)
     if regate_of:
         stamp["regate_of"] = regate_of
@@ -446,7 +465,29 @@ def record_sent(args, cfg) -> int:
     hub.log_event(cfg, verb, text, ref=first_ref(stamp), target=hub._draft(args.file).get("to", "").split(" ")[0],
                   detail=detail)
     print(f"recorded {verb} {args.record_sent}: sent/{day}/{safe}.md")
+    for h in covered(cfg, stamp, data):
+        shutil.move(h, d / f"held-{h.name}")
+        hub.log_event(cfg, "released", "held draft went out", ref=first_ref(stamp),
+                      target=hub._draft(str(d / f"held-{h.name}")).get("to", "").split(" ")[0],
+                      detail=f"id={args.record_sent} file={h.name}")
+        print(f"released held/{h.name}: it went out with this message (kept as sent/{day}/held-{h.name})")
     return 0
+
+
+def covered(cfg, stamp: dict, data: bytes) -> list:
+    """The held drafts a send covers: each held for the thread a reply went to or
+    one it answers, and any whose message is these bytes. A held reply once stayed
+    under Held after it went out."""
+    held = hub.state_dir(cfg) / "held"
+    reply = stamp["target"].startswith("reply:")
+    threads = {stamp["target"].split(":", 1)[1], *(stamp.get("answers") or [])} if reply else set()
+    out = []
+    for h in sorted(held.glob("*.md")) if held.is_dir() else []:
+        to = hub._draft(str(h)).get("to", "").split()
+        thread = to[2] if len(to) == 3 and to[1] == "reply" else ""
+        if thread in threads or message(h)[0] == data:
+            out.append(h)
+    return out
 
 
 def first_ref(stamp: dict) -> str:

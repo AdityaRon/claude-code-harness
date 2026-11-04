@@ -393,15 +393,15 @@ def my_last_review(pr: dict, me: str) -> dict | None:
     return mine[-1] if mine else None
 
 
-def watched_row(ref: str, pr: dict, me: str, requested: bool, updated: str) -> str | None:
+def watched_row(ref: str, pr: dict, me: str, requested: bool, updated: str, mark: dict | None = None) -> str | None:
     """The WATCHED line for a PR by a watched author, or None when it is a draft
-    or I already reviewed its current head."""
+    or I already reviewed its current head, or re-looked it by hand (`mark`)."""
     if pr["isDraft"]:
         return None
     head = pr["headRefOid"]
     mine = sorted((r for r in pr["reviews"]["nodes"] if hub.is_me(r.get("author"), me) and r.get("state") != "PENDING"),
                   key=lambda r: r.get("submittedAt") or "")
-    if any(((r.get("commit") or {}).get("oid")) == head for r in mine):
+    if any(((r.get("commit") or {}).get("oid")) == head for r in mine) or (mark or {}).get("sha") == head:
         return None
     last = mine[-1] if mine else None
     seen = f"{last['state']}@{((last.get('commit') or {}).get('oid') or '?')[:7]}" if last else "none"
@@ -409,20 +409,25 @@ def watched_row(ref: str, pr: dict, me: str, requested: bool, updated: str) -> s
             f"my-review={seen} updated {updated[:10]} {pr['title']!r}  {pr['url']}")
 
 
-def reviewed_row(ref: str, pr: dict, me: str, requested: bool) -> str | None:
+def reviewed_row(ref: str, pr: dict, me: str, requested: bool, mark: dict | None = None) -> str | None:
     """The REVIEWED line for an open PR, anyone's, whose head moved since my last
     review: a re-look, a delta review of `compare` against my open threads. None
-    when it is a draft, I never reviewed it, or my last review is at its head.
+    when it is a draft, I never reviewed it, or my last review, or a re-look by
+    hand (`mark`, from hub.py relooked), is at its head.
     Four PRs once got commits after my reviews and only the closing report noticed."""
     if pr["state"] != "OPEN" or pr["isDraft"]:
         return None
     last = my_last_review(pr, me)
     sha = ((last or {}).get("commit") or {}).get("oid")
     head = pr["headRefOid"]
-    if not last or sha == head:
+    looked = (mark or {}).get("sha")
+    if not last or head in (sha, looked):
         return None
+    # A re-look by hand after my last review is where the next one starts.
+    since = looked if looked and hub.parse_time(mark.get("at")) > hub.parse_time(last.get("submittedAt")) else sha
     return (f"{ref} by {hub.login(pr.get('author')) or '?'} requested={'yes' if requested else 'no'} head={head[:7]} "
-            f"my-review={last['state']}@{(sha or '?')[:7]} compare={sha or '?'}...{head} {pr['title']!r}  {pr['url']}")
+            f"my-review={last['state']}@{(sha or '?')[:7]}" + (f" re-looked@{since[:7]}" if since != sha else "")
+            + f" compare={since or '?'}...{head} {pr['title']!r}  {pr['url']}")
 
 
 def pr_facts(ref: str, pr: dict, me: str) -> dict:
@@ -503,6 +508,12 @@ def open_rows(cfg: dict, kind: str) -> list[dict]:
 def key_of(row: dict) -> str:
     m = re.search(r"\bkey=(\S+)", row.get("detail") or "")
     return m.group(1) if m else ""
+
+
+def todo_ref(row: dict) -> str:
+    """owner/repo#N from a todo's key: review:<ref>@<sha> or route:<ref>:<who>@<at>."""
+    key = key_of(row)
+    return key.split(":", 1)[1].split("@")[0].rsplit(":", 1)[0] if ":" in key else ""
 
 
 pr_ref = hub.pr_ref
@@ -596,6 +607,7 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     # What the user parked stays out of the status sections and the panel;
     # what asks something new of them still shows.
     parked = hub.parked(cfg)
+    marks = hub.relooked(cfg)
     emit(f"parked: {len(parked)}" + (f" ({' '.join(sorted(parked))}): left out of REVIEWED, WATCHED, AWAITING, DRIFT "
                                      "and the panel; INBOUND, OUTBOUND and ROUTE still show them" if parked else ""))
 
@@ -684,7 +696,9 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     # A posted review waits under Needs you until the user approves or it merges:
     # read those PRs too, merged ones included, which no open-PR search returns.
     waiting = [r for r in open_rows(cfg, "reviewed") if r.get("needs_user") and pr_ref(r.get("ref", ""))]
-    todo_refs = {key_of(r).split(":", 1)[1].split("@")[0] for r in todo if key_of(r).startswith("review:")}
+    # Every todo's PR, an ask's too: one merged before merged_days leaves every
+    # search, and its ask stayed in flight unread, routed again each tick.
+    todo_refs = {todo_ref(r) for r in todo} - {""}
     # What the last prs.json listed: one that has left every search may have merged.
     prev = read_prs(cfg)
     listed = {p["ref"] for p in (prev or {}).get("reviewing", []) + (prev or {}).get("authored", [])}
@@ -723,18 +737,21 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     # its author is watched: one row, there.
     reviewed_rows = {}
     for ref in sorted((reviewed_refs | inbound_refs | set(watched_items)) - set(parked)):
-        row = reviewed_row(ref, details[ref], me, ref in inbound_refs) if ref in details else None
+        row = reviewed_row(ref, details[ref], me, ref in inbound_refs, marks.get(ref)) if ref in details else None
         if row:
             reviewed_rows[ref] = row
     watched_rows = []
     for ref, r in watched_items.items():
         if ref in details and ref not in reviewed_rows and ref not in parked:
-            row = watched_row(ref, details[ref], me, ref in inbound_refs, r["updated_at"])
+            row = watched_row(ref, details[ref], me, ref in inbound_refs, r["updated_at"], marks.get(ref))
             if row:
                 watched_rows.append(row)
+    # A re-request still pending on GitHub would list a head re-looked by hand every tick.
+    looked = {ref for ref in inbound_refs if ref in details and my_last_review(details[ref], me)
+              and (marks.get(ref) or {}).get("sha") == details[ref]["headRefOid"]}
     sections = [
         ("INBOUND", [f"{row_ref(r)} by {r['user']['login']} updated {r['updated_at'][:10]} {r['title']!r}  {r['html_url']}"
-                     for r in inbound if row_ref(r) not in reviewed_rows]),
+                     for r in inbound if row_ref(r) not in set(reviewed_rows) | looked]),
         ("REVIEWED", list(reviewed_rows.values())),
         ("WATCHED", watched_rows),
         ("AWAITING", awaiting),
@@ -748,7 +765,7 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     if time.time() - wall0 > wall_limit:
         blocked.append(f"the scan took more than {wall_limit:g}s of wall-clock time (the machine slept?); "
                        "what it read may be stale")
-    remember(cfg, emit, details, me, route, inbound_refs - set(reviewed_rows), reviewed_rows, todo, waiting)
+    remember(cfg, emit, details, me, route, inbound_refs - set(reviewed_rows) - looked, reviewed_rows, todo, waiting)
     if blocked:
         emit("prs: not written (BLOCKED); the panel keeps the last scan's, with its age")
     else:
@@ -802,8 +819,7 @@ def remember(cfg: dict, emit, details: dict, me: str, route: list[dict], to_revi
                                      ref=details[ref]["url"], detail=f"key={key}"))
     for r in todo:
         key = key_of(r)
-        ref = key.split(":", 1)[1].split("@")[0].rsplit(":", 1)[0] if ":" in key else ""
-        pr = details.get(ref)
+        pr = details.get(todo_ref(r))
         if not pr:
             continue  # unread: unknown, so left open
         if pr["state"] != "OPEN":
@@ -823,10 +839,16 @@ def remember(cfg: dict, emit, details: dict, me: str, route: list[dict], to_revi
         mine = next((v for w, v in mine.items() if hub.is_me(v.get("author"), me)), None)
         sha = (re.search(r"\bsha=([0-9a-f]{40})\b", r.get("detail") or "") or [None, None])[1]
         decided = (mine or {}).get("state") in ("APPROVED", "CHANGES_REQUESTED")
+        posted = any(hub.is_me(v.get("author"), me) and v.get("state") != "PENDING"
+                     and (v.get("commit") or {}).get("oid") == pr["headRefOid"] for v in pr["reviews"]["nodes"])
         if pr["state"] != "OPEN" or decided:
             why = (pr["state"].lower() if pr["state"] != "OPEN"
                    else "you approved" if mine["state"] == "APPROVED" else "you requested changes")
             closed.append(hub.log_event(cfg, "answered", why, ref=r["ref"], corrects=r["id"]))
+        elif sha and sha != pr["headRefOid"] and posted:
+            # A review at the head posted outside review_lint.py --post (hub.py
+            # relooked moves its own row): such a re-look stayed open for days.
+            closed.append(hub.looked_again(cfg, r, pr["headRefOid"], "review at the head"))
         elif sha and sha != pr["headRefOid"] and not r["text"].startswith("re-look"):
             closed.append(hub.log_event(cfg, "reviewed", "re-look: new commits since the review", ref=r["ref"],
                                         needs_user=True, corrects=r["id"], detail=f"sha={sha}"))

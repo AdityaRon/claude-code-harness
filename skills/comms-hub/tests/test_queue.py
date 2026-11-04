@@ -28,6 +28,20 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   stdlib-queue-unbound: hub.py: `import queue  # noqa: F401` => `pass`
   team-requests-inbound: queue.py: `user-review-requested:{me} draft:false` => `review-requested:{me} draft:false`
   draft-requests-inbound: queue.py: `user-review-requested:{me} draft:false` => `user-review-requested:{me}`
+  relook-still-reviewed: queue.py: `if not last or head in (sha, looked):` => `if not last or sha == head:`
+  relook-compare-from-review: queue.py: `since = looked if looked and hub.parse_time(mark.get("at")) > hub.parse_time(last.get("submittedAt")) else sha` => `since = sha`
+  relook-still-watched: queue.py: ` or (mark or {}).get("sha") == head:` => `:`
+  relook-still-inbound: queue.py: `for r in inbound if row_ref(r) not in set(reviewed_rows) | looked]),` => `for r in inbound if row_ref(r) not in reviewed_rows]),`
+  relook-todo-again: queue.py: `inbound_refs - set(reviewed_rows) - looked,` => `inbound_refs - set(reviewed_rows),`
+  relook-panel-moved: hub.py: `moved = behind and not looked` => `moved = behind`
+  relook-head-unchecked: hub.py: `if live.get("state") != "OPEN" or live.get("headRefOid") != sha:` => `if False:`
+  relook-unsaid: hub.py: `"re-looked" if looked else ""` => `""`
+  relook-todo-open: hub.py: `if r["kind"] == "todo" and key and sha.startswith(key.group(1)):` => `if False:`
+  relook-row-unmoved: hub.py: `elif r["kind"] == "reviewed" and r.get("needs_user") and row_sha and row_sha.group(1) != sha:` => `elif False:`
+  relook-short-sha: hub.py: `re.fullmatch(r"[0-9a-f]{40}", sha)` => `re.fullmatch(r"[0-9a-f]{7,40}", sha)`
+  hand-review-ignored: queue.py: `elif sha and sha != pr["headRefOid"] and posted:` => `elif False:`
+  hand-review-any-commit: queue.py: `and (v.get("commit") or {}).get("oid") == pr["headRefOid"] for v in pr["reviews"]["nodes"])` => `for v in pr["reviews"]["nodes"])`
+  route-todo-unread: queue.py: `todo_refs = {todo_ref(r) for r in todo} - {""}` => `todo_refs = {todo_ref(r) for r in todo if key_of(r).startswith("review:")}`
   empty-approval-owed: queue.py: `if r["state"] in ("APPROVED", "DISMISSED") and acknowledgement(r.get("body") or ""):` => `if False:`
   lgtm-owed: queue.py: `if r["state"] in ("APPROVED", "DISMISSED") and acknowledgement(r.get("body") or ""):` => `if r["state"] in ("APPROVED", "DISMISSED") and not (r.get("body") or "").strip():`
   ask-tag-ignored: queue.py: `m = TAG.search(body)` => `m = None`
@@ -39,9 +53,9 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   reviewed-search-dropped: queue.py: `reviewed = sorted(rows, key=row_ref)` => `reviewed = []`
   reviewed-own-prs: queue.py: `reviewed-by:{me} -author:{me} ` => `reviewed-by:{me} `
   reviewed-unbounded: queue.py: `f"updated:>={cutoff:%Y-%m-%d} {scope(owners)}")` => `f"{scope(owners)}")`
-  relook-at-head: queue.py: `if not last or sha == head:` => `if not last:`
+  relook-at-head: queue.py: `if not last or head in (sha, looked):` => `if not last or head == looked:`
   watched-wins: queue.py: `if ref in details and ref not in reviewed_rows and ref not in parked:` => `if ref in details and ref not in parked:`
-  inbound-wins: queue.py: `for r in inbound if row_ref(r) not in reviewed_rows]),` => `for r in inbound]),`
+  inbound-wins: queue.py: `for r in inbound if row_ref(r) not in set(reviewed_rows) | looked]),` => `for r in inbound if row_ref(r) not in looked]),`
   need-unchanged: queue.py: `need = 3 + len(authors)` => `need = 2 + len(authors)`
   untraced-unlogged: queue.py: `    if untraced:
         hub.log_event(` => `    if False:
@@ -82,7 +96,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   merge-unfetched: queue.py: `extra = {pr_ref(r["ref"]) for r in waiting} | todo_refs | listed` => `extra = {pr_ref(r["ref"]) for r in waiting} | todo_refs`
   history-review-missed: queue.py: `if p.get("my_sha") and (o.get("my_state"), o.get("my_sha")) != (p.get("my_state"), p.get("my_sha")):` => `if False:`
   watched-draft-listed: queue.py: `if pr["isDraft"]:` => `if False:`
-  watched-reviewed-listed: queue.py: `if any(((r.get("commit") or {}).get("oid")) == head for r in mine):` => `if False:`
+  watched-reviewed-listed: queue.py: `if any(((r.get("commit") or {}).get("oid")) == head for r in mine) or` => `if False or`
   watched-zero-trusted: queue.py: `if by_graph:` => `if False:`
   held-uncounted: queue.py: `held = sorted(p.name for p in (hub.state_dir(cfg) / "held").glob("*.md"))` => `held = []`
   comments-one-page: queue.py: `while info.get("hasNextPage"):` => `while False:`
@@ -644,6 +658,16 @@ class InFlight(unittest.TestCase):
         outs, _, _, _ = scans(lambda i: fake(details={**DETAILS, 2: self.ask()}), before=seed)
         self.assertIn("logged: 2 in-flight", outs[0], "the two reviews; the ask was logged yesterday")
 
+    def test_an_ask_on_a_pr_merged_before_the_window_still_closes(self):
+        # #6 merged before merged_days, so no search returns it: its ask stayed
+        # in flight every tick, unread, and was routed again each time.
+        def seed(cfg, state):
+            hub.log_event(cfg, "todo", "route bob's question", ref="https://github.com/acme/app/pull/6", who="bob",
+                          detail="key=route:acme/app#6:bob@20261012T100000")
+        outs, rows, _, _ = scans(lambda i: fake(details={**DETAILS, 6: detail(6, state="MERGED")}), n=2, before=seed)
+        self.assertEqual([(r["kind"], r["text"]) for r in rows if r["corrects"]], [("done", "merged before it was done")])
+        self.assertNotIn("route bob's question", outs[1].split("== INBOUND")[0])
+
     def test_github_closes_what_is_done(self):
         replied = detail(2, comments=[ev(ME, MINE_AT), ev(ME, "2026-10-21T09:00:00Z")],
                          reviews=[rv("bob", "APPROVED", AFTER, body="[question] safe on retry")])
@@ -720,6 +744,93 @@ class ReviewRows(unittest.TestCase):
                         "you approved"), (detail(20, author="stranger", state="MERGED", head="1" * 40), "merged")):
             _, rows, _, _ = scans(lambda i: fake(details={**DETAILS, 20: d}), before=self.seed)
             self.assertEqual([(r["kind"], r["text"]) for r in rows if r["corrects"]], [("answered", why)])
+
+    def test_a_review_posted_by_hand_at_the_head_moves_the_row_there(self):
+        # Posted outside review_lint.py --post, it left the re-look open for days.
+        d = detail(20, author="stranger", head="2" * 40,
+                   reviews=[rv(ME, "COMMENTED", OLD, oid="1" * 40), rv(ME, "COMMENTED", RECENT, oid="2" * 40)])
+        for text in ("approvable", "re-look: new commits since the review"):
+            def seed(cfg, state, text=text):
+                hub.log_event(cfg, "reviewed", text, ref="https://github.com/acme/app/pull/20", needs_user=True,
+                              detail="sha=" + "1" * 40)
+            _, rows, _, _ = scans(lambda i: fake(details={**DETAILS, 20: d}), n=2, before=seed)
+            self.assertEqual([(r["text"], r["needs_user"], r["detail"]) for r in rows if r["corrects"]],
+                             [("looked again: review at the head", True, "sha=" + "2" * 40)], text)
+
+
+class Relooked(unittest.TestCase):
+    """A re-look done by hand with nothing to post left the PR flagged "new commits"
+    and its todo open until a review sat at the head."""
+
+    H1, H2, H3 = "1" * 40, "2" * 40, "3" * 40
+
+    def mark(self, ref, sha, *why, head=None, state="OPEN"):
+        """hub.py relooked, against a gh that says the PR is `state` at `head` (sha by default)."""
+        gh = FakeGh(rest={"pr view": {"state": state, "headRefOid": head or sha}})
+        return hub.main(["relooked", ref, sha, *why], gh=hub.Gh(runner=gh, pause=0))
+
+    def pr(self, head, requests=()):
+        return detail(20, author="stranger", head=head, requests=requests,
+                      reviews=[rv(ME, "APPROVED", OLD, oid=self.H1)])
+
+    def test_the_head_counts_as_reviewed_until_it_moves(self):
+        heads, seen, said = [self.H2, self.H2, self.H3], [], io.StringIO()
+
+        def gh(i):
+            cfg = hub.load_config()
+            if i == 1:
+                with contextlib.redirect_stdout(said):
+                    self.assertEqual(self.mark("acme/app#20", self.H2, "nothing", "new"), 0)
+                seen.append(hub.prs_panel(cfg, {})["rows"])
+            if i == 2:
+                seen.append(hub.prs_panel(cfg, {})["rows"])
+            return fake(details={**DETAILS, 20: self.pr(heads[i])}, reviewed=[(20, "stranger")])
+        outs, rows, _, _ = scans(gh, n=3)
+        self.assertTrue(section(outs[0], "REVIEWED")[-1].startswith("acme/app#20"), outs[0])
+        todo = next(r for r in rows if r["kind"] == "todo" and q.pr_ref(r["ref"]) == "acme/app#20")
+        self.assertIn(f"closed {todo['id']}: the re-look it was waiting on", said.getvalue())
+        self.assertEqual([r["text"] for r in rows if r["corrects"] == todo["id"]], ["re-looked by hand"])
+        # The panel reads the record at once, before the next scan writes prs.json.
+        row = lambda rs: next(r for r in rs if r["key"] == "pr:acme/app#20")  # noqa: E731
+        self.assertEqual((row(seen[0])["needs"], row(seen[0])["line"]),
+                         (False, "app #20  stranger  approved@1111111 · re-looked · CI none"))
+        self.assertFalse(row(seen[1])["needs"])
+        self.assertNotIn("acme/app#20", "".join(section(outs[1], "REVIEWED") + section(outs[1], "WATCHED")))
+        self.assertIn("logged: 0 in-flight", outs[1])
+        # A push after it: a re-look again, from the head looked at.
+        self.assertIn(f"my-review=APPROVED@1111111 re-looked@2222222 compare={self.H2}...{self.H3}",
+                      section(outs[2], "REVIEWED")[-1])
+
+    def test_a_re_request_still_pending_is_not_inbound_once_relooked(self):
+        def seed(cfg, state):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.mark("acme/app#9", self.H2)
+        d = detail(9, author="teammate", head=self.H2, requests=[ME], reviews=[rv(ME, "COMMENTED", OLD, oid=self.H1)])
+        outs, rows, _, _ = scans(lambda i: fake(details={**DETAILS, 9: d}), before=seed)
+        self.assertEqual(section(outs[0], "INBOUND"), [])
+        self.assertNotIn("acme/app#9", "".join(section(outs[0], "REVIEWED") + section(outs[0], "WATCHED")))
+        self.assertEqual([r for r in rows if r["kind"] == "todo" and q.pr_ref(r["ref"]) == "acme/app#9"], [])
+
+    def test_the_open_review_row_moves_to_the_head_and_still_needs_the_user(self):
+        def seed(cfg, state):
+            hub.log_event(cfg, "reviewed", "re-look: new commits since the review",
+                          ref="https://github.com/acme/app/pull/20", needs_user=True, detail="sha=" + self.H1)
+        out = io.StringIO()
+        with Env(now=NOW) as env, contextlib.redirect_stdout(out):
+            cfg = hub.load_config()
+            env.state.mkdir(parents=True, exist_ok=True)
+            seed(cfg, env.state)
+            # An older head, or a merged PR: nothing recorded, nothing moved.
+            self.assertEqual(self.mark("acme/app#20", self.H2, head=self.H3), 1)
+            self.assertEqual(self.mark("acme/app#20", self.H2, state="MERGED"), 1)
+            self.assertEqual(hub.relooked(cfg), {})
+            self.assertEqual(self.mark("https://github.com/acme/app/pull/20", self.H2), 0)
+            needs = hub.open_items(cfg)[0]
+            for bad in (["relooked", "acme/app#20", "2222222"], ["relooked", "app#20", self.H2], ["relooked", "acme/app#20"]):
+                self.assertEqual(hub.main(bad), 2, bad)
+            self.assertEqual(set(hub.relooked(cfg)), {"acme/app#20"})
+        self.assertIn("FAIL: acme/app#20 is open at 3333333, not open at 2222222: re-look the head it has", out.getvalue())
+        self.assertEqual([(r["text"], r["detail"]) for r in needs], [("looked again: nothing new", "sha=" + self.H2)])
 
 
 class PrsFile(unittest.TestCase):

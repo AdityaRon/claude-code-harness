@@ -35,6 +35,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   morning-every-tick: hub.py: `return prev < end <= at` => `return True`
   routed-today-only: hub.py: `for back in range(days):` => `for back in range(1):`
   routed-any-line: hub.py: `if text in line]` => `if True]`
+  routed-two-days: hub.py: `def routed(cfg: dict, text: str, days: int = OPEN_DAYS)` => `def routed(cfg: dict, text: str, days: int = 2)`
   known-bots-ignored: hub.py: `or name.lower() in KNOWN_BOTS` => `or False`
   feedback-undated: hub.py: `f.write(f"- {local_now(cfg):%Y-%m-%d %H:%M} {text}\n")` => `f.write(f"- {text}\n")`
   weekend-ticks: hub.py: `days = sorted((DAYS.index(d) + 1) % 7 for d in a["days"])` => `days = list(range(7))`
@@ -350,19 +351,22 @@ class Park(unittest.TestCase):
 
 
 class Routed(unittest.TestCase):
-    def test_finds_what_the_last_two_days_logged_and_nothing_else(self):
+    def test_finds_what_the_last_seven_days_logged_and_nothing_else(self):
+        # Seven, as long as an item stays open: with two, an ask answered on the 18th was routed again.
         link = "https://github.com/acme/app/pull/12"
         with Env(now="2026-10-21T17:00:00Z") as env:
             (env.state / "log").mkdir(parents=True)
             (env.state / "log" / "2026-10-20.md").write_text(f"- 16:10 routed {link} to app-session\n- 16:11 held a draft\n")
             (env.state / "log" / "2026-10-18.md").write_text(f"- 09:00 routed {link} to app-session\n")
+            (env.state / "log" / "2026-10-14.md").write_text(f"- 09:00 routed {link} to app-session\n")
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 rc = hub.main(["routed", link])
             self.assertEqual(rc, 0)
             self.assertEqual(out.getvalue().splitlines(),
                              [f"2026-10-20 - 16:10 routed {link} to app-session",
-                              f"routed: 1 line(s) in the last 2 days mention '{link}'"])
+                              f"2026-10-18 - 09:00 routed {link} to app-session",
+                              f"routed: 2 line(s) in the last 7 days mention '{link}'"])
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(hub.main(["routed", "acme/app#99"]), 1)
 

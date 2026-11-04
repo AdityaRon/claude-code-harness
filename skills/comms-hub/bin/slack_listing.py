@@ -10,7 +10,10 @@ string `ts`; a reply whose `thread_ts` differs from its `ts` is skipped), the
 tool's JSON envelope around a text dump, several JSON documents in one file,
 and text: one message per line that starts with its ts, or blocks with a
 labelled ts line such as `ts: 1712345678.123456` and, when threaded, a reply
-count such as `replies: 3`. Another text shape: pass --ts-pattern and
+count such as `replies: 3`; that includes the compact page a session writes from
+its read instead of the whole read (about 100 KB a channel): one line per
+top-level message, its ts, then `N replies` where the read shows a count, and
+the page's `next_cursor: ...` when it has one. Another text shape: pass --ts-pattern and
 --replies-pattern (one group each), or set slack.listing_ts_pattern and
 slack.listing_replies_pattern in the config.
 
@@ -98,6 +101,8 @@ def _documents(text: str) -> list:
             obj, i = dec.raw_decode(text, i)
         except ValueError:
             return [text]
+        if not isinstance(obj, (dict, list)):
+            return [text]  # a ts alone on a line decodes as a number: a compact page, not JSON
         docs.append(obj)
 
 
