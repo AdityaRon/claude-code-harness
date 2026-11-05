@@ -323,8 +323,9 @@ whole context.
      `--asks <github login>` for whoever the draft asks to review when the
      config's `slack.github_logins` does not map their `<@id>`. Only PASS
      sends. FAIL: fix the shape (an unlinked PR, ticket or commit, a dash, a
-     `>`; a ticket is a key in a project some `routing` entry's `tickets`
-     names, and a hex string that is no commit goes in backticks) or send it
+     `>`; a ticket is a key in a project `slack.link_ticket_projects` lists,
+     or without that key one some `routing` entry's `tickets` names, and a
+     hex string that is no commit goes in backticks) or send it
      back; a line that calls a merged PR awaiting, or asks a reviewer for a
      review they gave at the current head, goes back to the peer (a review ask
      once went out minutes after the approval). BLOCKED: a linked PR's live

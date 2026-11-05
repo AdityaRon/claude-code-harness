@@ -61,7 +61,10 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   ack-hardcoded: check_draft.py: `ack = cfg["slack"]["ack_reaction"]` => `ack = "white_check_mark"`
   ack-colons-kept: hub.py: `.strip(":")` => ``
   tickets-unchecked: check_draft.py: `    for m in tickets.finditer(rest) if tickets else []:` => `    for m in []:`
-  tickets-unconfigured: check_draft.py: `ticket_ref([t for r in cfg["routing"] for t in r["tickets"]]))` => `None)`
+  tickets-unconfigured: check_draft.py: `ticket_ref(ticket_projects(cfg)))` => `None)`
+  link-projects-ignored: check_draft.py: `return own if own is not None else [t for r in cfg["routing"] for t in r["tickets"]]` => `return [t for r in cfg["routing"] for t in r["tickets"]]`
+  link-projects-no-fallback: check_draft.py: `return own if own is not None else [t for r in cfg["routing"] for t in r["tickets"]]` => `return own or []`
+  link-projects-empty-falls-back: check_draft.py: `return own if own is not None else` => `return own if own else`
   commits-unchecked: check_draft.py: `    for m in COMMIT.finditer(CODE.sub(" ", rest)):` => `    for m in []:`
   commit-in-a-link: check_draft.py: `    for m in COMMIT.finditer(CODE.sub(" ", rest)):` => `    for m in COMMIT.finditer(text):`
   commit-without-a-digit: check_draft.py: `(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])` => `(?=[0-9a-f]*[a-f])`
@@ -196,6 +199,21 @@ class Shape(unittest.TestCase):
             self.assertEqual(rc, 0, f"{text}: {out}")
         with Env() as env:
             self.assertEqual(gate(env, "PROJ-12 is fixed\n", "--top-level", gh=fake())[0], 0, "no routing tickets, no keys")
+
+    def test_its_own_ticket_projects_replace_the_routing_entries(self):
+        # SEC is in slack.link_ticket_projects and in no routing entry: its keys still need a link.
+        routed = CONFIG + '[[routing]]\nsession = "app-session"\nrepos = ["acme/app"]\ntickets = ["PROJ"]\n'
+        def listing(value):
+            return routed.replace('my_user_id = "user-me"', f'my_user_id = "user-me"\nlink_ticket_projects = {value}')
+        with Env(config=listing('["SEC"]')) as env:
+            rc, out = gate(env, "SEC-4 is fixed\n", "--top-level", gh=fake())
+            self.assertEqual(rc, 1, out)
+            self.assertIn("FAIL: ticket 'SEC-4' is not a link", out)
+            rc, out = gate(env, "PROJ-12 is fixed\n", "--top-level", gh=fake())
+            self.assertEqual(rc, 0, f"the list replaces the routing entries' projects: {out}")
+        with Env(config=listing("[]")) as env:
+            rc, out = gate(env, "PROJ-12 and SEC-4 are fixed\n", "--top-level", gh=fake())
+            self.assertEqual(rc, 0, f"an empty list checks no project: {out}")
 
     def test_token_shape_fails(self):
         rc, out = self.check("token xoxb-" + "1" * 12 + "-abcdefghij\n")

@@ -116,8 +116,16 @@ def thin_bullets(text: str) -> list[str]:
     return out
 
 
+def ticket_projects(cfg: dict) -> list[str]:
+    """The projects whose ticket keys a message must link: slack.link_ticket_projects,
+    or without it every routing entry's tickets, which leave out a project no
+    session owns."""
+    own = cfg["slack"].get("link_ticket_projects")
+    return own if own is not None else [t for r in cfg["routing"] for t in r["tickets"]]
+
+
 def ticket_ref(prefixes) -> re.Pattern | None:
-    """A ticket key in one of the routing table's projects. From the config: a bare
+    """A ticket key in one of the configured projects. From the config: a bare
     [A-Z]+-N pattern would fail SHA-256 and UTF-8."""
     return re.compile(rf"(?<![\w/.-])(?:{'|'.join(map(re.escape, prefixes))})-\d+(?![\w-])") if prefixes else None
 
@@ -299,8 +307,7 @@ def gate(args, cfg, gh) -> int:
             print(f"FAIL: {ts!r} is not a Slack ts (1234567890.123456)")
             return 2
     target = f"reply:{args.reply}" if args.reply else "top-level"
-    problems = shape_problems(text, int(cfg["slack"]["max_chars"]),
-                              ticket_ref([t for r in cfg["routing"] for t in r["tickets"]]))
+    problems = shape_problems(text, int(cfg["slack"]["max_chars"]), ticket_ref(ticket_projects(cfg)))
     if args.answers and args.reply != max(args.answers, key=ts_key):
         problems.append(f"--reply {args.reply} is not the newest message the draft answers "
                         f"({max(args.answers, key=ts_key)}): a combined reply threads under the newest")

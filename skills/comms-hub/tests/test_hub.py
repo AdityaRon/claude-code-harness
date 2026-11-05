@@ -59,6 +59,8 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   days-unvalidated: hub.py: `or any(d not in DAYS for d in a["days"]):` => `or False:`
   mid-hour-window: hub.py: `if not re.fullmatch(r"([01]\d|2[0-3]):00|24:00", str(a[k]))` => `if False`
   cadence-unvalidated: hub.py: `if a["every_minutes"] not in CADENCES:` => `if False:`
+  link-projects-unvalidated: hub.py: `if projects is not None and not keys:` => `if False:`
+  link-projects-lowercase-ok: hub.py: `re.fullmatch(r"[A-Z][A-Z0-9_]+", t)` => `True`
   ack-unvalidated: hub.py: `if not re.fullmatch(r"[\w+'.-]+", ack):` => `if False:`
   control-not-earlier: hub.py: `since -= dt.timedelta(days=CONTROL_DAYS)` => `pass`
   queries-any-flag: hub.py: `if argv[1:] not in ([], ["--control"]):` => `if False:`
@@ -224,6 +226,17 @@ class QuietHours(unittest.TestCase):
 
 
 class Config(unittest.TestCase):
+    def test_link_ticket_projects_is_a_list_of_project_keys(self):
+        def listing(value):
+            return CONFIG.replace('my_user_id = "user-me"', f'my_user_id = "user-me"\nlink_ticket_projects = {value}')
+        for bad in ('"PROJ"', '["proj"]', "[12]"):
+            with Env(config=listing(bad)), self.assertRaisesRegex(hub.ConfigError, "slack.link_ticket_projects must list"):
+                hub.load_config()
+        with Env(config=listing('["SEC", "OPS_2"]')):
+            self.assertEqual(hub.load_config()["slack"]["link_ticket_projects"], ["SEC", "OPS_2"])
+        with Env():
+            self.assertNotIn("link_ticket_projects", hub.load_config()["slack"], "unset: the routing entries' tickets")
+
     def test_defaults_and_required_keys(self):
         with Env():
             cfg = hub.load_config()

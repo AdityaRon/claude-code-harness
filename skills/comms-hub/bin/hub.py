@@ -178,6 +178,12 @@ def load_config(explicit: str | None = None) -> dict:
         raise ConfigError(f"{path}: slack.ack_reaction must be an emoji name such as white_check_mark, "
                           f"not {cfg['slack']['ack_reaction']!r}")
     cfg["slack"]["ack_reaction"] = ack
+    # Left unset, check_draft.py takes the routing entries' tickets; [] checks no project.
+    projects = cfg["slack"].get("link_ticket_projects")
+    keys = isinstance(projects, list) and all(isinstance(t, str) and re.fullmatch(r"[A-Z][A-Z0-9_]+", t) for t in projects)
+    if projects is not None and not keys:
+        raise ConfigError(f"{path}: slack.link_ticket_projects must list ticket project keys such as \"PROJ\", "
+                          f"not {projects!r}")
     q = cfg.setdefault("quiet_hours", {})
     q.setdefault("start", "19:00")
     q.setdefault("post_at", "08:30")
