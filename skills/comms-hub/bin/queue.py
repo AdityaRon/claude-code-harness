@@ -551,7 +551,7 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     cutoff = at - dt.timedelta(days=int(g["merged_days"]))
     blocked: list[str] = []
     emit(f"comms-hub queue {at:%Y-%m-%dT%H:%MZ} login={me} owners={','.join(owners)} merged_days={g['merged_days']}")
-    # How far back the mention searches must reach; the Slack pages are read without `oldest`.
+    # The previous scan, for the morning check; the mention searches keep their own reach (hub.py queries).
     stamp = hub.state_dir(cfg) / "last-scan"
     try:
         prev = hub.parse_time(stamp.read_text().strip()) if stamp.is_file() else None

@@ -34,7 +34,22 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   morning-never: hub.py: `return prev < end <= at` => `return False`
   morning-every-tick: hub.py: `return prev < end <= at` => `return True`
   routed-today-only: hub.py: `for back in range(days):` => `for back in range(1):`
-  routed-any-line: hub.py: `if text in line]` => `if True]`
+  routed-any-line: hub.py: `if any(n in line for n in needles)]` => `if True]`
+  routed-text-only: hub.py: `needles = [n for ts in slack_ts(text) for n in (ts, "p" + ts.replace(".", ""))] or [text]` => `needles = [text]`
+  routed-dotted-only: hub.py: `for n in (ts, "p" + ts.replace(".", ""))` => `for n in (ts,)`
+  routed-p-only: hub.py: `for n in (ts, "p" + ts.replace(".", ""))` => `for n in ("p" + ts.replace(".", ""),)`
+  p-path-ignored: hub.py: `found = [f"{a}.{b}" for a, b in _P_TS.findall(text)] + _DOTTED_TS` => `found = _DOTTED_TS`
+  thread-of-a-reply-ignored: hub.py: `found = [f"{a}.{b}" for a, b in _P_TS.findall(text)] + _DOTTED_TS.findall(text)` => `found = [f"{a}.{b}" for a, b in _P_TS.findall(text)] or _DOTTED_TS.findall(text)`
+  owner-never-expires: hub.py: `return isinstance(v, dict) and (parse_time(v.get("at")) or cutoff) > cutoff` => `return isinstance(v, dict)`
+  owner-unprinted: hub.py: `owner = thread_owner(cfg, text)` => `owner = None`
+  owner-any-ts: hub.py: `not re.fullmatch(r"\d{10}\.\d{6}", argv[2]) or ` => `False or `
+  reach-from-full-scan: hub.py: `last = parse_time(_record(cfg, "tick.json").get("mentions"))` => `last = parse_time(_record(cfg, "tick.json").get("full"))`
+  reach-no-overlap: hub.py: `return last - REACH_OVERLAP` => `return last`
+  reach-default-today: hub.py: `day = at.astimezone(zone(cfg)).date() - dt.timedelta(days=1)` => `day = at.astimezone(zone(cfg)).date()`
+  reach-short-recorded: hub.py: `dt.timezone.utc)] if t > reach]` => `dt.timezone.utc)] if False]`
+  reach-thread-ts: hub.py: `m = _P_TS.search(hit)` => `m = re.search(r"thread_ts=(\d{10})\.(\d{6})", hit) or _P_TS.search(hit)`
+  reach-future-ok: hub.py: `or started > now() + dt.timedelta(minutes=1)` => ``
+  since-ignores-reach: hub.py: `return min(local_now(cfg).date() - dt.timedelta(days=2), reach.astimezone(zone(cfg)).date() - dt.timedelta(days=1))` => `return local_now(cfg).date() - dt.timedelta(days=2)`
   routed-two-days: hub.py: `def routed(cfg: dict, text: str, days: int = OPEN_DAYS)` => `def routed(cfg: dict, text: str, days: int = 2)`
   known-bots-ignored: hub.py: `or name.lower() in KNOWN_BOTS` => `or False`
   feedback-undated: hub.py: `f.write(f"- {local_now(cfg):%Y-%m-%d %H:%M} {text}\n")` => `f.write(f"- {text}\n")`
@@ -78,6 +93,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
 import contextlib
 import datetime as dt
 import io
+import json
 import os
 import re
 import stat
@@ -315,9 +331,68 @@ class MentionQueries(unittest.TestCase):
         out = io.StringIO()
         with Env(now="2026-10-22T03:00:00Z"), contextlib.redirect_stdout(out):
             self.assertEqual(hub.main(["queries"]), 0)
-        self.assertEqual(out.getvalue().splitlines(), [
+        self.assertEqual(out.getvalue().splitlines()[:3], [
             "<@user-me> after:2026-10-19", "to:<@user-me> after:2026-10-19",
             "with:<@user-me> is:thread after:2026-10-19"])
+
+    def queries(self, *args, now=None):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"COMMS_HUB_NOW": now} if now else {}), contextlib.redirect_stdout(out):
+            rc = hub.main(["queries", *args])
+        return rc, out.getvalue().splitlines()
+
+    def test_the_searches_page_back_to_where_the_last_complete_ones_started(self):
+        # One page of the with: search once held only the last hour, and nothing said the rest was unread.
+        tue_0900, mon_2300, mon_2200, mon_2000 = "1792512000.000100", "1792476000.000100", "1792472400.000100", "1792465200"
+        perma = "https://example.slack.com/archives/chan-one/p{}?thread_ts=" + mon_2000 + ".000100"
+        reply, older = perma.format(tue_0900.replace(".", "")), perma.format(mon_2200.replace(".", ""))
+        with Env(now="2026-10-21T17:00:00Z") as env:
+            # A full scan's record is not the searches' own: the reach is still the start of yesterday.
+            env.state.mkdir(parents=True)
+            (env.state / "tick.json").write_text('{"full": "2026-10-21T16:00:00+00:00"}\n')
+            rc, lines = self.queries()
+            self.assertEqual(lines[3:], [
+                "reach: Tue 00:00 epoch=1792479600: page each search, newest first, until its oldest hit is at "
+                "or before this, or it runs out",
+                "then: hub.py queries --reached 1792602000 --oldest <each search's oldest hit read, its ts or "
+                "permalink, or end where it ran out>"])
+            # A search whose oldest hit is after the reach stopped short: nothing recorded.
+            rc, lines = self.queries("--reached", "1792602000", "--oldest", tue_0900, "end", older)
+            self.assertEqual((rc, lines), (1, [
+                "TRUNCATED: the mention search stopped at Tue 09:00, after the reach Tue 00:00: read its next page, "
+                "or log the mentions as truncated",
+                "mentions: not recorded; the next tick reaches back to Tue 00:00 again"]))
+            # A reply's permalink counts by its own ts, not its thread's, which is older.
+            rc, lines = self.queries("--reached", "1792602000", "--oldest", mon_2300, "end", reply)
+            self.assertEqual(rc, 1, lines)
+            self.assertIn("TRUNCATED: the with: search stopped at Tue 09:00", lines[0])
+            self.assertNotIn("mentions", json.loads((env.state / "tick.json").read_text()))
+            rc, lines = self.queries("--reached", "1792602000", "--oldest", mon_2300, "end", older)
+            self.assertEqual((rc, lines), (0, [
+                "mentions: every search reached Tue 00:00; the next tick reaches back to 09:55"]))
+            self.assertEqual(json.loads((env.state / "tick.json").read_text()),
+                             {"full": "2026-10-21T16:00:00+00:00", "mentions": "2026-10-21T17:00:00+00:00"})
+            # The next tick reaches back to that start, less the overlap; `after:` stays two days back.
+            rc, lines = self.queries(now="2026-10-21T17:30:00Z")
+            self.assertEqual(lines[0], "<@user-me> after:2026-10-19")
+            self.assertTrue(lines[3].startswith("reach: 09:55 epoch=1792601700:"), lines)
+
+    def test_after_a_weekend_the_searches_date_back_to_the_day_before_the_reach(self):
+        with Env(now="2026-10-26T15:07:00Z") as env:
+            env.state.mkdir(parents=True)
+            (env.state / "tick.json").write_text('{"mentions": "2026-10-24T00:30:00+00:00"}\n')
+            rc, lines = self.queries()
+            self.assertEqual(lines[:3], ["<@user-me> after:2026-10-22", "to:<@user-me> after:2026-10-22",
+                                         "with:<@user-me> is:thread after:2026-10-22"])
+            self.assertTrue(lines[3].startswith("reach: Fri 17:25 "), lines)
+
+    def test_a_reach_claim_it_cannot_read_records_nothing(self):
+        with Env(now="2026-10-21T17:00:00Z") as env:
+            for args in (["x", "--oldest", "end", "end", "end"], ["1792602000", "--oldest", "end", "end"],
+                         ["1792605600", "--oldest", "end", "end", "end"],   # an hour ahead: not a `then:` line
+                         ["1792602000", "--oldest", "end", "yesterday", "end"]):
+                self.assertEqual(self.queries("--reached", *args)[0], 2, args)
+            self.assertFalse((env.state / "tick.json").exists())
 
     def test_the_control_is_the_same_searches_a_week_further_back(self):
         out = io.StringIO()
@@ -382,6 +457,51 @@ class Routed(unittest.TestCase):
                               f"routed: 2 line(s) in the last 7 days mention '{link}'"])
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(hub.main(["routed", "acme/app#99"]), 1)
+
+    def routed(self, text, now=None):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"COMMS_HUB_NOW": now} if now else {}), contextlib.redirect_stdout(out):
+            rc = hub.main(["routed", text])
+        return rc, out.getvalue().splitlines()
+
+    def test_a_slack_thread_matches_in_every_form_the_log_holds_it(self):
+        # Asked by permalink, it printed nothing for a thread it had routed and sent into.
+        thread, perma = "1792600000.000100", "https://example.slack.com/archives/chan-two/p1792600000000100"
+        log = (f"- 09:00 sent acme/app#12 chan-two: reply | id=1792600500.000200 target=reply:{thread} sha256=abc [1021.1]\n"
+               f"- 09:05 routed chan-two {thread} (app-session): a reviewer asked when it merges [1021.2]\n"
+               f"- 09:06 routed {perma} (app-session): a second reply [1021.3]\n"
+               "- 09:07 routed chan-two 1792699999.000100 (ops-session): another thread [1021.4]\n")
+        with Env(now="2026-10-21T17:00:00Z") as env:
+            (env.state / "log").mkdir(parents=True)
+            (env.state / "log" / "2026-10-21.md").write_text(log)
+            for text in (f"https://example.slack.com/archives/chan-two/p1792600900000300?thread_ts={thread}&cid=chan-two",
+                         perma, f"chan-two {thread}", thread):
+                rc, lines = self.routed(text)
+                self.assertEqual((rc, [ln.split(" [")[-1] for ln in lines[:-1]]), (0, ["1021.1]", "1021.2]", "1021.3]"]),
+                                 text)
+            self.assertEqual(self.routed("1792699999.000100")[1][0], "2026-10-21 " + log.splitlines()[3])
+
+    def test_the_peer_that_drafted_into_a_thread_owns_its_replies_for_two_weeks(self):
+        thread = "1792600000.000100"
+        reply = f"https://example.slack.com/archives/chan-two/p1792600900000300?thread_ts={thread}&cid=chan-two"
+        with Env(now="2026-10-21T17:00:00Z") as env:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(hub.main(["owner", "chan-two", thread, "app-session"]), 0)
+                self.assertEqual(hub.main(["owner", "chan-two", "1792600000", "app-session"]), 2)
+                self.assertEqual(hub.main(["owner", "chan-two", thread]), 2)
+            self.assertIn(f"owner: app-session owns the replies in chan-two {thread} for 14 days", out.getvalue())
+            self.assertEqual(self.routed(reply), (0, [
+                f"routed: 0 line(s) in the last 7 days mention '{reply}'",
+                "owner: app-session drafted the hub's last message in this thread (10:00), so its replies route there"]))
+            self.assertEqual(self.routed("1792699999.000100")[0], 1)
+            # 13 days on it still owns them; 15 days on, no one does, and a new owner drops the stale entry.
+            self.assertEqual(self.routed(thread, now="2026-11-03T17:00:00Z")[0], 0)
+            self.assertEqual(self.routed(thread, now="2026-11-05T17:00:00Z")[0], 1)
+            with mock.patch.dict(os.environ, {"COMMS_HUB_NOW": "2026-11-05T17:00:00Z"}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(hub.main(["owner", "chan-two", "1793900000.000100", "ops-session"]), 0)
+            self.assertEqual(list(json.loads((env.state / "threads.json").read_text())), ["chan-two 1793900000.000100"])
 
 
 class TmpDir(unittest.TestCase):

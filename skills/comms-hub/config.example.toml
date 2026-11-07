@@ -57,7 +57,7 @@ start = "08:00"                # whole hours: a cron hour field cannot start mid
 end = "18:00"                  # no tick starts at or after this time
 every_minutes = 30             # 10, 15, 20, 30 or 60; ticks run at 7 past, then every_minutes on
 review_margin_minutes = 120    # an INBOUND reviewer does not start this close to `end`; the next window reviews it
-full_scan_minutes = 120        # watched channels and mention searches: the window's first tick, then this often
+full_scan_minutes = 120        # watched channels: the window's first tick, then this often (mention searches run every tick)
 
 [session]
 # What `hub.py launch` starts the comms session with. A compaction leaves the

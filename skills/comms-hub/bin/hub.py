@@ -20,10 +20,23 @@ review state and CI state. Imported by the scripts beside it; run directly:
                       what TEXT may not hold moved to the detail, and a warning on stderr
   hub.py panel        what the comms panel draws, as JSON
   hub.py queries [--control]
-                      the three Slack mention searches, dated two days back; --control: the
-                      same a week further back, which an empty search needs before it is quiet
+                      the three Slack mention searches, dated two days back or the day before
+                      their reach if that is earlier, then the reach: how far back each must
+                      page, the start of the last searches that all got there, less 5 minutes;
+                      --control: the same searches a week further back, which an empty search
+                      needs before it is quiet
+  hub.py queries --reached EPOCH --oldest HIT HIT HIT
+                      the searches printed at EPOCH got back to their reach: each HIT, the oldest
+                      hit read of one search in the printed order (its ts or permalink), or
+                      `end` where it ran out, is at or before it. Only then is EPOCH the next
+                      tick's reach; else TRUNCATED (exit 1) and the reach stays
   hub.py routed TEXT  the log lines of the last seven days (as long as an item stays open) that
-                      mention TEXT (a link, a key); exit 1 if none
+                      mention TEXT (a link, a key, or a Slack thread as a permalink, `CHANNEL TS`
+                      or a ts, matched in each form the log holds a thread), and `owner:`, the
+                      session that owns the replies in that thread; exit 1 if neither
+  hub.py owner CHANNEL TS PEER
+                      PEER owns the replies in the thread at TS for 14 days: what --record-sent
+                      records for a send it knows the thread of, by hand for one it does not
   hub.py feedback TEXT  append a dated correction to feedback.md, for the next change to the skill
   hub.py park [REF [WHY]]
                       keep a PR (owner/repo#N or its link) off the panel and out of the scan's
@@ -567,6 +580,112 @@ def mention_queries(uid: str, since: dt.date) -> list[str]:
 # rows: a filter Slack cannot read also returns nothing (an epoch filter once
 # returned 0). A week, so a Monday's control reaches past the weekend.
 CONTROL_DAYS = 7
+# The searches reach back to where the last complete ones started, less this,
+# so a reply Slack had not indexed when they ran is still found. A guard, not a
+# measured lag; a hit seen twice is caught by `routed`.
+REACH_OVERLAP = dt.timedelta(minutes=5)
+MENTION_SEARCHES = ("the mention search", "the to: search", "the with: search")
+
+
+def mention_reach(cfg: dict, at: dt.datetime) -> dt.datetime:
+    """How far back this tick's mention searches page: where the last searches
+    that all got back to their own reach started, less REACH_OVERLAP; with none
+    recorded, the start of yesterday. One page of the with: search once held only
+    the last hour, and nothing said the rest was unread. Only `queries --reached`
+    records it, never a tick's start, so a tick that ends before its searches
+    leaves the reach where it was."""
+    last = parse_time(_record(cfg, "tick.json").get("mentions"))
+    if last is None:
+        day = at.astimezone(zone(cfg)).date() - dt.timedelta(days=1)
+        return dt.datetime.combine(day, dt.time(0), tzinfo=zone(cfg))
+    return last - REACH_OVERLAP
+
+
+def mention_since(cfg: dict, reach: dt.datetime) -> dt.date:
+    """The searches' `after:` day: two days back, or the day before the reach when
+    that is earlier, as on a Monday reaching back to Friday."""
+    return min(local_now(cfg).date() - dt.timedelta(days=2), reach.astimezone(zone(cfg)).date() - dt.timedelta(days=1))
+
+
+def hit_ts(hit: str) -> str | None:
+    """A search hit's own ts, from the ts or its permalink's `p` path (a reply's
+    permalink also names its thread, which is older)."""
+    m = _P_TS.search(hit)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}"
+    return hit if re.fullmatch(r"\d{10}\.\d{6}", hit) else None
+
+
+def reached_cmd(cfg: dict, argv: list[str]) -> int:
+    """`queries --reached EPOCH --oldest HIT HIT HIT`: the next tick's reach moves to
+    EPOCH only when every search got back to this one's."""
+    hits = argv[2:]
+    started = None
+    if len(argv) == 5 and argv[1] == "--oldest" and argv[0].isdigit():
+        started = dt.datetime.fromtimestamp(int(argv[0]), dt.timezone.utc)
+    if started is None or started > now() + dt.timedelta(minutes=1) or any(h != "end" and not hit_ts(h) for h in hits):
+        print("usage: hub.py queries --reached EPOCH --oldest HIT HIT HIT: EPOCH from the line `queries` printed, "
+              "then for each search in its order the oldest hit read (its ts or permalink), or end where it ran out")
+        return 2
+    reach = mention_reach(cfg, started)
+    short = [(name, t) for name, h in zip(MENTION_SEARCHES, hits) if h != "end"
+             for t in [dt.datetime.fromtimestamp(float(hit_ts(h)), dt.timezone.utc)] if t > reach]
+    for name, t in short:
+        print(f"TRUNCATED: {name} stopped at {_when(cfg, t)}, after the reach {_when(cfg, reach)}: read its next "
+              "page, or log the mentions as truncated")
+    if short:
+        print(f"mentions: not recorded; the next tick reaches back to {_when(cfg, reach)} again")
+        return 1
+    (state_dir(cfg) / "tick.json").write_text(json.dumps({**_record(cfg, "tick.json"),
+                                                          "mentions": started.isoformat()}) + "\n")
+    print(f"mentions: every search reached {_when(cfg, reach)}; the next tick reaches back to "
+          f"{_when(cfg, started - REACH_OVERLAP)}")
+    return 0
+
+
+# A thread the hub sent into for a peer is that peer's this long after the last
+# send: its replies route back to it. A lookup, not a read, so no tick pays for it.
+THREAD_DAYS = 14
+_P_TS = re.compile(r"/p(\d{10})(\d{6})(?!\d)")
+_DOTTED_TS = re.compile(r"(?<![\d.])\d{10}\.\d{6}(?!\d)")
+
+
+def slack_ts(text: str) -> list[str]:
+    """Every Slack ts `text` names, dotted: a permalink's `p` path, and any
+    `1234567890.123456`, which a reply's permalink holds as its `thread_ts=`."""
+    found = [f"{a}.{b}" for a, b in _P_TS.findall(text)] + _DOTTED_TS.findall(text)
+    return list(dict.fromkeys(found))
+
+
+def thread_owners(cfg: dict) -> dict[str, dict]:
+    """The threads a peer owns the replies of, sent into in the last THREAD_DAYS days."""
+    try:
+        d = json.loads((state_dir(cfg) / "threads.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    cutoff = now() - dt.timedelta(days=THREAD_DAYS)
+
+    def live(v) -> bool:
+        try:
+            return isinstance(v, dict) and (parse_time(v.get("at")) or cutoff) > cutoff
+        except ValueError:
+            return False
+    return {k: v for k, v in d.items() if live(v)} if isinstance(d, dict) else {}
+
+
+def own_thread(cfg: dict, channel: str, ts: str, peer: str) -> None:
+    """`peer` drafted the hub's latest message in the thread at `ts`, so it owns
+    the replies: sends recorded no thread or peer, and replies in threads no
+    routing entry covers were routed from memory of who drafted what."""
+    keep = thread_owners(cfg)
+    keep[f"{channel} {ts}"] = {"channel": channel, "ts": ts, "peer": peer, "at": now().isoformat()}
+    (state_dir(cfg) / "threads.json").write_text(json.dumps(keep, indent=1) + "\n")
+
+
+def thread_owner(cfg: dict, text: str) -> dict | None:
+    """The owner of the thread `text` names, if the hub sent into it for a peer lately."""
+    owners = thread_owners(cfg).values()
+    return next((v for ts in slack_ts(text) for v in owners if v.get("ts") == ts), None)
 
 
 def append_log(cfg: dict | None, line: str) -> Path:
@@ -771,7 +890,7 @@ def _draft(path: str) -> dict:
     head, sep, body = text.partition("\n---\n")
     if not sep:
         head, body = text, ""
-    fields = dict(re.findall(r"^(to|kind|reason|needs):\s*(.+)$", head, re.M))
+    fields = dict(re.findall(r"^(to|from|kind|reason|needs):\s*(.+)$", head, re.M))
     claim = re.search(r"^- (\S+)", head.split("claims:", 1)[1], re.M) if "claims:" in head else None
     first = next((ln.strip() for ln in body.splitlines() if ln.strip()), "")
     return {**fields, "claim": claim.group(1) if claim else "", "first": first, "body": body}
@@ -1149,7 +1268,11 @@ def routed(cfg: dict, text: str, days: int = OPEN_DAYS) -> list[str]:
     """Log lines from the last `days` days that mention `text`: what was already
     routed, held or asked about, so an item is not sent to its owner twice. As
     far back as an item stays open: with two days, asks answered days before
-    were routed again."""
+    were routed again. A Slack thread matches in every form the log holds one: a
+    permalink's `p` path, or the ts dotted, as `CHANNEL TS`, `reply:TS` and
+    `id=TS` put it. Asked by permalink, it once printed nothing for a thread it
+    had routed and sent into."""
+    needles = [n for ts in slack_ts(text) for n in (ts, "p" + ts.replace(".", ""))] or [text]
     d = state_dir(cfg) / "log"
     today = local_now(cfg).date()
     out = []
@@ -1157,7 +1280,7 @@ def routed(cfg: dict, text: str, days: int = OPEN_DAYS) -> list[str]:
         day = today - dt.timedelta(days=back)
         p = d / f"{day:%Y-%m-%d}.md"
         if p.is_file():
-            out += [f"{day:%Y-%m-%d} {line}" for line in p.read_text().splitlines() if text in line]
+            out += [f"{day:%Y-%m-%d} {line}" for line in p.read_text().splitlines() if any(n in line for n in needles)]
     return out
 
 
@@ -1325,7 +1448,7 @@ def init(gh: Gh | None = None, example: Path | None = None) -> int:
 def main(argv=None, gh: Gh | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if (argv[:1] not in (["init"], ["config"], ["log"], ["panel"], ["queries"], ["routed"], ["feedback"],
-                         ["cron"], ["window"], ["trigger"], ["launch"], ["park"], ["unpark"], ["relooked"])
+                         ["cron"], ["window"], ["trigger"], ["launch"], ["park"], ["unpark"], ["relooked"], ["owner"])
             or (argv[0] in ("log", "routed", "feedback", "unpark", "relooked") and len(argv) < 2)):
         print(__doc__.split("run directly:", 1)[1].rstrip())
         return 2
@@ -1372,21 +1495,43 @@ def main(argv=None, gh: Gh | None = None) -> int:
         if not uid:
             print("config: slack.my_user_id is required for the mention searches")
             return 2
+        if argv[1:2] == ["--reached"]:
+            return reached_cmd(cfg, argv[2:])
         if argv[1:] not in ([], ["--control"]):
-            print("usage: hub.py queries [--control]")
+            print("usage: hub.py queries [--control] | --reached EPOCH --oldest HIT HIT HIT")
             return 2
-        since = local_now(cfg).date() - dt.timedelta(days=2)
+        at = now()
+        reach = mention_reach(cfg, at)
+        since = mention_since(cfg, reach)
         if argv[1:] == ["--control"]:
             since -= dt.timedelta(days=CONTROL_DAYS)
         for q in mention_queries(uid, since):
             print(q)
+        if argv[1:] == []:
+            print(f"reach: {_when(cfg, reach)} epoch={int(reach.timestamp())}: page each search, newest first, "
+                  "until its oldest hit is at or before this, or it runs out")
+            print(f"then: hub.py queries --reached {int(at.timestamp())} --oldest <each search's oldest hit read, "
+                  "its ts or permalink, or end where it ran out>")
         return 0
     if argv[0] == "routed":
-        lines = routed(cfg, " ".join(argv[1:]))
+        text = " ".join(argv[1:])
+        lines = routed(cfg, text)
         for line in lines:
             print(line)
-        print(f"routed: {len(lines)} line(s) in the last {OPEN_DAYS} days mention {' '.join(argv[1:])!r}")
-        return 0 if lines else 1
+        print(f"routed: {len(lines)} line(s) in the last {OPEN_DAYS} days mention {text!r}")
+        owner = thread_owner(cfg, text)
+        if owner:
+            print(f"owner: {owner['peer']} drafted the hub's last message in this thread "
+                  f"({_when(cfg, parse_time(owner['at']))}), so its replies route there")
+        return 0 if lines or owner else 1
+    if argv[0] == "owner":
+        if len(argv) != 4 or not re.fullmatch(r"\d{10}\.\d{6}", argv[2]) or not all(a.strip() for a in argv[1:]):
+            print("usage: hub.py owner CHANNEL TS PEER: the channel id, the thread's ts (1234567890.123456), and the "
+                  "session that owns its replies, as ListAgents names it")
+            return 2
+        own_thread(cfg, argv[1], argv[2], argv[3])
+        print(f"owner: {argv[3]} owns the replies in {argv[1]} {argv[2]} for {THREAD_DAYS} days")
+        return 0
     if argv[0] == "feedback":
         print(f"noted in {append_feedback(cfg, ' '.join(argv[1:]))}")
         return 0
