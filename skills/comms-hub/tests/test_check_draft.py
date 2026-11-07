@@ -76,6 +76,13 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   held-same-bytes-ignored: check_draft.py: `if thread in threads or message(h)[0] == data:` => `if thread in threads:`
   long-reply-ok: check_draft.py: `if args.reply and not react and words > REPLY_WORDS:` => `if False:`
   long-top-level-warned: check_draft.py: `if args.reply and not react and words > REPLY_WORDS:` => `if not react and words > REPLY_WORDS:`
+  owner-unrecorded: check_draft.py: `hub.own_thread(cfg, channel, thread, peer)` => `pass`
+  owner-header-ignored: check_draft.py: `peer = (args.peer or head.get("from", "")).strip()` => `peer = (args.peer or "").strip()`
+  owner-header-wins: check_draft.py: `peer = (args.peer or head.get("from", "")).strip()` => `peer = (head.get("from") or args.peer or "").strip()`
+  owner-from-unparsed: hub.py: `(to|from|kind|reason|needs)` => `(to|kind|reason|needs)`
+  owner-of-the-reply-not-the-thread: check_draft.py: `thread = stamp["target"].split(":", 1)[1]` => `thread = args.record_sent`
+  owner-top-level-unowned: check_draft.py: `thread = args.record_sent if stamp["send"] != "schedule" and TS.fullmatch(args.record_sent) else ""` => `thread = ""`
+  owner-scheduled-id-as-thread: check_draft.py: `if stamp["send"] != "schedule" and TS.fullmatch(args.record_sent) else ""` => `if True else ""`
 """
 import contextlib
 import io
@@ -611,6 +618,53 @@ class Freshness(unittest.TestCase):
             self.assertEqual(rc, 0, out)
             self.assertTrue((env.state / "sent" / "2026-10-21" / "1761040800.000100.md").is_file(), out)
 
+
+class Owner(unittest.TestCase):
+    """Sends kept no thread or peer, so replies in threads no routing entry covers
+    were routed from memory of who drafted what."""
+
+    def head(self, where, peer="app-session"):
+        return f"comms-hub draft\nto: chan-one {where}\n" + (f"from: {peer}\n" if peer else "") + "kind: reply\n---\n"
+
+    def owner(self, ts):
+        return (hub.thread_owner(hub.load_config(), ts) or {}).get("peer")
+
+    def test_the_peer_that_drafted_a_send_owns_the_replies_in_its_thread(self):
+        parent = "1761040800.000100"
+        with Env(now=DAY) as env:
+            # A reply: its thread, owned by the header's `from:`.
+            gate(env, self.head(f"reply {parent}") + "ok\n", "--reply", parent, gh=fake())
+            rc, out = gate(env, None, "--record-sent", "1761044400.000200", "--replies", "3", "4")
+            self.assertEqual(rc, 0, out)
+            self.assertIn(f"owner: app-session owns the replies in chan-one {parent}\n", out)
+            self.assertEqual((self.owner(parent), self.owner("1761044400.000200")), ("app-session", None))
+            # A live top-level message is its own thread; --peer wins over the header.
+            gate(env, self.head("top-level") + "news\n", "--top-level", gh=fake())
+            rc, out = gate(env, None, "--record-sent", "1761044500.000300", "--peer", "ops-session")
+            self.assertIn("owner: ops-session owns the replies in chan-one 1761044500.000300\n", out)
+            self.assertEqual(self.owner("1761044500.000300"), "ops-session")
+
+    def test_a_send_with_no_peer_or_no_thread_yet_says_how_to_record_it(self):
+        parent = "1761040800.000100"
+        with Env(now=DAY) as env:
+            gate(env, self.head(f"reply {parent}", peer="") + "ok\n", "--reply", parent, gh=fake())
+            rc, out = gate(env, None, "--record-sent", "1761044400.000200", "--replies", "3", "4")
+            self.assertEqual(rc, 0, out)
+            self.assertIn("owner: none (no --peer, no `from:` in the header)", out)
+            gate(env, "ok again\n", "--reply", parent, gh=fake())
+            rc, out = gate(env, None, "--record-sent", "1761044500.000300", "--replies", "4", "5", "--peer", "app-session")
+            self.assertIn("owner: not recorded, the header has no `to:`: once you have it, "
+                          "`hub.py owner <channel> <thread ts> app-session`", out)
+            self.assertIsNone(self.owner(parent))
+            # Scheduled: a reply's thread is known now, a top-level message's ts only once it posts.
+            gate(env, self.head("top-level") + "news\n", "--top-level", gh=fake(), now=EVENING)
+            rc, out = gate(env, None, "--record-sent", "Q0001", now=EVENING)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("owner: not recorded, a scheduled message has no ts yet", out)
+            self.assertFalse((env.state / "threads.json").exists())
+            gate(env, self.head(f"reply {parent}") + "later\n", "--reply", parent, gh=fake(), now=EVENING)
+            rc, out = gate(env, None, "--record-sent", "Q0002", now=EVENING)
+            self.assertIn(f"owner: app-session owns the replies in chan-one {parent}\n", out)
 
 
 class Held(unittest.TestCase):

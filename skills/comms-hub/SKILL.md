@@ -21,6 +21,7 @@ all the drafts you hold:
 ```
 comms-hub draft
 to: <channel id> reply <thread ts>      (or: to: <channel id> top-level)
+from: <your session's name, as ListAgents lists it>
 kind: reply | react
 claims:
 - <each fact the message states> | <its source: PR URL, ticket key, page URL and version>
@@ -36,7 +37,9 @@ ts as for a reply. The review on GitHub is the answer; Slack carries only what
 GitHub can't (a decision, merge order, a hold, a question not on the PR, a
 review not posted yet). `fold-in: expected` means more is coming for the same
 thread (a CI run, an answer you are waiting on). The comms session replies with
-the sent ts, the scheduled id, the reaction, or why it held the draft.
+the sent ts, the scheduled id, the reaction, or why it held the draft. Once it
+sends, you own that thread's replies for two weeks: the comms session routes
+each one back to you.
 
 ## Setup, once per machine
 
@@ -145,7 +148,8 @@ When it prints `scan: full`, run CronList too, then
 `PY B/hub.py trigger --live "<the tick's expression>"`: a MISMATCH, RENEW,
 ZONE or NONE line says what to delete and create (Claude Code deletes a
 recurring task 7 days after it was created, so without RENEW the loop dies
-weekly). With `scan: quick`, step 2 reads the DM only.
+weekly). With `scan: quick`, step 2 reads the DM and runs the mention
+searches; the watched channels wait for a full scan.
 
 **Fail fast.** If the tick's first call out (the scan, or the first Slack
 read) fails, times out, or gets no permission verdict, run
@@ -268,11 +272,16 @@ whole context.
      that name the user: a reply count that moved is a reply someone may be
      waiting on. A top-level post that names nobody is an event for the
      `routing` entry whose `channels` holds the channel (step 3).
-   - With `scan: full` only, mentions: three searches, not one, each sorted by time: the queries
-     `PY B/hub.py queries` prints (`<@my_user_id>`, `to:<@my_user_id>` and
-     `with:<@my_user_id> is:thread`, each `after:` two days back). Each of the
-     last two once caught a reply the others missed, one under a week-old
-     thread. Send each printed line whole as the search's query text (the
+   - Mentions, on every tick, quick ones too: three searches, not one, each
+     sorted by time: the three query lines `PY B/hub.py queries` prints
+     (`<@my_user_id>`, `to:<@my_user_id>` and `with:<@my_user_id> is:thread`,
+     each `after:` two days back, or the day before the reach when that is
+     earlier). Each of the last two once caught a reply the others missed,
+     one under a week-old thread. A quick tick that read only the DM once
+     missed six replies, none naming the user, in two threads the hub had
+     posted in, which the with: search found, and only a search finds a reply
+     under a DM thread too old for the DM's first page. Send each query line
+     whole as the search's query text (the
      Slack MCP's `natural_language_query`), never in a filters field: a bare
      `<@my_user_id>` sent as a filter ran an empty search, which listed the
      workspace's newest posts, alerts and webhooks, none naming the user.
@@ -286,18 +295,36 @@ whole context.
      ambiguous. An empty search counts as quiet only when the same query from
      `PY B/hub.py queries --control` (a week further back) returns rows (for
      the bare search, rows holding `<@my_user_id>`): a misfired control
-     returns rows too. Ask for the smallest page, since one such row proves it. Empty
-     too, the search is not working, so say mentions are unknown, never quiet. The newest hit of each shows how far it
-     reached; if it is older than the last tick, say the search may not have
-     reached.
-3. **Route** every event: a review, a comment, a Slack reply. The owner is the
+     returns rows too. Ask the control for the smallest page, since one such
+     row proves it. Empty too, the search is not working, so say mentions are
+     unknown, never quiet.
+     Then check each search reached far enough: one page of the with: search
+     once held only the last hour, and nothing said the rest was unread. The
+     `reach:` line `queries` prints is where the last searches that all got
+     back started, less 5 minutes. Read each search's pages, newest first,
+     until its oldest hit is at or before the reach, or it has no next page.
+     Then run the `then:` line with each search's oldest hit read (its ts or
+     permalink), in the printed order, or `end` for one that ran out: the
+     reach moves up for the next tick only when every search got back to it.
+     TRUNCATED means one stopped short: read its next page, and if there is
+     none to read, log `--kind blocked --needs-user "mention search truncated"`
+     and say mentions are truncated, never quiet. A tick that ends before this
+     records nothing, so the next tick searches the gap too.
+3. **Route** every event: a review, a comment, a Slack reply. For a Slack
+   reply, first `PY B/hub.py routed <its permalink>`: an `owner:` line names
+   the session that drafted the hub's last message in that thread, and that
+   session owns the replies (replies in threads no routing entry covers were
+   once routed from memory of who drafted what). Otherwise the owner is the
    `routing` entry (`PY B/hub.py config` prints them) whose `repos` holds the
    PR's repo, whose `tickets` holds the ticket key's prefix, or whose
    `channels` holds the Slack channel of a post that names nobody. Run ListAgents
    now, at routing time, and confirm the owner is listed. Before messaging an
    item, check the owner is not already on it: `PY B/hub.py routed <link>`
    prints what the last seven days' log routed, held or asked about it (with
-   two, asks answered days before were routed again), and
+   two, asks answered days before were routed again). A Slack thread matches
+   as a permalink, `<channel> <ts>` or a bare ts, whichever form the log holds
+   (asked by permalink, it once printed nothing for a thread it had routed and
+   sent into), and
    ListAgents shows what each session is on; an item routed with nothing new
    since is not routed again. For a review, read the whole conversation, not
    the summary: the review's inline threads too (an empty-bodied approval
@@ -377,17 +404,24 @@ whole context.
      tick gates it again. When the header prints `morning:`, what was
      scheduled has posted: read each target thread, confirm it landed (a
      reply: the thread's reply count moved since it was scheduled), and log
-     `--kind sent` for each, or report one that did not land.
+     `--kind sent` for each, or report one that did not land. A top-level
+     one has a ts now: `PY B/hub.py owner <channel id> <its ts> <peer>`, so
+     its replies route back to the peer that drafted it.
    - Confirm the send: the send tool says OK either way. For a reply, re-read
      the parent thread and compare its reply count with the one read before
      the send; for a top-level message, re-read the channel's first page and
      find the ts. Then
-     `PY B/check_draft.py <file> --record-sent <message ts or scheduled id> --replies <before> <after> --context "<who asked what>"`
+     `PY B/check_draft.py <file> --record-sent <message ts or scheduled id> --replies <before> <after> --context "<who asked what>" --peer <the session that sent the draft>`
      keeps a copy and logs it; it refuses a count that did not move. A
      scheduled reply cannot move the count before it posts: record it without
      `--replies`, and with `--post-at HH:MM` when you scheduled it later than
      the gate's `post_at`. `--context` is the panel's text for it: 80
-     characters, names in words. Answer the peer with the ts or id.
+     characters, names in words. `--peer` (the header's `from:` when left
+     out) makes that session the owner of the thread's replies for two weeks
+     (step 3), and its `owner:` line says so; leave it out for a message the
+     user asked for themselves. The owner comes from the header's `to:`
+     channel: without one, `owner:` names the `hub.py owner` command to run.
+     Answer the peer with the ts or id.
 5. **Log**: one event per item, which the panel shows as one line:
    `PY B/hub.py log --kind <kind> [--ref <PR or ticket link>] [--target <channel id>] [--who <person or session>] [--detail "<the rest>"] "<what, in words>"`.
    The text is at most 80 characters with no ids, ts, hashes, links or time:
@@ -466,7 +500,8 @@ whole context.
 | `held/<peer>-<thread ts>.md` | each draft held between ticks, with its header; the scan counts them |
 | `preflight.json` | step 0's record of this session's tools and trigger |
 | `trigger.json` | the tick's trigger and when it was created, for its 7-day expiry |
-| `tick.json` | when the last full scan finished: `queue.py scan` records it, or `window --full-done` by hand |
+| `tick.json` | when the last full scan finished (`queue.py scan` records it, or `window --full-done` by hand), and where the last mention searches that all reached started (`queries --reached`) |
+| `threads.json` | each thread the hub sent into for a peer in the last two weeks, with that peer, which owns its replies |
 | `last-scan` | when the last scan started, BLOCKED or not; the panel calls an older `prs.json` stale |
 | `prs.json` | the last scan that did not end BLOCKED: each open PR I review or authored, which the panel's PRS section reads |
 | `prs-history.jsonl` | what changed between two `prs.json`, one row each (reviewed, approved, merged, by day), for the panel's last five days |

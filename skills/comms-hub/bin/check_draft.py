@@ -6,9 +6,12 @@ same turn.
                                                    shape, live PR state, send mode; records a pass
   check_draft.py FILE --assert-fresh [--max-age S]  the bytes are the ones that passed, recently
   check_draft.py FILE --record-sent ID [--replies BEFORE AFTER] [--context TEXT] [--post-at HH:MM]
+                 [--peer SESSION]
                                                    after sending: keep a copy, log it, retire the pass;
                                                    --context: who asked what, the headline the panel shows
-                                                   (100 characters, names in words, no ids or links)
+                                                   (80 characters, names in words, no ids or links);
+                                                   --peer (else the header's `from:`): the session that
+                                                   drafted it, which owns the replies in its thread
   check_draft.py --scheduled                       scheduled messages not yet posted, with the copy to re-gate
   check_draft.py --withdrawn ID [--context WHY]    a scheduled message deleted before it posted
 
@@ -472,6 +475,7 @@ def record_sent(args, cfg) -> int:
     hub.log_event(cfg, verb, text, ref=first_ref(stamp), target=hub._draft(args.file).get("to", "").split(" ")[0],
                   detail=detail)
     print(f"recorded {verb} {args.record_sent}: sent/{day}/{safe}.md")
+    note_owner(args, cfg, stamp)
     for h in covered(cfg, stamp, data):
         shutil.move(h, d / f"held-{h.name}")
         hub.log_event(cfg, "released", "held draft went out", ref=first_ref(stamp),
@@ -479,6 +483,28 @@ def record_sent(args, cfg) -> int:
                       detail=f"id={args.record_sent} file={h.name}")
         print(f"released held/{h.name}: it went out with this message (kept as sent/{day}/held-{h.name})")
     return 0
+
+
+def note_owner(args, cfg, stamp: dict) -> None:
+    """The peer that drafted a send owns the replies in its thread, so one there
+    routes back to it. Sends kept no thread or peer, and replies in threads no
+    routing entry covers were routed from memory, or late."""
+    head = hub._draft(args.file)
+    channel = (head.get("to", "").split() or [""])[0]
+    peer = (args.peer or head.get("from", "")).strip()
+    if stamp["target"].startswith("reply:"):
+        thread = stamp["target"].split(":", 1)[1]
+    else:
+        thread = args.record_sent if stamp["send"] != "schedule" and TS.fullmatch(args.record_sent) else ""
+    if not peer:
+        print("owner: none (no --peer, no `from:` in the header): a reply in this thread routes by repo, ticket "
+              "or channel, or is asked about")
+    elif channel and thread:
+        hub.own_thread(cfg, channel, thread, peer)
+        print(f"owner: {peer} owns the replies in {channel} {thread}")
+    else:
+        print(f"owner: not recorded, {'the header has no `to:`' if not channel else 'a scheduled message has no ts yet'}"
+              f": once you have it, `hub.py owner <channel> <thread ts> {peer}`")
 
 
 def covered(cfg, stamp: dict, data: bytes) -> list:
@@ -550,6 +576,8 @@ def main(argv=None, gh=None) -> int:
     ap.add_argument("--context", metavar="TEXT", help="who asked what, in one line, for the log")
     ap.add_argument("--withdrawn", metavar="ID", help="a scheduled message deleted before it posted")
     ap.add_argument("--post-at", metavar="HH:MM", help="with --record-sent: the time it was scheduled for, if later")
+    ap.add_argument("--peer", metavar="SESSION", help="with --record-sent: the session that drafted it, which owns "
+                                                      "the replies in its thread; the header's `from:` otherwise")
     ap.add_argument("--config")
     args = ap.parse_args(argv)
     try:
