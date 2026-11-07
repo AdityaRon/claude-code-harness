@@ -52,7 +52,7 @@ async function snapshotOf($: EngineInterface): Promise<Snapshot> {
 async function refresh($: EngineInterface): Promise<Snapshot> {
   const next = await snapshotOf($)
   await update($, snapshot, () => next)
-  if (phones.size) $.ui.status(statusLine(next))
+  if (phones.size) $.ui.status(statusLine(next, (await read($, look)).since))
   return next
 }
 
@@ -69,17 +69,24 @@ function words(...parts: string[]): string {
   return parts.filter(Boolean).join('  ')
 }
 
-function counts(p: Panel): string {
+// What was logged since the look before the last one: the events that carry a dot.
+function freshOf(p: Panel, since: number) {
+  return p.events.filter(ev => Date.parse(ev.ts) > since)
+}
+
+// The counts lead with what is on the user, then what is new: after time away
+// the new count sat only in the last heading, off screen in a short pane.
+function counts(p: Panel, since: number): string {
   const prNeeds = (p.prs?.rows ?? []).filter(r => r.needs).length
-  return [`${p.needs.length} need you`, `${prNeeds} PRs need you`, `${p.going.length} going out`,
-          `${p.sessions.length} with sessions`, `${p.held.length} held`].join(' · ')
+  return [`${p.needs.length} need you`, `${prNeeds} PRs need you`, `${freshOf(p, since).length} new`,
+          `${p.going.length} going out`, `${p.sessions.length} with sessions`, `${p.held.length} held`].join(' · ')
 }
 
 // One line for the status line while a phone is attached.
-function statusLine(s: Snapshot): string {
+function statusLine(s: Snapshot, since: number): string {
   if (s.problem) return s.problem
   if (!s.panel) return 'Comms: reading the state'
-  return `Comms: ${counts(s.panel)} · next tick ${s.panel.next_tick} · /comms for the list`
+  return `Comms: ${counts(s.panel, since)} · next tick ${s.panel.next_tick} · /comms for the list`
 }
 
 // A section of the text below: its title, then at most its compact rows.
@@ -90,26 +97,31 @@ function lines<T>(title: string, items: T[], max: number, line: (item: T) => str
 }
 
 // The panel as text, for /comms where no pane draws: the counts, what needs
-// the user, the PRs that do, then what goes out, what is with sessions, and
-// what was logged since the look before this one.
+// the user, the PRs that do, then what goes out, what is with sessions, what
+// is held, and what was logged since the look before this one.
 function summary(s: Snapshot, since: number): string {
-  if (s.problem || !s.panel) return statusLine(s)
+  if (s.problem || !s.panel) return statusLine(s, since)
   const p = s.panel
-  const fresh = p.events.filter(ev => Date.parse(ev.ts) > since)
+  const fresh = freshOf(p, since)
   return [
-    `Comms${p.day ? ` · ${p.day}` : ''}: ${counts(p)} · next tick ${p.next_tick}`,
+    `Comms${p.day ? ` · ${p.day}` : ''}: ${counts(p, since)} · next tick ${p.next_tick}`,
     ...p.needs.map(n => `● ${words(n.ref, n.target, n.note)}: ${n.text}`),
     ...(p.prs?.rows ?? []).filter(r => r.needs).map(r => `● ${r.line}`),
+    // The status before the message, as in the pane: a phone's narrow line cuts the end.
     ...lines(`GOING OUT · ${p.going.length}`, p.going, ROWS.going,
-             g => words(g.post, g.target, g.ref, g.text, g.status)),
+             g => words(g.post, g.target, g.ref, g.status, g.text)),
     ...lines(`WITH SESSIONS · ${p.sessions.length}`, p.sessions, ROWS.sessions,
              w => words(w.who, w.ref, w.text, `since ${w.since}`)),
+    // The header counted held drafts and the text listed none.
+    ...lines(`HELD · ${p.held.length}`, p.held, ROWS.held,
+             d => words(d.ref, d.target, d.reason) + (d.text ? `: ${d.text}` : '')),
     ...lines(`SINCE YOU LOOKED · ${fresh.length} new`, fresh, ROWS.events,
              ev => words(ev.at, ev.kind, ev.ref, ev.target, ev.text)),
   ].join('\n')
 }
 
-const CI_COLOR: Record<string, string> = { green: 'success', red: 'error', pending: 'warning' }
+// Warning is what is on the user or wrong; pending is CI's to finish, so plain.
+const CI_COLOR: Record<string, string | undefined> = { green: 'success', red: 'error', pending: undefined }
 
 // A part of a PR line (they are ` · ` apart): what waits on the user in
 // warning, what is ready in success. An authored PR's decision shares the
@@ -189,7 +201,7 @@ export const register: Register = on => {
     const { full, open } = await read($, view)
     // Compact cuts a row at the pane's edge; expanded wraps it, so all of it reads.
     const cut = full ? 'wrap' : 'truncate-end'
-    const fresh = p.events.filter(ev => Date.parse(ev.ts) > since).length
+    const fresh = freshOf(p, since).length
     // A hub.py from before the PRS section prints no `prs`.
     const prs: Prs = p.prs ?? { as_of: '', age: '', stale: true, repos: [], rows: [], days: [] }
     const prNeeds = prs.rows.filter(r => r.needs).length
@@ -223,14 +235,20 @@ export const register: Register = on => {
       ]
     }
     // What a row is about on its own line, so a long message never pushes it off the edge.
+    // Dim beside its row compact; expanded, the message is what the view is for.
     function two(head: unknown, sub: string) {
-      return [head, ...(sub ? [<Text dimColor wrap={cut}>{`    ${sub}`}</Text>] : [])]
+      return [head, ...(sub ? [<Text dimColor={!full} wrap={cut}>{`    ${sub}`}</Text>] : [])]
     }
     // A draft's message: its first line compact, the whole of it expanded.
     const msg = (r: { text: string; full?: string }) => (full && r.full) || r.text
     // The strip only once something happened in it; mono so the columns line up on a desktop too.
     const days = prs.days.some(d => d.reviewed || d.approved || d.merged) ? prs.days : []
     const col = (v: string | number) => `${v}`.padStart(7)
+    // The foot is dim but for ticks missed since the last scan, a problem the user should see.
+    const foot = `next tick ${p.next_tick} · last scan: ${p.last_tick} · read ${p.read}`.split(' · ')
+    // A status is green only once checked; re-check due waits on the next tick, so plain.
+    const goingColor = (g: { status: string; warn: boolean }) =>
+      g.warn ? 'warning' : g.status.startsWith('gated') ? 'success' : undefined
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -239,11 +257,17 @@ export const register: Register = on => {
           <Box flexDirection="row" justifyContent="space-between" flexWrap="wrap" columnGap={2}>
             <Text weight="bold">{p.day ? `Comms · ${p.day}` : 'Comms'}</Text>
             {/* `last_tick` is the last scan, by hand outside the window too, so it says so. */}
-            <Text dimColor>{`next tick ${p.next_tick} · last scan: ${p.last_tick} · read ${p.read}`}</Text>
+            <Text>
+              {foot.map((part, i) => [
+                i ? <Text dimColor>{' · '}</Text> : '',
+                part.endsWith('missed since') ? <Text color="warning">{part}</Text> : <Text dimColor>{part}</Text>,
+              ])}
+            </Text>
           </Box>
           <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
             {chip(p.needs.length, 'need you', 'warning')}
             {chip(prNeeds, 'PRs need you', 'warning')}
+            {chip(fresh, 'new', 'warning')}
             {chip(p.going.length, 'going out', 'suggestion')}
             {chip(p.sessions.length, 'with sessions', 'suggestion')}
             {chip(p.held.length, 'held', 'suggestion')}
@@ -301,22 +325,18 @@ export const register: Register = on => {
               </Text>
             ))}
             {more('prs', prs.rows.length, ROWS.prs)}
-            {days.length > 0 && [
-              <Text mono dimColor>{`${'last 5 days'.padEnd(11)}${days.map(d => col(d.day)).join('')}`}</Text>,
-              ...(['reviewed', 'approved', 'merged'] as const).map(k => (
-                <Text mono>{`${k.padEnd(11)}${days.map(d => col(d[k])).join('')}`}</Text>
-              )),
-            ]}
           </Box>
         )}
 
+        {/* The status before the message: a row cut at the edge loses the message's end, not whether it was checked. */}
         {p.going.length > 0 && (
           <Box flexDirection="column">
             {section('GOING OUT', 'going', p.going, ROWS.going, g => two(
               <Text wrap={cut}>
                 <Text dimColor>{g.post}</Text>
-                {`  ${words(g.target, g.ref, full ? '' : g.text)}  `}
-                {g.warn ? <Text color="warning">{g.status}</Text> : <Text color="success">{g.status}</Text>}
+                {`  ${words(g.target, g.ref)}  `}
+                <Text color={goingColor(g)}>{g.status}</Text>
+                {full ? '' : `  ${g.text}`}
               </Text>, full ? msg(g) : ''))}
           </Box>
         )}
@@ -336,6 +356,16 @@ export const register: Register = on => {
                 {`${words(d.ref, d.target)}  `}
                 <Text dimColor>{d.reason}</Text>
               </Text>, msg(d)))}
+          </Box>
+        )}
+
+        {/* History, after what needs acting on or watching: the order the sections are listed in. */}
+        {days.length > 0 && (
+          <Box flexDirection="column">
+            <Text mono dimColor>{`${'last 5 days'.padEnd(11)}${days.map(d => col(d.day)).join('')}`}</Text>
+            {(['reviewed', 'approved', 'merged'] as const).map(k => (
+              <Text mono>{`${k.padEnd(11)}${days.map(d => col(d[k])).join('')}`}</Text>
+            ))}
           </Box>
         )}
 
