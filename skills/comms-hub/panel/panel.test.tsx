@@ -135,7 +135,11 @@ test('the summary counts each section, then what needs the user comes first', as
     const at = (s: string) => out.findIndex(t => t.includes(s))
     expect(at('Comms · Wed 21 Oct')).toBe(0)
     expect(out).toContain('next tick 10:07 · last scan: 09:45, 1 event · read 10:00')
-    for (const c of ['1 need you', '3 PRs need you', '2 going out', '1 with sessions', '0 held']) expect(out).toContain(c)
+    // What is new sits with what needs the user: in the last heading alone it was off screen in a short pane.
+    for (const c of ['1 need you', '3 PRs need you', '3 new', '2 going out', '1 with sessions', '0 held']) {
+      expect(out).toContain(c)
+    }
+    expect(at('3 new')).toBeLessThan(at('2 going out'))
     const needs = at('NEEDS YOU · 1')
     expect(needs).toBeGreaterThan(at('0 held'))
     expect(out[needs + 1]).toBe('● app #14  #team-reviews  needs your go  2h')
@@ -143,12 +147,36 @@ test('the summary counts each section, then what needs the user comes first', as
     expect(at('PRS · 5')).toBeGreaterThan(needs)
     expect(at('GOING OUT · 2')).toBeGreaterThan(at('PRS · 5'))
     expect(at('WITH SESSIONS · 1')).toBeGreaterThan(at('GOING OUT · 2'))
-    expect(at('SINCE YOU LOOKED')).toBeGreaterThan(at('WITH SESSIONS · 1'))
+    // The five days are history: after what is live, before the events.
+    expect(at('last 5 days')).toBeGreaterThan(at('WITH SESSIONS · 1'))
+    expect(at('SINCE YOU LOOKED')).toBeGreaterThan(at('last 5 days'))
     expect(at('HELD')).toBe(-1)
     expect(at('nothing needs you')).toBe(-1)
   }
   expect(await border($)).toBe('warning')
   expect(await colorOf($, /^claim moved ⚠$/)).toBe('warning')
+})
+
+// Warning is what is on the user or wrong; success, what was checked.
+test('GOING OUT puts the status before the message, and colours only what was checked or moved', async ($, on) => {
+  const recheck = { key: 'going:d', post: 'Thu 08:30', target: '#platform', ref: 'app #19',
+                    text: 'release note for the flag rollout', status: 're-check due', warn: false }
+  world(on, { now: json({ ...PANEL, going: [...PANEL.going, recheck], last_tick: '09:45, 1 event · 2 missed since' }) })
+  await $.command.run({ command: 'comms', args: '' })
+
+  const out = await texts($)
+  // Cut at the pane's edge, a row loses the end of its message, not its status.
+  expect(out).toContain('08:30  Bob DM  app #16  claim moved ⚠  a review ask not yet recorded')
+  expect(out).toContain('Thu 08:30  #platform  app #19  re-check due  release note for the flag rollout')
+  expect(await colorOf($, /^gated 09:50 ✓$/)).toBe('success')
+  expect(await colorOf($, /^claim moved ⚠$/)).toBe('warning')
+  expect(await colorOf($, /^re-check due$/)).toBeUndefined()
+  // The foot's one problem is not dim like the rest of it.
+  expect(out).toContain('next tick 10:07 · last scan: 09:45, 1 event · 2 missed since · read 10:00')
+  expect(await colorOf($, /^2 missed since$/)).toBe('warning')
+  const ui = await mounted($)
+  expect((await ui.find({ type: 'Text', text: /^next tick 10:07$/ }))?.props.dimColor).toBe(true)
+  await ui.unmount()
 })
 
 // Ages and "stale" come from hub.py as it reads, so with no turn ending they froze.
@@ -246,7 +274,8 @@ test('PRS counts each repo, marks what needs the user, and colours what waits an
   }
   expect(await colorOf($, /^ · new commits$/)).toBe('warning')
   expect(await colorOf($, /^ · approvable$/)).toBe('success')
-  expect(await colorOf($, /^ · CI pending$/)).toBe('warning')
+  // Pending is CI's to finish, not the user's: plain, so warning keeps one meaning.
+  expect(await colorOf($, /^ · CI pending$/)).toBeUndefined()
   expect(await colorOf($, /^ · CI red$/)).toBe('error')
   // An authored PR's decision shares the first part with its ref.
   expect(await colorOf($, /^app #40  approved, needs your merge$/)).toBe('warning')
@@ -313,6 +342,7 @@ test('expand shows every row and every message whole, and compact cuts them agai
   expect([toggle?.text, toggle?.props.hotkey]).toEqual(['expand', 'e'])
   expect((await compact.find({ type: 'Text', text: LONG }))?.props.wrap).toBe('truncate-end')
   expect(await compact.find({ type: 'Text', text: /next release/ })).toBeUndefined()
+  expect((await compact.find({ type: 'Text', text: /^ {4}Carol, could/ }))?.props.dimColor).toBe(true)
   await compact.unmount()
 
   await press($, 'view')
@@ -324,6 +354,9 @@ test('expand shows every row and every message whole, and compact cuts them agai
   expect((await full.find({ type: 'Text', text: /^ {4}Merged\./ }))?.text).toBe('    Merged.\n\nIt ships in the next release.')
   expect((await full.find({ type: 'Text', text: /^ {4}Bob, could/ }))?.text)
     .toBe('    Bob, could you review #15?\n\nThe tables move first.')
+  // Expanded is for reading the message: at full strength, not dim.
+  expect((await full.find({ type: 'Text', text: /^ {4}Merged\./ }))?.props.dimColor).toBe(false)
+  expect((await full.find({ type: 'Text', text: /^ {4}Carol, could/ }))?.props.dimColor).toBe(false)
   // Expanded, the toggle at the top scrolls away: the way back is at the end too, with no second hotkey.
   const end = await full.find({ type: 'Button', key: 'view-end' })
   expect([end?.text, end?.props.hotkey]).toEqual(['compact', undefined])
@@ -394,14 +427,14 @@ test('/comms where no pane draws answers with the state as text', async ($, on) 
   const r = await $.command.run({ command: 'comms', args: '' })
 
   expect(r.text).toBe([
-    'Comms · Wed 21 Oct: 1 need you · 3 PRs need you · 2 going out · 1 with sessions · 0 held · next tick 10:07',
+    'Comms · Wed 21 Oct: 1 need you · 3 PRs need you · 3 new · 2 going out · 1 with sessions · 0 held · next tick 10:07',
     '● app #14  #team-reviews  needs your go: Carol, could you review #14?',
     '● app #31  dana  commented@1111111 · new commits · CI green · approved by erin',
     '● app #32  dana  commented@2222222 · approvable · CI pending',
     '● app #40  approved, needs your merge · CI green',
     'GOING OUT · 2',
-    '  08:30  Bob DM  app #15  review ask  gated 09:50 ✓',
-    '  08:30  Bob DM  app #16  a review ask not yet recorded  claim moved ⚠',
+    '  08:30  Bob DM  app #15  gated 09:50 ✓  review ask',
+    '  08:30  Bob DM  app #16  claim moved ⚠  a review ask not yet recorded',
     'WITH SESSIONS · 1',
     '  app-session  app #16  conflicts  since 09:20',
     'SINCE YOU LOOKED · 3 new',
@@ -422,8 +455,12 @@ test('/comms as text caps each section at the pane\'s compact rows', async ($, o
   const r = await $.command.run({ command: 'comms', args: '' })
 
   const out = r.text.split('\n')
+  // The header counted a held draft and the text listed none.
+  const held = out.indexOf('HELD · 1')
+  expect(held).toBeGreaterThan(out.indexOf('WITH SESSIONS · 1'))
+  expect(out[held + 1]).toBe('  app #18  Bob DM  a fold-in is expected: Merged.')
   const at = out.indexOf('SINCE YOU LOOKED · 15 new')
-  expect(at).toBeGreaterThan(0)
+  expect(at).toBeGreaterThan(held)
   expect(out.slice(at + 1, at + 13).every(t => /^ {2}\d\d:\d\d {2}/.test(t))).toBe(true)
   expect(out[at + 13]).toBe('  +3 more')
 })
@@ -439,7 +476,7 @@ test('a phone joining pins the counts on the status line, and its leaving clears
 
   await $.session.attach({ surface: 'mobile', clientId: 'mobile:1', viewport: { columns: 40, rows: 80, isFullscreen: false } })
   expect(statuses.at(-1))
-    .toBe('Comms: 1 need you · 3 PRs need you · 2 going out · 1 with sessions · 0 held · next tick 10:07 · /comms for the list')
+    .toBe('Comms: 1 need you · 3 PRs need you · 3 new · 2 going out · 1 with sessions · 0 held · next tick 10:07 · /comms for the list')
   await $.session.detach({ surface: 'mobile', clientId: 'mobile:1', reason: 'detach' })
   expect(statuses.at(-1)).toBeUndefined()
 })
@@ -478,6 +515,7 @@ test('the unread dot clears after /comms', async ($, on) => {
   expect((await first.find({ type: 'Text', text: 'reply to carol' }))?.text.startsWith('● ')).toBe(true)
   expect((await first.findAll({ type: 'Text', text: 'SINCE YOU LOOKED · 3 new' })).length).toBe(1)
   expect((await first.find({ type: 'Text', text: /^ · 3 new$/ }))?.props.color).toBe('warning')
+  expect((await first.find({ type: 'Text', text: /^3 new$/ }))?.props.dimColor).toBeFalsy()
   await first.unmount()
 
   await $.command.run({ command: 'comms', args: '' })
@@ -485,6 +523,7 @@ test('the unread dot clears after /comms', async ($, on) => {
   expect((await again.find({ type: 'Text', text: 'reply to carol' }))?.text.startsWith('● ')).toBe(false)
   expect((await again.findAll({ type: 'Text', text: 'SINCE YOU LOOKED · 0 new' })).length).toBe(1)
   expect((await again.find({ type: 'Text', text: /^ · 0 new$/ }))?.props.color).toBeUndefined()
+  expect((await again.find({ type: 'Text', text: /^0 new$/ }))?.props.dimColor).toBe(true)
   await again.unmount()
 })
 
@@ -503,6 +542,7 @@ test('a held draft draws its row', async ($, on) => {
     expect(at).toBeGreaterThan(0)
     expect(out[at + 1]).toBe('app #18  Bob DM  a fold-in from app-session is expected')
     expect(out).toContain('    Merged.')
+    expect(out.findIndex(t => t.startsWith('last 5 days'))).toBeGreaterThan(at)
   }
 })
 
