@@ -16,16 +16,30 @@ Mutations that must turn this file red:
   bad-name-allowed: forge.py: `if not NAME.fullmatch(name):` => `if False:`
   yaml-unquoted: forge.py: `if ": " in text or " #" in text or` => `if False and`
   guards-dropped: forge.py: `f"guards = {toml_value(spec.get('guards', []))}",` => `"guards = []",`
+  compare-apply-passed: forge.py: `if any("--apply" in a for a in (args_d or []) + (args_e or [])):` => `if False:`
+  compare-headers-counted: forge.py: `if not ln.lstrip().startswith("#"))` => `if True)`
+  compare-noise-counted: forge.py: `NUMBER.findall(NOT_A_VALUE.sub(" ", body))` => `NUMBER.findall(body)`
+  compare-required-unreported: forge.py: `        if not e["guards"][g]:` => `        if False:`
+  compare-template-guards-unreported: forge.py: `if ev and not d["guards"][g]:` => `if False:`
+  compare-template-subs-unreported: forge.py: `only = sorted(e["subs"] - d["subs"])` => `only = []`
+  compare-case-arms-unread: forge.py: `subs |= {a.strip() for a in arm.split("|")}` => `pass`
+  compare-help-unguarded: forge.py: `    if not handles:` => `    if False:`
+  compare-usage-subs-unread: forge.py: `subs |= named` => `pass`
+  compare-flat-unread: forge.py: `draft_dir, existing = draft_dir.resolve(), existing.resolve()` => `pass`
 """
 from __future__ import annotations
 
+import http.server
 import io
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+import warnings
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -187,6 +201,140 @@ class MaskTest(unittest.TestCase):
             d = forge.draft("runbook", "cust-acme-alerts", "what does this alert mean", out=tmp / "d")
             _, out, _ = quiet(forge.install, d, tmp / "skills" / "x", False)
         self.assertNotIn("cust-acme", out)
+
+
+class CompileTest(unittest.TestCase):
+    def test_sources_and_every_draft_compile_without_escape_warnings(self):
+        # Python 3.12+ prints these as SyntaxWarning; 3.11 raises DeprecationWarning. Either is an error here.
+        with Tmp() as tmp:
+            files = [*SKILL.glob("bin/*.py"), *SKILL.glob("tests/*.py"), *SKILL.glob("templates/_shared/tests/*.py")]
+            for arch in ARCHETYPES:
+                d = forge.draft(arch, f"demo-{arch}", "how many rows", out=tmp / arch)
+                files += [*d.glob("bin/*.py"), *d.glob("tests/*.py")]
+            bad = []
+            for f in files:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error")
+                    try:
+                        compile(f.read_text(), str(f), "exec")
+                    except (SyntaxError, SyntaxWarning, DeprecationWarning) as e:
+                        bad.append(f"{f.name}: {e}")
+        self.assertGreater(len(files), 40)
+        self.assertEqual(bad, [])
+
+
+HAND = HERE / "fixtures" / "compare" / "hand-metrics"
+SERIES = [{"metric": {"job": "api"}, "value": [1762850000, "41.5"]}, {"metric": {"job": "db"}, "value": [1762850000, "3.25"]}]
+
+
+class FakeProm:
+    """A Prometheus-shaped API on localhost: every instant query answers two series."""
+
+    def __enter__(self) -> str:
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                data = {"/api/v1/query": {"resultType": "vector", "result": SERIES},
+                        "/api/v1/status/buildinfo": {"version": "2.53.2"},
+                        "/api/v1/series": [{"__name__": "up"}], "/api/v1/label/__name__/values": ["up"]}.get(self.path.split("?")[0])
+                body = json.dumps({"status": "success", "data": data}).encode()
+                self.send_response(200 if data is not None else 404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        return f"http://127.0.0.1:{self.srv.server_address[1]}"
+
+    def __exit__(self, *exc):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+class CompareTest(unittest.TestCase):
+    def compare(self, tmp: Path, *extra, existing: Path = HAND):
+        d = forge.draft("metrics-query", "demo-metrics", "request rate by job", out=tmp / "d")
+        return quiet(forge.main, ["compare", str(d), str(existing), *extra])
+
+    def test_compare_lists_guard_and_subcommand_differences(self):
+        with Tmp() as tmp:
+            rc, out, err = self.compare(tmp)
+        self.assertEqual(rc, 0, out + err)
+        self.assertTrue(out.startswith("# target:  draft "), out[:200])
+        for want in ("for the existing skill: no absent guard, which metrics-query requires",
+                     "for the existing skill: no partial guard, which metrics-query requires",
+                     "for the existing skill: fails C6, which the draft passes",
+                     "for the metrics-query template: the existing skill exposes top, which the draft does not",
+                     "ab, instant, query, series, volume-step | query, top",
+                     "expired_auth (required): test_guard_expired_auth, prints AUTH or a re-login, exit 4 | "
+                     "test_guard_expired_auth, prints AUTH or a re-login, exit 4"):
+            self.assertIn(want, out)
+
+    def test_a_guard_only_the_existing_skill_has_is_a_template_finding(self):
+        with Tmp() as tmp:
+            probe = forge.draft("cluster-probe", "demo-probe", "is the queue draining", out=tmp / "probe")
+            rc, out, _ = self.compare(tmp, existing=probe)
+        self.assertIn("for the metrics-query template: the existing skill has the incomplete_capture guard "
+                      "(test_guard_incomplete_capture, prints a terminal marker)", out)
+
+    def test_subcommands_built_in_a_loop_come_from_the_usage_line(self):
+        with Tmp() as tmp:
+            logs = forge.draft("logs-fetch", "demo-logs", "why did the export fail", out=tmp / "logs")
+            self.assertNotIn("add_parser(\"fetch\"", (logs / "bin" / "demo_logs.py").read_text())
+            self.assertEqual(forge.profile(logs, [])["subs"], {"fetch", "streams"})
+
+    def test_run_on_a_fixture_backend_gives_the_same_numbers(self):
+        with Tmp() as tmp, FakeProm() as url, mock.patch.dict(os.environ, {"DEMO_METRICS_PROM_URL": url, "HAND_PROM_URL": url}):
+            rc, out, err = self.compare(tmp, "--run", "instant 'rate(http_requests_total[5m])'",
+                                        "--run-existing", "query 'rate(http_requests_total[5m])'")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("SAME: exit 0 and the same 2 numbers", out)
+
+    def test_run_tells_different_numbers_apart(self):
+        with Tmp() as tmp, FakeProm() as url, mock.patch.dict(os.environ, {"DEMO_METRICS_PROM_URL": url, "HAND_PROM_URL": url}):
+            rc, out, err = self.compare(tmp, "--run", "instant x", "--run-existing", "top x --k 1")
+        self.assertEqual(rc, mask.EXIT_PARTIAL, out + err)
+        self.assertIn("DIFFERENT: exit 0 | 0; only the draft: 3.25; only the existing: -", out)
+
+    def test_run_refuses_apply(self):
+        with Tmp() as tmp:
+            rc, out, err = self.compare(tmp, "--run", "instant x --apply")
+        self.assertEqual(rc, mask.EXIT_REFUSED)
+        self.assertIn("REFUSED", err)
+
+    def test_archetype_back_test_drafts_compares_and_cleans_up(self):
+        before = set(Path(tempfile.gettempdir()).glob("forge-compare.*"))
+        with Tmp():
+            rc, out, err = quiet(forge.main, ["compare", "--archetype", "metrics-query", str(HAND)])
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("back-test: drafted metrics-query as hand-metrics-draft", out)
+        self.assertIn("$HAND_METRICS_DRAFT_* variables", out)
+        self.assertEqual(set(Path(tempfile.gettempdir()).glob("forge-compare.*")), before)
+
+    def test_numbers_leave_out_headers_quotes_times_and_masked_ids(self):
+        out = '# rows:    5 series\n{instance="10.0.0.1:9090"}  41.5\nlast at 2026-11-11T10:00:00Z <masked-3> -7\n'
+        self.assertEqual(forge.numbers(out), ["-7", "41.5"])
+
+    def test_a_shell_engines_subcommands_are_its_case_arms(self):
+        with Tmp() as tmp:
+            s = tmp / "sh-skill"
+            s.mkdir()
+            (s / "SKILL.md").write_text("---\nname: sh-skill\ndescription: Use when asked.\n---\n")
+            (s / "tool.sh").write_text('case "$1" in\n  status|show) echo up ;;\n  restart) echo no ;;\n  -h|--help) echo usage ;;\nesac\n')
+            self.assertEqual(forge.profile(s, [])["subs"], {"status", "show", "restart"})
+
+    def test_help_runs_only_when_the_source_handles_it(self):
+        with Tmp() as tmp:
+            mark = tmp / "ran"
+            s = tmp / "sh-skill"
+            s.mkdir()
+            (s / "tool.sh").write_text(f'touch "{mark}"\n')
+            line, _ = forge.usage_line(s, "tool.sh", (s / "tool.sh").read_text())
+            self.assertEqual(line, "(no --help in the source; not run)")
+            self.assertFalse(mark.exists(), "a script that ignores --help would have run its default action")
 
 
 if __name__ == "__main__":

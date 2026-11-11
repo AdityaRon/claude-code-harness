@@ -42,7 +42,13 @@ included, is in `~/.local/state/skill-forge/`.
    a real instance of the question, and inject each required guard's fault on
    the real system: a misspelled metric for ABSENT, a tiny cap for PARTIAL, an
    expired login for AUTH, a wrong context for the target check. A skill that
-   only passed against fakes is not done.
+   only passed against fakes is not done. When a skill already answers the
+   question, `PY F/forge.py compare DIR EXISTING --run 'ARGS'` lints both side
+   by side, lists the guards and subcommands each has, and runs both engines on
+   the same question: the same numbers are the real pass. A required guard the
+   existing skill lacks is that skill's finding; one only it has is the
+   template's. `compare --archetype ARCH EXISTING` back-tests a template
+   against an existing skill without keeping the draft.
 6. **Install.** `PY F/forge.py install DIR` prints the copy; `--apply` copies
    to `~/.claude/skills/NAME` (or `--dest`, a work repo the user names) and
    records the question in `inventory.md`. It refuses the public harness clone
