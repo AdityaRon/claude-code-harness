@@ -1,6 +1,6 @@
 ---
 name: comms-hub
-description: The comms session's recurring tick, and how every other session sends Slack. Use in the one long-lived comms session on each tick (GitHub queue, Slack replies, routing events to peer sessions, gating and sending their drafts, resolving answered-and-approved threads on my PRs), and in any other session about to send, answer or schedule a Slack message, which hands the draft to the comms session instead.
+description: The comms session's recurring tick, and how every other session sends Slack. Use when running a tick in the one long-lived comms session (GitHub queue, Slack replies, routing events to peer sessions, gating and sending their drafts, resolving answered-and-approved threads on my PRs), and when any other session is about to send, answer or schedule a Slack message, which hands the draft to the comms session instead.
 ---
 
 # comms-hub: one session speaks on Slack for all of them
@@ -240,7 +240,9 @@ whole context.
    re-look with every thread fixed and nothing new has no findings; with
    nothing to post, record it with `hub.py relooked` (REVIEWED above). A 404 means
    a force-push dropped my sha: review the whole diff instead. Then
-   `PY B/review_lint.py --post <job tmp>/review-N.json --pr owner/repo#N`. It
+   `PY B/review_lint.py --post <job tmp>/review-N.json --pr owner/repo#N --apply`.
+   Without `--apply` it is a dry run: it prints what would post, ends with
+   `NOT POSTED`, and logs nothing. It
    lints the body and each comment, re-reads the head and the open state,
    posts through the reviews API with the inline comments, and logs the review
    under Needs you with its verdict (`logged <id>: reviewed <verdict>`):
@@ -434,7 +436,7 @@ whole context.
    the link is `--ref`, the channel `--target` (named from
    `slack.channel_names`), everything else `--detail`. Sends and resolves log
    themselves, as do the scan's `todo`, `done` and `blocked` rows and
-   `review_lint.py --post`'s `reviewed`. Log each item routed
+   `review_lint.py --post --apply`'s `reviewed`. Log each item routed
    (`--kind routed --who <session>`, with `--corrects <its todo id>` for a
    ROUTE item, so it moves from in-flight to with-sessions), each
    draft held and why (`--kind held`), each question for the user and each

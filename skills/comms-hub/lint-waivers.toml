@@ -1,16 +1,13 @@
 # skill_lint waivers (skills/skill-forge/bin/skill_lint.py). comms-hub predates
-# skill-forge and runs on every tick of a live session; each finding below is
-# recorded rather than changed in the PR that added the lint. The lint fails a
-# waiver with no reason, or one whose check passes, so these go when fixed.
-
-[C1]
-reason = "resolve_threads.py's GraphQL write already passes (behind --apply, with a dry-run test). review_lint.py's only write, the review POST, is gated by its own --post flag: without it the script lints and posts nothing, which is the dry run convention 1 asks for under another name. Renaming the flag would break the commands the comms tick already runs."
+# skill-forge and runs on every tick of a live session. C1, C3 and the C8
+# description were fixed; these three stay because the fix would break or risk
+# that session. The lint fails a waiver with no reason, or one whose check passes.
 
 [C6]
-reason = "comms-hub's output is queue, panel and draft state read by one session, not an answer pasted elsewhere, so it carries no provenance header. Adding header() to its 8 scripts is a change of its own."
+reason = "hub.py panel's stdout is parsed as JSON by the panel (panel/hooks/register.tsx:87, JSON.parse(out.stdout)), so a provenance header in front of it breaks the panel. The rest is queue, draft and tick state the comms session acts on, not an answer pasted elsewhere."
 
 [C7]
-reason = "Its 8 scripts print directly (142 lines with print(, grep -c on 2026-11-10). check_draft.py already scans every outgoing Slack draft for secrets and names. Routing output through mask.emit is a change of its own."
+reason = "A vendored mask.py reads skill-forge's config, so a mask pattern added for a forged skill would also rewrite the names and repos comms-hub routes on. Its 8 scripts print directly (144 lines with print(, grep -c over bin/*.py on 2026-11-11), and check_draft.py already scans every outgoing Slack draft for secrets and names."
 
 [C8]
-reason = "The description says 'Use in the one long-lived comms session on each tick', the phrasing its triggering was tuned for, not the literal 'Use when'. SKILL.md is 514 lines (budget 150; wc -l on 2026-11-10, after #186) because it is the comms protocol, and it loads only in the comms session. Slimming it is a change of its own."
+reason = "SKILL.md is 520 lines (wc -l, 2026-11-11), over the 150-line budget, and the tick section alone is 335. Every session that sends Slack loads it all for the 29-line peer section. Moving the tick into its own file changes what the live comms session must re-read after compaction, which no test here exercises, so that waits for a decision and a live trial."
