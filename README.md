@@ -161,8 +161,9 @@ you as a comment only. It never approves a PR or merges someone else's.
 - A panel beside the comms session's chat (`skills/comms-hub/panel/`, a mod
   `hub.py launch` loads into that session alone): what needs you, what goes
   out and when, what is with other sessions, and what changed since you last
-  looked, one line each, from `hub.py panel` as each turn ends, so it calls no
-  model. `claude plugin test skills/comms-hub/panel` runs its tests,
+  looked, one line each, from `hub.py panel` as each turn ends and each minute
+  while it is drawn, so it calls no model; its PR rows move when a tick
+  scans. `claude plugin test skills/comms-hub/panel` runs its tests,
   and `bin/upstream-check.sh` runs them against each new Claude Code release.
 
 ## Design choices

@@ -82,7 +82,8 @@ MAX_CHARS = 2500
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 CADENCES = (10, 15, 20, 30, 60)
 TICK_MINUTE = 7          # off the hour, when every other schedule fires
-TRIGGER_RENEW_DAYS = 6   # Claude Code deletes a recurring task 7 days after it was created
+TRIGGER_EXPIRY_DAYS = 7  # Claude Code deletes a recurring task 7 days after it was created
+TRIGGER_RENEW_DAYS = 6   # so the tick renews it a day before
 KNOWN_BOTS: set[str] = set()  # github.bots from the config, lower-cased; load_config fills it
 
 
@@ -454,7 +455,7 @@ def launch_env(cfg: dict) -> dict[str, str]:
 
 
 def panel_dir() -> Path | None:
-    """The skill's panel mod beside bin/: held drafts and today's log in a pane.
+    """The skill's panel mod beside bin/: the comms state in a pane (`hub.py panel`).
     Only the comms session loads it, through the command `launch` prints."""
     p = Path(__file__).resolve().parent.parent / "panel"
     return p if (p / ".claude-plugin" / "plugin.json").is_file() else None
@@ -951,15 +952,56 @@ def tick_lag(cfg: dict, rows: list[dict]) -> dt.timedelta | None:
 LATE_GRACE = dt.timedelta(minutes=5)
 
 
+def write_whole(path: Path, text: str) -> None:
+    """`text` into a file beside `path`, then renamed over it: the panel reads
+    each minute and once met a gate record half written, which failed the read."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+GATE_KEEP_DAYS = 30  # every reader wants a message still to post, or one sent today
+
+
+def prune_gate(cfg: dict) -> int:
+    """Removes gate records untouched for GATE_KEEP_DAYS whose message is not
+    still to post: nothing removed any, and the panel opens each one a minute."""
+    gate, at = state_dir(cfg) / "gate", now()
+    cutoff = (at - dt.timedelta(days=GATE_KEEP_DAYS)).timestamp()
+    n = 0
+    for p in sorted(gate.glob("*.json")) if gate.is_dir() else []:
+        try:
+            if p.stat().st_mtime >= cutoff:
+                continue
+            s = json.loads(p.read_text())
+            ahead = s.get("send") == "schedule" and not s.get("withdrawn_at") and (parse_time(s.get("post_at")) or at) > at
+        except (OSError, ValueError, AttributeError):
+            ahead = False  # a record left half a month ago is no record
+        if not ahead:
+            p.unlink(missing_ok=True)
+            n += 1
+    return n
+
+
+def last_scan_at(cfg: dict) -> dt.datetime | None:
+    """When the last scan started; None with no stamp, or one that does not parse."""
+    try:
+        return parse_time((state_dir(cfg) / "last-scan").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def going_out(cfg: dict) -> list[dict]:
     """Scheduled messages still ahead of post_at, from the gate's records: one the
     session has not recorded yet (no sent_id) is going out all the same."""
     at = now()
-    last_scan = parse_time((state_dir(cfg) / "last-scan").read_text().strip()) \
-        if (state_dir(cfg) / "last-scan").is_file() else None
+    last_scan = last_scan_at(cfg)
     out = []
     for p in sorted((state_dir(cfg) / "gate").glob("*.json")) if (state_dir(cfg) / "gate").is_dir() else []:
-        s = json.loads(p.read_text())
+        try:
+            s = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue  # caught mid-write, or left half by a crash: this record, not the whole read
         if s.get("send") != "schedule" or s.get("withdrawn_at") or s.get("regate_of") or not s.get("post_at"):
             continue
         post = parse_time(s["post_at"])
@@ -1003,11 +1045,13 @@ MERGEABLE = ("CLEAN", "HAS_HOOKS", "UNSTABLE")
 STRIP_DAYS = 5
 
 
-def prs_panel(cfg: dict, verdicts: dict[str, str]) -> dict:
+def prs_panel(cfg: dict, verdicts: dict[str, str], lag: dt.timedelta = dt.timedelta(0)) -> dict:
     """The PRS section from the last prs.json, which a scan that did not end
     BLOCKED writes: what needs the user first, a count per repo, and how old it
-    is. A file older than two ticks, or one a later scan did not replace, is
-    stale and says so: never shown as live. `verdicts` maps owner/repo#N to an
+    is. A file two ticks were due after (by their usual `lag` and LATE_GRACE),
+    or one a later scan did not replace, is stale and says so: never shown as
+    live. After the window's last tick none is due, so an evening's file is old,
+    not stale. `verdicts` maps owner/repo#N to an
     open review row's text (approvable, needs your read, re-look)."""
     d = state_dir(cfg)
     try:
@@ -1045,9 +1089,10 @@ def prs_panel(cfg: dict, verdicts: dict[str, str]) -> dict:
         c = repos.setdefault(short_ref(cfg, r["ref"]).rsplit(" #", 1)[0], [0, 0])
         c[0] += r["needs"]
         c[1] += 1
-    last_scan = parse_time((d / "last-scan").read_text().strip()) if (d / "last-scan").is_file() else None
-    every = cfg["active_hours"]["every_minutes"]
-    stale = written is None or now() - written > dt.timedelta(minutes=2 * every) \
+    last_scan = last_scan_at(cfg)
+    # The amber said "stale" every evening and weekend, when no tick was due.
+    second = next_tick(cfg, next_tick(cfg, written) or now()) if written else None
+    stale = written is None or bool(second and second + lag + LATE_GRACE <= now()) \
         or bool(last_scan and last_scan - written > dt.timedelta(minutes=1))
     return {"as_of": _when(cfg, written) if written else "", "age": _age(written) if written else "", "stale": stale,
             "repos": [{"repo": k, "needs": v[0], "total": v[1]} for k, v in sorted(repos.items(), key=lambda kv: (-kv[1][0], kv[0]))],
@@ -1098,43 +1143,65 @@ def panel(cfg: dict) -> dict:
                  "since": _when(cfg, parse_time(r["ts"]))} for r in routed_]
     logs = sorted(p.stem for p in (d / "log").glob("*.md") if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.stem)) \
         if (d / "log").is_dir() else []
-    newest = logs[-1] if logs else ""
+    today = f"{local_now(cfg):%Y-%m-%d}"
+
+    def dated(r: dict) -> str:
+        """A bare time is today's: on Monday morning, Friday's rows read as Friday's."""
+        return r["at"] if r["day"] == today else f"{dt.date.fromisoformat(r['day']):%a} {r['at']}"
+
     # The log day before too: the first scan after midnight starts a new file,
     # and the evening the user has not looked at yet once went with the old one.
     recent = [r for r in folded(cfg, OPEN_DAYS) if r["day"] in logs[-2:]]
-    events = [{"key": f"row:{r['id']}", "ts": r["ts"],
-               "at": r["at"] if r["day"] == newest else f"{dt.date.fromisoformat(r['day']):%a} {r['at']}",
+    events = [{"key": f"row:{r['id']}", "ts": r["ts"], "at": dated(r),
                "kind": r["kind"], "ref": short_ref(cfg, r["ref"]), "target": target_label(cfg, r["target"]),
                "text": r["text"], "corrected": bool(r.get("corrected"))}
               for r in reversed(recent) if r["kind"] not in UNSHOWN]
-    raw = day_rows(cfg, dt.date.fromisoformat(newest)) if newest else []
-    scans = [i for i, r in enumerate(raw) if r["kind"] == "scan"]
-    since_scan = [r for r in raw[scans[-1] + 1:] if r["kind"] not in UNSHOWN + ("tick", "setup")] if scans else []
-    rows = [r for day in logs[-2:] for r in day_rows(cfg, dt.date.fromisoformat(day))]
+    # Every row of the days an item stays open: a row logged before the day's
+    # first scan started a file with no scan in it, which read "none yet" and
+    # hid the ticks missed since the last one.
+    rows = rows_since(cfg, now() - dt.timedelta(days=OPEN_DAYS))
+    scans = [i for i, r in enumerate(rows) if r["kind"] == "scan"]
+    since_scan = [r for r in rows[scans[-1] + 1:] if r["kind"] not in UNSHOWN + ("tick", "setup")] if scans else []
     lag = tick_lag(cfg, rows) or dt.timedelta(0)
     # From now less the lag: at 08:10 the 08:07 tick is still to come.
     nxt = next_tick(cfg, now() - lag)
     lag_m = round(lag.total_seconds() / 60)
     # Ticks due since the last scan that have not run by their usual lag and a grace.
-    late = untraced(cfg, parse_time(raw[scans[-1]]["ts"]), now() - lag - LATE_GRACE, rows) if scans else []
+    late = untraced(cfg, parse_time(rows[scans[-1]]["ts"]), now() - lag - LATE_GRACE, rows) if scans else []
     verdicts = {}
     for r in asks:
         m = re.search(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", r["ref"] or "") \
             or re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", (r["ref"] or "").strip())
         if r["kind"] == "reviewed" and m:
             verdicts[f"{m.group(1)}/{m.group(2)}#{m.group(3)}"] = r["text"]
-    return {"state": str(d), "day": f"{dt.date.fromisoformat(newest):%a %d %b}" if newest else "",
-            "prs": prs_panel(cfg, verdicts),
+    # Today, not the newest log day: each morning before the first scan it said yesterday.
+    return {"state": str(d), "day": f"{local_now(cfg):%a %d %b}",
+            "prs": prs_panel(cfg, verdicts, lag),
             "needs": needs, "going": going_out(cfg), "sessions": sessions, "held": held, "events": events,
             # The schedule's time, and how late scans have started after it lately.
             "next_tick": _when(cfg, nxt) + (f" (+{lag_m}m lately)" if lag_m else "") if nxt else "none scheduled",
             # When the last scan started (the pane says "last scan": one run by hand
             # outside the window counts too), what it logged ("1 item" once read as
             # sends, or problems), and the ticks due since that did not run.
-            "last_tick": f"{raw[scans[-1]]['at']}, " + (
+            "last_tick": f"{dated(rows[scans[-1]])}, " + (
                 "quiet" if not since_scan else f"{len(since_scan)} event{'s' * (len(since_scan) != 1)}")
             + (f" · {len(late)} missed since" if late else "")
-            if scans else "none yet", "read": f"{local_now(cfg):%H:%M}"}
+            if scans else "none yet", "read": f"{local_now(cfg):%H:%M}",
+            "trigger": trigger_expired(cfg, parse_time(rows[scans[-1]]["ts"]) if scans else None)}
+
+
+def trigger_expired(cfg: dict, last_scan: dt.datetime | None = None) -> str:
+    """Said once Claude Code has deleted the tick's trigger: after that no tick
+    runs, and the pane only counted the ticks missed, with no reason. A scan
+    since then says ticks still run: the trigger was renewed and not recorded."""
+    try:
+        created = parse_time(_record(cfg, "trigger.json").get("created"))
+    except ValueError:
+        return ""
+    gone = created + dt.timedelta(days=TRIGGER_EXPIRY_DAYS) if created else None
+    if not gone or gone > now() or (last_scan and last_scan > gone):
+        return ""
+    return f"trigger expired {_when(cfg, gone)}"
 
 
 def pending_scheduled(cfg: dict) -> list[dict]:

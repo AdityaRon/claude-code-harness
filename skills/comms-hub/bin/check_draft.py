@@ -361,7 +361,7 @@ def gate(args, cfg, gh) -> int:
     regate_of = mark_regate(cfg, args.file, True)
     if regate_of:
         stamp["regate_of"] = regate_of
-    stamp_path(cfg, args.file).write_text(json.dumps(stamp, indent=1))
+    hub.write_whole(stamp_path(cfg, args.file), json.dumps(stamp, indent=1))
     print(f"PASS sha256={stamp['sha256'][:12]}: send "
           + ("the message after the header's `---`, not the header," if has_header else "this file")
           + " in the same turn, after --assert-fresh")
@@ -381,7 +381,7 @@ def mark_regate(cfg, path, ok: bool) -> str | None:
             s.pop("claim_moved_at", None)
         else:
             s["claim_moved_at"] = hub.now().isoformat()
-        p.write_text(json.dumps(s, indent=1))
+        hub.write_whole(p, json.dumps(s, indent=1))
         return s["sent_id"]
     return None
 
@@ -468,7 +468,7 @@ def record_sent(args, cfg) -> int:
     stamp["sent_id"] = args.record_sent
     stamp["sent_copy"] = str(d / f"{safe}.md")
     stamp["headline"] = text
-    p.write_text(json.dumps(stamp, indent=1))
+    hub.write_whole(p, json.dumps(stamp, indent=1))
     detail = (f"id={args.record_sent} target={stamp['target']} sha256={stamp['sha256'][:12]}"
               + (f" post_at={stamp['post_at']}" if stamp.get("post_at") else "")
               + (f"; {context}" if problem and context else ""))
@@ -537,7 +537,7 @@ def withdraw(args, cfg) -> int:
             continue
         if not s.get("withdrawn_at"):
             s["withdrawn_at"] = hub.now().isoformat()
-            p.write_text(json.dumps(s, indent=1))
+            hub.write_whole(p, json.dumps(s, indent=1))
             why = " ".join((args.context or "").split())
             hub.log_event(cfg, "withdrawn", s.get("headline") or "scheduled message", ref=first_ref(s),
                           target=hub._draft(s.get("sent_copy")).get("to", "").split(" ")[0],

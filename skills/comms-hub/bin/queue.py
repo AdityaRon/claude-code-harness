@@ -449,7 +449,7 @@ def pr_facts(ref: str, pr: dict, me: str) -> dict:
 
 
 def write_prs(cfg: dict, at: dt.datetime, reviewing: list[dict], authored: list[dict]) -> None:
-    """prs.json, whole or not at all: the panel reads it as each turn ends."""
+    """prs.json, whole or not at all: the panel reads it each minute."""
     p = hub.state_dir(cfg) / "prs.json"
     tmp = p.with_name("prs.json.tmp")
     tmp.write_text(json.dumps({"written_at": at.isoformat(), "reviewing": reviewing, "authored": authored}) + "\n")
@@ -568,7 +568,7 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     emit(f"scheduled-pending: {len(pending)}"
          + (f" ({' '.join(s['sent_id'] for s in pending)}): gate each copy again this tick (check_draft.py --scheduled)"
             if pending else ""))
-    stamp.write_text(at.isoformat() + "\n")
+    hub.write_whole(stamp, at.isoformat() + "\n")
     hub.log_event(cfg, "scan", "scan started", detail=f"{at:%Y-%m-%dT%H:%M:%SZ}")
     plan = hub.scan_plan(cfg, at)
     # A fire that failed before the session could act left nothing in the log: say so for it.
@@ -590,6 +590,9 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     emit(f"morning-unchecked: {len(missed)}" + (
         f" ({' '.join(s['sent_id'] for s in missed)}): posted with no re-gate since the window opened; re-check each "
         "claim now and tell the user what moved" if missed else ""))
+    pruned = hub.prune_gate(cfg)
+    if pruned:
+        emit(f"gate-pruned: {pruned} record{'s' * (pruned != 1)} untouched for {hub.GATE_KEEP_DAYS} days")
     # A held draft lives in a file, not in the session's memory, so a compaction cannot lose it.
     held = sorted(p.name for p in (hub.state_dir(cfg) / "held").glob("*.md"))
     emit(f"held-drafts: {len(held)}" + (f" ({' '.join(held)}): gate and send each, or say why it still waits" if held else ""))

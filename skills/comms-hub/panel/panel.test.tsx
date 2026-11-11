@@ -79,8 +79,10 @@ const json = (panel: object) => ({ exitCode: 0, stdout: JSON.stringify(panel), s
 // Each hook here stands for the engine: a call on `$` is answered `{ value }`.
 // `hub.py panel` answers with whatever `out.now` holds when it is asked.
 // `opened` is what `$.ui.open` answers: a surface that docks no pane answers false.
-function world(on, out = { now: json(PANEL) }, opened: object = { isPlaced: true }) {
+// `roster` is what `$.session.surfaces()` answers: a phone attached is 'mobile' there.
+function world(on, out = { now: json(PANEL) }, opened: object = { isPlaced: true }, roster: string[] = ['terminal']) {
   on('command.register', () => ({ value: { command: 'comms' } }))
+  on('session.surfaces', () => ({ value: roster }))
   on('ui.open', () => ({ value: opened }))
   on('clock.now', () => ({ value: NOW }))
   on('process.run', (_, e) =>
@@ -179,12 +181,23 @@ test('GOING OUT puts the status before the message, and colours only what was ch
   await ui.unmount()
 })
 
+// Claude Code deletes the tick's trigger after 7 days: "missed since" then only counted up.
+test('an expired trigger leads the foot, in amber', async ($, on) => {
+  world(on, { now: json({ ...PANEL, trigger: 'trigger expired 09:07' }) })
+  await $.command.run({ command: 'comms', args: '' })
+
+  expect(await texts($)).toContain('trigger expired 09:07 · next tick 10:07 · last scan: 09:45, 1 event · read 10:00')
+  expect(await colorOf($, /^trigger expired 09:07$/)).toBe('warning')
+})
+
 // Ages and "stale" come from hub.py as it reads, so with no turn ending they froze.
 test('the pane reads again each minute while it is drawn or a phone is here, and not while it waits undrawn', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const out = { now: json(PANEL) }
   const panes = { placed: true }
+  const roster = ['terminal']
   let reads = 0
+  on('session.surfaces', () => ({ value: roster }))
   on('command.register', () => ({ value: { command: 'comms' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.panes', () => ({ value: [{ id: 'comms', title: 'Comms', isShown: panes.placed, isFocused: false,
@@ -209,6 +222,7 @@ test('the pane reads again each minute while it is drawn or a phone is here, and
   await clock.advance(60_000)
   expect(reads).toBe(first + 1)
 
+  roster.push('mobile')
   await $.session.attach({ surface: 'mobile', clientId: 'phone-1' })
   const attached = reads
   await clock.advance(60_000)
@@ -422,11 +436,15 @@ test('the pane draws on the mobile surface, and /comms says it opened', async ($
 })
 
 // The phone app docks no pane: /comms there once said "opened" and nothing drew.
-test('/comms where no pane draws answers with the state as text', async ($, on) => {
+// As the command's text, the list then rode every request after it.
+test('/comms where no pane draws puts the state in the transcript, not in what the model is sent', async ($, on) => {
+  const logs: string[] = []
   world(on, undefined, { isPlaced: false, reason: 'the attached surfaces place no panes: mobile' })
+  on('ui.log', (_, e) => { if (e.to === 'transcript') logs.push(e.text); return { value: undefined } })
   const r = await $.command.run({ command: 'comms', args: '' })
 
-  expect(r.text).toBe([
+  expect(r.text).toBe('Comms: the list is above (no pane here: the attached surfaces place no panes: mobile)')
+  expect(logs).toEqual([
     'Comms · Wed 21 Oct: 1 need you · 3 PRs need you · 3 new · 2 going out · 1 with sessions · 0 held · next tick 10:07',
     '● app #14  #team-reviews  needs your go: Carol, could you review #14?',
     '● app #31  dana  commented@1111111 · new commits · CI green · approved by erin',
@@ -441,20 +459,21 @@ test('/comms where no pane draws answers with the state as text', async ($, on) 
     '  09:46  sent  #team-reviews  reply to carol',
     '  09:30  note  the thread had 19 replies',
     `  09:00  note  ${LONG}`,
-    '(no pane here: the attached surfaces place no panes: mobile)',
-  ].join('\n'))
+  ])
 
   // A second look has nothing new since the first.
-  const again = await $.command.run({ command: 'comms', args: '' })
-  expect(again.text.includes('SINCE YOU LOOKED')).toBe(false)
-  expect(again.text.includes('GOING OUT · 2')).toBe(true)
+  logs.length = 0
+  await $.command.run({ command: 'comms', args: '' })
+  expect(logs.some(l => l.startsWith('SINCE YOU LOOKED'))).toBe(false)
+  expect(logs).toContain('GOING OUT · 2')
 })
 
 test('/comms as text caps each section at the pane\'s compact rows', async ($, on) => {
+  const out: string[] = []
   world(on, { now: json(BUSY) }, { isPlaced: false, reason: 'the attached surfaces place no panes: mobile' })
-  const r = await $.command.run({ command: 'comms', args: '' })
+  on('ui.log', (_, e) => { out.push(e.text); return { value: undefined } })
+  await $.command.run({ command: 'comms', args: '' })
 
-  const out = r.text.split('\n')
   // The header counted a held draft and the text listed none.
   const held = out.indexOf('HELD · 1')
   expect(held).toBeGreaterThan(out.indexOf('WITH SESSIONS · 1'))
@@ -467,16 +486,19 @@ test('/comms as text caps each section at the pane\'s compact rows', async ($, o
 
 test('a phone joining pins the counts on the status line, and its leaving clears them', async ($, on) => {
   const statuses: (string | undefined)[] = []
-  world(on)
+  const roster = ['terminal']
+  world(on, undefined, undefined, roster)
   on('ui.status', (_, e) => { statuses.push(e.text); return { value: undefined } })
   on('session.attach', (_, e) => ({ clientId: e.clientId }))
   on('session.detach', (_, e) => ({ clientId: e.clientId }))
   await $.command.run({ command: 'comms', args: '' })
   expect(statuses).toEqual([])
 
+  roster.push('mobile')
   await $.session.attach({ surface: 'mobile', clientId: 'mobile:1', viewport: { columns: 40, rows: 80, isFullscreen: false } })
   expect(statuses.at(-1))
     .toBe('Comms: 1 need you · 3 PRs need you · 3 new · 2 going out · 1 with sessions · 0 held · next tick 10:07 · /comms for the list')
+  roster.pop()
   await $.session.detach({ surface: 'mobile', clientId: 'mobile:1', reason: 'detach' })
   expect(statuses.at(-1)).toBeUndefined()
 })
@@ -527,6 +549,60 @@ test('the unread dot clears after /comms', async ($, on) => {
   await again.unmount()
 })
 
+// With the pane docked, only session start and /comms were looks: the new count only grew.
+test('seen takes every dot off at once, and shows only while something is new', async ($, on) => {
+  const kept: unknown[] = []
+  const w = live(on)
+  on('store.set', (_, e) => { if (e.key === 'look') kept.push(e.value); return { value: undefined } })
+  await start($, w)                                    // a look at 10:00
+  await w.clock.advance(10 * 60_000)
+  const ts = new Date(NOW + 5 * 60_000).toISOString()  // logged at 10:05, after that look
+  w.out = json({ ...PANEL, events: [{ key: 'row:1021.9', ts, at: '10:05', kind: 'held', ref: 'app #17', target: '',
+                                      text: 'a fold-in is expected', corrected: false }, ...PANEL.events] })
+  await endTurn($)
+  await w.clock.settle()
+  const first = await mounted($)
+  expect((await first.findAll({ type: 'Text', text: 'SINCE YOU LOOKED · 4 new' })).length).toBe(1)
+  expect((await first.find({ type: 'Button', key: 'seen' }))?.props.hotkey).toBe('s')
+  await first.unmount()
+
+  await press($, 'seen')
+  const after = await mounted($)
+  expect((await after.findAll({ type: 'Text', text: 'SINCE YOU LOOKED · 0 new' })).length).toBe(1)
+  expect((await after.find({ type: 'Text', text: /a fold-in is expected/ }))?.text.startsWith('● ')).toBe(false)
+  expect(await after.find({ type: 'Button', key: 'seen' })).toBeUndefined()
+  await after.unmount()
+  expect(kept.at(-1)).toEqual({ since: NOW + 10 * 60_000, last: NOW + 10 * 60_000 })
+})
+
+// $.state lasts one session: after each relaunch every event of two log days was new again.
+test('the last look outlives the session', async ($, on) => {
+  const kept: unknown[] = []
+  const w = live(on)
+  const last = Date.parse('2026-10-21T16:45:00+00:00')
+  on('store.get', (_, e) => ({ value: e.key === 'look' ? { since: 0, last } : undefined }))
+  on('store.set', (_, e) => { if (e.key === 'look') kept.push(e.value); return { value: undefined } })
+  await start($, w)
+  expect((await texts($)).find(t => t.startsWith('SINCE YOU LOOKED'))).toBe('SINCE YOU LOOKED · 1 new')
+  expect(kept).toEqual([{ since: last, last: NOW }])
+})
+
+test('a kept look of another shape is left alone', async ($, on) => {
+  const w = live(on)
+  mock.store(on, { look: 'from an older version' })
+  await start($, w)
+  expect((await texts($)).find(t => t.startsWith('SINCE YOU LOOKED'))).toBe('SINCE YOU LOOKED · 3 new')
+})
+
+test('a store that fails stops no read, and the dots fall back to the session\'s look', async ($, on) => {
+  const w = live(on)
+  on('store.get', () => { throw new Error('store.get failed') })
+  on('store.set', () => { throw new Error('store.set failed') })
+  await start($, w)
+  expect(w.reads).toBe(1)
+  expect((await texts($)).find(t => t.startsWith('SINCE YOU LOOKED'))).toBe('SINCE YOU LOOKED · 3 new')
+})
+
 // v1.1.9 named the HELD row's parameter `h`, which shadowed the JSX factory:
 // every render with a held draft threw "h is not a function" and drew nothing.
 test('a held draft draws its row', async ($, on) => {
@@ -553,15 +629,193 @@ test('a config the scripts refuse is said in the pane', async ($, on) => {
   expect(await texts($)).toEqual(['comms-hub: config: no config at /home/me/.config/comms-hub/config.toml'])
 })
 
-test('the pane reads again when a turn ends', async ($, on) => {
-  const out = world(on)
-  on('turn.complete', () => ({ text: 'done' }))
-  await $.command.run({ command: 'comms', args: '' })
+test('the pane reads again when a turn ends, and the turn\'s end does not wait for it', async ($, on) => {
+  const w = live(on)
+  await start($, w)
   const later = { ...PANEL, events: [{ key: 'row:1021.8', ts: '2026-10-21T16:58:00+00:00', at: '09:58', kind: 'held',
                                        ref: 'app #17', target: '', text: 'a fold-in is expected', corrected: false },
                                      ...PANEL.events] }
-  out.now = json(later)
-  await $.turn.complete({ reason: 'answer', answer: 'done', durationMs: 1, isAborted: false, turnId: 't1' })
-
+  w.out = json(later)
+  w.slow = 20_000                                      // hub.py runs to its timeout
+  let ended = false
+  const ending = endTurn($).then(() => { ended = true })
+  await w.clock.settle()
+  expect(ended).toBe(true)
+  await w.clock.advance(20_000)
+  await ending
   expect((await texts($)).some(t => t.includes('held  app #17  a fold-in is expected'))).toBe(true)
+})
+
+// ---- when the pane reads, with a clock the test moves -------------------------
+
+const aged = (age: string, read: string) => json({ ...PANEL, read, prs: { ...PANEL.prs, age } })
+const TRACEBACK = 'Traceback (most recent call last):\n  File "hub.py", line 962, in going_out\n'
+  + 'json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n'
+
+// The engine beneath the mod: a pane placed or not, the roster of surfaces, and
+// `hub.py panel` answering `w.out`. `slow` holds the next read that many clock
+// milliseconds; `fails` names host calls that reject.
+function live(on, { placed = true, surfaces = ['terminal'] } = {}) {
+  const clock = mock.clock(on, { now: NOW })
+  const w = { clock, placed, surfaces, out: aged('0m', '10:00') as object, reads: 0, slow: 0,
+              statuses: [] as (string | undefined)[], fails: new Set<string>() }
+  const or = (name: string, value: unknown) => {
+    if (w.fails.has(name)) throw new Error(`${name} failed`)
+    return { value }
+  }
+  on('command.register', () => ({ value: { command: 'comms' } }))
+  on('ui.open', () => ({ value: w.placed ? { isPlaced: true } : { isPlaced: false, reason: 'narrow' } }))
+  on('ui.panes', () => ({ value: [{ id: 'comms', title: 'Comms', isShown: w.placed, isFocused: false, isPlaced: w.placed }] }))
+  on('ui.status', (_, e) => { w.statuses.push(e.text); return { value: undefined } })
+  on('ui.log', () => ({ value: undefined }))
+  on('session.surfaces', () => or('session.surfaces', w.surfaces))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.attach', (_, e) => ({ clientId: e.clientId }))
+  on('session.detach', (_, e) => ({ clientId: e.clientId }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('process.run', async (_, e) => {
+    if (e.argv[0] === 'bash') return { value: { exitCode: 0, stdout: '/usr/bin/python3.12\n', stderr: '' } }
+    w.reads += 1
+    const answer = w.out
+    const hold = w.slow
+    w.slow = 0
+    if (hold) await clock.sleep(hold)
+    return { value: answer }
+  })
+  return w
+}
+
+async function start($, w) {
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+}
+
+const prsLine = (out: string[]) => out.find(t => t.startsWith('PRS ·'))
+const endTurn = $ => $.turn.complete({ reason: 'answer', answer: 'done', durationMs: 1, isAborted: false, turnId: 't1' })
+
+// It waited a minute: only a phone attaching read, and only the minute's timer if it was drawn.
+test('a pane drawn after waiting undrawn reads at once, not at the next minute', async ($, on) => {
+  const w = live(on, { placed: false })
+  await start($, w)
+  for (let i = 0; i < 10; i++) await w.clock.advance(60_000)
+  w.out = aged('10m', '10:10')
+  w.placed = true
+  await texts($)                                       // the surface asks the pane's ui.render
+  await w.clock.advance(1_000)
+  expect(prsLine(await texts($))).toBe('PRS · 5  as of 10:00 (10m ago)')
+})
+
+test('a draw asks for one read when the last is old, none when it is fresh, and never loops on a failing one', async ($, on) => {
+  const w = live(on)
+  await start($, w)
+  const first = w.reads
+  for (let i = 0; i < 5; i++) await texts($)
+  await w.clock.advance(1_000)
+  expect(w.reads).toBe(first)
+  w.placed = false
+  for (let i = 0; i < 10; i++) await w.clock.advance(60_000)
+  w.out = { exitCode: 1, stdout: '', stderr: TRACEBACK }
+  w.placed = true
+  for (let i = 0; i < 5; i++) await texts($)            // five draws before the read lands
+  await w.clock.advance(1_000)
+  for (let i = 0; i < 5; i++) { await texts($); await w.clock.advance(1_000) }   // and five after it failed
+  expect(w.reads - first).toBe(1)
+})
+
+test('a draw whose clock fails still draws', async ($, on) => {
+  let failing = false
+  on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('clock.now', () => {
+    if (failing) throw new Error('clock.now failed')
+    return { value: NOW }
+  })
+  on('process.run', (_, e) =>
+    ({ value: e.argv[0] === 'bash' ? { exitCode: 0, stdout: '/usr/bin/python3.12\n', stderr: '' } : json(PANEL) }))
+  await $.command.run({ command: 'comms', args: '' })
+  failing = true
+  expect(prsLine(await texts($))).toBe('PRS · 5  as of 10:00 (0m ago)')
+})
+
+test('a desktop client joining is read for at once, as a phone is', async ($, on) => {
+  const w = live(on)
+  await start($, w)
+  const before = w.reads
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:1' })
+  await w.clock.settle()
+  expect(w.reads).toBe(before + 1)
+})
+
+test('a failed read keeps the last good panel, and says why in one line', async ($, on) => {
+  const w = live(on)
+  await start($, w)
+  w.out = { exitCode: 1, stdout: '', stderr: TRACEBACK }
+  await w.clock.advance(60_000)
+  const out = await texts($)
+  expect(out).toContain('NEEDS YOU · 1')
+  expect(out[0]).toBe('read failed, showing 10:00: comms-hub: json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)')
+  expect(out.some(t => t.includes('Traceback'))).toBe(false)
+})
+
+test('with two reads in flight, the pane ends on the one that started last', async ($, on) => {
+  const w = live(on)
+  await start($, w)
+  const foot = async () => (await texts($)).find(t => t.startsWith('next tick'))?.split(' · ').at(-1)
+  w.out = aged('1m', '10:01 before the turn ended')
+  w.slow = 5_000                                       // the minute's read hangs for 5 s
+  await w.clock.advance(60_000)
+  w.out = aged('1m', '10:01 after the turn ended')
+  await endTurn($)                                     // and the turn's own read answers at once
+  await w.clock.settle()
+  const between = await foot()
+  await w.clock.advance(5_000)
+  expect([between, await foot()]).toEqual(['read 10:01 after the turn ended', 'read 10:01 after the turn ended'])
+})
+
+test('session.start raised again (a reload, a worker respawn) is no look, and arms no second timer', async ($, on) => {
+  const w = live(on)
+  await start($, w)
+  const heading = async () => (await texts($)).find(t => t.startsWith('SINCE YOU LOOKED'))
+  expect(await heading()).toBe('SINCE YOU LOOKED · 3 new')
+  await start($, w)
+  expect(await heading()).toBe('SINCE YOU LOOKED · 3 new')
+  const before = w.reads
+  await w.clock.advance(60_000)
+  expect(w.reads).toBe(before + 1)
+})
+
+test('an environment that never heard session.start arms the minute at the first turn end', async ($, on) => {
+  const w = live(on)
+  await endTurn($)
+  await w.clock.settle()
+  const before = w.reads
+  await w.clock.advance(60_000)
+  expect(w.reads).toBe(before + 1)
+})
+
+test('a phone on the roster with no attach heard (as after a reload) keeps its status line', async ($, on) => {
+  const w = live(on, { placed: false, surfaces: ['terminal', 'mobile'] })
+  await start($, w)
+  w.statuses.length = 0
+  await w.clock.advance(60_000)
+  expect(w.statuses.at(-1)?.startsWith('Comms: 1 need you')).toBe(true)
+})
+
+test('a roster that fails to answer stops no read of a drawn pane', async ($, on) => {
+  const w = live(on)
+  await start($, w)
+  w.fails.add('session.surfaces')
+  const before = w.reads
+  await w.clock.advance(60_000)
+  expect(w.reads).toBe(before + 1)
+})
+
+test('a phone still listed when its detach is heard comes off the status line at the next minute', async ($, on) => {
+  const w = live(on, { placed: false, surfaces: ['terminal', 'mobile'] })
+  await start($, w)
+  await $.session.detach({ surface: 'mobile', clientId: 'mobile:1', reason: 'detach' })
+  expect(w.statuses.at(-1)?.startsWith('Comms: ')).toBe(true)
+  w.surfaces = ['terminal']
+  await w.clock.advance(60_000)
+  expect(w.statuses.at(-1)).toBeUndefined()
 })
