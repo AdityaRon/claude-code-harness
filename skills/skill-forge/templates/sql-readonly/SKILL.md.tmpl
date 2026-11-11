@@ -1,0 +1,48 @@
+---
+name: {{name}}
+description: {{description}}
+---
+
+# {{name}}
+
+Answers one question: **{{question}}?** Drafted by skill-forge
+({{archetype}}, {{date}}); edit this file to say which tables answer it.
+
+## Setup, once per machine
+
+- `{{env_prefix}}_PSQL`: the psql command that reaches the database as a
+  read-only role. Borrow an identity where one exists: `kubectl exec -i
+  deploy/<app> -- psql -d <db>` uses the service's own settings. A password
+  goes in PGPASSWORD, PGPASSFILE or a service file; a command line carrying
+  one is refused.
+- `{{env_prefix}}_RELOGIN`: the command that renews access, printed on AUTH.
+- `{{env_prefix}}_EXPECT_DB` (optional): refuse any other database.
+
+## Run
+
+```
+PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
+$PY ~/.claude/skills/{{name}}/bin/{{module}}.py query --sql "SELECT ..."
+```
+
+The statement can come on stdin or from `--file`. `--max-rows` (default 1000)
+caps the rows; `--timeout` (default 30s) bounds the statement on the server.
+
+## Reading the output
+
+The `#` lines say where the answer came from: database, role, replica or
+primary, the command, the row count, and whether it is partial. Paste them
+with any number.
+
+- exit 0 with `EMPTY`: the statement ran and matched nothing.
+- exit 2 `ABSENT`: a table or column does not exist, so the answer is not
+  zero. The closest names follow; usually a wrong identifier form.
+- exit 3 `PARTIAL`: more rows than the cap. Aggregate in SQL.
+- exit 4 `AUTH`: an expired login, not an empty answer. Run the printed
+  re-login command.
+- exit 5 `BLOCKED` or `REFUSED`: not read-only, or not the expected target.
+
+## Gotchas
+
+None yet. When a session hits a trap, add the guard to the engine with its
+test, and one line here.

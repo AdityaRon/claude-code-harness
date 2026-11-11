@@ -1,0 +1,10 @@
+name = "lint-baseline"
+question = "is this flag on for this tenant"
+archetype = "fixture"
+engines = ["engine.py"]
+guards = ["absent", "partial"]
+write_verbs = ['(?i)update\s+flags\s+set']
+sql = true
+audit_table = "flag_audit"
+
+[deps]

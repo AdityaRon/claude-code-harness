@@ -1,0 +1,323 @@
+"""Tests for {{module}}.py. The API is faked at fetch(), and the auth tests fake
+urlopen; no test opens a connection.
+
+Mutations that must turn this file red:
+  no-metric-check: {{module}}.py: `if not api("/api/v1/series", {"match[]": selector(metric), **span, "limit": "1"})["data"]:` => `if False:`
+  no-label-check: {{module}}.py: `if not api("/api/v1/series", {"match[]": selector(metric, label, value), **span, "limit": "1"})["data"]:` => `if False:`
+  warnings-ignored: {{module}}.py: `reasons = list(warn)` => `reasons = []`
+  series-cap-ignored: {{module}}.py: `    if n > cap:` => `    if False:`
+  series-api-warning-ignored: {{module}}.py: `partial = "; ".join(warn) if warn else (` => `partial = None if warn else (`
+  auth-html-missed: {{module}}.py: `if "html" in ctype or body.lstrip()[:1] == "<":` => `if False:`
+  auth-401-missed: {{module}}.py: `if e.code in (401, 403):` => `if False:`
+  lag-unsaid: {{module}}.py: `lag.append(` => `(lambda *a: None)(`
+  points-cap-off: {{module}}.py: `if points > MAX_POINTS:` => `if False:`
+  creds-in-url-ok: {{module}}.py: `if "@" in urllib.parse.urlsplit(url).netloc:` => `if False:`
+  token-in-url: {{module}}.py: `req.add_header("Authorization", "Bearer " + token)` => `req.full_url += "&token=" + token`
+  label-unescaped: {{module}}.py: `+ '="' + esc(value) + '"}'` => `+ '="' + value + '"}'`
+  by-labels-as-metrics: {{module}}.py: `if word.lower() in GROUPING and k < n and expr[k] == "(":` => `if False:`
+  aggregations-as-metrics: {{module}}.py: `KEYWORDS = GROUPING | AGGREGATIONS |` => `KEYWORDS = GROUPING |`
+  ab-unpaired: {{module}}.py: `pairs = sorted(set(a_vals) & set(b_vals))` => `pairs = sorted(set(a_vals) | set(b_vals))`
+  ab-pooled-only: {{module}}.py: `buckets = [("all", ordered)] if not sizes else [` => `buckets = [("all", ordered)] if True else [`
+  ab-few-pairs-ok: {{module}}.py: `partial = None if len(pairs) >= a.min_pairs else` => `partial = None if True else`
+  void-never: {{module}}.py: `void = abs(moved) > a.tolerance` => `void = False`
+  unmasked-series: {{module}}.py: `emit(f"{labels(s['metric'])}  last=` => `sys.stdout.write(f"{labels(s['metric'])}  last=`
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+import urllib.error
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest import mock
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "bin"))
+import mask  # noqa: E402
+import {{module}} as eng  # noqa: E402
+
+ENV = eng.ENV
+END = datetime(2026, 11, 10, 6, 0, tzinfo=timezone.utc)
+T_END = END.timestamp()
+NAMES = ["http_requests_total", "http_request_duration_seconds_count", "up"]
+
+
+def series(metric: dict, values: list, last: float = T_END) -> dict:
+    n = len(values)
+    return {"metric": metric, "values": [[last - 60 * (n - 1 - i), str(v)] for i, v in enumerate(values)]}
+
+
+class FakeApi:
+    """Routes API paths to canned answers; records every call."""
+
+    def __init__(self, result=None, warnings=None, known=None, label_values=None, vector=None, series_data=None, series_warn=None):
+        self.result = result or []
+        self.warnings = warnings or []
+        self.known = known if known is not None else {"http_requests_total": [{"job": "api"}, {"job": "worker"}]}
+        self.label_values = label_values or {}
+        self.vector = vector or (lambda q: [])
+        self.series_data, self.series_warn = series_data, series_warn
+        self.calls = []
+
+    def __call__(self, path, params):
+        self.calls.append((path, params))
+        if path == "/api/v1/status/buildinfo":
+            return {"status": "success", "data": {"version": "2.53.2"}}
+        if path == "/api/v1/query_range":
+            return {"status": "success", "data": {"resultType": "matrix", "result": self.result}, **({"warnings": self.warnings} if self.warnings else {})}
+        if path == "/api/v1/query":
+            return {"status": "success", "data": {"resultType": "vector", "result": self.vector(params["query"])}}
+        if path == "/api/v1/series":
+            if self.series_data is not None and params.get("limit") != "1":
+                return {"status": "success", "data": self.series_data, **({"warnings": self.series_warn} if self.series_warn else {})}
+            sel = params["match[]"]
+            metric = sel.split("{")[0]
+            rows = self.known.get(metric, [])
+            if "{" in sel:
+                label, value = sel[len(metric) + 1:-1].split("=", 1)
+                rows = [r for r in rows if r.get(label) == json.loads(value)]
+            return {"status": "success", "data": rows[:1]}
+        if path == "/api/v1/label/__name__/values":
+            return {"status": "success", "data": NAMES}
+        if path.startswith("/api/v1/label/"):
+            label = path.split("/")[4]
+            return {"status": "success", "data": self.label_values.get(label, [])}
+        raise AssertionError(path)
+
+
+class Run:
+    def __init__(self, fake=None, env=None, patterns=()):
+        self.fake, self.env, self.patterns = fake, env or {}, patterns
+
+    def __call__(self, *argv):
+        tmp = tempfile.TemporaryDirectory()
+        cfg = Path(tmp.name) / "config.toml"
+        cfg.write_text("[mask]\npatterns = " + json.dumps(list(self.patterns)) + "\n")
+        env = {f"{ENV}_PROM_URL": "http://prom.test:9090", "SKILL_FORGE_CONFIG": str(cfg), **self.env}
+        out, err = io.StringIO(), io.StringIO()
+        mask._MASKER = None
+        patches = [mock.patch.dict(os.environ, env)]
+        if self.fake is not None:
+            patches.append(mock.patch.object(eng, "fetch", self.fake))
+        try:
+            for p in patches:
+                p.start()
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = eng.main(list(argv))
+        finally:
+            for p in reversed(patches):
+                p.stop()
+            mask._MASKER = None
+            tmp.cleanup()
+        return rc, out.getvalue(), err.getvalue()
+
+
+AT = ["--end", "2026-11-10T06:00:00Z"]
+
+
+class QueryTest(unittest.TestCase):
+    def test_golden_provenance_header_and_series(self):
+        fake = FakeApi(result=[series({"__name__": "up", "job": "api"}, [1, 1, 0])])
+        rc, out, _ = Run(fake)("query", "up", "--window", "2m", *AT)
+        self.assertEqual(rc, 0)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "# target:  prometheus-compatible http://prom.test:9090 v2.53.2")
+        self.assertEqual(lines[1], "# window:  2026-11-10T05:58:00Z .. 2026-11-10T06:00:00Z (UTC, bounds [start, end], step 60s)")
+        self.assertTrue(lines[2].startswith("# command: "))
+        self.assertEqual(lines[3:], ["# rows:    1 series", "# partial: no", 'up{job="api"}  last=0 min=0 max=1 avg=0.666667 points=3'])
+
+    def test_selectors_skip_functions_grouping_labels_and_ranges(self):
+        got = eng.selectors('sum by (job, code) (rate(http_requests_total{job="api", code=~"5.."}[5m])) / ignoring(code) up offset 5m')
+        self.assertEqual(got, [("http_requests_total", [("job", "=", "api"), ("code", "=~", "5..")]), ("up", [])])
+        self.assertEqual(eng.selectors('{__name__="up", job="x"}'), [("up", [("job", "=", "x")])])
+
+    def test_quoting_a_label_value_with_a_quote_is_escaped(self):
+        self.assertEqual(eng.selector("m", "path", 'a"b\\c'), 'm{path="a\\"b\\\\c"}')
+
+
+class GuardTest(unittest.TestCase):
+    def test_guard_absent_misspelled_metric(self):
+        rc, out, _ = Run(FakeApi())("query", "rate(http_requets_total[5m])", *AT)
+        self.assertEqual(rc, 2)
+        self.assertIn("ABSENT: metric http_requets_total has no series in the window; did you mean http_requests_total?", out)
+
+    def test_guard_absent_wrong_label_value(self):
+        fake = FakeApi(label_values={"job": ["api", "worker"]})
+        rc, out, _ = Run(fake)("instant", 'http_requests_total{job="apii"}', "--at", "2026-11-10T06:00:00Z")
+        self.assertEqual(rc, 2)
+        self.assertIn('ABSENT: no series of http_requests_total has job="apii"; closest: api', out)
+
+    def test_guard_absent_and_empty_differ(self):
+        rc, out, _ = Run(FakeApi())("query", 'rate(http_requests_total{job="api"}[30s])', *AT)
+        self.assertEqual(rc, 0)
+        self.assertIn("EMPTY: the series exist", out)
+        self.assertNotIn("ABSENT", out)
+
+    def test_guard_partial_backend_warning(self):
+        fake = FakeApi(result=[series({"__name__": "up"}, [1])], warnings=["partial response: store unavailable"])
+        rc, out, _ = Run(fake)("query", "up", *AT)
+        self.assertEqual(rc, 3)
+        self.assertIn("# partial: YES: partial response: store unavailable", out)
+
+    def test_guard_partial_more_series_than_the_cap(self):
+        fake = FakeApi(result=[series({"__name__": "up", "i": str(i)}, [i]) for i in range(3)])
+        rc, out, _ = Run(fake)("query", "up", "--max-series", "2", *AT)
+        self.assertEqual(rc, 3)
+        self.assertIn("3 series, printed the first 2", out)
+        self.assertNotIn('i="2"', out)
+
+    def test_guard_partial_series_api_truncation_warning(self):
+        fake = FakeApi(series_data=[{"__name__": "up", "job": "a"}], series_warn=["results truncated due to limit"])
+        rc, out, _ = Run(fake)("series", "up", "--limit", "5", *AT)
+        self.assertEqual(rc, 3)
+        self.assertIn("PARTIAL: results truncated due to limit", out)
+
+    def test_guard_expired_auth_401_is_not_no_data(self):
+        def urlopen(req, timeout):
+            raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {"Content-Type": "text/plain"}, io.BytesIO(b"Unauthorized"))
+        with mock.patch("urllib.request.urlopen", urlopen):
+            rc, out, err = Run(env={f"{ENV}_RELOGIN": "sso-login metrics"})("query", "up", *AT)
+        self.assertEqual(rc, 4)
+        self.assertIn("Re-login with: sso-login metrics", err)
+        self.assertEqual(out, "")
+
+    def test_guard_expired_auth_html_login_page(self):
+        with mock.patch("urllib.request.urlopen", FakeResponse.factory(b"<!doctype html><title>Sign in</title>", "text/html")):
+            rc, _, err = Run()("query", "up", *AT)
+        self.assertEqual(rc, 4)
+        self.assertIn("login wall", err)
+
+    def test_guard_window_is_utc_with_step(self):
+        fake = FakeApi(result=[series({"__name__": "up"}, [1])])
+        _, out, _ = Run(fake)("query", "up", "--window", "1h", "--step", "5m", "--end", "2026-11-09T22:00:00-08:00")
+        self.assertIn("# window:  2026-11-10T05:00:00Z .. 2026-11-10T06:00:00Z (UTC, bounds [start, end], step 5m)", out)
+
+    def test_guard_window_a_stale_end_is_called_out(self):
+        fake = FakeApi(result=[series({"__name__": "up", "job": "api"}, [1, 1], last=T_END - 1800)])
+        _, out, _ = Run(fake)("query", "up", *AT)
+        self.assertIn('WINDOW: up{job="api"} last sample 2026-11-10T05:30:00Z', out)
+
+    def test_guard_window_points_over_the_cap_are_refused(self):
+        rc, _, err = Run(FakeApi())("query", "up", "--window", "30d", "--step", "60s", *AT)
+        self.assertEqual(rc, 5)
+        self.assertIn("raise --step", err)
+
+    def test_guard_wrong_target_credentials_in_the_url_refused(self):
+        rc, _, err = Run(FakeApi(), env={f"{ENV}_PROM_URL": "http://u:" + "pw@prom.test"})("query", "up", *AT)
+        self.assertEqual(rc, 5)
+        self.assertIn("_PROM_TOKEN", err)
+
+    def test_guard_wrong_target_a_naive_end_time_is_refused(self):
+        rc, _, err = Run(FakeApi())("query", "up", "--end", "2026-11-10T06:00:00")
+        self.assertEqual(rc, 5)
+        self.assertIn("timezone", err)
+
+
+class AnalysisTest(unittest.TestCase):
+    def vec(self, q):
+        if q.startswith("avg by (version, tenant)"):
+            rows = []
+            for t, (a, b) in {"t1": (100, 80), "t2": (100, 90), "t3": (100, 120), "t4": (100, 70), "t5": (100, 101), "t6": (50, 25)}.items():
+                rows += [{"metric": {"version": "v1", "tenant": t}, "value": [T_END, str(a)]},
+                         {"metric": {"version": "v2", "tenant": t}, "value": [T_END, str(b)]}]
+            rows.append({"metric": {"version": "v1", "tenant": "only-v1"}, "value": [T_END, "5"]})
+            return rows
+        if q.startswith("sum by (tenant)"):
+            return [{"metric": {"tenant": t}, "value": [T_END, str(s)]} for t, s in {"t1": 1, "t2": 2, "t3": 30, "t4": 40, "t5": 500, "t6": 600}.items()]
+        raise AssertionError(q)
+
+    def test_ab_cohorts_by_version_pairs_and_buckets_by_size(self):
+        rc, out, _ = Run(FakeApi(vector=self.vec))("ab", "latency", "--version-label", "version", "--a", "v1", "--b", "v2",
+                                                   "--by", "tenant", "--size", "requests", *AT)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("# rows:    6 pairs (7 on v1, 6 on v2)", out)
+        self.assertRegex(out, r"small\s+2\s+1..2\s+0.850")
+        self.assertRegex(out, r"large\s+2\s+500..600\s+0.755")
+        self.assertIn("pooled median", out)
+
+    def test_ab_absent_version_names_the_versions_seen(self):
+        rc, out, _ = Run(FakeApi(vector=self.vec))("ab", "latency", "--version-label", "version", "--a", "v1", "--b", "v3", "--by", "tenant", *AT)
+        self.assertEqual(rc, 2)
+        self.assertIn('ABSENT: no series with version="v3"; versions seen: v1, v2', out)
+
+    def test_ab_too_few_pairs_is_partial(self):
+        rc, out, _ = Run(FakeApi(vector=self.vec))("ab", "latency", "--version-label", "version", "--a", "v1", "--b", "v2",
+                                                   "--by", "tenant", "--min-pairs", "10", *AT)
+        self.assertEqual(rc, 3)
+        self.assertIn("PARTIAL: 6 entities ran both versions", out)
+
+    def test_volume_step_voids_a_magnitude_when_the_input_moved(self):
+        calls = []
+
+        def vec(q):
+            calls.append(q)
+            n = len(calls)
+            # before metric, after metric, before input, after input
+            return [{"metric": {}, "value": [T_END, str({1: 10, 2: 20, 3: 100, 4: 200}[n])]}]
+        rc, out, _ = Run(FakeApi(vector=vec))("volume-step", "errors", "--input", "requests", "--at", "2026-11-10T05:00:00Z")
+        self.assertEqual(rc, 3)
+        self.assertIn("VOID: the input moved +100%", out)
+        self.assertIn("change=+0.0%", out.splitlines()[-1])
+
+    def test_volume_step_stands_when_the_input_held(self):
+        calls = []
+
+        def vec(q):
+            calls.append(q)
+            return [{"metric": {}, "value": [T_END, str({1: 10, 2: 20, 3: 100, 4: 105}[len(calls)])]}]
+        rc, out, _ = Run(FakeApi(vector=vec))("volume-step", "errors", "--input", "requests", "--at", "2026-11-10T05:00:00Z")
+        self.assertEqual(rc, 0)
+        self.assertIn("metric  before=10 after=20 change=+100.0%", out)
+        self.assertNotIn("VOID", out)
+
+
+class FakeResponse:
+    def __init__(self, body: bytes, ctype: str):
+        self.body, self.headers = body, {"Content-Type": ctype}
+
+    def read(self):
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    @classmethod
+    def factory(cls, body, ctype, seen=None):
+        def urlopen(req, timeout):
+            if seen is not None:
+                seen.append(req)
+            return cls(body, ctype)
+        return urlopen
+
+
+class TransportTest(unittest.TestCase):
+    def test_token_goes_in_a_header_not_the_url(self):
+        seen = []
+        body = json.dumps({"status": "success", "data": {"resultType": "matrix", "result": []}}).encode()
+        with mock.patch("urllib.request.urlopen", FakeResponse.factory(body, "application/json", seen)), \
+                mock.patch.dict(os.environ, {f"{ENV}_PROM_URL": "http://prom.test", f"{ENV}_PROM_TOKEN": "tok-123456789"}):
+            eng.fetch("/api/v1/query_range", {"query": "up"})
+        self.assertEqual(seen[0].get_header("Authorization"), "Bearer tok-123456789")
+        self.assertNotIn("tok-123456789", seen[0].full_url)
+        self.assertEqual(seen[0].get_method(), "GET")
+
+
+class MaskTest(unittest.TestCase):
+    def test_mask_planted_label_value(self):
+        fake = FakeApi(result=[series({"__name__": "up", "tenant": "cust-acme"}, [1])])
+        rc, out, _ = Run(fake, patterns=[r"\bcust-[a-z]+"])("query", "up", *AT)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("cust-acme", out)
+        self.assertIn('tenant="<masked-1>"', out)
+
+
+if __name__ == "__main__":
+    unittest.main()
