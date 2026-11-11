@@ -11,7 +11,9 @@ Mutations that must turn this file red:
   current-context-assumed: access.py: `        if not ctx:` => `        if False:`
   context-unchecked: access.py: `        if ctx not in out.split():` => `        if False:`
   pod-without-apply: access.py: `    if not apply:` => `    if False:`
-  pod-left-behind: access.py: `            rc, _, err = kubectl(delete)` => `            rc, err = 0, ""`
+  pod-left-behind: access.py: `        rc, _, err = kubectl(delete)` => `        rc, err = 0, ""`
+  interrupted-create-kept: access.py: `        if created is not False:` => `        if created:`
+  refused-create-deleted: access.py: `            created = False   # the API server` => `            created = None   # the API server`
   forward-left-running: access.py: `        stop(p)` => `        pass`
   signals-ignored: access.py: `            old[s] = signal.signal(s, raise_exit)` => `            pass`
   token-in-argv: access.py: `["exec", "-i", self.pod, "--", "curl", "-K", "-"]` => `["exec", "-i", self.pod, "--", "curl", "-K", "-", "-H", str(headers)]`
@@ -84,6 +86,10 @@ STUB = textwrap.dedent('''\
             r = e
         hj = json.dumps({k.lower(): [v] for k, v in r.headers.items()})
         sys.stdout.write(r.read().decode() + "\\n<<sf-access>>%d %s" % (r.status, hj)); sys.exit(0)
+    if "run" in args and mode == "auth-run":
+        print("error: You must be logged in to the server (Unauthorized)", file=sys.stderr); sys.exit(1)
+    if "run" in args and mode == "slow-run":
+        time.sleep(30); sys.exit(0)
     if "delete" in args and mode == "nodelete":
         print("error: connection refused", file=sys.stderr); sys.exit(1)
     sys.exit(0)
@@ -397,6 +403,36 @@ class PodTest(unittest.TestCase):
             r.get("/x")
         self.assertRegex(err.getvalue(), r"LEFTOVER: pod sf-access-[0-9a-f]{8} was not deleted \(error: connection refused\); "
                                          r"delete it with: kubectl --context kind-test --namespace monitoring delete pod")
+
+    def test_a_create_refused_for_auth_deletes_nothing(self):
+        fx = Fixture(self, "auth-run", T_ACCESS="pod prometheus:9090 in monitoring")
+        cm, h = opened(fx, apply=True)
+        err = io.StringIO()
+        with redirect_stderr(err), cm as r:
+            h["r"] = r
+            with self.assertRaises(access.AccessAuth):
+                r.get("/x")
+        self.assertEqual([c[4] for c in fx.calls() if c[:1] == ["--context"]], ["run"])
+        self.assertNotIn("LEFTOVER", err.getvalue())
+
+    def test_a_sigterm_while_the_pod_is_created_still_deletes_it(self):
+        fx = Fixture(self, "slow-run", T_ACCESS="pod prometheus:9090 in monitoring")
+        driver = fx.tmp / "driver.py"
+        driver.write_text(textwrap.dedent(f'''\
+            import sys
+            sys.path.insert(0, {str(BIN)!r})
+            import access
+            with access.route("T", lambda: "http://unused", None, [""], apply=True) as r:
+                r.get("/x")
+            '''))
+        p = subprocess.Popen([sys.executable, str(driver)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        deadline = time.monotonic() + 10
+        while not any("run" in c for c in fx.calls()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        p.send_signal(signal.SIGTERM)
+        self.assertEqual(p.wait(10), 128 + signal.SIGTERM, p.stderr.read())
+        p.stderr.close()
+        self.assertEqual([c[4] for c in fx.calls() if c[:1] == ["--context"]], ["run", "delete"])
 
     def test_an_expired_login_at_exec_is_auth(self):
         fx = Fixture(self, "auth-exec", T_ACCESS="pod prometheus:9090 in monitoring")

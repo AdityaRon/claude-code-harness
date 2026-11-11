@@ -20,9 +20,10 @@ open or probe is kept and raised again on every later request, so no request
 goes out on a route that was never confirmed.
 
 The port-forward and the pod are torn down on every exit: a normal one, an
-exception, SIGINT, SIGTERM or SIGHUP. SIGKILL cannot be caught: the pod's own
-`sleep` ends it within POD_TTL seconds, and a port-forward left behind is a
-local kubectl process to kill by hand. The token travels in a header; on the
+exception, SIGINT, SIGTERM or SIGHUP, even one that lands while `kubectl run`
+is still creating the pod. SIGKILL cannot be caught: the pod's own `sleep` stops
+it within POD_TTL seconds (the stopped pod stays until deleted), and a
+port-forward left behind is a local kubectl process to kill by hand. The token travels in a header; on the
 pod route the URL and headers reach curl as a config on stdin (`curl -K -`), so
 neither is in argv, the pod spec or the cluster's exec audit record.
 """
@@ -232,14 +233,14 @@ def port_forward(kube: list[str], svc: str, port: str):
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except FileNotFoundError:
         raise AccessRefused("kubectl is not on PATH")
-    lines: queue.Queue = queue.Queue()
-    errs: list[str] = []
-    # kubectl prints a line per connection; reading both pipes for the whole run keeps it from blocking.
-    readers = [threading.Thread(target=lambda s=s, put=put: [put(ln) for ln in s], daemon=True)
-               for s, put in ((p.stdout, lines.put), (p.stderr, errs.append))]
-    for t in readers:
-        t.start()
     try:
+        lines: queue.Queue = queue.Queue()
+        errs: list[str] = []
+        # kubectl prints a line per connection; reading both pipes for the whole run keeps it from blocking.
+        readers = [threading.Thread(target=lambda s=s, put=put: [put(ln) for ln in s], daemon=True)
+                   for s, put in ((p.stdout, lines.put), (p.stderr, errs.append))]
+        for t in readers:
+            t.start()
         deadline, local = time.monotonic() + FORWARD_WAIT, None
         while local is None:
             try:
@@ -274,23 +275,34 @@ def pod(kube: list[str], image: str, apply: bool):
                      "--command", "--", "sleep", str(POD_TTL)]
     if not apply:
         raise AccessRefused("the pod route creates a pod, so it needs --apply. It would run\n  " + shlex.join(create)
-                            + f"\nand delete the pod when this run ends (its sleep ends it within {POD_TTL}s if this process is killed)")
-    rc, _, err = kubectl(create)
-    if rc != 0:
-        raise AccessRefused(f"could not create pod {name}: {first(err)}")
+                            + f"\nand delete the pod when this run ends (its sleep stops it within {POD_TTL}s if this process is killed)")
+    created = None   # until kubectl run answers, the pod may exist, so it is deleted
     try:
+        try:
+            rc, _, err = kubectl(create)
+        except AccessAuth:
+            created = False   # the API server turned the request away
+            raise
+        created = rc == 0
+        if not created:
+            raise AccessRefused(f"could not create pod {name}: {first(err)}")
         rc, _, err = kubectl(kube + ["wait", "--for=condition=Ready", f"pod/{name}", "--timeout=90s"], timeout=100)
         if rc != 0:
             raise OSError(f"pod {name} never became ready: {first(err)}")
         yield name
     finally:
-        delete = kube + ["delete", "pod", name, "--wait=false", "--ignore-not-found"]
-        try:
-            rc, _, err = kubectl(delete)
-        except (AccessAuth, AccessRefused, OSError) as e:
-            rc, err = 1, str(e)
-        if rc != 0:
-            emit(f"LEFTOVER: pod {name} was not deleted ({first(err)}); delete it with: {shlex.join(delete)}", err=True)
+        if created is not False:
+            remove(kube, name)
+
+
+def remove(kube: list[str], name: str) -> None:
+    delete = kube + ["delete", "pod", name, "--wait=false", "--ignore-not-found"]
+    try:
+        rc, _, err = kubectl(delete)
+    except (AccessAuth, AccessRefused, OSError) as e:
+        rc, err = 1, str(e)
+    if rc != 0:
+        emit(f"LEFTOVER: pod {name} was not deleted ({first(err)}); delete it with: {shlex.join(delete)}", err=True)
 
 
 @contextmanager
