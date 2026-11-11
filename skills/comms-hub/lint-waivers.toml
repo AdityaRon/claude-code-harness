@@ -16,4 +16,4 @@ reason = "comms-hub's output is queue, panel and draft state read by one session
 reason = "Its 8 scripts print directly (142 lines with print(, grep -c on 2026-11-10). check_draft.py already scans every outgoing Slack draft for secrets and names. Routing output through mask.emit is a change of its own."
 
 [C8]
-reason = "The description says 'Use in the one long-lived comms session on each tick', the phrasing its triggering was tuned for, not the literal 'Use when'. SKILL.md is 512 lines (budget 150) because it is the comms protocol, and it loads only in the comms session. Slimming it is a change of its own."
+reason = "The description says 'Use in the one long-lived comms session on each tick', the phrasing its triggering was tuned for, not the literal 'Use when'. SKILL.md is 514 lines (budget 150; wc -l on 2026-11-10, after #186) because it is the comms protocol, and it loads only in the comms session. Slimming it is a change of its own."
