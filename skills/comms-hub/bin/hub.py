@@ -1215,18 +1215,22 @@ def panel(cfg: dict) -> dict:
             "last_tick": f"{dated(rows[scans[-1]])}, " + (
                 "quiet" if not since_scan else f"{len(since_scan)} event{'s' * (len(since_scan) != 1)}")
             + (f" · {len(late)} missed since" if late else "")
-            if scans else "none yet", "read": f"{local_now(cfg):%H:%M}", "trigger": trigger_expired(cfg)}
+            if scans else "none yet", "read": f"{local_now(cfg):%H:%M}",
+            "trigger": trigger_expired(cfg, parse_time(rows[scans[-1]]["ts"]) if scans else None)}
 
 
-def trigger_expired(cfg: dict) -> str:
+def trigger_expired(cfg: dict, last_scan: dt.datetime | None = None) -> str:
     """Said once Claude Code has deleted the tick's trigger: after that no tick
-    runs, and the pane only counted the ticks missed, with no reason."""
+    runs, and the pane only counted the ticks missed, with no reason. A scan
+    since then says ticks still run: the trigger was renewed and not recorded."""
     try:
         created = parse_time(_record(cfg, "trigger.json").get("created"))
     except ValueError:
         return ""
     gone = created + dt.timedelta(days=TRIGGER_EXPIRY_DAYS) if created else None
-    return f"trigger expired {_when(cfg, gone)}" if gone and gone <= now() else ""
+    if not gone or gone > now() or (last_scan and last_scan > gone):
+        return ""
+    return f"trigger expired {_when(cfg, gone)}"
 
 
 def pending_scheduled(cfg: dict) -> list[dict]:

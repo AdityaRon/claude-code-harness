@@ -64,8 +64,10 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   gate-pending-pruned: hub.py: `ahead = s.get("send") == "schedule" and not s.get("withdrawn_at") and (parse_time(s.get("post_at")) or at) > at` => `ahead = False`
   gate-withdrawn-kept: hub.py: `== "schedule" and not s.get("withdrawn_at") and (` => `== "schedule" and (`
   gate-half-kept: hub.py: `ahead = False  # a record left half a month ago is no record` => `ahead = True`
-  trigger-expiry-unsaid: hub.py: `return f"trigger expired {_when(cfg, gone)}" if gone and gone <= now() else ""` => `return ""`
-  trigger-expiry-early: hub.py: `if gone and gone <= now() else ""` => `if gone else ""`
+  trigger-expiry-unsaid: hub.py: `return f"trigger expired {_when(cfg, gone)}"` => `return ""`
+  trigger-expiry-early: hub.py: `if not gone or gone > now() or (last_scan and last_scan > gone):` => `if not gone or (last_scan and last_scan > gone):`
+  trigger-renewed-unread: hub.py: `if not gone or gone > now() or (last_scan and last_scan > gone):` => `if not gone or gone > now():`
+  trigger-scans-unpassed: hub.py: `"trigger": trigger_expired(cfg, parse_time(rows[scans[-1]]["ts"]) if scans else None)}` => `"trigger": trigger_expired(cfg)}`
   trigger-junk-crashes: hub.py: `    except ValueError:
         return ""
     gone =` => `    except OSError:
@@ -443,6 +445,13 @@ class NoTickDue(unittest.TestCase):
             self.assertEqual(said(json.dumps({"expr": "x", "created": "2026-10-14T17:07:00+00:00"})), "", "it expires at 10:07")
             self.assertEqual(said(json.dumps({"created": "not a time"})), "")
             self.assertEqual(said('{"created": "2026-10-1'), "")
+            # Renewed with no record: a scan since the expiry says ticks still run.
+            main_out("log", "--kind", "scan", "scan started", now="2026-10-21T16:45:00+00:00")
+            self.assertEqual(said(json.dumps({"expr": "x", "created": "2026-10-14T16:07:00+00:00"})), "")
+            self.assertEqual(said(json.dumps({"expr": "x", "created": "2026-10-14T15:00:00+00:00"})), "",
+                             "expired 08:00, a scan at 09:45")
+            self.assertEqual(said(json.dumps({"expr": "x", "created": "2026-10-14T16:50:00+00:00"})), "trigger expired 09:50",
+                             "the 09:45 scan was before it")
 
     def test_a_row_before_the_days_first_scan_does_not_hide_the_last_scan(self):
         """A draft held at 07:00 started the day's log, which then read "none yet"
