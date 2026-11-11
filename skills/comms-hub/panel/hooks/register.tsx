@@ -7,12 +7,16 @@ import type { Look, Panel, Prs, Snapshot, View } from '../types'
 // what needs the user, where their PRs stand, what goes out and when, what is
 // with other sessions, and what changed since they last looked. `hub.py panel`
 // sorts and names it all (run.py --mutate tests it there); this lays it out.
-// It reads files only: no model call, no tokens. `hub.py launch` loads it into
-// the comms session alone.
+// It reads files, and every CHECK_EVERY minutes while drawn asks GitHub for the
+// PRs listed (`queue.py check`): no model call, no tokens. `hub.py launch`
+// loads it into the comms session alone.
 const PANE = 'comms'
 const TITLE = 'Comms'
 // The minute read; a drawn snapshot older than 1.5 of these asks for its own.
 const PERIOD = 60_000
+// Between ticks, an approval or a merge stayed under NEEDS YOU until the next
+// scan: every fifth minute read also asks GitHub, one query per 25 PRs.
+const CHECK_EVERY = 5
 const EMPTY: Snapshot = { panel: null, problem: '', readAt: 0 }
 // Change a tag when its fields change: it declines what an earlier version
 // stored, which outlives a reload.
@@ -38,15 +42,37 @@ let asked = false
 // timed, so a clock set back makes no read late.
 let begun = 0
 let shown = 0
+// Minute reads since the timer was armed, and whether a check is in flight.
+let minutes = 0
+let checking = false
 
-async function hub($: EngineInterface, args: string[]) {
+async function script($: EngineInterface, name: string, args: string[], timeoutMs: number) {
   const bin = `${$.plugin.root}/../bin`
   if (!python) {
     const py = await $.process.run(['bash', `${bin}/python.sh`], { timeoutMs: 10_000 })
     if (py.exitCode !== 0) throw new Error(py.stderr.trim() || 'python.sh found no interpreter')
     python = py.stdout.trim()
   }
-  return $.process.run([python, `${bin}/hub.py`, ...args], { timeoutMs: 20_000 })
+  return $.process.run([python, `${bin}/${name}`, ...args], { timeoutMs })
+}
+
+const hub = ($: EngineInterface, args: string[]) => script($, 'hub.py', args, 20_000)
+
+// The PRs read again (two tries of 45s at most, in hub.Gh), then the pane read
+// again. Never awaited by a read, and what fails goes to the debug log alone:
+// the pane says what the scan said until a check lands.
+async function checkPrs($: EngineInterface): Promise<void> {
+  if (checking) return
+  checking = true
+  try {
+    const out = await script($, 'queue.py', ['check'], 100_000)
+    if (out.exitCode === 0) await refresh($)
+    else $.ui.log(`comms panel: queue.py check: ${(out.stdout.trim() || out.stderr.trim()).split('\n').at(-1)}`, { to: 'debug' })
+  } catch (err) {
+    $.ui.log(`comms panel: queue.py check: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+  } finally {
+    checking = false
+  }
 }
 
 async function snapshotOf($: EngineInterface): Promise<Snapshot> {
@@ -105,7 +131,10 @@ async function refresh($: EngineInterface): Promise<Snapshot> {
 function arm($: EngineInterface): void {
   minute ??= $.clock.every(PERIOD, () => {
     void Promise.all([$.ui.panes().catch(() => []), phoneHere($)]).then(([panes, phone]) => {
-      if (phone || panes.some(p => p.id === PANE && p.isPlaced)) return refresh($)
+      if (phone || panes.some(p => p.id === PANE && p.isPlaced)) {
+        if (++minutes % CHECK_EVERY === 0) void checkPrs($)
+        return refresh($)
+      }
       // The phone left while its detach still listed it.
       if (pinned) {
         $.ui.status(undefined)
@@ -413,6 +442,7 @@ export const register: Register = on => {
               <Text weight="bold" color="claude">{`PRS · ${prs.rows.length}`}</Text>
               {prs.stale ? <Text color="warning">{`  stale, as of ${prs.as_of || 'never'}${prs.age ? ` (${prs.age} ago)` : ''}`}</Text>
                          : <Text dimColor>{`  as of ${prs.as_of} (${prs.age} ago)`}</Text>}
+              {prs.checked ? <Text dimColor>{`  checked ${prs.checked}`}</Text> : ''}
               {prs.parked ? <Text dimColor>{`  ${prs.parked} parked`}</Text> : ''}
             </Text>
             {prs.repos.length > 0 && (

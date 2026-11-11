@@ -23,6 +23,13 @@ Mutations (run.py --mutate applies each and expects this file to fail):
         emit(f"gate-pruned:` => `    if False:
         emit(f"gate-pruned:`
   gate-unpruned: queue.py: `pruned = hub.prune_gate(cfg)` => `pruned = 0`
+  check-stops-scans: queue.py: `if args.command == "check":` => `if False:`
+  check-in-quiet-hours: queue.py: `if hub.window(cfg, at)[1]:` => `if False:`
+  check-partial-pages-read: queue.py: `if not pr or pr["reviews"]["pageInfo"]["hasNextPage"] or pr["reviewThreads"]["pageInfo"]["hasNextPage"]:` => `if not pr:`
+  check-gone-kept: queue.py: `out[ref] = {"gone": why} if pr["state"] != "OPEN" else` => `out[ref] = {"gone": why} if False else`
+  check-unanswered: queue.py: `{"facts": pr_facts(ref, pr, me), "answered": why}` => `{"facts": pr_facts(ref, pr, me), "answered": ""}`
+  check-of-unset: queue.py: `json.dumps({"checked_at": at.isoformat(), "of": data["written_at"], "prs": out})` => `json.dumps({"checked_at": at.isoformat(), "of": "", "prs": out})`
+  partial-answer-fails: hub.py: `if isinstance(body, dict) and isinstance(body.get("data"), dict):` => `if p.returncode == 0 and isinstance(body, dict) and isinstance(body.get("data"), dict):`
   main-thread-wall: queue.py: `if time.time() - wall0 > wall_limit:` => `if False:`
   monotonic-watchdog: queue.py: `clock = time.time` => `clock = time.monotonic`
   watchdog-no-exit: queue.py: `exit_fn(3)` => `pass`
@@ -91,8 +98,10 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   regate-fail-unchecked: queue.py: `(hub.parse_time(s.get("regated_at")), hub.parse_time(s.get("claim_moved_at")))` => `(hub.parse_time(s.get("regated_at")),)`
   morning-gate-unchecked: queue.py: `checked = max([dt.datetime.fromtimestamp(s.get("passed_at") or 0, dt.timezone.utc)]` => `checked = max([dt.datetime.fromtimestamp(0, dt.timezone.utc)]`
   relook-never: queue.py: `elif sha and sha != pr["headRefOid"] and not r["text"].startswith("re-look"):` => `elif False:`
-  approval-never-closes: queue.py: `decided = (mine or {}).get("state") in ("APPROVED", "CHANGES_REQUESTED")` => `decided = False`
-  merge-never-closes: queue.py: `if pr["state"] != "OPEN" or decided:` => `if decided:`
+  approval-never-closes: queue.py: `return DECIDED.get((mine or {}).get("state"), "")` => `return ""`
+  merge-never-closes: queue.py: `        return pr["state"].lower()
+    mine = next(` => `        pass
+    mine = next(`
   prs-written-blocked: queue.py: `emit("prs: not written (BLOCKED); the panel keeps the last scan's, with its age")
     else:` => `pass
     if True:`
@@ -717,6 +726,104 @@ class Parked(unittest.TestCase):
         self.assertEqual([p["ref"] for p in prs["reviewing"]], ["acme/app#14"])
         self.assertEqual([p["ref"] for p in prs["authored"]], ["acme/app#1", "acme/app#5"])
         self.assertNotIn("re-look: new commits", [r["text"] for r in rows if r["kind"] == "todo"])
+
+
+SHA_A, SHA_B = "a" * 40, "b" * 40
+
+
+class Check(unittest.TestCase):
+    """Between ticks an approval or a merge stayed under NEEDS YOU until the next scan."""
+
+    WRITTEN = "2026-10-21T16:44:00+00:00"
+
+    def seed(self, env):
+        env.state.mkdir(parents=True, exist_ok=True)
+        facts = {"url": "", "title": "t", "author": "teammate", "ci": "green", "decision": None, "merge": "CLEAN",
+                 "approvals": [], "changes_requested": [], "unresolved": 0, "requested": []}
+        (env.state / "prs.json").write_text(json.dumps({
+            "written_at": self.WRITTEN,
+            "reviewing": [{**facts, "ref": "acme/app#31", "head": SHA_B, "my_state": "COMMENTED", "my_sha": SHA_A,
+                           "requested_me": False}],
+            "authored": [{**facts, "ref": "acme/app#40", "head": SHA_B, "my_state": None, "my_sha": None}]}))
+        (env.state / "last-scan").write_text(self.WRITTEN + "\n")
+        return (env.state / "prs.json").read_bytes()
+
+    @staticmethod
+    def gh(body, code=0):
+        calls = []
+
+        def run(args, timeout):
+            calls.append(list(args))
+            return subprocess.CompletedProcess(args, code, json.dumps(body) if body is not None else "",
+                                               "gh: Could not resolve to a PullRequest" if code else "")
+        return hub.Gh(runner=run, pause=0), calls
+
+    @staticmethod
+    def approved():
+        return detail(31, author="teammate", head=SHA_B, reviews=[rv(ME, "APPROVED", "2026-10-21T16:50:00Z", oid=SHA_B)])
+
+    def checked(self, gh, now=NOW):
+        out = []
+        with Env(now=now) as env:
+            before = self.seed(env)
+            rc = q.check(hub.load_config(), gh, emit=out.append)
+            p = env.state / "prs-checked.json"
+            rec = json.loads(p.read_text()) if p.is_file() else None
+            files = sorted(x.name for x in env.state.iterdir())
+            untouched = (env.state / "prs.json").read_bytes() == before \
+                and (env.state / "last-scan").read_text() == self.WRITTEN + "\n"
+        return rc, out, rec, files, untouched
+
+    def test_one_query_reads_the_listed_prs_and_writes_its_own_file_alone(self):
+        gh, calls = self.gh({"data": {"p0": {"pullRequest": self.approved()},
+                                      "p1": {"pullRequest": detail(40, state="MERGED")}}})
+        rc, out, rec, files, untouched = self.checked(gh)
+        self.assertEqual((rc, out), (0, ["check: 2 read, 2 answered or closed"]))
+        self.assertEqual(len(calls), 1, "one query for both")
+        query = next(a for a in calls[0] if a.startswith("query="))
+        self.assertNotIn("acme", query, "owner, name and number go as variables")
+        self.assertTrue({"o0=acme", "n0=app", "p0=31", "p1=40"} <= set(calls[0]))
+        self.assertEqual((rec["of"], rec["checked_at"]), (self.WRITTEN, NOW))
+        self.assertEqual(rec["prs"]["acme/app#40"], {"gone": "merged"})
+        mine = rec["prs"]["acme/app#31"]
+        self.assertEqual((mine["answered"], mine["facts"]["my_state"], mine["facts"]["my_sha"]), ("you approved", "APPROVED", SHA_B))
+        self.assertEqual(files, ["last-scan", "prs-checked.json", "prs.json"], "no log, no pid file, no history")
+        self.assertTrue(untouched, "prs.json and last-scan are the scan's")
+
+    def test_a_pr_github_cannot_resolve_stays_as_the_scan_had_it(self):
+        gh, _ = self.gh({"data": {"p0": None, "p1": {"pullRequest": detail(40, state="MERGED")}},
+                         "errors": [{"type": "NOT_FOUND", "message": "Could not resolve"}]}, code=1)
+        rc, out, rec, _, _ = self.checked(gh)
+        self.assertEqual((rc, out), (0, ["check: 1 read, 1 answered or closed, 1 unread (acme/app#31)"]))
+        self.assertEqual(sorted(rec["prs"]), ["acme/app#40"])
+
+    def test_a_pr_with_more_reviews_than_a_page_is_unread(self):
+        many = self.approved()
+        many["reviews"]["pageInfo"]["hasNextPage"] = True
+        gh, _ = self.gh({"data": {"p0": {"pullRequest": many}, "p1": {"pullRequest": detail(40)}}})
+        rc, out, rec, _, _ = self.checked(gh)
+        self.assertEqual(out, ["check: 1 read, 0 answered or closed, 1 unread (acme/app#31)"])
+        self.assertEqual(rec["prs"]["acme/app#40"]["answered"], "")
+
+    def test_outside_the_window_it_asks_github_nothing(self):
+        gh, calls = self.gh({"data": {}})
+        rc, out, rec, _, _ = self.checked(gh, now="2026-10-21T03:00:00+00:00")   # 20:00
+        self.assertEqual((rc, out, calls, rec), (0, ["check: the window is closed"], [], None))
+
+    def test_github_unread_writes_nothing(self):
+        gh, _ = self.gh(None, code=1)
+        rc, out, rec, _, _ = self.checked(gh)
+        self.assertEqual((rc, rec), (1, None))
+        self.assertTrue(out[0].startswith("check: GitHub unread: "), out)
+
+    def test_it_stops_no_scan(self):
+        gh, _ = self.gh({"data": {"p0": {"pullRequest": self.approved()}, "p1": {"pullRequest": detail(40)}}})
+        with Env(now=NOW) as env:
+            self.seed(env)
+            (env.state / "queue.pid").write_text("999999 2026-10-21T16:59:00+00:00\n")
+            rc = q.main(["check"], gh=gh)
+            pid = (env.state / "queue.pid").read_text()
+        self.assertEqual((rc, pid), (0, "999999 2026-10-21T16:59:00+00:00\n"))
 
 
 class GatePruned(unittest.TestCase):
