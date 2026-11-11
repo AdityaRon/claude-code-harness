@@ -6,9 +6,6 @@
 [C1]
 reason = "resolve_threads.py's GraphQL write already passes (behind --apply, with a dry-run test). review_lint.py's only write, the review POST, is gated by its own --post flag: without it the script lints and posts nothing, which is the dry run convention 1 asks for under another name. Renaming the flag would break the commands the comms tick already runs."
 
-[C3]
-reason = "The two hits (tests/test_check_draft.py:159 and :161) are fake secret shapes that test check_draft.py's own secret detector. They are built from fragments or marked EXAMPLE, and are not credentials."
-
 [C6]
 reason = "comms-hub's output is queue, panel and draft state read by one session, not an answer pasted elsewhere, so it carries no provenance header. Adding header() to its 8 scripts is a change of its own."
 
