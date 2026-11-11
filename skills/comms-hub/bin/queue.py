@@ -11,10 +11,11 @@ drafts left out), AWAITING (my open PRs with nothing new from anyone), OUTBOUND
 (activity on my PRs, open or merged within merged_days, newer than my last
 reply; an approval or a dismissal that only approves, no body or "LGTM", is not
 activity I owe a reply), ROUTE (each of those that asks something: a
-[consider], [question] or [blocking] tag, a '?' outside code, links and quotes,
-or changes requested), DRIFT (an approval pinned to an older head), UNKNOWN (a
-PR that could not be read). The header prints search-quota, my-open-xcheck and,
-for a watched author the search finds nothing for, whether graphql agrees.
+[consider], [question], [blocking] or [do] tag, a '?' outside code, links and
+quotes, or changes requested), DRIFT (an approval pinned to an older head),
+UNKNOWN (a PR that could not be read). The header prints search-quota,
+my-open-xcheck and, for a watched author the search finds nothing for, whether
+graphql agrees.
 
 The scan writes to the log itself, each row once (`key=` in its detail): a
 `todo` per ROUTE item and per review or re-look, before the session starts the
@@ -274,7 +275,7 @@ def fetch_pr(gh: hub.Gh, ref: str) -> dict:
     return pr
 
 
-TAG = re.compile(r"\[(consider|question|blocking)\]", re.I)
+TAG = re.compile(r"\[(consider|question|blocking|do)\]", re.I)
 # What an approval says when it asks nothing. The ask check runs first, so
 # "looks good, but why X?" is still a question.
 ACK = re.compile(r"lgtm|looks good( to me)?|ship ?it|approved?|thanks?( you)?|thank you|nice( work| one)?|"
@@ -282,10 +283,11 @@ ACK = re.compile(r"lgtm|looks good( to me)?|ship ?it|approved?|thanks?( you)?|th
 
 
 def ask_kind(body: str) -> str:
-    """What a review, comment or thread comment asks: "consider", "question" or
-    "blocking" from its tag, else "question" for a '?' outside code, links and
-    quoted lines, else ''. A quote is the line being answered, not a new ask.
-    An approval with a [consider] once logged as status and routed nothing."""
+    """What a review, comment or thread comment asks: "consider", "question",
+    "blocking" or "do" from its tag, else "question" for a '?' outside code,
+    links and quoted lines, else ''. A quote is the line being answered, not a
+    new ask. An approval with a [consider] once logged as status and routed
+    nothing, and four [do] items once routed nothing: an instruction has no '?'."""
     m = TAG.search(body)
     if m:
         return m.group(1).lower()
