@@ -1399,7 +1399,10 @@ class Gh:
         self.retries = retries
         self.pause = float(os.environ.get("COMMS_HUB_GH_RETRY_PAUSE", "2")) if pause is None else pause
 
-    def run(self, args: list[str]) -> str:
+    def run(self, args: list[str], take=None):
+        """gh's stdout once it exits 0; with `take`, what take makes of each
+        finished call instead, tried again while it gives None."""
+        take = take or (lambda p: p.stdout if p.returncode == 0 else None)
         why = ""
         for attempt in range(self.retries + 1):
             try:
@@ -1409,8 +1412,9 @@ class Gh:
             except OSError as e:
                 raise GhError(f"gh did not start: {e}")
             else:
-                if p.returncode == 0:
-                    return p.stdout
+                got = take(p)
+                if got is not None:
+                    return got
                 why = (p.stderr or p.stdout or "").strip().splitlines()[-1:] or [f"exit {p.returncode}"]
                 why = why[0][:300]
             if attempt < self.retries:
@@ -1438,25 +1442,15 @@ class Gh:
         alias it cannot resolve (a PR deleted, a repo gone) comes back null, and
         gh exits 1 with the rest printed (measured 2026-11-10). Raises only when
         no data came back at all."""
-        args, why = self._graphql_args(query, variables), ""
-        for attempt in range(self.retries + 1):
+        def take(p):
             try:
-                p = self.runner(args, self.timeout)
-            except subprocess.TimeoutExpired:
-                why = f"timed out after {self.timeout:g}s"
-            except OSError as e:
-                raise GhError(f"gh did not start: {e}")
-            else:
-                try:
-                    body = json.loads(p.stdout or "")
-                except ValueError:
-                    body = None
-                if isinstance(body, dict) and isinstance(body.get("data"), dict):
-                    return body["data"], [e.get("message", "?") for e in body.get("errors") or []]
-                why = ((p.stderr or p.stdout or "").strip().splitlines()[-1:] or [f"exit {p.returncode}"])[0][:300]
-            if attempt < self.retries:
-                time.sleep(self.pause)
-        raise GhError(f"gh api graphql: {why} (tried {self.retries + 1}x)")
+                body = json.loads(p.stdout or "")
+            except ValueError:
+                return None
+            if isinstance(body, dict) and isinstance(body.get("data"), dict):
+                return body["data"], [e.get("message", "?") for e in body.get("errors") or []]
+            return None
+        return self.run(self._graphql_args(query, variables), take)
 
     def graphql(self, query: str, **variables) -> dict:
         args = self._graphql_args(query, variables)

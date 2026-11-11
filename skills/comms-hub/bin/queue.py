@@ -422,7 +422,7 @@ CHECK_FIELDS = """fragment F on PullRequest{number url title state isDraft headR
  commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage}
   nodes{__typename ... on CheckRun{name status conclusion startedAt completedAt}
   ... on StatusContext{context state createdAt}}}}}}}}"""
-CHECK_BATCH = 25  # PRs a query: three cost 1 point of the hour's 5,000 (measured 2026-11-10)
+CHECK_BATCH = 25  # PRs a query: 3 or 25 cost 1 point of the hour's 5,000 (measured 2026-11-10)
 
 
 def check_query(n: int) -> str:
