@@ -1003,11 +1003,13 @@ MERGEABLE = ("CLEAN", "HAS_HOOKS", "UNSTABLE")
 STRIP_DAYS = 5
 
 
-def prs_panel(cfg: dict, verdicts: dict[str, str]) -> dict:
+def prs_panel(cfg: dict, verdicts: dict[str, str], lag: dt.timedelta = dt.timedelta(0)) -> dict:
     """The PRS section from the last prs.json, which a scan that did not end
     BLOCKED writes: what needs the user first, a count per repo, and how old it
-    is. A file older than two ticks, or one a later scan did not replace, is
-    stale and says so: never shown as live. `verdicts` maps owner/repo#N to an
+    is. A file two ticks were due after (by their usual `lag` and LATE_GRACE),
+    or one a later scan did not replace, is stale and says so: never shown as
+    live. After the window's last tick none is due, so an evening's file is old,
+    not stale. `verdicts` maps owner/repo#N to an
     open review row's text (approvable, needs your read, re-look)."""
     d = state_dir(cfg)
     try:
@@ -1046,8 +1048,9 @@ def prs_panel(cfg: dict, verdicts: dict[str, str]) -> dict:
         c[0] += r["needs"]
         c[1] += 1
     last_scan = parse_time((d / "last-scan").read_text().strip()) if (d / "last-scan").is_file() else None
-    every = cfg["active_hours"]["every_minutes"]
-    stale = written is None or now() - written > dt.timedelta(minutes=2 * every) \
+    # The amber said "stale" every evening and weekend, when no tick was due.
+    second = next_tick(cfg, next_tick(cfg, written) or now()) if written else None
+    stale = written is None or bool(second and second + lag + LATE_GRACE <= now()) \
         or bool(last_scan and last_scan - written > dt.timedelta(minutes=1))
     return {"as_of": _when(cfg, written) if written else "", "age": _age(written) if written else "", "stale": stale,
             "repos": [{"repo": k, "needs": v[0], "total": v[1]} for k, v in sorted(repos.items(), key=lambda kv: (-kv[1][0], kv[0]))],
@@ -1098,40 +1101,47 @@ def panel(cfg: dict) -> dict:
                  "since": _when(cfg, parse_time(r["ts"]))} for r in routed_]
     logs = sorted(p.stem for p in (d / "log").glob("*.md") if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.stem)) \
         if (d / "log").is_dir() else []
-    newest = logs[-1] if logs else ""
+    today = f"{local_now(cfg):%Y-%m-%d}"
+
+    def dated(r: dict) -> str:
+        """A bare time is today's: on Monday morning, Friday's rows read as Friday's."""
+        return r["at"] if r["day"] == today else f"{dt.date.fromisoformat(r['day']):%a} {r['at']}"
+
     # The log day before too: the first scan after midnight starts a new file,
     # and the evening the user has not looked at yet once went with the old one.
     recent = [r for r in folded(cfg, OPEN_DAYS) if r["day"] in logs[-2:]]
-    events = [{"key": f"row:{r['id']}", "ts": r["ts"],
-               "at": r["at"] if r["day"] == newest else f"{dt.date.fromisoformat(r['day']):%a} {r['at']}",
+    events = [{"key": f"row:{r['id']}", "ts": r["ts"], "at": dated(r),
                "kind": r["kind"], "ref": short_ref(cfg, r["ref"]), "target": target_label(cfg, r["target"]),
                "text": r["text"], "corrected": bool(r.get("corrected"))}
               for r in reversed(recent) if r["kind"] not in UNSHOWN]
-    raw = day_rows(cfg, dt.date.fromisoformat(newest)) if newest else []
-    scans = [i for i, r in enumerate(raw) if r["kind"] == "scan"]
-    since_scan = [r for r in raw[scans[-1] + 1:] if r["kind"] not in UNSHOWN + ("tick", "setup")] if scans else []
-    rows = [r for day in logs[-2:] for r in day_rows(cfg, dt.date.fromisoformat(day))]
+    # Every row of the days an item stays open: a row logged before the day's
+    # first scan started a file with no scan in it, which read "none yet" and
+    # hid the ticks missed since the last one.
+    rows = rows_since(cfg, now() - dt.timedelta(days=OPEN_DAYS))
+    scans = [i for i, r in enumerate(rows) if r["kind"] == "scan"]
+    since_scan = [r for r in rows[scans[-1] + 1:] if r["kind"] not in UNSHOWN + ("tick", "setup")] if scans else []
     lag = tick_lag(cfg, rows) or dt.timedelta(0)
     # From now less the lag: at 08:10 the 08:07 tick is still to come.
     nxt = next_tick(cfg, now() - lag)
     lag_m = round(lag.total_seconds() / 60)
     # Ticks due since the last scan that have not run by their usual lag and a grace.
-    late = untraced(cfg, parse_time(raw[scans[-1]]["ts"]), now() - lag - LATE_GRACE, rows) if scans else []
+    late = untraced(cfg, parse_time(rows[scans[-1]]["ts"]), now() - lag - LATE_GRACE, rows) if scans else []
     verdicts = {}
     for r in asks:
         m = re.search(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", r["ref"] or "") \
             or re.fullmatch(r"([\w.-]+)/([\w.-]+)#(\d+)", (r["ref"] or "").strip())
         if r["kind"] == "reviewed" and m:
             verdicts[f"{m.group(1)}/{m.group(2)}#{m.group(3)}"] = r["text"]
-    return {"state": str(d), "day": f"{dt.date.fromisoformat(newest):%a %d %b}" if newest else "",
-            "prs": prs_panel(cfg, verdicts),
+    # Today, not the newest log day: each morning before the first scan it said yesterday.
+    return {"state": str(d), "day": f"{local_now(cfg):%a %d %b}",
+            "prs": prs_panel(cfg, verdicts, lag),
             "needs": needs, "going": going_out(cfg), "sessions": sessions, "held": held, "events": events,
             # The schedule's time, and how late scans have started after it lately.
             "next_tick": _when(cfg, nxt) + (f" (+{lag_m}m lately)" if lag_m else "") if nxt else "none scheduled",
             # When the last scan started (the pane says "last scan": one run by hand
             # outside the window counts too), what it logged ("1 item" once read as
             # sends, or problems), and the ticks due since that did not run.
-            "last_tick": f"{raw[scans[-1]]['at']}, " + (
+            "last_tick": f"{dated(rows[scans[-1]])}, " + (
                 "quiet" if not since_scan else f"{len(since_scan)} event{'s' * (len(since_scan) != 1)}")
             + (f" · {len(late)} missed since" if late else "")
             if scans else "none yet", "read": f"{local_now(cfg):%H:%M}"}

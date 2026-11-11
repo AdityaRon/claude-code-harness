@@ -31,7 +31,11 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   merge-not-needs: hub.py: `merge_me = p.get("decision") == "APPROVED" and p.get("merge") in MERGEABLE` => `merge_me = False`
   needs-unsorted: hub.py: `rows.sort(key=lambda r: (not r["needs"], r["group"] != "reviewing", short_ref(cfg, r["ref"])))` => `rows.sort(key=lambda r: short_ref(cfg, r["ref"]))`
   repo-needs-uncounted: hub.py: `c[0] += r["needs"]` => `pass`
-  old-file-live: hub.py: `stale = written is None or now() - written > dt.timedelta(minutes=2 * every) \` => `stale = written is None or False \`
+  old-file-live: hub.py: `stale = written is None or bool(second and second + lag + LATE_GRACE <= now()) \` => `stale = written is None or False \`
+  stale-after-one-tick: hub.py: `second = next_tick(cfg, next_tick(cfg, written) or now()) if written else None` => `second = next_tick(cfg, written) if written else None`
+  stale-without-lag: hub.py: `second + lag + LATE_GRACE <= now()` => `second + LATE_GRACE <= now()`
+  stale-without-grace: hub.py: `second + lag + LATE_GRACE <= now()` => `second + lag <= now()`
+  stale-without-the-usual-lag: hub.py: `"prs": prs_panel(cfg, verdicts, lag),` => `"prs": prs_panel(cfg, verdicts),`
   blocked-scan-live: hub.py: `or bool(last_scan and last_scan - written > dt.timedelta(minutes=1))` => `or False`
   bad-file-crashes: hub.py: `except (OSError, ValueError, KeyError, TypeError):
         data, written = None, None` => `except OSError:
@@ -40,9 +44,12 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   strip-uncounted: hub.py: `counts[r["day"]][r["event"]] += 1` => `pass`
   events-oldest-first: hub.py: `for r in reversed(recent) if` => `for r in recent if`
   events-yesterday-dropped: hub.py: `if r["day"] in logs[-2:]]` => `if r["day"] in logs[-1:]]`
-  events-yesterday-undated: hub.py: `"at": r["at"] if r["day"] == newest else` => `"at": r["at"] if True else`
-  last-tick-counts-all: hub.py: `r in raw[scans[-1] + 1:]` => `r in raw`
-  last-tick-untimed: hub.py: `"last_tick": f"{raw[scans[-1]]['at']}, " + (` => `"last_tick": "" + (`
+  events-yesterday-undated: hub.py: `return r["at"] if r["day"] == today else` => `return r["at"] if True else`
+  header-newest-log-day: hub.py: `"day": f"{local_now(cfg):%a %d %b}",` => `"day": f"{dt.date.fromisoformat(logs[-1]):%a %d %b}" if logs else "",`
+  last-tick-counts-all: hub.py: `r in rows[scans[-1] + 1:]` => `r in rows`
+  last-tick-untimed: hub.py: `"last_tick": f"{dated(rows[scans[-1]])}, " + (` => `"last_tick": "" + (`
+  last-tick-undated: hub.py: `"last_tick": f"{dated(rows[scans[-1]])}, " + (` => `"last_tick": f"{rows[scans[-1]]['at']}, " + (`
+  scans-of-today-only: hub.py: `rows = rows_since(cfg, now() - dt.timedelta(days=OPEN_DAYS))` => `rows = rows_since(cfg, now())`
   next-tick-ignores-lag: hub.py: `nxt = next_tick(cfg, now() - lag)` => `nxt = next_tick(cfg, now())`
   lag-unshown: hub.py: `+ (f" (+{lag_m}m lately)" if lag_m else "")` => `+ ""`
   lag-the-latest: hub.py: `return lags[len(lags) // 2] if len(lags) >= 3 else None` => `return lags[-1] if len(lags) >= 3 else None`
@@ -284,7 +291,7 @@ class Panel(unittest.TestCase):
         with Env(now=NOW):
             p = json.loads(main_out("panel")[1])
         self.assertEqual((p["needs"], p["going"], p["sessions"], p["held"], p["events"], p["day"], p["last_tick"]),
-                         ([], [], [], [], [], "", "none yet"))
+                         ([], [], [], [], [], "Wed 21 Oct", "none yet"))
         self.assertEqual((p["prs"]["rows"], p["prs"]["stale"], p["prs"]["as_of"]), ([], True, ""))
 
     def test_the_scans_own_bookkeeping_stays_out_of_the_events(self):
@@ -339,6 +346,60 @@ class Panel(unittest.TestCase):
                          "09:47: the 09:37 tick is due about 09:44, and gets five minutes past that")
         self.assertEqual(later["last_tick"], "09:30, quiet · 2 missed since", "10:30: the 09:37 and 10:07 ticks")
         self.assertEqual(later["next_tick"], "10:37 (+7m lately)")
+
+
+def a_day_of_scans(day: str, next_day: str) -> None:
+    """The ticks of a weekday in Los Angeles (UTC-7), each scanning 7 minutes late:
+    08:14 to 17:44, the last two on the next UTC day."""
+    for h in range(15, 24):
+        for m in ("14", "44"):
+            main_out("log", "--kind", "scan", "scan started", now=f"{day}T{h:02d}:{m}:00+00:00")
+    for m in ("14", "44"):
+        main_out("log", "--kind", "scan", "scan started", now=f"{next_day}T00:{m}:00+00:00")
+
+
+class NoTickDue(unittest.TestCase):
+    """What the pane says while no tick runs: in the evening, at the weekend, before the first."""
+
+    def written_after(self, env, scans_on, next_day):
+        a_day_of_scans(scans_on, next_day)
+        stamp = f"{next_day}T00:44:00+00:00"   # the 17:44 scan
+        (env.state / "last-scan").write_text(stamp + "\n")
+        (env.state / "prs.json").write_text(json.dumps({"written_at": stamp, "reviewing": [], "authored": []}))
+
+    def test_an_evening_or_weekend_file_is_old_not_stale_until_two_ticks_were_due(self):
+        """The amber said stale every evening: after 17:37 no tick is due."""
+        def stale(at):
+            return json.loads(main_out("panel", now=at)[1])["prs"]["stale"]
+        with Env(now=NOW) as env:
+            self.written_after(env, "2026-10-20", "2026-10-21")       # Tuesday
+            evening = json.loads(main_out("panel", now="2026-10-21T03:00:00+00:00")[1])["prs"]
+            self.assertEqual((evening["as_of"], evening["age"], evening["stale"]), ("17:44", "2h16m", False))
+            self.assertTrue(stale("2026-10-21T15:50:00+00:00"), "Wed 08:50: 08:07 and 08:37 were due, by 7m late and 5m grace")
+        with Env(now=NOW) as env:
+            self.written_after(env, "2026-10-23", "2026-10-24")       # Friday
+            self.assertFalse(stale("2026-10-24T19:00:00+00:00"), "Saturday noon")
+            self.assertFalse(stale("2026-10-26T15:48:00+00:00"), "Mon 08:48: the 08:37 tick may start until 08:49")
+            self.assertTrue(stale("2026-10-26T15:50:00+00:00"), "Mon 08:50")
+
+    def test_the_header_is_today_and_another_days_rows_say_which(self):
+        """Friday's log read on Monday at 07:30: the pane was still on Friday."""
+        with Env(config=NAMES, now=NOW):
+            main_out("log", "--kind", "scan", "scan started", now="2026-10-24T00:44:00+00:00")
+            main_out("log", "--kind", "sent", "--target", "C0CHANONE1", "reply to carol", now="2026-10-24T00:50:00+00:00")
+            p = json.loads(main_out("panel", now="2026-10-26T14:30:00+00:00")[1])
+        self.assertEqual(p["day"], "Mon 26 Oct")
+        self.assertEqual([(e["at"], e["text"]) for e in p["events"]], [("Fri 17:50", "reply to carol")])
+        self.assertEqual(p["last_tick"], "Fri 17:44, 1 event")
+
+    def test_a_row_before_the_days_first_scan_does_not_hide_the_last_scan(self):
+        """A draft held at 07:00 started the day's log, which then read "none yet"
+        and did not count the four ticks due by 10:00 that never ran."""
+        with Env(now=NOW) as env:
+            self.written_after(env, "2026-10-20", "2026-10-21")
+            main_out("log", "--kind", "held", "a fold-in is expected", now="2026-10-21T14:00:00+00:00")
+            p = json.loads(main_out("panel")[1])
+        self.assertEqual(p["last_tick"], "Tue 17:44, 1 event · 4 missed since")
 
 
 SHA1, SHA2 = "1" * 40, "2" * 40
