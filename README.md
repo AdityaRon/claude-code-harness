@@ -163,7 +163,8 @@ you as a comment only. It never approves a PR or merges someone else's.
   out and when, what is with other sessions, and what changed since you last
   looked, one line each, from `hub.py panel` as each turn ends and each minute
   while it is drawn, so it calls no model; its PR rows move when a tick
-  scans. `claude plugin test skills/comms-hub/panel` runs its tests,
+  scans, and every five minutes while it is drawn in active hours, from one
+  GitHub query (`queue.py check`). `claude plugin test skills/comms-hub/panel` runs its tests,
   and `bin/upstream-check.sh` runs them against each new Claude Code release.
 
 ## Design choices
