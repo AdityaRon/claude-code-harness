@@ -41,8 +41,10 @@ for reading the repo, not for the installed tree.
   harness-src/             ← harness-update.sh's own clone, made on its first run
   harness.version          ← version, commit, the clone it came from and its origin, install time
   harness-contract.version ← last_verified_version from config/upstream-contract.json
-  skills/<name>/SKILL.md   ← memory-audit, memory-archive, pr-review, comms-hub
+  skills/<name>/SKILL.md   ← memory-audit, memory-archive, pr-review, comms-hub, skill-forge
   skills/comms-hub/bin/    ← its scripts; config.example.toml sits beside its SKILL.md
+  skills/skill-forge/bin/  ← its scripts; config.example.toml beside it; its templates go to
+                             ~/.local/share/skill-forge/templates/ ($XDG_DATA_HOME), not here
   rules/*.md               ← copied from rules/; local-*.md and other files left alone
   local-settings/*.json    ← yours, read by install.sh and network-guard
   logs/
@@ -80,6 +82,10 @@ Skills go to `~/.claude/skills/<name>/SKILL.md`:
 - `comms-hub`: the tick for the one session that speaks on Slack for all the
   others. Its `bin/` scripts and `config.example.toml` install with it; its
   tests stay in the clone.
+- `skill-forge`: inventories a new job's systems, finds the questions that
+  keep coming up, and drafts one skill per question; its `skill_lint.py` checks
+  any skill. Its config, `~/.config/skill-forge/config.toml`, is yours to copy
+  from the example; `install.sh` never writes it.
 
 ## comms-hub's config and state
 

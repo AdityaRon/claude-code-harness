@@ -48,7 +48,8 @@ PSQL_FLAGS = ["-X", "-q", "-v", "ON_ERROR_STOP=1", "--csv"]
 AUTH = re.compile(r"(?i)password authentication failed|no password supplied|authentication failed|token (?:has )?expired"
                   r"|sso session|must be logged in|unauthorized|forbidden|PAM authentication|IAM authentication|access denied")
 ABSENT = re.compile(r'(relation|column|schema|function|table) "?([^"\s]+?)"? does not exist')
-SECRET_ARG = re.compile(r"(?i)\bpass" + r"word=|://[^/\s:@]+:[^/\s@]+@")
+# Also catches `docker exec -e PGPASSWORD=x`: pass the variable by name (`-e PGPASSWORD`) instead.
+SECRET_ARG = re.compile(r"(?i)pass" + r"word=|://[^/\s:@]+:[^/\s@]+@")
 
 
 class Refused(Exception):
@@ -91,7 +92,7 @@ def rows_of(out: str) -> list[list[str]]:
 
 def identity(argv: list[str], timeout: float) -> dict:
     q = ("SELECT current_database() AS db, current_user AS role, pg_is_in_recovery() AS replica,"
-         " current_setting('server_version') AS version,"
+         " split_part(current_setting('server_version'), ' ', 1) AS version,"
          " (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) AS superuser")
     rc, out, err = run_psql(argv, wrap(q, 1, "10s"), timeout)
     if rc != 0:

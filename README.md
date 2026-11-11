@@ -22,7 +22,8 @@ median approved ask held its call 133 s, against 5 s for a Bash call with no pro
 
 Needs macOS or Linux with bash, `jq` (the guards fail closed without it), `gh`,
 `python3` (for `bin/hook-bench.py` and `bin/permission-friction.py`; 3.10 or
-newer with a TOML reader for the comms-hub skill and its tests) and `claude`.
+newer with a TOML reader for the comms-hub and skill-forge skills and their
+tests) and `claude`.
 
 ```bash
 git clone https://github.com/AdityaRon/claude-code-harness.git
@@ -166,6 +167,34 @@ you as a comment only. It never approves a PR or merges someone else's.
   scans. `claude plugin test skills/comms-hub/panel` runs its tests,
   and `bin/upstream-check.sh` runs them against each new Claude Code release.
 
+## skill-forge: one skill per recurring question
+
+A skill for a new job's environment. It inventories, read-only, the systems
+that answer operational questions (access and how to re-login, metrics, logs,
+databases, schedulers, deploy tools, the repos that hold configs), mines
+transcripts and shell history for the questions that keep coming up, and
+drafts one skill per question from an archetype: sql-readonly, metrics-query,
+logs-fetch, cluster-probe, job-run, api-readonly, runbook or local-repro. A
+drafted skill is read-only by default, opens every output with where its
+answer came from, masks identifiers that name customers, and tells an empty
+answer from a missing metric, a partial one and an expired login. It is not a
+library of prebuilt infra skills: the archetypes are templates it specializes.
+
+- `skills/skill-forge/bin/skill_lint.py` checks any skill against the ten
+  conventions. `tests/skill-lint.test.sh` runs it over every skill here; a
+  finding is fixed, or waived in that skill's `lint-waivers.toml` with its reason.
+- Config in `~/.config/skill-forge/config.toml` (mask patterns, transcript
+  dirs, excluded contexts, line budget), from the skill's `config.example.toml`;
+  state, `inventory.md` included, in `~/.local/state/skill-forge/`; templates in
+  `~/.local/share/skill-forge/templates/`, never under `~/.claude/skills`.
+  `install.sh` creates no config. A drafted skill installs to `~/.claude/skills`
+  or a work repo, never into this one.
+- The protocol: [skills/skill-forge/SKILL.md](skills/skill-forge/SKILL.md).
+  `tests/skill-forge.test.sh` runs the tests, `skills/skill-forge/tests/run.py --mutate`
+  checks that each listed mutation turns a test red, and
+  `skills/skill-forge/tests/live_acceptance.py` runs the acceptance checks
+  against Postgres and Prometheus in Docker.
+
 ## Design choices
 
 - A hook sees the whole command and a permission rule sees only a prefix, so enforcement lives in the guards and the deny list is a backstop ([docs/permissions.md](docs/permissions.md)).
@@ -209,6 +238,7 @@ rules/                   ← installed to ~/.claude/rules, loaded in every sessi
   python-tests.md        ← path-scoped: loads only when Claude opens Python
 skills/                  ← memory-audit/, memory-archive/, pr-review/
   comms-hub/             ← SKILL.md, config.example.toml, bin/ (its scripts), tests/ (Python)
+  skill-forge/           ← SKILL.md, config.example.toml, bin/, templates/ (installed to ~/.local/share), tests/
 tests/                   ← one <name>.test.sh per hook or script, plus bench-corpus.jsonl
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md

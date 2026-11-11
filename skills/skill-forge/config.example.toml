@@ -1,0 +1,30 @@
+# skill-forge config. Copy to ~/.config/skill-forge/config.toml and edit there:
+# install.sh never creates or overwrites that file, and this example names
+# nothing real. A pattern below can name a customer, so keep the real file out
+# of any repo others read.
+
+# The SKILL.md line budget skill_lint enforces (convention 8).
+line_budget = 150
+
+[mask]
+# Regexes for identifiers that embed customer or user names. Every engine's
+# output and inventory.md pass through them; a match prints as <masked-N>.
+# Built in already: e-mail addresses, a URL's user:password, a bearer token.
+patterns = [
+  '\b(?:cust|tenant|org)-[a-z0-9-]+',
+]
+
+[discover]
+# Git clones up to two levels under these roots are checked for charts,
+# manifests, queries, dashboards and CI.
+repo_roots = ["~/code", "~/src", "~/work"]
+# Kube contexts to leave out of the inventory (fnmatch globs).
+exclude_contexts = []
+# Contexts that count as production: --probe-context asks before touching one.
+prod_patterns = ["*prod*", "*prd*", "*live*"]
+
+[demand]
+transcript_dirs = ["~/.claude/projects"]
+history_files = ["~/.zsh_history", "~/.bash_history"]
+since_days = 60
+top = 10

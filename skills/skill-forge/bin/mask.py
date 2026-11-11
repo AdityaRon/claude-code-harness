@@ -40,7 +40,7 @@ EXIT_OK, EXIT_USAGE, EXIT_ABSENT, EXIT_PARTIAL, EXIT_AUTH, EXIT_REFUSED = 0, 1, 
 
 BUILTIN = [
     ("url userinfo", r"(?<=://)[^/\s@]+(?=@)"),
-    ("e-mail", r"(?<![\w.%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?![\w.:-])"),
+    ("e-mail", r"(?<![\w.%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![\w.:-])"),
     ("bearer token", r"(?i)(?<=bearer )[A-Za-z0-9._~+/=-]{8,}"),
 ]
 

@@ -1,0 +1,228 @@
+"""Tests for {{module}}.py. kubectl is faked at run_kubectl() and the clock is
+faked; no test reaches a cluster, builds a client or sleeps.
+
+Mutations that must turn this file red:
+  dry-run-gate-off: {{module}}.py: `if not a.apply:` => `if False:`
+  not-from-template: {{module}}.py: `"--from=cronjob/" + a.from_cronjob` => `"--image=busybox"`
+  absent-unchecked: {{module}}.py: `if not cronjob_exists(base, a.from_cronjob):` => `if False:`
+  timeout-as-success: {{module}}.py: `return None, clock() - start` => `return "Complete", clock() - start`
+  failed-as-timeout: {{module}}.py: `if state == "Failed":` => `if False:`
+  multi-not-partial: {{module}}.py: `    return EXIT_PARTIAL` => `    return EXIT_OK`
+  auth-missed: {{module}}.py: `if rc != 0 and AUTH.search(err):` => `if False:`
+  context-unchecked: {{module}}.py: `if ctx not in contexts:` => `if False:`
+  name-unvalidated: {{module}}.py: `if not DNS.fullmatch(n) or len(n) > 63:` => `if False:`
+  tail-ignored: {{module}}.py: `"--tail=" + str(a.tail)` => `"--tail=-1"`
+  one-result-line-missing: {{module}}.py: `emit(f"{ctx}: {status} {detail}")` => `pass`
+  unmasked-logs: {{module}}.py: `    for line in out:
+        emit(line)` => `    for line in out:
+        sys.stdout.write(line + "\\n")`
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "bin"))
+import mask  # noqa: E402
+import {{module}} as eng  # noqa: E402
+
+ENV = eng.ENV
+AUTH_ERR = "error: You must be logged in to the server (Unauthorized)"
+
+
+class FakeKube:
+    """Answers kubectl per context from canned results; records every argv."""
+
+    def __init__(self, contexts="east\nwest\n", cronjobs=("nightly-report",), statuses=None, logs="step 1\nstep 2 failed\n", auth_ctx=None):
+        self.contexts, self.cronjobs, self.logs, self.auth_ctx = contexts, cronjobs, logs, auth_ctx
+        self.statuses = statuses or {}
+        self.polls = {}
+        self.calls = []
+
+    def verbs(self, ctx=None):
+        return [a[5] for a in self.calls if len(a) > 5 and (ctx is None or a[2] == ctx)]
+
+    def argv_of(self, verb):
+        return [a for a in self.calls if len(a) > 5 and a[5] == verb]
+
+    def __call__(self, argv, stdin=None, timeout=600):
+        self.calls.append(argv)
+        if argv[1:3] == ["config", "get-contexts"]:
+            return 0, self.contexts, ""
+        ctx, verb, rest = argv[2], argv[5], argv[6:]
+        if ctx == self.auth_ctx:
+            return 1, "", AUTH_ERR
+        if verb == "get" and rest[0] == "cronjob":
+            ok = rest[1] in self.cronjobs
+            return (0, f"cronjob.batch/{rest[1]}\n", "") if ok else (1, "", f'Error from server (NotFound): cronjobs.batch "{rest[1]}" not found')
+        if verb == "get" and rest[0] == "cronjobs":
+            return 0, "".join(f"cronjob.batch/{c}\n" for c in self.cronjobs), ""
+        if verb == "create":
+            if "--dry-run=client" in argv:
+                return 0, "apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: planned\n", ""
+            return 0, f"job.batch/{rest[1] if rest[0] == 'job' else 'from-manifest'}\n", ""
+        if verb == "get" and rest[0] == "job":
+            seq = self.statuses.get(ctx, ["Complete"])
+            i = self.polls.get(ctx, 0)
+            self.polls[ctx] = i + 1
+            state = seq[min(i, len(seq) - 1)]
+            return 0, json.dumps({"status": {"conditions": [{"type": state, "status": "True"}] if state else []}}), ""
+        if verb == "logs":
+            return 0, self.logs, ""
+        raise AssertionError(argv)
+
+
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def now(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+class Run:
+    def __init__(self, fake, env=None, patterns=()):
+        self.fake, self.env, self.patterns = fake, env or {}, patterns
+
+    def __call__(self, *argv):
+        tmp = tempfile.TemporaryDirectory()
+        cfg = Path(tmp.name) / "config.toml"
+        cfg.write_text("[mask]\npatterns = " + json.dumps(list(self.patterns)) + "\n")
+        clk = Clock()
+        out, err = io.StringIO(), io.StringIO()
+        mask._MASKER = None
+        try:
+            with mock.patch.dict(os.environ, {"SKILL_FORGE_CONFIG": str(cfg), **self.env}), \
+                    mock.patch.object(eng, "run_kubectl", self.fake), mock.patch.object(eng, "clock", clk.now), \
+                    mock.patch.object(eng, "sleep", clk.sleep), redirect_stdout(out), redirect_stderr(err):
+                rc = eng.main(list(argv))
+        finally:
+            mask._MASKER = None
+            tmp.cleanup()
+        return rc, out.getvalue(), err.getvalue()
+
+
+ONE = ["run", "--from-cronjob", "nightly-report", "--contexts", "east", "--namespace", "jobs", "--name", "nr-manual"]
+TWO = ["run", "--from-cronjob", "nightly-report", "--contexts", "east,west", "--namespace", "jobs", "--name", "nr-manual"]
+
+
+class RunTest(unittest.TestCase):
+    def test_run_is_a_dry_run_without_apply(self):
+        fake = FakeKube()
+        rc, out, _ = Run(fake)(*ONE)
+        self.assertEqual(rc, 0)
+        creates = fake.argv_of("create")
+        self.assertTrue(creates and all("--dry-run=client" in a for a in creates))
+        self.assertIn("would run: kubectl --context east --namespace jobs create job nr-manual --from=cronjob/nightly-report", out)
+        self.assertIn("east: DRY-RUN nothing created", out)
+        self.assertIn("dry run: nothing created", out)
+
+    def test_golden_provenance_header(self):
+        rc, out, _ = Run(FakeKube(statuses={"east": [None, None, "Complete"]}))(*ONE, "--apply")
+        self.assertEqual(rc, 0, out)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "# target:  contexts=east namespace=jobs job from cronjob/nightly-report")
+        self.assertTrue(lines[1].startswith("# window:  n/a: runs now (20"))
+        self.assertTrue(lines[1].endswith("each watched up to 30m"))
+        self.assertTrue(lines[2].startswith("# command: "))
+        self.assertEqual(lines[3:], ["# rows:    1 cluster(s)", "# partial: no", "east: SUCCEEDED in 20s"])
+
+    def test_the_job_comes_from_the_cronjobs_own_template(self):
+        fake = FakeKube()
+        Run(fake)(*ONE, "--apply")
+        self.assertEqual(fake.argv_of("create")[0], ["kubectl", "--context", "east", "--namespace", "jobs", "create", "job",
+                                                     "nr-manual", "--from=cronjob/nightly-report", "-o", "name"])
+
+    def test_manifest_mode_creates_from_the_file(self):
+        fake = FakeKube()
+        rc, out, _ = Run(fake)("run", "--manifest", "job.yaml", "--contexts", "east", "--namespace", "jobs", "--apply")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(fake.argv_of("create")[0][5:], ["create", "-f", "job.yaml", "-o", "name"])
+
+
+class GuardTest(unittest.TestCase):
+    def test_guard_incomplete_capture_a_failed_job_prints_its_end(self):
+        fake = FakeKube(statuses={"east": [None, "Failed"]})
+        rc, out, _ = Run(fake)(*ONE, "--apply", "--tail", "50")
+        self.assertEqual(rc, 1)
+        self.assertIn("it reached Failed, so these are its end", out)
+        self.assertIn("step 2 failed", out)
+        self.assertIn("east: FAILED after 10s", out)
+        self.assertIn("--tail=50", fake.argv_of("logs")[0])
+
+    def test_guard_incomplete_capture_a_timeout_is_a_snapshot_and_partial(self):
+        fake = FakeKube(statuses={"east": [None]})
+        rc, out, _ = Run(fake)(*ONE, "--apply", "--timeout", "30s", "--poll", "10s")
+        self.assertEqual(rc, 3)
+        self.assertIn("a snapshot of its last 100 log lines, not the end of the run", out)
+        self.assertIn("east: TIMEOUT still running after 30s", out)
+        self.assertIn("# partial: YES: 1 of 1 cluster(s) did not succeed", out)
+
+    def test_guard_absent_cronjob_names_those_that_exist(self):
+        fake = FakeKube()
+        rc, out, _ = Run(fake)("run", "--from-cronjob", "nightly-reprot", "--contexts", "east", "--namespace", "jobs", "--apply")
+        self.assertEqual(rc, 2)
+        self.assertIn("east: ABSENT no cronjob nightly-reprot in jobs; cronjobs there: nightly-report", out)
+        self.assertEqual(fake.argv_of("create"), [])
+
+    def test_guard_partial_one_of_two_clusters_failed(self):
+        rc, out, _ = Run(FakeKube(statuses={"west": ["Failed"]}))(*TWO, "--apply")
+        self.assertEqual(rc, 3)
+        self.assertIn("east: SUCCEEDED", out)
+        self.assertIn("west: FAILED", out)
+        self.assertIn("# partial: YES: 1 of 2 cluster(s) did not succeed", out)
+
+    def test_guard_expired_auth_on_one_cluster(self):
+        fake = FakeKube(auth_ctx="west")
+        rc, out, _ = Run(fake, env={f"{ENV}_RELOGIN": "kube-login west"})(*TWO, "--apply")
+        self.assertEqual(rc, 3)
+        self.assertIn("west: AUTH", out)
+        self.assertIn("re-login: kube-login west", out)
+        self.assertIn("east: SUCCEEDED", out)
+
+    def test_guard_expired_auth_alone_exits_4(self):
+        rc, out, _ = Run(FakeKube(auth_ctx="east"))(*ONE, "--apply")
+        self.assertEqual(rc, 4)
+        self.assertIn("east: AUTH", out)
+
+    def test_guard_wrong_target_an_absent_context_is_skipped_and_named(self):
+        fake = FakeKube()
+        rc, out, _ = Run(fake)("run", "--from-cronjob", "nightly-report", "--contexts", "east,nowhere", "--namespace", "jobs", "--apply")
+        self.assertEqual(rc, 3)
+        self.assertIn("nowhere: SKIPPED context absent from the kubeconfig", out)
+        self.assertEqual(fake.verbs("nowhere"), [])
+        self.assertIn("# target:  contexts=east,nowhere namespace=jobs", out)
+
+
+class QuotingTest(unittest.TestCase):
+    def test_quoting_names_must_be_kubernetes_names(self):
+        for bad in ("x; rm -rf /", "Upper", "a" * 64):
+            fake = FakeKube()
+            rc, _, err = Run(fake)("run", "--from-cronjob", "nightly-report", "--contexts", "east", "--namespace", "jobs", "--name", bad)
+            self.assertEqual(rc, 5, bad)
+            self.assertIn("is not a Kubernetes name", err)
+            self.assertEqual(fake.calls, [])
+
+
+class MaskTest(unittest.TestCase):
+    def test_mask_planted_identifier_in_logs(self):
+        fake = FakeKube(statuses={"east": ["Failed"]}, logs="export for cust-acme failed\n")
+        rc, out, _ = Run(fake, patterns=[r"\bcust-[a-z]+"])(*ONE, "--apply")
+        self.assertEqual(rc, 1)
+        self.assertNotIn("cust-acme", out)
+        self.assertIn("export for <masked-1> failed", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

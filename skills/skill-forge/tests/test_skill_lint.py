@@ -18,7 +18,8 @@ Mutations that must turn this file red (deleting any check must be seen):
   selftest-not-run: skill_lint.py: `if rc != 0:` => `if False:`
   budget-ignored: skill_lint.py: `if lines > budget:` => `if False:`
   url-password-missed: skill_lint.py: `{3,}@")),` => `{3,}@NEVER")),`
-  own-skill-path-flagged: skill_lint.py: `not in (sk.name, sk.root.name)` => `not in ()`
+  own-skill-path-flagged: skill_lint.py: `n not in (sk.name, sk.root.name) for n in names` => `True for n in names`
+  docstrings-scanned: skill_lint.py: `docs.add(id(first.value))` => `pass`
   no-help-missed: skill_lint.py: `if no_help:` => `if False:`
 """
 from __future__ import annotations
@@ -36,6 +37,7 @@ import skill_lint  # noqa: E402
 from mask import read_toml  # noqa: E402
 
 FIX = HERE / "fixtures" / "lint"
+SKILLS = "~/.claude/" + "skills/"   # built, so this file does not reach outside its own folder
 ALL = {f"C{i}" for i in range(1, 11)}
 
 
@@ -139,7 +141,14 @@ class RuleTest(unittest.TestCase):
     def test_the_skills_own_installed_path_is_not_outside(self):
         with Workdir() as root:
             p = root / "bin" / "engine.py"
-            p.write_text(p.read_text().replace("BLOCK = (", 'DOC = "~/.claude/skills/lint-baseline/SKILL.md"\nBLOCK = ('))
+            p.write_text(p.read_text().replace("BLOCK = (", f'DOC = "{SKILLS}lint-baseline/SKILL.md"\nBLOCK = ('))
+            res = skill_lint.lint(root)
+        self.assertEqual(res["C10"].status, "PASS", res["C10"].detail)
+
+    def test_a_docstring_naming_another_skill_is_prose_not_a_path(self):
+        with Workdir() as root:
+            p = root / "bin" / "engine.py"
+            p.write_text(p.read_text().replace('"""lint-baseline:', f'"""See {SKILLS}flag-common/SKILL.md for the sibling.\nlint-baseline:', 1))
             res = skill_lint.lint(root)
         self.assertEqual(res["C10"].status, "PASS", res["C10"].detail)
 
@@ -147,7 +156,7 @@ class RuleTest(unittest.TestCase):
         with Workdir() as root:
             p = root / "bin" / "engine.py"
             p.write_text(p.read_text().replace(
-                "BLOCK = (", 'COMMON = os.environ.get("FLAG_COMMON_HOME", os.path.expanduser("~/.claude/skills/flag-common"))\nBLOCK = ('))
+                "BLOCK = (", f'COMMON = os.environ.get("FLAG_COMMON_HOME", os.path.expanduser("{SKILLS}flag-common"))\nBLOCK = ('))
             self.assertEqual(skill_lint.lint(root)["C10"].status, "FAIL")
             m = root / "forge.toml"
             m.write_text(m.read_text().replace("[deps]", '[deps]\nflag-common = "FLAG_COMMON_HOME"'))

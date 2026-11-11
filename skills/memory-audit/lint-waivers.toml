@@ -1,0 +1,5 @@
+# skill_lint waivers (skills/skill-forge/bin/skill_lint.py). Each says why the
+# finding stands; the lint fails a waiver with no reason, or one whose check passes.
+
+[C8]
+reason = "SKILL.md is 163 lines against the 150-line budget (wc -l, 2026-11-10). The skill is prose only, with no engine to move logic into, and its length is the audit protocol itself."

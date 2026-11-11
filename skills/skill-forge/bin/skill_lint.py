@@ -346,10 +346,27 @@ def check_tests(sk: Skill, opts) -> Result:
     return Result("FAIL", "; ".join(bad)) if bad else Result("PASS", f"{len(sk.scripts)} scripts, each with a test file listing mutations")
 
 
-# Split so these lines do not match themselves when the lint reads its own folder.
-OUTSIDE_LITERAL = re.compile(r"""["'][^"'\n]*\.\.""" + r"""/\.\.[^"'\n]*["']""")
-SKILL_PATH = re.compile(r"""\.claude""" + r"""/skills/([\w-]+)|["'](?:\.\./)*skills/([\w-]+)/""")
+CLIMB = re.compile(r"(?:^|/)\.\./\.\.(?:/|$)")
+CLAUDE_SKILL = re.compile(r"\.claude/skills/([\w-]+)")
+SIBLING = re.compile(r"^(?:\.\./)+skills/([\w-]+)")
 PARENTS = re.compile(r"Path\(__file__\)(?:\.resolve\(\))?((?:\.parent)+)|\.parents\[(\d+)\]|((?:os\.path\.dirname\(){3,})")
+
+
+def code_strings(src: str):
+    """(line, value) for each string literal in code; docstrings are prose and skipped."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return
+    docs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                docs.add(id(first.value))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs:
+            yield node.lineno, node.value
 
 
 def check_self_contained(sk: Skill, opts) -> Result:
@@ -358,15 +375,21 @@ def check_self_contained(sk: Skill, opts) -> Result:
     files = {f"bin/{n}": s for n, s in sk.scripts.items()}
     files.update({f"tests/{n}": s for n, s in sk.tests.items()})
     for path, src in files.items():
-        for i, line in enumerate(src.splitlines(), 1):
-            out = bool(OUTSIDE_LITERAL.search(line))
+        lines = src.splitlines()
+        hits = set()
+        for i, value in code_strings(src):
+            names = [m.group(1) for m in CLAUDE_SKILL.finditer(value)] + [m.group(1) for m in SIBLING.finditer(value)]
+            if CLIMB.search(value) or any(n not in (sk.name, sk.root.name) for n in names):
+                hits.add(i)
+        for i, line in enumerate(lines, 1):
+            if line.lstrip().startswith("#"):
+                continue
             for m in PARENTS.finditer(line):
                 if (m.group(1) and m.group(1).count(".parent") > 2) or (m.group(2) and int(m.group(2)) > 1) or m.group(3):
-                    out = True
-            for m in SKILL_PATH.finditer(line):
-                if (m.group(1) or m.group(2)) not in (sk.name, sk.root.name):
-                    out = True
-            if out and not any(re.search(rf"""(?:environ(?:\.get)?\(?\[?|getenv\()\s*["']{re.escape(d)}["']""", line) for d in deps):
+                    hits.add(i)
+        for i in sorted(hits):
+            line = lines[i - 1] if i - 1 < len(lines) else ""
+            if not any(re.search(rf"""(?:environ(?:\.get)?\(?\[?|getenv\()\s*["']{re.escape(d)}["']""", line) for d in deps):
                 bad.append(f"{path}:{i} reaches outside the folder without a declared env var")
     if bad:
         return Result("FAIL", "; ".join(bad[:6]) + ("; declare it in forge.toml [deps] and read it from the environment" if deps == set() else ""))
@@ -389,7 +412,7 @@ CHECKS = [
 
 def lint(root: Path, budget: int | None = None, no_exec: bool = False) -> dict:
     opts = argparse.Namespace(budget=budget, no_exec=no_exec)
-    sk = load(Path(root))
+    sk = load(Path(root).resolve())
     results = {}
     for cid, fn in CHECKS:
         results[cid] = fn(sk, opts)

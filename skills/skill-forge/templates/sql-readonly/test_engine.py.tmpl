@@ -11,6 +11,7 @@ Mutations that must turn this file red:
             return auth_failed(err)` => ``
   expect-db-ignored: {{module}}.py: `if expect and who.get("db") != expect:` => `if False:`
   password-argv-ok: {{module}}.py: `if any(SECRET_ARG.search(a) for a in argv):` => `if False:`
+  env-flag-password-ok: {{module}}.py: `r"(?i)pass" + r"word=` => `r"(?i)\bpass" + r"word=`
   flags-after-dbname: {{module}}.py: `return argv[:i] + PSQL_FLAGS + argv[i:]` => `return argv + PSQL_FLAGS`
   comment-swallows-wrapper: {{module}}.py: `body = f"SELECT * FROM (\\n{body}\\n)` => `body = f"SELECT * FROM ({body})`
   unmasked-rows: {{module}}.py: `    emit(buf.getvalue().rstrip("\\n"))` => `    sys.stdout.write(buf.getvalue())`
@@ -112,6 +113,14 @@ class QueryTest(unittest.TestCase):
         self.assertEqual(rc, 5)
         self.assertIn("ps shows it", err)
         self.assertEqual(fake.calls, [])
+
+    def test_a_password_in_a_docker_env_flag_is_refused_but_a_name_is_not(self):
+        fake = FakePsql()
+        rc, _, _ = Run(fake, env={f"{ENV}_PSQL": "docker exec -i -e PGPASS" + "WORD=pw123 db psql -U app"})("query", "--sql", "SELECT 1")
+        self.assertEqual(rc, 5)
+        self.assertEqual(fake.calls, [])
+        rc, _, _ = Run(fake, env={f"{ENV}_PSQL": "docker exec -i -e PGPASSWORD db psql -U app"})("query", "--sql", "SELECT 1")
+        self.assertEqual(rc, 0)
 
     def test_self_test_passes(self):
         with mock.patch.dict(os.environ, {}), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):

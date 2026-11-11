@@ -4,6 +4,7 @@ skill it drafts, unchanged.
 Mutations that must turn this file red:
   no-userinfo: mask.py: `("url userinfo", r"(?<=://)[^/\\s@]+(?=@)"),` => ``
   no-email: mask.py: `[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+` => `[A-Za-z0-9._%+-]+@NEVER[A-Za-z0-9-]+`
+  versions-as-email: mask.py: `*\.[A-Za-z]{2,}(?![\w.:-])` => `*\.[A-Za-z0-9]{2,}(?![\w.:-])`
   config-ignored: mask.py: `for src in (config_path(), skill / "forge.toml"):` => `for src in (skill / "forge.toml",):`
   skill-manifest-ignored: mask.py: `for src in (config_path(), skill / "forge.toml"):` => `for src in (config_path(),):`
   bad-pattern-tolerated: mask.py: `raise SystemExit(f"mask: pattern` => `print(f"mask: pattern`
@@ -81,6 +82,11 @@ class MaskerTest(unittest.TestCase):
         with Config():
             out, _ = printed(mask.emit, "git@github.com:org/repo.git")
         self.assertEqual(out, "git@github.com:org/repo.git\n")
+
+    def test_a_versioned_package_path_is_not_an_email(self):
+        with Config():
+            out, _ = printed(mask.emit, "/opt/homebrew/Cellar/python@3.11/3.11.15/bin")
+        self.assertEqual(out, "/opt/homebrew/Cellar/python@3.11/3.11.15/bin\n")
 
     def test_mask_planted_pattern_from_the_config(self):
         with Config(patterns=[r"\bcust-[a-z]+"]):

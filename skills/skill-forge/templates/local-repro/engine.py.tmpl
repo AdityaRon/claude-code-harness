@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""{{name}}: {{question}}?
+
+Archetype local-repro, drafted by skill-forge on {{date}}. It reproduces a
+production component in Docker, on the image tag production runs, with
+synthetic rows built from a real schema. It reads no production data.
+
+  {{module}}.py plan --image REF --schema schema.sql [--rows 50] [--seed 42] [--port 5432]
+  {{module}}.py up   --image REF --schema schema.sql [same] [--timeout 60s] [--ready-marker TEXT] [--apply]
+  {{module}}.py down [--apply]
+
+plan parses the CREATE TABLE statements of a schema-only dump (pg_dump
+--schema-only), writes seed.sql (those tables, then rows from a seeded RNG:
+the same seed gives the same file) under --out, and prints the docker commands.
+up does the same, then with --apply runs them: it removes a leftover
+container, starts the image bound to 127.0.0.1 with seed.sql mounted as an init
+script, and waits for --ready-marker in the container log. Without --apply,
+up and down print exactly what they would run.
+
+Guards: an image without a tag or digest, or tagged latest, is refused, since
+it is not what production runs. A schema with no CREATE TABLE is ABSENT. A
+container log without the ready marker inside --timeout is PARTIAL: the
+capture is incomplete and the repro may not be up.
+
+Exit status: 0 done, 2 ABSENT, 3 PARTIAL, 5 REFUSED.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import random
+import re
+import shlex
+import subprocess
+import sys
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mask import EXIT_ABSENT, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED, emit, header, parse_duration, state_dir  # noqa: E402
+
+NAME = "{{name}}-repro"
+WORDS = ["alpha", "bravo", "o'hara", "delta", "echo foxtrot", "golf\\hotel"]
+CONSTRAINT = re.compile(r"(?i)(constraint|primary\s+key|unique|foreign\s+key|check|exclude)\b")
+TYPES = [
+    ("bigint", re.compile(r"(?i)^(bigint|int8|bigserial|serial8)\b")),
+    ("int", re.compile(r"(?i)^(smallint|integer|int|int2|int4|serial|smallserial)\b")),
+    ("bool", re.compile(r"(?i)^(boolean|bool)\b")),
+    ("timestamp", re.compile(r"(?i)^(timestamp|timestamptz|date)\b")),
+    ("uuid", re.compile(r"(?i)^uuid\b")),
+    ("numeric", re.compile(r"(?i)^(numeric|decimal|real|double\s+precision|float\d*)\b")),
+    ("jsonb", re.compile(r"(?i)^(jsonb|json)\b")),
+    ("text", re.compile(r"(?i)^(text|citext|varchar|character\s+varying|char|character)\b")),
+]
+
+
+class Refused(Exception):
+    pass
+
+
+@dataclass
+class Column:
+    name: str
+    kind: str | None
+    length: int | None
+    pk: bool
+
+
+@dataclass
+class Table:
+    name: str
+    ddl: str
+    columns: list
+
+
+def run_docker(argv: list[str]) -> tuple[int, str, str]:
+    p = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    return p.returncode, p.stdout, p.stderr
+
+
+sleep, monotonic = time.sleep, time.monotonic
+
+
+def check_image(ref: str) -> str:
+    if "@sha256:" in ref:
+        return ref
+    tag = ref.rsplit("/", 1)[-1].partition(":")[2]
+    if not tag:
+        raise Refused(f"image {ref!r} has no tag or digest; give the one production runs "
+                      "(kubectl get deploy <name> -o jsonpath='{..image}')")
+    if tag == "latest":
+        raise Refused(f"image {ref!r} is tagged latest, which is not a version production runs; give the exact tag or digest")
+    return ref
+
+
+def split_top(body: str) -> list[str]:
+    parts, depth, cur, quote = [], 0, "", None
+    for c in body:
+        if quote:
+            quote = None if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif c == "," and depth == 0:
+            parts.append(cur.strip())
+            cur = ""
+            continue
+        cur += c
+    if cur.strip():
+        parts.append(cur.strip())
+    return parts
+
+
+def parse_schema(text: str) -> list[Table]:
+    tables = []
+    for m in re.finditer(r"(?i)create\s+(?:unlogged\s+)?table\s+(?:if\s+not\s+exists\s+)?([\w.\"]+)\s*\(", text):
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[i], 0)
+            i += 1
+        body = text[m.end():i - 1]
+        cols = []
+        for part in split_top(body):
+            if CONSTRAINT.match(part):
+                continue
+            name, _, rest = part.partition(" ")
+            rest = rest.strip()
+            kind = next((k for k, rx in TYPES if rx.match(rest)), None)
+            ln = re.match(r"(?i)^(?:varchar|character\s+varying|char|character)\s*\((\d+)\)", rest)
+            cols.append(Column(name.strip('"'), kind, int(ln.group(1)) if ln else None, bool(re.search(r"(?i)primary\s+key", rest))))
+        end = text.find(";", i)
+        tables.append(Table(m.group(1), text[m.start():end + 1 if end >= 0 else i], cols))
+    return tables
+
+
+def sql_text(s: str) -> str:
+    return "'" + s.replace("'", "''") + "'"
+
+
+def value(col: Column, i: int, rng: random.Random) -> str:
+    if col.pk or col.name == "id":
+        return str(i) if col.kind in ("int", "bigint") else sql_text(str(uuid.UUID(int=i, version=4)))
+    if col.kind in ("int", "bigint"):
+        return str(rng.randint(1, 1000))
+    if col.kind == "bool":
+        return "true" if rng.random() < 0.5 else "false"
+    if col.kind == "timestamp":
+        t = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=rng.randint(0, 86400 * 300))
+        return sql_text(t.isoformat())
+    if col.kind == "uuid":
+        return sql_text(str(uuid.UUID(int=rng.getrandbits(128), version=4)))
+    if col.kind == "numeric":
+        return f"{rng.uniform(0, 1000):.2f}"
+    if col.kind == "jsonb":
+        return sql_text(json.dumps({"synthetic": i, "w": rng.choice(WORDS)}))
+    if col.kind == "text":
+        s = f"{rng.choice(WORDS)}-{i}"
+        return sql_text(s[:col.length] if col.length else s)
+    return "NULL"
+
+
+def seed_sql(tables: list[Table], rows: int, seed: int) -> str:
+    rng = random.Random(seed)
+    out = ["-- Synthetic seed written by {{name}}: tables from the schema dump, rows from a seeded RNG.",
+           "-- Foreign keys are not honoured by random rows, so their triggers are off while it loads.",
+           "SET session_replication_role = replica;\n"]
+    for t in tables:
+        out.append(t.ddl)
+        names = ", ".join('"' + c.name + '"' for c in t.columns)
+        for i in range(1, rows + 1):
+            out.append(f"INSERT INTO {t.name} ({names}) VALUES ({', '.join(value(c, i, rng) for c in t.columns)});")
+        out.append("")
+    out.append("SET session_replication_role = origin;")
+    return "\n".join(out) + "\n"
+
+
+def prepare(a) -> tuple[list[Table], Path, str | None]:
+    image = check_image(a.image)
+    tables = parse_schema(Path(a.schema).read_text())
+    if not tables:
+        return [], Path(), None
+    out = Path(a.out) if a.out else state_dir() / "repro" / "{{name}}"
+    out.mkdir(parents=True, exist_ok=True)
+    seed = out / "seed.sql"
+    seed.write_text(seed_sql(tables, a.rows, a.seed))
+    unknown = sum(c.kind is None for t in tables for c in t.columns)
+    partial = f"{unknown} columns of a type this engine does not generate are NULL" if unknown else None
+    emit(header(f"docker image {image} as {NAME}", "n/a: a local reproduction; no production data read",
+                rows=f"{len(tables)} tables x {a.rows} synthetic rows", partial=partial))
+    for t in tables:
+        emit(f"table {t.name}: {len(t.columns)} columns, {a.rows} rows")
+    emit(f"seed: {seed}")
+    return tables, seed, image
+
+
+def docker_cmds(a, seed: Path, image: str) -> list[list[str]]:
+    return [
+        ["docker", "rm", "-f", NAME],
+        ["docker", "run", "-d", "--name", NAME, "-p", f"127.0.0.1:{a.port}:{a.container_port}",
+         "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "-v", f"{seed}:/docker-entrypoint-initdb.d/seed.sql:ro", image],
+    ]
+
+
+def execute(cmds: list[list[str]], apply: bool) -> int:
+    for argv in cmds:
+        if not apply:
+            emit("would run: " + shlex.join(argv))
+            continue
+        rc, _, err = run_docker(argv)
+        emit("ran: " + shlex.join(argv) + f" (exit {rc})")
+        if rc != 0 and argv[1] != "rm":
+            emit(f"docker failed: {err.strip()[:300]}", err=True)
+            return rc
+    return EXIT_OK
+
+
+def wait_ready(marker: str, timeout: str) -> int:
+    deadline = monotonic() + parse_duration(timeout).total_seconds()
+    logs = ""
+    while monotonic() < deadline:
+        _, out, err = run_docker(["docker", "logs", NAME])
+        logs = out + err
+        if marker in logs:
+            emit(f"ready: {marker!r} is in the {NAME} log")
+            return EXIT_OK
+        sleep(1)
+    emit(f"PARTIAL: no {marker!r} in the {NAME} log within {timeout}; the capture is incomplete and the repro may not be up. Last lines:")
+    for ln in logs.strip().splitlines()[-10:]:
+        emit("  " + ln)
+    return EXIT_PARTIAL
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n", 1)[1])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    for cmd in ("plan", "up"):
+        s = sub.add_parser(cmd)
+        s.add_argument("--image", required=True)
+        s.add_argument("--schema", required=True)
+        s.add_argument("--rows", type=int, default=50)
+        s.add_argument("--seed", type=int, default=42)
+        s.add_argument("--port", type=int, default=5432)
+        s.add_argument("--container-port", type=int, default=5432)
+        s.add_argument("--out")
+        if cmd == "up":
+            s.add_argument("--timeout", default="60s")
+            s.add_argument("--ready-marker", default="database system is ready to accept connections")
+            s.add_argument("--apply", action="store_true", help="run the commands; without it, print them")
+    d = sub.add_parser("down")
+    d.add_argument("--apply", action="store_true", help="remove the container; without it, print the command")
+    a = p.parse_args(argv)
+    try:
+        if a.cmd == "down":
+            emit(header(f"docker container {NAME}", "n/a: a local reproduction", rows=1))
+            return execute([["docker", "rm", "-f", NAME]], a.apply)
+        tables, seed, image = prepare(a)
+        if not tables:
+            emit(header(f"docker image {a.image}", "n/a: a local reproduction", rows="ABSENT"))
+            emit(f"ABSENT: {a.schema} holds no CREATE TABLE; use a schema-only dump (pg_dump --schema-only)")
+            return EXIT_ABSENT
+        cmds = docker_cmds(a, seed, image)
+        if a.cmd == "plan":
+            return execute(cmds, False)
+        rc = execute(cmds, a.apply)
+        if rc != EXIT_OK or not a.apply:
+            if not a.apply:
+                emit("dry run: nothing ran; pass --apply to start it")
+            return rc
+        return wait_ready(a.ready_marker, a.timeout)
+    except (Refused, ValueError, OSError) as e:
+        emit(f"REFUSED: {e}", err=True)
+        return EXIT_REFUSED
+
+
+if __name__ == "__main__":
+    sys.exit(main())

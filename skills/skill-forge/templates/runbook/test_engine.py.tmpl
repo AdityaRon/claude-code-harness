@@ -1,0 +1,178 @@
+"""Tests for {{module}}.py. It opens no connection, so nothing is faked but the
+alert and the rules file.
+
+Mutations that must turn this file red:
+  no-rule-as-ok: {{module}}.py: `if unmatched or not plans:` => `if not plans:`
+  first-rule-loses: {{module}}.py: `            return i, rule` => `            pass`
+  glob-ignores-missing-label: {{module}}.py: `if all(k in labels and fnmatch.fnmatchcase(` => `if all(fnmatch.fnmatchcase(`
+  blank-label-built: {{module}}.py: `missing = [f for f in names if not fields.get(f)]` => `missing = [f for f in names if f not in fields]`
+  missing-label-built: {{module}}.py: `    if missing:
+        return None, missing` => ``
+  unquoted: {{module}}.py: `fields = {k: urllib.parse.quote(str(v), safe="") for k, v in labels.items()}` => `fields = {k: str(v) for k, v in labels.items()}`
+  window-from-now: {{module}}.py: `starts = parse_time(alert["startsAt"])` => `starts = datetime.now(timezone.utc)`
+  no-starts-invents-now: {{module}}.py: `    if not alert.get("startsAt"):
+        raise Refused(` => `    if False:
+        raise Refused(`
+  ends-ignored: {{module}}.py: `end = ends if ends and ends > starts else starts + lookahead` => `end = starts + lookahead`
+  zero-ends-kept: {{module}}.py: `end = ends if ends and ends > starts else` => `end = ends if ends else`
+  webhook-flattened: {{module}}.py: `alerts = payload["alerts"] if isinstance(payload, dict) and "alerts" in payload else [payload]` => `alerts = [payload]`
+  next-unsaid: {{module}}.py: `lines.append(f"  next: {rule['next_skill']}")` => `pass`
+  partial-hidden: {{module}}.py: `links refused for missing labels" if refused else None` => `links refused for missing labels" if False else None`
+  all-refused-ok: {{module}}.py: `if refused and not built:` => `if False:`
+  unmasked-lines: {{module}}.py: `    for ln in lines:
+        emit(ln)` => `    for ln in lines:
+        sys.stdout.write(ln + "\\n")`
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "bin"))
+import mask  # noqa: E402
+import {{module}} as eng  # noqa: E402
+
+RULES = """
+[[rule]]
+match = { alertname = "HighErrorRate*" }
+steps = ["Check the deploy first."]
+links = ["https://g.example/d/x?var-ns={namespace}&var-svc={service}&from={from_ms}&to={to_ms}"]
+next_skill = "the metrics-query skill"
+
+[[rule]]
+match = { alertname = "High*" }
+links = ["https://g.example/other?svc={service}"]
+next_skill = "a later rule"
+
+[[rule]]
+match = { alertname = "*JobFailed", severity = "page" }
+links = ["https://logs.example/q?job={job}&start={from_iso}&end={to_iso}", "https://ci.example/{pipeline}"]
+next_skill = "the job-run skill"
+"""
+
+ALERT = {"labels": {"alertname": "HighErrorRate", "namespace": "shop", "service": "checkout"},
+         "startsAt": "2026-11-10T05:00:00Z", "endsAt": "2026-11-10T05:20:00Z"}
+
+
+class Run:
+    def __init__(self, rules=RULES, patterns=()):
+        self.rules, self.patterns = rules, patterns
+
+    def __call__(self, payload, *argv):
+        tmp = tempfile.TemporaryDirectory()
+        d = Path(tmp.name)
+        (d / "config.toml").write_text("[mask]\npatterns = " + json.dumps(list(self.patterns)) + "\n")
+        (d / "runbook.toml").write_text(self.rules)
+        (d / "alert.json").write_text(json.dumps(payload))
+        out, err = io.StringIO(), io.StringIO()
+        mask._MASKER = None
+        try:
+            with mock.patch.dict(os.environ, {"SKILL_FORGE_CONFIG": str(d / "config.toml")}), \
+                    redirect_stdout(out), redirect_stderr(err):
+                rc = eng.main(["links", str(d / "alert.json"), "--rules", str(d / "runbook.toml"), *argv])
+        finally:
+            mask._MASKER = None
+            tmp.cleanup()
+        return rc, out.getvalue(), err.getvalue()
+
+
+class LinksTest(unittest.TestCase):
+    def test_golden_provenance_header_steps_links_and_next(self):
+        rc, out, _ = Run()(ALERT, "--lookback", "10m")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.splitlines()[0], "# target:  runbook runbook.toml (3 rules) for alert HighErrorRate")
+        self.assertEqual(out.splitlines()[1], "# window:  2026-11-10T04:50:00Z .. 2026-11-10T05:20:00Z "
+                                              "(UTC, bounds startsAt - lookback, endsAt or startsAt + lookahead)")
+        self.assertEqual(out.splitlines()[3:], [
+            "# rows:    1 links",
+            "# partial: no",
+            "alert HighErrorRate window 2026-11-10T04:50:00Z .. 2026-11-10T05:20:00Z "
+            "(UTC, bounds startsAt - lookback, endsAt or startsAt + lookahead)  (rule 1)",
+            "  step: Check the deploy first.",
+            "  link: https://g.example/d/x?var-ns=shop&var-svc=checkout&from=1794286200000&to=1794288000000",
+            "  next: the metrics-query skill",
+        ])
+
+    def test_the_first_matching_rule_wins(self):
+        _, out, _ = Run()(ALERT)
+        self.assertNotIn("a later rule", out)
+
+    def test_an_alertmanager_webhook_gives_one_section_per_alert(self):
+        second = {**ALERT, "labels": {**ALERT["labels"], "service": "cart"}}
+        rc, out, _ = Run()({"version": "4", "alerts": [ALERT, second]})
+        self.assertEqual(rc, 0)
+        self.assertIn("var-svc=checkout", out)
+        self.assertIn("var-svc=cart", out)
+        self.assertIn("# rows:    2 links", out)
+
+    def test_the_shipped_rules_parse_and_match_their_example(self):
+        rules = (HERE.parent / "runbook.toml").read_text()
+        rc, out, _ = Run(rules=rules)({**ALERT, "labels": {**ALERT["labels"], "alertname": "HighErrorRate5xx"}})
+        self.assertEqual(rc, 0, out)
+        self.assertIn("var-service=checkout", out)
+
+
+class GuardTest(unittest.TestCase):
+    def test_guard_absent_no_rule_names_what_the_rules_cover(self):
+        rc, out, _ = Run()({**ALERT, "labels": {"alertname": "DiskFull"}})
+        self.assertEqual(rc, 2)
+        self.assertIn("NO RULE: no rule matches alertname=DiskFull; the rules cover HighErrorRate*, High*, *JobFailed", out)
+
+    def test_guard_absent_a_glob_needs_its_label_present(self):
+        rc, out, _ = Run()({**ALERT, "labels": {"alertname": "NightlyJobFailed", "job": "etl"}})
+        self.assertEqual(rc, 2)
+        self.assertIn("NO RULE", out)
+
+    def test_guard_wrong_target_missing_label_refuses_the_link(self):
+        alert = {**ALERT, "labels": {"alertname": "NightlyJobFailed", "severity": "page", "job": "etl"}}
+        rc, out, _ = Run()(alert)
+        self.assertEqual(rc, 3)
+        self.assertIn("REFUSED link: needs pipeline", out)
+        self.assertIn("# partial: YES: 1 of 2 links refused", out)
+        self.assertIn("link: https://logs.example/q?job=etl", out)
+
+    def test_guard_wrong_target_an_empty_label_is_never_built_into_a_link(self):
+        rc, out, _ = Run()({**ALERT, "labels": {**ALERT["labels"], "namespace": ""}})
+        self.assertEqual(rc, 5)
+        self.assertIn("REFUSED link: needs namespace", out)
+        self.assertNotIn("var-ns=&", out)
+
+    def test_guard_window_uses_the_alerts_start_not_now(self):
+        _, out, _ = Run()(ALERT, "--lookback", "1h")
+        self.assertIn("from=1794283200000", out)
+
+    def test_guard_window_a_firing_alert_spans_lookahead(self):
+        firing = {**ALERT, "endsAt": "0001-01-01T00:00:00Z"}
+        _, out, _ = Run()(firing, "--lookback", "0s", "--lookahead", "15m")
+        self.assertIn("from=1794286800000&to=1794287700000", out)
+
+    def test_guard_window_no_starts_at_is_refused(self):
+        rc, _, err = Run()({"labels": ALERT["labels"]})
+        self.assertEqual(rc, 5)
+        self.assertIn("no startsAt", err)
+
+
+class QuotingTest(unittest.TestCase):
+    def test_quoting_label_values_are_url_quoted(self):
+        _, out, _ = Run()({**ALERT, "labels": {**ALERT["labels"], "service": "a&b c"}})
+        self.assertIn("var-svc=a%26b%20c&", out)
+
+
+class MaskTest(unittest.TestCase):
+    def test_mask_planted_identifier_in_a_link(self):
+        rc, out, _ = Run(patterns=[r"\bcust-[a-z]+"])({**ALERT, "labels": {**ALERT["labels"], "namespace": "cust-acme"}})
+        self.assertEqual(rc, 0)
+        self.assertNotIn("cust-acme", out)
+        self.assertIn("var-ns=<masked-1>", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

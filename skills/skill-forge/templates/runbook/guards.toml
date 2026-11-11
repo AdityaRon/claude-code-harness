@@ -1,0 +1,7 @@
+archetype = "runbook"
+summary = "Turns an alert payload into the first steps, deep links over the alert's own window, and the sibling skill to use next; it builds links and reads nothing."
+not_for = "fetching data (the next skill it names does that), or acknowledging or silencing alerts"
+guards = ["absent", "wrong_target", "window"]
+write_verbs = []
+sql = false
+vendor = []

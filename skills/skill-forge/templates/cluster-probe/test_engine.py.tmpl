@@ -1,0 +1,242 @@
+"""Tests for {{module}}.py. kubectl is faked at run_kubectl(); no test reaches a
+cluster or builds a client.
+
+Mutations that must turn this file red:
+  finally-delete-skipped: {{module}}.py: `        kube(delete_cmd(base, pod), check=False)` => `        pass`
+  marker-not-required: {{module}}.py: `if done is None:` => `if False:`
+  trap-missing: {{module}}.py: `return TRAP + script` => `return script`
+  leftover-ignored: {{module}}.py: `    if left:` => `    if False:`
+  auth-missed: {{module}}.py: `if rc != 0 and AUTH.search(err):` => `if False:`
+  exec-auth-missed: {{module}}.py: `if rc and AUTH.search(err):` => `if False:`
+  context-unchecked: {{module}}.py: `if context not in contexts:` => `if False:`
+  expect-ignored: {{module}}.py: `if expect and not re.fullmatch(expect, context):` => `if False:`
+  no-ttl: {{module}}.py: `"activeDeadlineSeconds": ttl,` => ``
+  no-workload-identity: {{module}}.py: `"serviceAccountName": a.service_account,` => ``
+  apply-gate-off: {{module}}.py: `if not a.apply:` => `if False:`
+  cleanup-gate-off: {{module}}.py: `if not a.apply or not pods:` => `if not pods:`
+  script-in-argv: {{module}}.py: `run_kubectl(base + ["exec", "-i", pod, "--", "sh", "-s"], stdin=wrap(script))` => `run_kubectl(base + ["exec", "-i", pod, "--", "sh", "-c", wrap(script)])`
+  unmasked-output: {{module}}.py: `emit(out_line)` => `sys.stdout.write(out_line + "\\n")`
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "bin"))
+import mask  # noqa: E402
+import {{module}} as eng  # noqa: E402
+
+ENV = eng.ENV
+AUTH_ERR = "error: You must be logged in to the server (Unauthorized)"
+
+
+class FakeKube:
+    """Answers each kubectl verb from canned results; records argv and stdin."""
+
+    def __init__(self, contexts="dev\nprod-east\n", leftover="", probe_out="hello\n__PROBE_DONE__ rc=0\n",
+                 exec_rc=0, exec_err="", auth_on=None, wait_rc=0):
+        self.contexts, self.leftover, self.probe_out = contexts, leftover, probe_out
+        self.exec_rc, self.exec_err, self.auth_on, self.wait_rc = exec_rc, exec_err, auth_on, wait_rc
+        self.calls = []
+
+    @staticmethod
+    def verb(argv):
+        return argv[5] if argv[1] == "--context" else argv[1]
+
+    def verbs(self):
+        return [self.verb(a) for a, _ in self.calls]
+
+    def stdin_of(self, verb):
+        return next(s for a, s in self.calls if self.verb(a) == verb)
+
+    def argv_of(self, verb):
+        return next(a for a, _ in self.calls if self.verb(a) == verb)
+
+    def __call__(self, argv, stdin=None, timeout=600):
+        self.calls.append((argv, stdin))
+        v = self.verb(argv)
+        if v == self.auth_on:
+            return 1, "", AUTH_ERR
+        if v == "config":
+            return 0, self.contexts, ""
+        if v == "get":
+            return 0, self.leftover, ""
+        if v == "create":
+            return 0, "pod/x created\n", ""
+        if v == "wait":
+            return (0, "condition met\n", "") if self.wait_rc == 0 else (1, "", "error: timed out waiting for the condition")
+        if v == "exec":
+            return self.exec_rc, self.probe_out, self.exec_err
+        if v == "delete":
+            return 0, "deleted\n", ""
+        raise AssertionError(argv)
+
+
+class Run:
+    def __init__(self, fake, env=None, patterns=(), script="echo hello\n"):
+        self.fake, self.env, self.patterns, self.script = fake, env or {}, patterns, script
+
+    def __call__(self, *argv):
+        tmp = tempfile.TemporaryDirectory()
+        cfg = Path(tmp.name) / "config.toml"
+        cfg.write_text("[mask]\npatterns = " + json.dumps(list(self.patterns)) + "\n")
+        script = Path(tmp.name) / "probe.sh"
+        script.write_text(self.script)
+        argv = [str(script) if x == "SCRIPT" else x for x in argv]
+        out, err = io.StringIO(), io.StringIO()
+        mask._MASKER = None
+        try:
+            with mock.patch.dict(os.environ, {"SKILL_FORGE_CONFIG": str(cfg), **self.env}), \
+                    mock.patch.object(eng, "run_kubectl", self.fake), redirect_stdout(out), redirect_stderr(err):
+                rc = eng.main(list(argv))
+        finally:
+            mask._MASKER = None
+            tmp.cleanup()
+        return rc, out.getvalue(), err.getvalue()
+
+
+RUN = ["run", "--context", "dev", "--namespace", "tools", "--script", "SCRIPT", "--service-account", "reader-sa"]
+
+
+class RunTest(unittest.TestCase):
+    def test_run_is_a_dry_run_without_apply(self):
+        fake = FakeKube()
+        rc, out, _ = Run(fake)(*RUN)
+        self.assertEqual(rc, 0)
+        self.assertEqual(fake.verbs(), ["config", "get"])
+        self.assertIn("would create pod " + eng.NAME + "-probe-", out)
+        self.assertIn('"serviceAccountName": "reader-sa"', out)
+        self.assertIn("dry run: nothing created", out)
+
+    def test_golden_provenance_header(self):
+        rc, out, _ = Run(FakeKube())(*RUN, "--apply")
+        self.assertEqual(rc, 0, out)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "# target:  context=dev namespace=tools service-account=reader-sa image=alpine:3.20")
+        self.assertTrue(lines[1].startswith("# window:  n/a: a point-in-time probe started 20"))
+        self.assertTrue(lines[2].startswith("# command: "))
+        self.assertEqual(lines[3:], ["# rows:    1", "# partial: no", "hello"])
+
+    def test_apply_creates_waits_execs_and_deletes_in_order(self):
+        fake = FakeKube()
+        Run(fake)(*RUN, "--apply")
+        self.assertEqual(fake.verbs(), ["config", "get", "create", "wait", "exec", "delete"])
+
+    def test_the_pod_is_deleted_when_the_wait_fails(self):
+        fake = FakeKube(wait_rc=1)
+        rc, _, err = Run(fake)(*RUN, "--apply")
+        self.assertEqual(rc, 5)
+        self.assertIn("timed out", err)
+        self.assertEqual(fake.verbs()[-1], "delete")
+
+    def test_the_pod_is_deleted_when_exec_hits_an_expired_login(self):
+        fake = FakeKube(exec_rc=1, probe_out="", exec_err=AUTH_ERR)
+        rc, _, err = Run(fake)(*RUN, "--apply")
+        self.assertEqual(rc, 4)
+        self.assertIn("AUTH:", err)
+        self.assertEqual(fake.verbs()[-1], "delete")
+
+    def test_manifest_has_workload_identity_ttl_label_and_sizing(self):
+        fake = FakeKube()
+        Run(fake)(*RUN, "--apply", "--ttl", "5m", "--cpu", "250m", "--memory", "64Mi")
+        pod = json.loads(fake.stdin_of("create"))
+        spec = pod["spec"]
+        self.assertEqual(spec["serviceAccountName"], "reader-sa")
+        self.assertEqual(spec["activeDeadlineSeconds"], 300)
+        self.assertEqual(pod["metadata"]["labels"], {eng.LABEL: eng.NAME})
+        self.assertEqual(spec["containers"][0]["resources"]["limits"], {"cpu": "250m", "memory": "64Mi"})
+        self.assertEqual(spec["containers"][0]["command"], ["sleep", "300"])
+
+
+class GuardTest(unittest.TestCase):
+    def test_guard_incomplete_capture_without_the_marker_is_partial(self):
+        fake = FakeKube(probe_out="half a line\n", exec_rc=137, exec_err="command terminated with exit code 137")
+        rc, out, _ = Run(fake)(*RUN, "--apply")
+        self.assertEqual(rc, 3)
+        self.assertIn("# partial: YES: no __PROBE_DONE__ marker", out)
+        self.assertIn("PARTIAL: the capture is incomplete", out)
+        self.assertIn("half a line", out)
+
+    def test_guard_incomplete_capture_the_marker_carries_the_scripts_exit_code(self):
+        rc, out, _ = Run(FakeKube(probe_out="x\n__PROBE_DONE__ rc=3\n"))(*RUN, "--apply")
+        self.assertEqual(rc, 1)
+        self.assertIn("the probe script exited 3", out)
+        self.assertNotIn("__PROBE_DONE__", out)
+
+    def test_guard_incomplete_capture_the_script_runs_under_an_exit_trap(self):
+        fake = FakeKube()
+        Run(fake, script="date\n")(*RUN, "--apply")
+        self.assertEqual(fake.stdin_of("exec"), eng.TRAP + "date\n")
+
+    def test_guard_leftover_probe_refuses_to_start(self):
+        fake = FakeKube(leftover=f"pod/{eng.NAME}-probe-abc123\n")
+        rc, _, err = Run(fake)(*RUN, "--apply")
+        self.assertEqual(rc, 5)
+        self.assertIn("still there", err)
+        self.assertNotIn("create", fake.verbs())
+
+    def test_guard_expired_auth_says_relogin_not_empty(self):
+        fake = FakeKube(auth_on="get")
+        rc, out, err = Run(fake, env={f"{ENV}_RELOGIN": "kube-login dev"})(*RUN, "--apply")
+        self.assertEqual(rc, 4)
+        self.assertIn("Re-login with: kube-login dev", err)
+        self.assertEqual(out, "")
+        self.assertNotIn("create", fake.verbs())
+
+    def test_guard_wrong_target_an_unknown_context_is_refused_locally(self):
+        fake = FakeKube()
+        rc, _, err = Run(fake)("run", "--context", "deev", "--namespace", "tools", "--script", "SCRIPT", "--apply")
+        self.assertEqual(rc, 5)
+        self.assertIn("closest: dev", err)
+        self.assertEqual(fake.verbs(), ["config"])
+
+    def test_guard_wrong_target_expect_context_pattern(self):
+        rc, _, err = Run(FakeKube(), env={f"{ENV}_EXPECT_CONTEXT": "prod-.*"})(*RUN, "--apply")
+        self.assertEqual(rc, 5)
+        self.assertIn("does not match", err)
+
+
+class QuotingTest(unittest.TestCase):
+    def test_quoting_the_script_goes_on_stdin_never_argv(self):
+        script = "echo \"a'b\" ) $(id) ; rm -rf /tmp/x\n"
+        fake = FakeKube()
+        Run(fake, script=script)(*RUN, "--apply")
+        argv = fake.argv_of("exec")
+        self.assertEqual(argv[-3:], ["--", "sh", "-s"])
+        self.assertFalse(any("echo" in x for x in argv))
+        self.assertEqual(fake.stdin_of("exec"), eng.TRAP + script)
+
+
+class CleanupTest(unittest.TestCase):
+    def test_cleanup_dry_run_lists_without_deleting(self):
+        fake = FakeKube(leftover=f"pod/{eng.NAME}-probe-abc123\n")
+        rc, out, _ = Run(fake)("cleanup", "--context", "dev", "--namespace", "tools")
+        self.assertEqual(rc, 0)
+        self.assertIn("would delete pod/", out)
+        self.assertNotIn("delete", fake.verbs())
+
+    def test_cleanup_apply_deletes(self):
+        fake = FakeKube(leftover=f"pod/{eng.NAME}-probe-abc123\n")
+        Run(fake)("cleanup", "--context", "dev", "--namespace", "tools", "--apply")
+        self.assertEqual(fake.verbs()[-1], "delete")
+
+
+class MaskTest(unittest.TestCase):
+    def test_mask_planted_identifier_in_probe_output(self):
+        fake = FakeKube(probe_out="bucket cust-acme reachable\n__PROBE_DONE__ rc=0\n")
+        rc, out, _ = Run(fake, patterns=[r"\bcust-[a-z]+"])(*RUN, "--apply")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("cust-acme", out)
+        self.assertIn("bucket <masked-1> reachable", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,267 @@
+"""Tests for {{module}}.py. The API is faked at fetch(), and the auth tests fake
+urlopen; no test opens a connection.
+
+Mutations that must turn this file red:
+  no-stream-check: {{module}}.py: `if api("/loki/api/v1/series", {"match[]": sel, **span})["data"]:` => `if True:`
+  no-label-check: {{module}}.py: `for label, value in EQ_MATCHER.findall(sel[1:-1]):` => `for label, value in []:`
+  full-page-not-partial: {{module}}.py: `full = len(got) >= limit` => `full = False`
+  no-pagination: {{module}}.py: `end = min(e[0] for e in got) + 1` => `break`
+  warnings-ignored: {{module}}.py: `partial = list(warns)` => `partial = []`
+  template-ignored: {{module}}.py: `tmpl = os.environ.get(f"{ENV}_SELECTOR_TEMPLATE", DEFAULT_TEMPLATE)` => `tmpl = DEFAULT_TEMPLATE`
+  raw-selector-ok: {{module}}.py: `if not any(v for _, v in EQ_MATCHER.findall(sel)):` => `if False:`
+  missing-namespace-ok: {{module}}.py: `    if missing:` => `    if False:`
+  skew-unsaid: {{module}}.py: `if d > skew:` => `if False:`
+  auth-html-missed: {{module}}.py: `if "html" in ctype or body.lstrip()[:1] == "<":` => `if False:`
+  auth-401-missed: {{module}}.py: `if e.code in (401, 403):` => `if False:`
+  creds-in-url-ok: {{module}}.py: `if "@" in urllib.parse.urlsplit(url).netloc:` => `if False:`
+  token-in-url: {{module}}.py: `req.add_header("Authorization", "Bearer " + token)` => `req.full_url += "&token=" + token`
+  filter-unescaped: {{module}}.py: `' |= "' + esc(filt) + '"'` => `' |= "' + filt + '"'`
+  value-unescaped: {{module}}.py: `SLOT.sub(lambda m: esc(values[m.group(1)]), tmpl)` => `SLOT.sub(lambda m: values[m.group(1)], tmpl)`
+  unmasked-lines: {{module}}.py: `emit(f"{stamp(ts)} {stream_label(labels)} {line}")` => `sys.stdout.write(f"{stamp(ts)} {stream_label(labels)} {line}\\n")`
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import re
+import sys
+import tempfile
+import unittest
+import urllib.error
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest import mock
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "bin"))
+import mask  # noqa: E402
+import {{module}} as eng  # noqa: E402
+
+ENV = eng.ENV
+END = datetime(2026, 11, 10, 6, 0, tzinfo=timezone.utc)
+API = {"app": "api", "namespace": "prod"}
+
+
+def ns(minutes_before_end: float) -> int:
+    return eng.to_ns(END - timedelta(minutes=minutes_before_end))
+
+
+class FakeLoki:
+    """Routes API paths to canned answers; records every call."""
+
+    def __init__(self, pages=None, warnings=None, streams=None, label_values=None):
+        self.pages = pages or [[]]
+        self.warnings = warnings or []
+        self.streams = streams if streams is not None else [API]
+        self.label_values = label_values or {}
+        self.calls = []
+
+    def queries(self) -> list:
+        return [p for path, p in self.calls if path == "/loki/api/v1/query_range"]
+
+    def __call__(self, path, params):
+        self.calls.append((path, params))
+        if path == "/loki/api/v1/status/buildinfo":
+            return {"version": "3.1.0"}
+        if path == "/loki/api/v1/query_range":
+            page = self.pages[min(len(self.queries()), len(self.pages)) - 1]
+            result = [{"stream": labels, "values": [[str(ts), line] for ts, line in vals]} for labels, vals in page]
+            return {"status": "success", "data": {"resultType": "streams", "result": result},
+                    **({"warnings": self.warnings} if self.warnings else {})}
+        if path == "/loki/api/v1/series":
+            want = dict(re.findall(r'(\w+)="((?:[^"\\]|\\.)*)"', params["match[]"]))
+            return {"status": "success", "data": [s for s in self.streams if all(s.get(k) == v for k, v in want.items())]}
+        if path.startswith("/loki/api/v1/label/"):
+            return {"status": "success", "data": self.label_values.get(path.split("/")[5], [])}
+        raise AssertionError(path)
+
+
+class Run:
+    def __init__(self, fake=None, env=None, patterns=()):
+        self.fake, self.env, self.patterns = fake, env or {}, patterns
+
+    def __call__(self, *argv):
+        tmp = tempfile.TemporaryDirectory()
+        cfg = Path(tmp.name) / "config.toml"
+        cfg.write_text("[mask]\npatterns = " + json.dumps(list(self.patterns)) + "\n")
+        env = {f"{ENV}_LOKI_URL": "http://loki.test:3100", "SKILL_FORGE_CONFIG": str(cfg), **self.env}
+        out, err = io.StringIO(), io.StringIO()
+        mask._MASKER = None
+        patches = [mock.patch.dict(os.environ, env)]
+        if self.fake is not None:
+            patches.append(mock.patch.object(eng, "fetch", self.fake))
+        try:
+            for p in patches:
+                p.start()
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = eng.main(list(argv))
+        finally:
+            for p in reversed(patches):
+                p.stop()
+            mask._MASKER = None
+            tmp.cleanup()
+        return rc, out.getvalue(), err.getvalue()
+
+
+SVC = ["--service", "api", "--namespace", "prod", "--end", "2026-11-10T06:00:00Z"]
+
+
+class FetchTest(unittest.TestCase):
+    def test_golden_provenance_header_and_lines(self):
+        fake = FakeLoki(pages=[[(API, [(ns(1), "second"), (ns(2), "first")])]])
+        rc, out, _ = Run(fake)("fetch", *SVC)
+        self.assertEqual(rc, 0, out)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], '# target:  loki http://loki.test:3100 v3.1.0 selector {namespace="prod",app="api"}')
+        self.assertEqual(lines[1], "# window:  2026-11-10T05:00:00Z .. 2026-11-10T06:00:00Z (UTC, bounds [start, end))")
+        self.assertTrue(lines[2].startswith("# command: "))
+        self.assertEqual(lines[3:], ["# rows:    2 lines from 1 page(s)", "# partial: no",
+                                     '2026-11-10T05:58:00.000Z {app="api",namespace="prod"} first',
+                                     '2026-11-10T05:59:00.000Z {app="api",namespace="prod"} second'])
+
+    def test_pagination_walks_back_and_stops_on_a_short_page(self):
+        fake = FakeLoki(pages=[[(API, [(ns(1), "c"), (ns(2), "b")])], [(API, [(ns(3), "a")])]])
+        rc, out, _ = Run(fake)("fetch", *SVC, "--limit", "2", "--max-pages", "5")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(fake.queries()), 2)
+        self.assertEqual(fake.queries()[1]["end"], str(ns(2) + 1))
+        self.assertIn("# rows:    3 lines from 2 page(s)", out)
+
+    def test_streams_lists_what_the_selector_matches(self):
+        rc, out, _ = Run(FakeLoki())("streams", *SVC)
+        self.assertEqual(rc, 0)
+        self.assertIn('{app="api",namespace="prod"}', out.splitlines()[-1])
+
+
+class GuardTest(unittest.TestCase):
+    def test_guard_wrong_target_selector_is_computed_from_the_template(self):
+        fake = FakeLoki(pages=[[(API, [(ns(1), "x")])]])
+        Run(fake, env={f"{ENV}_SELECTOR_TEMPLATE": 'k8s_ns="{ns}",svc="{service}"'})("fetch", *SVC)
+        self.assertEqual(fake.queries()[0]["query"], '{k8s_ns="prod",svc="api"}')
+
+    def test_guard_wrong_target_a_raw_selector_without_a_matcher_is_refused(self):
+        for sel in ("{}", '{app=~".+"}'):
+            fake = FakeLoki()
+            rc, _, err = Run(fake)("fetch", "--selector", sel)
+            self.assertEqual(rc, 5, sel)
+            self.assertIn("compute it from --service", err)
+            self.assertEqual(fake.calls, [])
+
+    def test_guard_wrong_target_the_template_needs_its_namespace(self):
+        rc, _, err = Run(FakeLoki())("fetch", "--service", "api")
+        self.assertEqual(rc, 5)
+        self.assertIn("needs --namespace", err)
+
+    def test_guard_wrong_target_credentials_in_the_url_refused(self):
+        rc, _, err = Run(FakeLoki(), env={f"{ENV}_LOKI_URL": "http://u:" + "pw@loki.test"})("fetch", *SVC)
+        self.assertEqual(rc, 5)
+        self.assertIn("_LOKI_TOKEN", err)
+
+    def test_guard_absent_no_stream_has_that_service(self):
+        fake = FakeLoki(label_values={"app": ["api", "worker"]})
+        rc, out, _ = Run(fake)("fetch", "--service", "apii", "--namespace", "prod", "--end", "2026-11-10T06:00:00Z")
+        self.assertEqual(rc, 2)
+        self.assertIn('ABSENT: no stream has app="apii" in the window; closest: api', out)
+
+    def test_guard_absent_and_empty_differ(self):
+        rc, out, _ = Run(FakeLoki())("fetch", *SVC)
+        self.assertEqual(rc, 0)
+        self.assertIn("EMPTY: the streams exist; no line in the window was logged", out)
+        self.assertNotIn("ABSENT", out)
+
+    def test_guard_partial_a_full_last_page_means_more_may_exist(self):
+        page = [(API, [(ns(1), "b"), (ns(2), "a")])]
+        rc, out, _ = Run(FakeLoki(pages=[page, page]))("fetch", *SVC, "--limit", "2", "--max-pages", "2")
+        self.assertEqual(rc, 3)
+        self.assertIn("# partial: YES: page cap: 2 page(s) of 2 lines and the last was full", out)
+
+    def test_guard_partial_backend_warning(self):
+        fake = FakeLoki(pages=[[(API, [(ns(1), "x")])]], warnings=["query timed out on 2 of 9 ingesters"])
+        rc, out, _ = Run(fake)("fetch", *SVC)
+        self.assertEqual(rc, 3)
+        self.assertIn("PARTIAL: query timed out on 2 of 9 ingesters", out)
+
+    def test_guard_expired_auth_401_is_not_no_data(self):
+        def urlopen(req, timeout):
+            raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {"Content-Type": "text/plain"}, io.BytesIO(b"no"))
+        with mock.patch("urllib.request.urlopen", urlopen):
+            rc, out, err = Run(env={f"{ENV}_RELOGIN": "sso-login logs"})("fetch", *SVC)
+        self.assertEqual(rc, 4)
+        self.assertIn("Re-login with: sso-login logs", err)
+        self.assertEqual(out, "")
+
+    def test_guard_expired_auth_html_login_page(self):
+        with mock.patch("urllib.request.urlopen", FakeResponse.factory(b"<html><title>Sign in</title>", "text/html")):
+            rc, _, err = Run()("fetch", *SVC)
+        self.assertEqual(rc, 4)
+        self.assertIn("login wall", err)
+
+    def test_guard_window_event_time_far_from_store_time_is_called_out(self):
+        line = json.dumps({"ts": "2026-11-10T04:00:00Z", "msg": "late"})
+        rc, out, _ = Run(FakeLoki(pages=[[(API, [(ns(1), line)])]]))("fetch", *SVC)
+        self.assertEqual(rc, 0)
+        self.assertIn("WINDOW: 1 line(s) carry an event time more than 5m from the store's time (worst 1:59:00)", out)
+
+    def test_guard_window_close_event_time_is_quiet(self):
+        line = json.dumps({"time": "2026-11-10T05:59:00Z"})
+        _, out, _ = Run(FakeLoki(pages=[[(API, [(ns(1), line)])]]))("fetch", *SVC)
+        self.assertNotIn("WINDOW:", out)
+
+
+class QuotingTest(unittest.TestCase):
+    def test_quoting_a_filter_with_a_quote_is_escaped(self):
+        fake = FakeLoki(pages=[[(API, [(ns(1), "x")])]])
+        Run(fake)("fetch", *SVC, "--filter", 'say "hi"')
+        self.assertEqual(fake.queries()[0]["query"], '{namespace="prod",app="api"} |= "say \\"hi\\""')
+
+    def test_quoting_a_service_name_is_escaped_into_the_selector(self):
+        self.assertEqual(eng.selector_for('a"b', "prod"), '{namespace="prod",app="a\\"b"}')
+
+
+class FakeResponse:
+    def __init__(self, body: bytes, ctype: str):
+        self.body, self.headers = body, {"Content-Type": ctype}
+
+    def read(self):
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    @classmethod
+    def factory(cls, body, ctype, seen=None):
+        def urlopen(req, timeout):
+            if seen is not None:
+                seen.append(req)
+            return cls(body, ctype)
+        return urlopen
+
+
+class TransportTest(unittest.TestCase):
+    def test_token_goes_in_a_header_not_the_url(self):
+        seen = []
+        body = json.dumps({"status": "success", "data": {"result": []}}).encode()
+        with mock.patch("urllib.request.urlopen", FakeResponse.factory(body, "application/json", seen)), \
+                mock.patch.dict(os.environ, {f"{ENV}_LOKI_URL": "http://loki.test", f"{ENV}_LOKI_TOKEN": "tok-123456789"}):
+            eng.fetch("/loki/api/v1/query_range", {"query": "{app=\"x\"}"})
+        self.assertEqual(seen[0].get_header("Authorization"), "Bearer tok-123456789")
+        self.assertNotIn("tok-123456789", seen[0].full_url)
+        self.assertEqual(seen[0].get_method(), "GET")
+
+
+class MaskTest(unittest.TestCase):
+    def test_mask_planted_identifier_in_a_line(self):
+        fake = FakeLoki(pages=[[(API, [(ns(1), "charge failed for cust-acme")])]])
+        rc, out, _ = Run(fake, patterns=[r"\bcust-[a-z]+"])("fetch", *SVC)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("cust-acme", out)
+        self.assertIn("charge failed for <masked-1>", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

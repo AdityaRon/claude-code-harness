@@ -1,0 +1,23 @@
+# The fixture live_acceptance.py runs: ports on 127.0.0.1 only, chosen by
+# Docker. The superuser password is the random canary the script sets per run,
+# so nothing here is a secret and any leak of it is detectable.
+services:
+  pg:
+    image: postgres:16.4
+    environment:
+      POSTGRES_USER: forge
+      POSTGRES_DB: forge
+      POSTGRES_PASSWORD: ${SF_CANARY:?live_acceptance.py sets it}
+    ports: ["127.0.0.1::5432"]
+    volumes: ["./pg-init.sql:/docker-entrypoint-initdb.d/init.sql:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U forge -d forge -tAc 'SELECT count(*) FROM orders' | grep -q 30"]
+      interval: 2s
+      retries: 60
+  prom:
+    image: prom/prometheus:v2.53.2
+    ports: ["127.0.0.1::9090"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 2s
+      retries: 60

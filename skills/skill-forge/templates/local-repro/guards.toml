@@ -1,0 +1,7 @@
+archetype = "local-repro"
+summary = "Reproduces a production component in Docker on the exact image tag production runs, seeded with synthetic rows built from a real schema; no production data is read."
+not_for = "touching production, or copying production rows (it generates its own)"
+guards = ["wrong_target", "absent", "incomplete_capture"]
+write_verbs = ['''["']docker["']\s*,\s*["'](?:run|rm|start|stop|pull)["']''']
+sql = false
+vendor = []

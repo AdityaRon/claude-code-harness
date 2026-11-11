@@ -1,0 +1,52 @@
+---
+name: {{name}}
+description: {{description}}
+---
+
+# {{name}}
+
+Answers one question: **{{question}}?** Drafted by skill-forge
+({{archetype}}, {{date}}); edit this file to say which probe script answers
+it and from which namespace and service account.
+
+## Setup, once per machine
+
+- A probe script beside this file, for example `probe.sh`. It runs under
+  `sh -s` in the pod; keep it read-only.
+- `{{env_prefix}}_RELOGIN`: the command that renews cluster access, printed on AUTH.
+- `{{env_prefix}}_EXPECT_CONTEXT` (optional): a regex the context must match.
+
+No credential is stored: the pod runs as the service account you name, so it
+borrows the workload identity the cluster already grants it.
+
+## Run
+
+```
+PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
+E=~/.claude/skills/{{name}}/bin/{{module}}.py
+$PY $E run --context <ctx> --namespace <ns> --service-account <sa> --script probe.sh           # dry run
+$PY $E run --context <ctx> --namespace <ns> --service-account <sa> --script probe.sh --apply   # the probe
+$PY $E cleanup --context <ctx> --namespace <ns>                                               # leftovers
+```
+
+`--image`, `--cpu`, `--memory` size the pod; `--ttl` (default 10m) is its
+activeDeadlineSeconds; `--timeout` bounds the wait for Ready.
+
+## Reading the output
+
+The `#` lines name the context, namespace, service account and image, and
+when the probe started. Without `--apply` nothing is created: read the pod
+and the commands, then add `--apply`.
+
+- exit 0: the probe ran to its end marker and exited 0.
+- exit 1: the probe ran to its end and exited non-zero (printed).
+- exit 3 `PARTIAL`: no `__PROBE_DONE__` marker, so the output stopped
+  mid-probe (killed pod, dropped stream). The lines are not the whole answer.
+- exit 4 `AUTH`: an expired login, not an empty answer. Run the re-login.
+- exit 5 `REFUSED`: an unknown context, a context the pattern rejects, or a
+  probe pod still left from an earlier run (look at it, then `cleanup --apply`).
+
+## Gotchas
+
+None yet. When a session hits a trap, add the guard to the engine with its
+test, and one line here.

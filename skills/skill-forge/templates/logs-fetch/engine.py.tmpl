@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""{{name}}: {{question}}?
+
+Archetype logs-fetch, drafted by skill-forge on {{date}}. Each guard below is
+here because the dangerous output is a clean-looking wrong answer; change one
+only together with its test.
+
+  {{module}}.py fetch --service S [--namespace N] [--filter TEXT] [--window 1h] [--end now]
+                      [--limit 500] [--max-pages 5] [--skew 5m]
+  {{module}}.py fetch --selector '{app="api",namespace="prod"}' ...   a selector you wrote; needs a label="value"
+  {{module}}.py streams --service S [--namespace N] [--window 1h]     the streams the selector matches
+
+${{env_prefix}}_LOKI_URL is the Loki API's base URL. A bearer token, when it
+needs one, comes from ${{env_prefix}}_LOKI_TOKEN and goes in a header, never a
+URL or argv. ${{env_prefix}}_RELOGIN is printed when auth fails.
+${{env_prefix}}_SELECTOR_TEMPLATE (default: namespace="{ns}",app="{service}") is
+how this job names a service's streams. The selector is computed from it, not
+guessed, and the computed selector prints in the header.
+
+Guards: no line is checked against the series API and reported ABSENT (no
+stream has that label value; the closest values follow) or EMPTY (the streams
+exist, nothing in the window matched). A full last page under --max-pages, or a
+backend warning, is PARTIAL. A 401, a 403 or an HTML login page is AUTH, not
+no-data. The window prints in UTC with Loki's bounds, and lines whose own JSON
+time differs from the store's time by more than --skew are called out: the
+window selects by store time, not event time.
+
+Exit status: 0 lines or EMPTY, 2 ABSENT, 3 PARTIAL, 4 AUTH, 5 REFUSED.
+"""
+from __future__ import annotations
+
+import argparse
+import difflib
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mask import (EXIT_ABSENT, EXIT_AUTH, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED,  # noqa: E402
+                  Window, emit, header, parse_duration, parse_time)
+
+ENV = "{{env_prefix}}"
+DEFAULT_TEMPLATE = 'namespace="{ns}",app="{service}"'
+SLOT = re.compile(r"\{(\w+)\}")
+EQ_MATCHER = re.compile(r'([a-zA-Z_]\w*)\s*=\s*"((?:[^"\\]|\\.)+)"')
+TIME_KEYS = ("ts", "time", "timestamp", "@timestamp")
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+class Refused(Exception):
+    pass
+
+
+class AuthError(Exception):
+    pass
+
+
+def base_url() -> str:
+    url = os.environ.get(f"{ENV}_LOKI_URL", "").strip().rstrip("/")
+    if not url:
+        raise Refused(f"set {ENV}_LOKI_URL to the Loki API's base URL")
+    if "@" in urllib.parse.urlsplit(url).netloc:
+        raise Refused(f"{ENV}_LOKI_URL carries credentials; put a token in {ENV}_LOKI_TOKEN instead")
+    return url
+
+
+def fetch(path: str, params: dict) -> dict:
+    """GET one API path. Raises AuthError on a login wall, returns the JSON."""
+    q = urllib.parse.urlencode([(k, v) for k, vs in params.items() for v in (vs if isinstance(vs, list) else [vs])])
+    req = urllib.request.Request(f"{base_url()}{path}?{q}", method="GET")
+    token = os.environ.get(f"{ENV}_LOKI_TOKEN")
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            body, ctype = r.read().decode("utf-8", "replace"), r.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise AuthError(f"HTTP {e.code} from {path}")
+        body, ctype = e.read().decode("utf-8", "replace"), e.headers.get("Content-Type", "")
+    if "html" in ctype or body.lstrip()[:1] == "<":
+        raise AuthError(f"{path} answered with an HTML page, most likely a login wall, not the API")
+    return json.loads(body)
+
+
+def api(path: str, params: dict) -> dict:
+    d = fetch(path, params)
+    if d.get("status") != "success":
+        raise Refused(f"{path}: {d.get('error', d)}")
+    return d
+
+
+def esc(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def unesc(value: str) -> str:
+    return value.replace('\\"', '"').replace("\\\\", "\\")
+
+
+def selector_for(service: str, namespace: str | None) -> str:
+    """The stream selector this job's template gives for a service."""
+    tmpl = os.environ.get(f"{ENV}_SELECTOR_TEMPLATE", DEFAULT_TEMPLATE)
+    values = {"service": service, "ns": namespace}
+    unknown = [n for n in SLOT.findall(tmpl) if n not in values]
+    if unknown:
+        raise Refused(f"{ENV}_SELECTOR_TEMPLATE names {', '.join(unknown)}; it may use only " + "{service} and {ns}")
+    missing = [n for n in SLOT.findall(tmpl) if not values[n]]
+    if missing:
+        raise Refused(f"{ENV}_SELECTOR_TEMPLATE needs " + ", ".join("--namespace" if n == "ns" else "--" + n for n in missing))
+    return checked("{" + SLOT.sub(lambda m: esc(values[m.group(1)]), tmpl) + "}")
+
+
+def checked(sel: str) -> str:
+    sel = sel.strip()
+    if not (sel.startswith("{") and sel.endswith("}")):
+        raise Refused(f"{sel!r} is not a stream selector")
+    if not any(v for _, v in EQ_MATCHER.findall(sel)):
+        raise Refused(f"{sel!r} has no label=\"value\" matcher, so it would scan every stream; compute it from --service")
+    return sel
+
+
+def logql(sel: str, filt: str | None) -> str:
+    return sel + (' |= "' + esc(filt) + '"' if filt else "")
+
+
+def to_ns(t: datetime) -> int:
+    return (t - EPOCH) // timedelta(microseconds=1) * 1000
+
+
+def from_ns(ns: int) -> datetime:
+    return EPOCH + timedelta(microseconds=ns // 1000)
+
+
+def stamp(ns: int) -> str:
+    return from_ns(ns).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def event_time(line: str) -> datetime | None:
+    if not line.lstrip().startswith("{"):
+        return None
+    try:
+        obj = json.loads(line)
+    except ValueError:
+        return None
+    for k in TIME_KEYS:
+        v = obj.get(k) if isinstance(obj, dict) else None
+        if isinstance(v, (int, float)):
+            secs = v / 1e9 if v > 1e17 else v / 1e3 if v > 1e11 else v
+            return EPOCH + timedelta(seconds=secs)
+        if isinstance(v, str):
+            try:
+                return parse_time(v)
+            except ValueError:
+                continue
+    return None
+
+
+def fetch_lines(query: str, w: Window, limit: int, max_pages: int) -> tuple[list, int, str | None]:
+    start, end = to_ns(w.start), to_ns(w.end)
+    seen, entries, warns, full, pages = set(), [], [], False, 0
+    for pages in range(1, max_pages + 1):
+        d = api("/loki/api/v1/query_range", {"query": query, "start": str(start), "end": str(end),
+                                             "limit": str(limit), "direction": "backward"})
+        warns += d.get("warnings", [])
+        got = [(int(ts), s.get("stream", {}), line) for s in d["data"]["result"] for ts, line in s["values"]]
+        for e in got:
+            key = (e[0], tuple(sorted(e[1].items())), e[2])
+            if key not in seen:
+                seen.add(key)
+                entries.append(e)
+        full = len(got) >= limit
+        if not full:
+            break
+        end = min(e[0] for e in got) + 1
+    partial = list(warns)
+    if full:
+        partial.append(f"page cap: {pages} page(s) of {limit} lines and the last was full, so more lines may exist "
+                       "(narrow --window or --filter, or raise --max-pages)")
+    return sorted(entries, key=lambda e: e[0]), pages, "; ".join(partial) or None
+
+
+def explain_empty(sel: str, w: Window, filt: str | None) -> tuple[str, str]:
+    span = {"start": str(to_ns(w.start)), "end": str(to_ns(w.end))}
+    if api("/loki/api/v1/series", {"match[]": sel, **span})["data"]:
+        return "EMPTY", "the streams exist; no line in the window" + (" matched the filter" if filt else " was logged")
+    for label, value in EQ_MATCHER.findall(sel[1:-1]):
+        if not api("/loki/api/v1/series", {"match[]": "{" + label + '="' + value + '"}', **span})["data"]:
+            seen = api(f"/loki/api/v1/label/{urllib.parse.quote(label)}/values", span).get("data") or []
+            near = difflib.get_close_matches(unesc(value), seen, n=3, cutoff=0.5)
+            return "ABSENT", (f'no stream has {label}="{unesc(value)}" in the window; '
+                              + (f"closest: {', '.join(near)}" if near else f"values seen: {', '.join(seen[:8]) or 'none'}"))
+    return "ABSENT", f"no stream matches {sel} as a whole, though each label value exists; check the template pairs them"
+
+
+def target(sel: str) -> str:
+    try:
+        v = fetch("/loki/api/v1/status/buildinfo", {}).get("version")
+    except (AuthError, ValueError, OSError):
+        v = None
+    return f"loki {base_url()}" + (f" v{v}" if v else "") + f" selector {sel}"
+
+
+def stream_label(labels: dict) -> str:
+    return "{" + ",".join(f'{k}="{v}"' for k, v in sorted(labels.items())) + "}"
+
+
+def resolve(a) -> str:
+    if a.selector:
+        return checked(a.selector)
+    if not a.service:
+        raise Refused("name the --service (the selector is computed from it), or pass --selector")
+    return selector_for(a.service, a.namespace)
+
+
+def window_of(a) -> Window:
+    end = parse_time(a.end)
+    return Window(end - parse_duration(a.window), end, bounds="[start, end)")
+
+
+def do_fetch(a) -> int:
+    sel = resolve(a)
+    w = window_of(a)
+    entries, pages, partial = fetch_lines(logql(sel, a.filter), w, a.limit, a.max_pages)
+    tgt = target(sel)
+    if not entries:
+        kind, why = explain_empty(sel, w, a.filter)
+        emit(header(tgt, w, rows=kind, partial=partial))
+        emit(f"{kind}: {why}")
+        return EXIT_ABSENT if kind == "ABSENT" else (EXIT_PARTIAL if partial else EXIT_OK)
+    emit(header(tgt, w, rows=f"{len(entries)} lines from {pages} page(s)", partial=partial))
+    skew = parse_duration(a.skew)
+    worst, off = timedelta(0), 0
+    for ts, labels, line in entries:
+        emit(f"{stamp(ts)} {stream_label(labels)} {line}")
+        ev = event_time(line)
+        d = abs(ev - from_ns(ts)) if ev else timedelta(0)
+        if d > skew:
+            off, worst = off + 1, max(worst, d)
+    if off:
+        emit(f"WINDOW: {off} line(s) carry an event time more than {a.skew} from the store's time (worst {worst}). "
+             "The window selects by store time, so events inside it may be missing and events outside it present.")
+    if partial:
+        emit(f"PARTIAL: {partial}")
+        return EXIT_PARTIAL
+    return EXIT_OK
+
+
+def do_streams(a) -> int:
+    sel = resolve(a)
+    w = window_of(a)
+    res = api("/loki/api/v1/series", {"match[]": sel, "start": str(to_ns(w.start)), "end": str(to_ns(w.end))})["data"]
+    if not res:
+        kind, why = explain_empty(sel, w, None)
+        emit(header(target(sel), w, rows=kind))
+        emit(f"{kind}: {why}")
+        return EXIT_ABSENT if kind == "ABSENT" else EXIT_OK
+    emit(header(target(sel), w, rows=f"{len(res)} streams"))
+    for s in res:
+        emit(stream_label(s))
+    return EXIT_OK
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n", 1)[1])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    for name in ("fetch", "streams"):
+        sp = sub.add_parser(name)
+        sp.add_argument("--service")
+        sp.add_argument("--namespace")
+        sp.add_argument("--selector")
+        sp.add_argument("--window", default="1h")
+        sp.add_argument("--end", default="now")
+        if name == "fetch":
+            sp.add_argument("--filter")
+            sp.add_argument("--limit", type=int, default=500)
+            sp.add_argument("--max-pages", type=int, default=5)
+            sp.add_argument("--skew", default="5m")
+    a = p.parse_args(argv)
+    try:
+        return do_fetch(a) if a.cmd == "fetch" else do_streams(a)
+    except AuthError as e:
+        relogin = os.environ.get(f"{ENV}_RELOGIN", f"(set {ENV}_RELOGIN to the command that renews access)")
+        emit(f"AUTH: {e}. This is an expired or missing login, not an empty answer. Re-login with: {relogin}", err=True)
+        return EXIT_AUTH
+    except (Refused, ValueError) as e:
+        emit(f"REFUSED: {e}", err=True)
+        return EXIT_REFUSED
+    except OSError as e:
+        emit(f"could not reach {os.environ.get(ENV + '_LOKI_URL', '?')}: {e}", err=True)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

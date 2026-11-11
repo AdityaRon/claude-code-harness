@@ -1,0 +1,51 @@
+---
+name: {{name}}
+description: {{description}}
+---
+
+# {{name}}
+
+Answers one question: **{{question}}?** Drafted by skill-forge
+({{archetype}}, {{date}}); edit this file to name the CronJob, namespace and
+clusters it runs in.
+
+## Setup, once per machine
+
+- kubectl with a context per cluster in the kubeconfig.
+- `{{env_prefix}}_RELOGIN`: the command that renews cluster access, printed on AUTH.
+
+## Run
+
+```
+PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
+E=~/.claude/skills/{{name}}/bin/{{module}}.py
+$PY $E run --from-cronjob <cronjob> --contexts <a>,<b> --namespace <ns>            # dry run
+$PY $E run --from-cronjob <cronjob> --contexts <a>,<b> --namespace <ns> --apply    # create and watch
+$PY $E run --manifest job.yaml --contexts <a> --namespace <ns> --apply
+```
+
+`--timeout` (default 30m) bounds the watch, `--poll` (10s) its interval,
+`--tail` (100) the log lines printed for a Job that failed or did not finish.
+
+## Reading the output
+
+The `#` lines name the contexts, namespace and source, and when the run
+started. Then one result line per cluster:
+
+- `SUCCEEDED in Ns`: the Job reached Complete.
+- `FAILED after Ns` (exit 1 alone): the Job reached Failed; the log lines
+  above it are its end.
+- `TIMEOUT` (exit 3): not finished within `--timeout`. The log lines are a
+  snapshot, not the end of the run. Look again before calling it.
+- `ABSENT` (exit 2): no such CronJob there; the ones that exist follow.
+- `AUTH` (exit 4): an expired login for that cluster. Run the re-login.
+- `SKIPPED` (exit 5): the context is not in the kubeconfig.
+- `DRY-RUN`: nothing was created; read the Job and add `--apply`.
+
+With more than one cluster, any line that is not SUCCEEDED makes the run
+PARTIAL (exit 3).
+
+## Gotchas
+
+None yet. When a session hits a trap, add the guard to the engine with its
+test, and one line here.

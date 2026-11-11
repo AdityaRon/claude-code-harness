@@ -1,0 +1,48 @@
+---
+name: {{name}}
+description: {{description}}
+---
+
+# {{name}}
+
+Answers one question: **{{question}}?** Drafted by skill-forge
+({{archetype}}, {{date}}); edit this file to name the endpoints that answer it.
+
+## Setup, once per machine
+
+- `{{env_prefix}}_API_URL`: the API's base URL, with no credentials in it.
+- `{{env_prefix}}_API_TOKEN`: sent in a header, never the URL.
+  `{{env_prefix}}_AUTH_HEADER` names the header (default
+  `Authorization: Bearer`; `X-Api-Key:` sends the bare key).
+- `{{env_prefix}}_RELOGIN`: the command that renews access, printed on AUTH.
+- `{{env_prefix}}_ID_PATTERN` (optional): the shape an id must have, for
+  example `cust-[a-z0-9]+`; an id of another shape is refused before any
+  request.
+
+## Run
+
+```
+PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
+$PY ~/.claude/skills/{{name}}/bin/{{module}}.py get '/tenants/{id}/flags' --id cust-42
+$PY ~/.claude/skills/{{name}}/bin/{{module}}.py get /tickets --param status=open --max-pages 10
+```
+
+It sends GET only; nothing else can leave it.
+
+## Reading the output
+
+The `#` lines carry the URL read, when, the command, how many items from how
+many pages, and whether it is partial. Each item follows as one JSON line.
+
+- `EMPTY` (exit 0): the resource exists and holds nothing.
+- `ABSENT` (exit 2): a 404. The resource does not exist, or the id has the
+  wrong form; not an empty answer.
+- `PARTIAL` (exit 3): more pages than `--max-pages`.
+- `AUTH` (exit 4): a 401, a 403 or a login page. Run the printed re-login.
+- `REFUSED` (exit 5): an id of the wrong shape, credentials in the base URL,
+  or a next link to another host.
+
+## Gotchas
+
+None yet. When a session hits a trap, add the guard to the engine with its
+test, and one line here.

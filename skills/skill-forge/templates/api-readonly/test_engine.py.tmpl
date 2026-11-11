@@ -1,0 +1,203 @@
+"""Tests for {{module}}.py. The API is faked at transport(); no test opens a
+connection.
+
+Mutations that must turn this file red:
+  get-only-off: {{module}}.py: `if method != "GET":` => `if False:`
+  absent-as-error: {{module}}.py: `if status == 404:` => `if False:`
+  empty-unsaid: {{module}}.py: `emit("EMPTY: the resource exists` => `(lambda *a: None)("EMPTY: the resource exists`
+  page-cap-hidden: {{module}}.py: `(--max-pages {a.max_pages})" if url else None` => `(--max-pages {a.max_pages})" if False else None`
+  page-cap-ignored: {{module}}.py: `while url and pages < a.max_pages:` => `while url:`
+  auth-401-missed: {{module}}.py: `if status in (401, 403):` => `if False:`
+  auth-html-missed: {{module}}.py: `if "html" in headers.get("content-type", "").lower() or body.lstrip()[:1] == "<":` => `if False:`
+  id-shape-unchecked: {{module}}.py: `if pattern and not re.fullmatch(pattern, ident):` => `if False:`
+  id-unquoted: {{module}}.py: `path.replace("{id}", urllib.parse.quote(ident, safe=""))` => `path.replace("{id}", ident)`
+  other-host-followed: {{module}}.py: `if (u.scheme, u.netloc) != (b.scheme, b.netloc):` => `if False:`
+  creds-in-url-ok: {{module}}.py: `if "@" in urllib.parse.urlsplit(url).netloc:` => `if False:`
+  token-in-url: {{module}}.py: `        req.add_header(name, value)` => `        req.full_url += "?token=" + value`
+  link-header-ignored: {{module}}.py: `m = LINK_NEXT.search(headers.get("link", ""))` => `m = None`
+  next-field-ignored: {{module}}.py: `for k in ("next", "next_page", "nextPage"):` => `for k in ():`
+  auth-header-name-ignored: {{module}}.py: `name, _, scheme = spec.partition(":")` => `name, scheme = "Authorization", "Bearer"`
+  unmasked-items: {{module}}.py: `emit(json.dumps(item, sort_keys=True))` => `sys.stdout.write(json.dumps(item, sort_keys=True))`
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "bin"))
+import mask  # noqa: E402
+import {{module}} as eng  # noqa: E402
+
+ENV = eng.ENV
+BASE = "https://api.test/v1"
+JSON = {"Content-Type": "application/json"}
+
+
+class FakeTransport:
+    """Answers each URL from a table of (status, headers, body); records requests."""
+
+    def __init__(self, table: dict):
+        self.table, self.seen = table, []
+
+    def __call__(self, req):
+        self.seen.append(req)
+        if req.full_url not in self.table:
+            raise AssertionError(f"unexpected request {req.full_url}")
+        status, headers, body = self.table[req.full_url]
+        return status, headers, body if isinstance(body, str) else json.dumps(body)
+
+
+class Run:
+    def __init__(self, table=None, env=None, patterns=()):
+        self.fake = FakeTransport(table or {})
+        self.env, self.patterns = env or {}, patterns
+
+    def __call__(self, *argv):
+        tmp = tempfile.TemporaryDirectory()
+        cfg = Path(tmp.name) / "config.toml"
+        cfg.write_text("[mask]\npatterns = " + json.dumps(list(self.patterns)) + "\n")
+        env = {f"{ENV}_API_URL": BASE, f"{ENV}_API_TOKEN": "tok-123456789", "SKILL_FORGE_CONFIG": str(cfg), **self.env}
+        out, err = io.StringIO(), io.StringIO()
+        mask._MASKER = None
+        try:
+            with mock.patch.dict(os.environ, env), mock.patch.object(eng, "transport", self.fake), \
+                    redirect_stdout(out), redirect_stderr(err):
+                rc = eng.main(list(argv))
+        finally:
+            mask._MASKER = None
+            tmp.cleanup()
+        return rc, out.getvalue(), err.getvalue()
+
+
+class GetTest(unittest.TestCase):
+    def test_golden_provenance_header_and_items(self):
+        run = Run({BASE + "/flags": (200, JSON, [{"key": "beta", "on": True}, {"key": "dark", "on": False}])})
+        rc, out, _ = run("get", "/flags")
+        self.assertEqual(rc, 0)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "# target:  https://api.test/v1/flags (GET)")
+        self.assertTrue(lines[1].startswith("# window:  n/a: the API's state as of "))
+        self.assertTrue(lines[2].startswith("# command: "))
+        self.assertEqual(lines[3:], ["# rows:    2 from 1 page(s)", "# partial: no",
+                                     '{"key": "beta", "on": true}', '{"key": "dark", "on": false}'])
+
+    def test_only_get_can_be_sent(self):
+        fake = FakeTransport({})
+        with mock.patch.object(eng, "transport", fake), mock.patch.dict(os.environ, {f"{ENV}_API_URL": BASE}):
+            for method in ("POST", "PUT", "PATCH", "DELETE"):
+                with self.assertRaises(eng.Refused):
+                    eng.request(method, BASE + "/flags")
+        self.assertEqual(fake.seen, [])
+
+    def test_token_goes_in_the_default_header_not_the_url(self):
+        run = Run({BASE + "/flags": (200, JSON, [])})
+        run("get", "/flags")
+        req = run.fake.seen[0]
+        self.assertEqual(req.get_header("Authorization"), "Bearer tok-123456789")
+        self.assertNotIn("tok-123456789", req.full_url)
+        self.assertEqual(req.get_method(), "GET")
+
+    def test_a_bare_key_header_is_configurable(self):
+        run = Run({BASE + "/flags": (200, JSON, [])}, env={f"{ENV}_AUTH_HEADER": "X-Api-Key:"})
+        run("get", "/flags")
+        self.assertEqual(run.fake.seen[0].get_header("X-api-key"), "tok-123456789")
+
+    def test_pages_follow_the_link_header(self):
+        run = Run({BASE + "/flags": (200, {**JSON, "Link": '<https://api.test/v1/flags?page=2>; rel="next"'}, [{"k": 1}]),
+                   BASE + "/flags?page=2": (200, JSON, [{"k": 2}])})
+        rc, out, _ = run("get", "/flags")
+        self.assertEqual(rc, 0)
+        self.assertIn("# rows:    2 from 2 page(s)", out)
+
+    def test_pages_follow_a_next_field(self):
+        run = Run({BASE + "/tickets": (200, JSON, {"items": [{"id": 1}], "next": "/v1/tickets?cursor=b"}),
+                   "https://api.test/v1/tickets?cursor=b": (200, JSON, {"items": [{"id": 2}], "next": None})})
+        rc, out, _ = run("get", "/tickets")
+        self.assertEqual(rc, 0)
+        self.assertIn('{"id": 2}', out)
+
+
+class GuardTest(unittest.TestCase):
+    def test_guard_absent_a_404_is_not_an_empty_answer(self):
+        rc, out, _ = Run({BASE + "/flags/nope": (404, JSON, {"error": "not found"})})("get", "/flags/nope")
+        self.assertEqual(rc, 2)
+        self.assertIn("ABSENT: /flags/nope returned 404", out)
+        self.assertNotIn("EMPTY", out)
+
+    def test_guard_absent_and_empty_differ(self):
+        rc, out, _ = Run({BASE + "/flags": (200, JSON, {"items": []})})("get", "/flags")
+        self.assertEqual(rc, 0)
+        self.assertIn("EMPTY: the resource exists and holds nothing.", out)
+
+    def test_guard_partial_pages_left_over_the_cap(self):
+        run = Run({BASE + "/flags": (200, JSON, {"items": [{"k": 1}], "next_page": "/v1/flags?p=2"}),
+                   "https://api.test/v1/flags?p=2": (200, JSON, {"items": [{"k": 2}], "next_page": "/v1/flags?p=3"})})
+        rc, out, _ = run("get", "/flags", "--max-pages", "2")
+        self.assertEqual(rc, 3)
+        self.assertIn("# partial: YES: more pages remain after 2 (--max-pages 2)", out)
+        self.assertEqual(len(run.fake.seen), 2)
+
+    def test_guard_expired_auth_401_is_not_no_data(self):
+        rc, out, err = Run({BASE + "/flags": (401, JSON, {"error": "expired"})}, env={f"{ENV}_RELOGIN": "sso-login api"})("get", "/flags")
+        self.assertEqual(rc, 4)
+        self.assertIn("Re-login with: sso-login api", err)
+        self.assertEqual(out, "")
+
+    def test_guard_expired_auth_html_login_page(self):
+        rc, _, err = Run({BASE + "/flags": (200, {"Content-Type": "text/html"}, "<!doctype html><title>Sign in</title>")})("get", "/flags")
+        self.assertEqual(rc, 4)
+        self.assertIn("login wall", err)
+
+    def test_guard_wrong_target_id_shape_refused_before_any_request(self):
+        run = Run({})
+        rc, _, err = run("get", "/tenants/{id}/flags", "--id", "Acme", "--id-pattern", "cust-[a-z0-9]+")
+        self.assertEqual(rc, 5)
+        self.assertIn("does not have the shape", err)
+        self.assertEqual(run.fake.seen, [])
+
+    def test_guard_wrong_target_id_pattern_from_the_environment(self):
+        run = Run({}, env={f"{ENV}_ID_PATTERN": "[0-9]+"})
+        rc, _, _ = run("get", "/tickets/{id}", "--id", "ABC-1")
+        self.assertEqual(rc, 5)
+
+    def test_guard_wrong_target_next_link_to_another_host_refused(self):
+        run = Run({BASE + "/flags": (200, JSON, {"items": [{"k": 1}], "next": "https://elsewhere.test/steal"})})
+        rc, _, err = run("get", "/flags")
+        self.assertEqual(rc, 5)
+        self.assertIn("not sending the token there", err)
+        self.assertEqual(len(run.fake.seen), 1)
+
+    def test_guard_wrong_target_credentials_in_the_base_url_refused(self):
+        rc, _, err = Run({}, env={f"{ENV}_API_URL": "https://u:" + "pw@api.test"})("get", "/flags")
+        self.assertEqual(rc, 5)
+        self.assertIn("_API_TOKEN", err)
+
+
+class QuotingTest(unittest.TestCase):
+    def test_quoting_the_id_is_url_quoted_into_the_path(self):
+        url = BASE + "/tenants/a%2Fb%20c%26d/flags"
+        run = Run({url: (200, JSON, [])})
+        rc, _, _ = run("get", "/tenants/{id}/flags", "--id", "a/b c&d")
+        self.assertEqual(rc, 0)
+        self.assertEqual(run.fake.seen[0].full_url, url)
+
+
+class MaskTest(unittest.TestCase):
+    def test_mask_planted_identifier_in_an_item(self):
+        run = Run({BASE + "/flags": (200, JSON, [{"tenant": "cust-acme", "on": True}])}, patterns=[r"\bcust-[a-z]+"])
+        rc, out, _ = run("get", "/flags")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("cust-acme", out)
+        self.assertIn("<masked-1>", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

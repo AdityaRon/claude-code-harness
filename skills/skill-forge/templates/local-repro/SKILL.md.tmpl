@@ -1,0 +1,47 @@
+---
+name: {{name}}
+description: {{description}}
+---
+
+# {{name}}
+
+Answers one question: **{{question}}?** Drafted by skill-forge
+({{archetype}}, {{date}}). It reproduces the component in Docker on the image
+tag production runs, with synthetic rows; it reads no production data.
+
+## Setup
+
+- Docker on this machine.
+- The image production runs, by tag or digest:
+  `kubectl get deploy <name> -o jsonpath='{..image}'` (read-only).
+- A schema-only dump, made by whoever may read the schema:
+  `pg_dump --schema-only`. Rows are generated, never copied.
+
+## Run
+
+```
+PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
+E=~/.claude/skills/{{name}}/bin/{{module}}.py
+$PY $E plan --image registry.example/app-db:16.4 --schema schema.sql --rows 200
+$PY $E up   --image registry.example/app-db:16.4 --schema schema.sql --apply
+$PY $E down --apply
+```
+
+Without `--apply`, `up` and `down` print exactly what they would run. The
+port binds to 127.0.0.1 only. `--ready-marker` names the log line that means
+the component is up (Postgres's is the default).
+
+## Reading the output
+
+The `#` lines carry the image, the table and row counts, and whether some
+columns were left NULL for a type the engine does not generate.
+
+- `ABSENT` (exit 2): the schema file holds no CREATE TABLE.
+- `PARTIAL` (exit 3): the ready marker never reached the log inside
+  `--timeout`; the last log lines follow. The repro may not be up.
+- `REFUSED` (exit 5): an image without a tag or digest, or `latest`.
+
+## Gotchas
+
+- Postgres prints its ready line once during init and again after the seed
+  loads; on a slow seed, wait for the second or raise `--timeout`.

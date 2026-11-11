@@ -1,0 +1,7 @@
+archetype = "job-run"
+summary = "Runs a Job from a CronJob's own template (or a manifest) in one or more clusters, watches it to the end, and says per cluster how it ended."
+not_for = "probing from inside the cluster (use the cluster-probe skill), or editing the CronJob itself"
+guards = ["absent", "partial", "expired_auth", "wrong_target", "incomplete_capture"]
+write_verbs = ['''["']create["']''']
+sql = false
+vendor = []
