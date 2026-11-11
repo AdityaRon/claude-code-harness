@@ -45,6 +45,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   empty-approval-owed: queue.py: `if r["state"] in ("APPROVED", "DISMISSED") and acknowledgement(r.get("body") or ""):` => `if False:`
   lgtm-owed: queue.py: `if r["state"] in ("APPROVED", "DISMISSED") and acknowledgement(r.get("body") or ""):` => `if r["state"] in ("APPROVED", "DISMISSED") and not (r.get("body") or "").strip():`
   ask-tag-ignored: queue.py: `m = TAG.search(body)` => `m = None`
+  do-tag-ignored: queue.py: `blocking|do)` => `blocking)`
   url-question: queue.py: `prose = re.sub(r"https?://\S+", " ", prose)` => `pass`
   code-question: queue.py: `prose = re.sub(r"`[^`\n]*`", " ", prose)` => `pass`
   quote-question: queue.py: `prose = re.sub(r"(?m)^\s*>.*$", " ", prose)` => `pass`
@@ -560,6 +561,8 @@ class Asks(unittest.TestCase):
     def test_what_asks_and_what_does_not(self):
         for text, want in (("[consider] cache the token", "consider"), ("**[Question]** is this safe", "question"),
                            ("[blocking] drops rows", "blocking"), ("why sleep a second here?", "question"),
+                           ("[do] rename the flag", "do"), ("**[Do]** drop the retry", "do"),
+                           ("[docs] a typo in the readme", ""),
                            ("see https://ci.example/run?id=4 for the log", ""), ("`a ? b : c` reads fine", ""),
                            ("> did you test it?\nyes, on staging", ""), ("```\nx = y ? 1 : 2\n```", ""),
                            ("one nit: a typo in the log line", ""), ("", "")):
@@ -580,6 +583,18 @@ class Asks(unittest.TestCase):
         rc, out = scan(fake(details={**DETAILS, 2: bare}))
         self.assertEqual(section(out, "ROUTE"), [])
         self.assertEqual([r.split()[0] for r in section(out, "OUTBOUND")], ["acme/app#4"], "an LGTM owes no reply")
+
+    def test_do_items_on_an_approval_route_one_todo_each(self):
+        """Four [do] inline items on an approval, none with a '?', went unflagged."""
+        items = ("[do] rename the flag", "**[Do]** drop the retry", "[do] log the skip", "[DO] add a test")
+        d = detail(2, comments=[ev(ME, MINE_AT)], reviews=[rv("bob", "APPROVED", AFTER, body="")],
+                   threads=[[body_ev("bob", AFTER, b)] for b in items])
+        outs, rows, _, _ = scans(lambda i: fake(details={**DETAILS, 2: d}), n=2)
+        self.assertEqual(section(outs[0], "ROUTE"),
+                         [f"acme/app#2 bob thread comment [do]: {b!r}  https://github.com/acme/app/pull/2" for b in items])
+        todo = [r["text"] for r in rows if r["kind"] == "todo" and r["text"].startswith("route")]
+        self.assertEqual(todo, ["route bob's do"] * 4, "one todo per item, though all four share a second")
+        self.assertIn("logged: 0 in-flight", outs[1], "a second scan logs none of them again")
 
     def test_inline_questions_and_changes_requested_route_and_a_bots_question_does_not(self):
         d = detail(2, comments=[ev(ME, MINE_AT), body_ev("ci[bot]", AFTER, "rerun?", bot=True)],

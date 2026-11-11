@@ -175,10 +175,11 @@ whole context.
      waiting on the user's approval. A review posted at the head any other
      way moves the row at the next scan.
    - ROUTE is each item on my PRs that asks something: a `[consider]`,
-     `[question]` or `[blocking]` tag, a question, or changes requested, an
-     approval's body and inline threads included (an approval carrying a
-     `[consider]` was once logged as status and routed nothing until the user
-     asked twice). A bare approval or "LGTM" is not in it. Route each at step 3.
+     `[question]`, `[blocking]` or `[do]` tag, a question, or changes
+     requested, an approval's body and inline threads included (an approval
+     carrying a `[consider]` was once logged as status and routed nothing until
+     the user asked twice). A bare approval or "LGTM" is not in it. Route each
+     at step 3.
    - The scan logs the tick's GitHub work before you start it, a `todo` row per
      ROUTE item and per review or re-look (`logged:`), so a compaction mid-tick
      resumes from disk: `in-flight:` lists what an earlier tick left, each with
