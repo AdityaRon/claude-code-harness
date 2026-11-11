@@ -6,16 +6,14 @@ description: Check stored memories against external truth (GitHub PRs, Jira issu
 # Auditing memories against external truth
 
 Claude Code's own memory hygiene (the limit checks on every write, and
-auto-dream where it runs) reasons over memory *content* and session logs. It
+auto-dream where it runs) reasons over memory *content* and session logs, and
 never leaves the machine. So a memory saying "PR #4821 is a held draft"
-survives consolidation intact: nothing inside the file contradicts it. The
-contradiction lives on GitHub. Closing that gap needs an external lookup, and
-working out *which* lookup needs judgment. That is this skill's whole job.
+survives consolidation intact: the contradiction lives on GitHub. Working out
+*which* external lookup settles it needs judgment, and that is this skill's job.
 
-Do not spend the session on anything else here: merging duplicates, rewriting
-relative dates, shortening the index and reordering it are the CLI's and
-`memory-archive`'s, and the measured history of why is in
-`docs/history/memory-hygiene-problems.md`.
+Leave everything else to the CLI and `memory-archive`: merging duplicates,
+rewriting relative dates, shortening and reordering the index. The measured
+history of why is in `docs/history/memory-hygiene-problems.md`.
 
 ## The hard part, and why a script cannot do it alone
 
@@ -30,11 +28,10 @@ references are genuinely ambiguous:
 - Memories name several repositories, or none, so the file may not say which
   repo a number belongs to.
 
-So your value is picking the operative claim and resolving the reference. Once
-you have, write a `verify:` block back into the file, and that memory becomes
-mechanically checkable forever after. **The audit is how the corpus becomes
-self-checking.** Leave a block on every file you touch, even one you conclude
-is still accurate.
+So your value is picking the operative claim and resolving the reference. Then
+write a `verify:` block back into the file, and that memory is mechanically
+checkable from then on. Leave a block on every file you touch, even one you
+conclude is still accurate.
 
 ## Procedure
 
@@ -45,20 +42,15 @@ bash ~/.claude/memory-verify.sh --json                  # every store
 bash ~/.claude/memory-verify.sh --json --store <slug>   # one store
 ```
 
-If that path does not exist, the harness is not installed on this machine; fall
-back to `bin/memory-verify.sh` in a checkout of the harness repo.
+If that path does not exist, use `bin/memory-verify.sh` in a harness checkout.
 
-Each line is `{status, store, file, detail}`. Each status means exactly one
-thing:
+Each line is `{status, store, file, detail}`, and each status means one thing:
 
 - `STALE`: already proven wrong. Go straight to step 3.
 - `TRIAGE`: asserts open state with no `verify:` block, so nothing can check
-  it. Needs steps 2 and 3. **Not age-gated**: a claim about something still
-  open, with no way to verify it, is a defect the moment it is written. This
-  corpus held a memory asserting three PRs were open when all three had merged
-  the same day.
-- `NEEDS_MCP`: a well-formed claim only this skill can resolve, because
-  trackers are reachable over MCP and not from a shell script.
+  it. Needs steps 2 and 3. **Not age-gated**: an unverifiable claim about
+  something still open is a defect the moment it is written.
+- `NEEDS_MCP`: a well-formed claim only this skill can resolve, over MCP.
 - `SKIP`: malformed or unrecognised claim. The memory itself needs fixing.
 - `VERIFIED`: nothing to do.
 - `HOOK`: advisory. An index hook trails off mid-claim while the memory's own
@@ -93,9 +85,8 @@ Read the whole file. Then:
 
 **3. Report, and propose an edit. Never delete on your own initiative.**
 
-A memory is only safe to touch *after* an external check has confirmed what it
-claims is false. Deleting on a heuristic destroys knowledge silently, which is
-worse than staleness. Propose; let the user decide.
+Touch a memory only *after* an external check confirms its claim is false.
+Deleting on a heuristic destroys knowledge silently, worse than staleness.
 
 For each affected memory, show what it claims (quoted), what the lookup
 returned with the date (`merged 2026-06-15`), and the proposed edit. Prefer the
@@ -104,16 +95,14 @@ smallest correct one:
 - **Claim overtaken**: rewrite the claim to what is now true and keep the
   history. `PENDING: merge, deploy, live-verify` becomes
   `Merged 2026-06-15 and verified in prod.`
-- **Self-contradiction**: the file asserts both open and closed state because
-  an update was appended without revising the original. Delete the superseded
-  sentence, keep the current one.
+- **Self-contradiction**: an appended update left the file asserting both open
+  and closed state. Delete the superseded sentence, keep the current one.
 - **Whole memory now worthless**: say so and recommend deletion, but let the
   user confirm. If the memory records a *lesson* rather than a status, the
   lesson usually outlives the ticket: keep it, fix the status line.
 
-**4. Leave a `verify:` block behind.**
-
-Add near the top of the body, after the frontmatter:
+**4. Leave a `verify:` block behind**, near the top of the body, after the
+frontmatter:
 
 ```yaml
 verify:
@@ -136,10 +125,8 @@ matching `- [Title](file.md) — hook` line in that store's `MEMORY.md`.
 
 `memory-verify.sh` reports index lines as `MEMORY.md:<line>`, aged by the memory
 they link to. Treat those like any other finding: resolve the claim, then
-rewrite the one-liner. The index is the part loaded into every session, so a
-stale hook there is read far more often than the memory behind it, and the two
-can disagree. A real store had a hook saying a PR was a draft awaiting
-validation while the memory it pointed at already recorded that PR as merged.
+rewrite the one-liner. The index loads into every session, so a stale hook
+there is read far more often than the memory behind it.
 
 The index gets no `verify:` block of its own; put that on the memory it links
 to, and keep the hook consistent with it.
@@ -153,11 +140,10 @@ to, and keep the hook consistent with it.
 - **Absolute dates only.** Rewrite "last week" to the actual date.
 - **Do not touch `CLAUDE.md`.** If a memory contradicts it, annotate the memory
   with `contradicts CLAUDE.md, verify which is current` and raise it.
-- **Batch your questions.** Audit the set, then come back with one consolidated
-  set of proposals rather than interrupting per file.
+- **Batch your questions.** Audit the set, then bring one set of proposals, not
+  one per file.
 
 ## Scope
 
-Default to the store for the current project. Audit every store only when
-asked: memory is siloed per launch directory, so the same repo can have two
-stores, and a full sweep is a much larger job than it looks.
+Default to the current project's store. Audit every store only when asked:
+memory is siloed per launch directory, so one repo can have two stores.
