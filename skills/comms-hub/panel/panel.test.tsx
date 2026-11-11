@@ -427,11 +427,15 @@ test('the pane draws on the mobile surface, and /comms says it opened', async ($
 })
 
 // The phone app docks no pane: /comms there once said "opened" and nothing drew.
-test('/comms where no pane draws answers with the state as text', async ($, on) => {
+// As the command's text, the list then rode every request after it.
+test('/comms where no pane draws puts the state in the transcript, not in what the model is sent', async ($, on) => {
+  const logs: string[] = []
   world(on, undefined, { isPlaced: false, reason: 'the attached surfaces place no panes: mobile' })
+  on('ui.log', (_, e) => { if (e.to === 'transcript') logs.push(e.text); return { value: undefined } })
   const r = await $.command.run({ command: 'comms', args: '' })
 
-  expect(r.text).toBe([
+  expect(r.text).toBe('Comms: the list is above (no pane here: the attached surfaces place no panes: mobile)')
+  expect(logs).toEqual([
     'Comms · Wed 21 Oct: 1 need you · 3 PRs need you · 3 new · 2 going out · 1 with sessions · 0 held · next tick 10:07',
     '● app #14  #team-reviews  needs your go: Carol, could you review #14?',
     '● app #31  dana  commented@1111111 · new commits · CI green · approved by erin',
@@ -446,20 +450,21 @@ test('/comms where no pane draws answers with the state as text', async ($, on) 
     '  09:46  sent  #team-reviews  reply to carol',
     '  09:30  note  the thread had 19 replies',
     `  09:00  note  ${LONG}`,
-    '(no pane here: the attached surfaces place no panes: mobile)',
-  ].join('\n'))
+  ])
 
   // A second look has nothing new since the first.
-  const again = await $.command.run({ command: 'comms', args: '' })
-  expect(again.text.includes('SINCE YOU LOOKED')).toBe(false)
-  expect(again.text.includes('GOING OUT · 2')).toBe(true)
+  logs.length = 0
+  await $.command.run({ command: 'comms', args: '' })
+  expect(logs.some(l => l.startsWith('SINCE YOU LOOKED'))).toBe(false)
+  expect(logs).toContain('GOING OUT · 2')
 })
 
 test('/comms as text caps each section at the pane\'s compact rows', async ($, on) => {
+  const out: string[] = []
   world(on, { now: json(BUSY) }, { isPlaced: false, reason: 'the attached surfaces place no panes: mobile' })
-  const r = await $.command.run({ command: 'comms', args: '' })
+  on('ui.log', (_, e) => { out.push(e.text); return { value: undefined } })
+  await $.command.run({ command: 'comms', args: '' })
 
-  const out = r.text.split('\n')
   // The header counted a held draft and the text listed none.
   const held = out.indexOf('HELD · 1')
   expect(held).toBeGreaterThan(out.indexOf('WITH SESSIONS · 1'))
@@ -533,6 +538,60 @@ test('the unread dot clears after /comms', async ($, on) => {
   expect((await again.find({ type: 'Text', text: /^ · 0 new$/ }))?.props.color).toBeUndefined()
   expect((await again.find({ type: 'Text', text: /^0 new$/ }))?.props.dimColor).toBe(true)
   await again.unmount()
+})
+
+// With the pane docked, only session start and /comms were looks: the new count only grew.
+test('seen takes every dot off at once, and shows only while something is new', async ($, on) => {
+  const kept: unknown[] = []
+  const w = live(on)
+  on('store.set', (_, e) => { if (e.key === 'look') kept.push(e.value); return { value: undefined } })
+  await start($, w)                                    // a look at 10:00
+  await w.clock.advance(10 * 60_000)
+  const ts = new Date(NOW + 5 * 60_000).toISOString()  // logged at 10:05, after that look
+  w.out = json({ ...PANEL, events: [{ key: 'row:1021.9', ts, at: '10:05', kind: 'held', ref: 'app #17', target: '',
+                                      text: 'a fold-in is expected', corrected: false }, ...PANEL.events] })
+  await endTurn($)
+  await w.clock.settle()
+  const first = await mounted($)
+  expect((await first.findAll({ type: 'Text', text: 'SINCE YOU LOOKED · 4 new' })).length).toBe(1)
+  expect((await first.find({ type: 'Button', key: 'seen' }))?.props.hotkey).toBe('s')
+  await first.unmount()
+
+  await press($, 'seen')
+  const after = await mounted($)
+  expect((await after.findAll({ type: 'Text', text: 'SINCE YOU LOOKED · 0 new' })).length).toBe(1)
+  expect((await after.find({ type: 'Text', text: /a fold-in is expected/ }))?.text.startsWith('● ')).toBe(false)
+  expect(await after.find({ type: 'Button', key: 'seen' })).toBeUndefined()
+  await after.unmount()
+  expect(kept.at(-1)).toEqual({ since: NOW + 10 * 60_000, last: NOW + 10 * 60_000 })
+})
+
+// $.state lasts one session: after each relaunch every event of two log days was new again.
+test('the last look outlives the session', async ($, on) => {
+  const kept: unknown[] = []
+  const w = live(on)
+  const last = Date.parse('2026-10-21T16:45:00+00:00')
+  on('store.get', (_, e) => ({ value: e.key === 'look' ? { since: 0, last } : undefined }))
+  on('store.set', (_, e) => { if (e.key === 'look') kept.push(e.value); return { value: undefined } })
+  await start($, w)
+  expect((await texts($)).find(t => t.startsWith('SINCE YOU LOOKED'))).toBe('SINCE YOU LOOKED · 1 new')
+  expect(kept).toEqual([{ since: last, last: NOW }])
+})
+
+test('a kept look of another shape is left alone', async ($, on) => {
+  const w = live(on)
+  mock.store(on, { look: 'from an older version' })
+  await start($, w)
+  expect((await texts($)).find(t => t.startsWith('SINCE YOU LOOKED'))).toBe('SINCE YOU LOOKED · 3 new')
+})
+
+test('a store that fails stops no read, and the dots fall back to the session\'s look', async ($, on) => {
+  const w = live(on)
+  on('store.get', () => { throw new Error('store.get failed') })
+  on('store.set', () => { throw new Error('store.set failed') })
+  await start($, w)
+  expect(w.reads).toBe(1)
+  expect((await texts($)).find(t => t.startsWith('SINCE YOU LOOKED'))).toBe('SINCE YOU LOOKED · 3 new')
 })
 
 // v1.1.9 named the HELD row's parameter `h`, which shadowed the JSX factory:

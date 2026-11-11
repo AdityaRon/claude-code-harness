@@ -115,13 +115,50 @@ function arm($: EngineInterface): void {
   })
 }
 
+// The look also goes in the plugin's store, which outlives the session: $.state
+// lasts one, so after each relaunch every event of two log days was new again.
+// A store that fails leaves this session's look as it is.
+async function keep($: EngineInterface, l: Look): Promise<void> {
+  try {
+    await $.store.set('look', l)
+  } catch {
+    // the dots fall back to this session's look
+  }
+}
+
+async function kept($: EngineInterface): Promise<Look | undefined> {
+  try {
+    const v = (await $.store.get('look')) as Partial<Look> | undefined
+    return typeof v?.since === 'number' && typeof v?.last === 'number' ? { since: v.since, last: v.last } : undefined
+  } catch {
+    return undefined
+  }
+}
+
 // Opening the pane or running /comms is a look: what was logged before the
 // previous one loses its dot, and a section opened at the last look closes.
 // Expand is a preference, so it stays.
 async function looked($: EngineInterface): Promise<void> {
   const at = await $.clock.now()
-  await update($, look, l => ({ since: l.last, last: at }))
+  await keep($, await update($, look, l => ({ since: l.last, last: at })))
   await update($, view, v => ({ ...v, open: [] }))
+}
+
+// The session's first start is a look, from the last one kept. Raised again for
+// a reload or a worker respawn, with the look kept: that once cleared every dot.
+async function firstLook($: EngineInterface): Promise<void> {
+  if ((await read($, look)).last) return
+  const k = await kept($)
+  if (k) await update($, look, () => k)
+  await looked($)
+}
+
+// "seen" takes every dot off now; a look keeps the ones since the look before,
+// so with the pane docked the new count only grew.
+async function seen($: EngineInterface): Promise<void> {
+  const at = await $.clock.now()
+  await keep($, await update($, look, () => ({ since: at, last: at })))
+  await pin($, await read($, snapshot))
 }
 
 function words(...parts: string[]): string {
@@ -199,9 +236,7 @@ export const register: Register = on => {
     // Unasked, a pane waits undrawn on a narrow terminal or a surface that docks none: say why, off screen.
     void $.ui.open({ id: PANE, title: TITLE })
       .then(o => { if (!o.isPlaced) $.ui.log(`comms panel not drawn: ${o.reason}`, { to: 'debug' }) })
-    // Raised again for a reload or a worker respawn, with the look kept: that
-    // once cleared every dot. Only the first is a look.
-    void read($, look).then(l => (l.last ? undefined : looked($))).then(() => refresh($))
+    void firstLook($).then(() => refresh($))
     arm($)
 
     return next(e)
@@ -213,9 +248,12 @@ export const register: Register = on => {
     const s = await refresh($)
     if (opened.isPlaced) return { text: 'Comms pane opened.' }
 
-    // No pane here (the phone app docks none): the state as text instead, and why.
+    // No pane here (the phone app docks none): the state as notices instead, one
+    // a line, which the model is not sent. As the command's text it rode every
+    // request after (about 1,000 tokens for a full panel).
     const { since } = await read($, look)
-    return { text: `${summary(s, since)}\n(no pane here: ${opened.reason})` }
+    for (const line of summary(s, since).split('\n')) $.ui.log(line)
+    return { text: `Comms: the list is above (no pane here: ${opened.reason})` }
   })
 
   // A client joining reads at once, so it never draws the last turn's
@@ -342,6 +380,7 @@ export const register: Register = on => {
             {chip(p.held.length, 'held', 'suggestion')}
             <Button key="view" hotkey="e" plain label={full ? 'compact' : 'expand'}
                     onPress={() => update($, view, v => ({ ...v, full: !v.full }))} />
+            {fresh > 0 && <Button key="seen" hotkey="s" plain label="seen" onPress={() => seen($)} />}
           </Box>
         </Box>
 
