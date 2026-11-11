@@ -19,6 +19,10 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   archived-counted: queue.py: `if n["repository"].get("isArchived"):  # search's archived:false drops it too` => `if False:`
   old-activity-counts: queue.py: `events = sorted((e for e in events if e[0] > last_reply), key=lambda e: e[:3])` => `events = sorted(events, key=lambda e: e[:3])`
   no-previous-scan: queue.py: `hub.write_whole(stamp, at.isoformat() + "\n")` => `pass`
+  gate-prune-unsaid: queue.py: `    if pruned:
+        emit(f"gate-pruned:` => `    if False:
+        emit(f"gate-pruned:`
+  gate-unpruned: queue.py: `pruned = hub.prune_gate(cfg)` => `pruned = 0`
   main-thread-wall: queue.py: `if time.time() - wall0 > wall_limit:` => `if False:`
   monotonic-watchdog: queue.py: `clock = time.time` => `clock = time.monotonic`
   watchdog-no-exit: queue.py: `exit_fn(3)` => `pass`
@@ -713,6 +717,20 @@ class Parked(unittest.TestCase):
         self.assertEqual([p["ref"] for p in prs["reviewing"]], ["acme/app#14"])
         self.assertEqual([p["ref"] for p in prs["authored"]], ["acme/app#1", "acme/app#5"])
         self.assertNotIn("re-look: new commits", [r["text"] for r in rows if r["kind"] == "todo"])
+
+
+class GatePruned(unittest.TestCase):
+    def test_the_scan_prunes_the_gate_and_says_so(self):
+        def seed(cfg, state):
+            (state / "gate").mkdir()
+            base = hub.parse_time(NOW).timestamp()
+            for name, days in (("old", 31), ("older", 40), ("young", 2)):
+                p = state / "gate" / f"{name}.json"
+                p.write_text(json.dumps({"send": "live"}))
+                os.utime(p, (base - days * 86400, base - days * 86400))
+        outs, _, _, _ = scans(lambda i: fake(), n=2, before=seed)
+        self.assertIn("gate-pruned: 2 records untouched for 30 days", outs[0])
+        self.assertNotIn("gate-pruned", outs[1], "nothing left to prune says nothing")
 
 
 class Morning(unittest.TestCase):

@@ -960,6 +960,29 @@ def write_whole(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+GATE_KEEP_DAYS = 30  # every reader wants a message still to post, or one sent today
+
+
+def prune_gate(cfg: dict) -> int:
+    """Removes gate records untouched for GATE_KEEP_DAYS whose message is not
+    still to post: nothing removed any, and the panel opens each one a minute."""
+    gate, at = state_dir(cfg) / "gate", now()
+    cutoff = (at - dt.timedelta(days=GATE_KEEP_DAYS)).timestamp()
+    n = 0
+    for p in sorted(gate.glob("*.json")) if gate.is_dir() else []:
+        try:
+            if p.stat().st_mtime >= cutoff:
+                continue
+            s = json.loads(p.read_text())
+            ahead = s.get("send") == "schedule" and not s.get("withdrawn_at") and (parse_time(s.get("post_at")) or at) > at
+        except (OSError, ValueError, AttributeError):
+            ahead = False  # a record left half a month ago is no record
+        if not ahead:
+            p.unlink(missing_ok=True)
+            n += 1
+    return n
+
+
 def last_scan_at(cfg: dict) -> dt.datetime | None:
     """When the last scan started; None with no stamp, or one that does not parse."""
     try:

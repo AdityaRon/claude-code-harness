@@ -50,6 +50,13 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   last-tick-untimed: hub.py: `"last_tick": f"{dated(rows[scans[-1]])}, " + (` => `"last_tick": "" + (`
   last-tick-undated: hub.py: `"last_tick": f"{dated(rows[scans[-1]])}, " + (` => `"last_tick": f"{rows[scans[-1]]['at']}, " + (`
   scans-of-today-only: hub.py: `rows = rows_since(cfg, now() - dt.timedelta(days=OPEN_DAYS))` => `rows = rows_since(cfg, now())`
+  gate-never-pruned: hub.py: `            p.unlink(missing_ok=True)` => `            pass`
+  gate-young-pruned: hub.py: `            if p.stat().st_mtime >= cutoff:
+                continue` => `            if False:
+                continue`
+  gate-pending-pruned: hub.py: `ahead = s.get("send") == "schedule" and not s.get("withdrawn_at") and (parse_time(s.get("post_at")) or at) > at` => `ahead = False`
+  gate-withdrawn-kept: hub.py: `== "schedule" and not s.get("withdrawn_at") and (` => `== "schedule" and (`
+  gate-half-kept: hub.py: `ahead = False  # a record left half a month ago is no record` => `ahead = True`
   trigger-expiry-unsaid: hub.py: `return f"trigger expired {_when(cfg, gone)}" if gone and gone <= now() else ""` => `return ""`
   trigger-expiry-early: hub.py: `if gone and gone <= now() else ""` => `if gone else ""`
   trigger-junk-crashes: hub.py: `    except ValueError:
@@ -591,6 +598,38 @@ class WriteWhole(unittest.TestCase):
             self.assertEqual(p.read_text(), '{"old": true}')
             hub.write_whole(p, '{"new": true}')
             self.assertEqual((p.read_text(), sorted(x.name for x in env.state.iterdir())), ('{"new": true}', ["Q0001.json"]))
+
+
+AHEAD = "2026-12-01T08:30:00-08:00"
+
+
+def gate_records(env, records):
+    """Each (name, days since last written, record or None for half a file) into gate/."""
+    g = env.state / "gate"
+    g.mkdir(parents=True)
+    base = hub.parse_time(NOW).timestamp()
+    for name, days, rec in records:
+        p = g / f"{name}.json"
+        p.write_text(json.dumps(rec) if rec is not None else '{"send": "sch')
+        os.utime(p, (base - days * 86400, base - days * 86400))
+    return g
+
+
+class GatePrune(unittest.TestCase):
+    """Nothing removed a gate record, and the panel opens each one a minute."""
+
+    def test_a_record_untouched_for_30_days_goes_unless_its_message_is_still_to_post(self):
+        with Env(now=NOW) as env:
+            g = gate_records(env, [
+                ("sent-long-ago", 31, {"send": "live"}),
+                ("sent-this-month", 29, {"send": "live"}),
+                ("posted-long-ago", 31, {"send": "schedule", "sent_id": "Q1", "post_at": "2026-09-01T08:30:00-07:00"}),
+                ("still-to-post", 31, {"send": "schedule", "sent_id": "Q2", "post_at": AHEAD}),
+                ("withdrawn", 31, {"send": "schedule", "sent_id": "Q3", "post_at": AHEAD, "withdrawn_at": NOW}),
+                ("half", 31, None)])
+            self.assertEqual(hub.prune_gate(hub.load_config()), 4)
+            self.assertEqual(sorted(p.stem for p in g.iterdir()), ["sent-this-month", "still-to-post"])
+            self.assertEqual(hub.prune_gate(hub.load_config()), 0)
 
 
 if __name__ == "__main__":

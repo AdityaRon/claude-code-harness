@@ -497,7 +497,7 @@ whole context.
 | `log/YYYY-MM-DD.md` | the same events as lines to read: sends, scheduled ids, resolves, routing, holds |
 | `sent/YYYY-MM-DD/<id>.md` | each message as it was sent or scheduled |
 | `slack/<channel>.tsv` | the committed snapshot `slack_diff.py` compares against |
-| `gate/` | `check_draft.py`'s pass records |
+| `gate/` | `check_draft.py`'s pass records; the scan removes one untouched for 30 days unless its message is still to post (`gate-pruned:`) |
 | `held/<peer>-<thread ts>.md` | each draft held between ticks, with its header; the scan counts them |
 | `preflight.json` | step 0's record of this session's tools and trigger |
 | `trigger.json` | the tick's trigger and when it was created, for its 7-day expiry |

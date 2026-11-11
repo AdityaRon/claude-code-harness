@@ -590,6 +590,9 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     emit(f"morning-unchecked: {len(missed)}" + (
         f" ({' '.join(s['sent_id'] for s in missed)}): posted with no re-gate since the window opened; re-check each "
         "claim now and tell the user what moved" if missed else ""))
+    pruned = hub.prune_gate(cfg)
+    if pruned:
+        emit(f"gate-pruned: {pruned} record{'s' * (pruned != 1)} untouched for {hub.GATE_KEEP_DAYS} days")
     # A held draft lives in a file, not in the session's memory, so a compaction cannot lose it.
     held = sorted(p.name for p in (hub.state_dir(cfg) / "held").glob("*.md"))
     emit(f"held-drafts: {len(held)}" + (f" ({' '.join(held)}): gate and send each, or say why it still waits" if held else ""))
