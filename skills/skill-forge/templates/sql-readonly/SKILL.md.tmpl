@@ -20,9 +20,12 @@ Answers one question: **{{question}}?** Drafted by skill-forge
 
 ## Run
 
+`PY` is the interpreter `bash ~/.claude/skills/{{name}}/bin/python.sh` prints and
+`E` is `~/.claude/skills/{{name}}/bin/{{module}}.py`. Write both out in full in
+every command: shell variables do not survive between calls.
+
 ```
-PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
-$PY ~/.claude/skills/{{name}}/bin/{{module}}.py query --sql "SELECT ..."
+PY E query --sql "SELECT ..."
 ```
 
 The statement can come on stdin or from `--file`. `--max-rows` (default 1000)

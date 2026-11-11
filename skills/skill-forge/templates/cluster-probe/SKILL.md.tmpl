@@ -21,12 +21,14 @@ borrows the workload identity the cluster already grants it.
 
 ## Run
 
+`PY` is the interpreter `bash ~/.claude/skills/{{name}}/bin/python.sh` prints and
+`E` is `~/.claude/skills/{{name}}/bin/{{module}}.py`. Write both out in full in
+every command: shell variables do not survive between calls.
+
 ```
-PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
-E=~/.claude/skills/{{name}}/bin/{{module}}.py
-$PY $E run --context <ctx> --namespace <ns> --service-account <sa> --script probe.sh           # dry run
-$PY $E run --context <ctx> --namespace <ns> --service-account <sa> --script probe.sh --apply   # the probe
-$PY $E cleanup --context <ctx> --namespace <ns>                                               # leftovers
+PY E run --context <ctx> --namespace <ns> --service-account <sa> --script probe.sh           # dry run
+PY E run --context <ctx> --namespace <ns> --service-account <sa> --script probe.sh --apply   # the probe
+PY E cleanup --context <ctx> --namespace <ns>                                               # leftovers
 ```
 
 `--image`, `--cpu`, `--memory` size the pod; `--ttl` (default 10m) is its

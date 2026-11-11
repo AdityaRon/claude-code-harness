@@ -12,6 +12,10 @@ Mutations that must turn this file red:
   context-unchecked: {{module}}.py: `if ctx not in contexts:` => `if False:`
   name-unvalidated: {{module}}.py: `if not DNS.fullmatch(n) or len(n) > 63:` => `if False:`
   tail-ignored: {{module}}.py: `"--tail=" + str(a.tail)` => `"--tail=-1"`
+  error-stops-the-loop: {{module}}.py: `    except Refused as e:
+        # One cluster` => `    except ZeroDivisionError as e:
+        # One cluster`
+  created-job-unnamed: {{module}}.py: `        if job:` => `        if False:`
   one-result-line-missing: {{module}}.py: `emit(f"{ctx}: {status} {detail}")` => `pass`
   unmasked-logs: {{module}}.py: `    for line in out:
         emit(line)` => `    for line in out:
@@ -41,8 +45,10 @@ AUTH_ERR = "error: You must be logged in to the server (Unauthorized)"
 class FakeKube:
     """Answers kubectl per context from canned results; records every argv."""
 
-    def __init__(self, contexts="east\nwest\n", cronjobs=("nightly-report",), statuses=None, logs="step 1\nstep 2 failed\n", auth_ctx=None):
+    def __init__(self, contexts="east\nwest\n", cronjobs=("nightly-report",), statuses=None, logs="step 1\nstep 2 failed\n", auth_ctx=None,
+                 broken_ctx=None):
         self.contexts, self.cronjobs, self.logs, self.auth_ctx = contexts, cronjobs, logs, auth_ctx
+        self.broken_ctx = broken_ctx
         self.statuses = statuses or {}
         self.polls = {}
         self.calls = []
@@ -69,6 +75,8 @@ class FakeKube:
             if "--dry-run=client" in argv:
                 return 0, "apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: planned\n", ""
             return 0, f"job.batch/{rest[1] if rest[0] == 'job' else 'from-manifest'}\n", ""
+        if verb == "get" and rest[0] == "job" and ctx == self.broken_ctx:
+            return 1, "", "Error from server: etcdserver: request timed out"
         if verb == "get" and rest[0] == "job":
             seq = self.statuses.get(ctx, ["Complete"])
             i = self.polls.get(ctx, 0)
@@ -182,6 +190,12 @@ class GuardTest(unittest.TestCase):
         self.assertIn("east: SUCCEEDED", out)
         self.assertIn("west: FAILED", out)
         self.assertIn("# partial: YES: 1 of 2 cluster(s) did not succeed", out)
+
+    def test_guard_partial_an_error_after_create_names_the_job_and_spares_the_rest(self):
+        rc, out, _ = Run(FakeKube(broken_ctx="east"))(*TWO, "--apply")
+        self.assertEqual(rc, 3)
+        self.assertIn("east: LOST created job/nr-manual, then lost track of it", out)
+        self.assertIn("west: SUCCEEDED", out)
 
     def test_guard_expired_auth_on_one_cluster(self):
         fake = FakeKube(auth_ctx="west")

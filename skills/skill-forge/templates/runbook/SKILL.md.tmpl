@@ -18,10 +18,13 @@ PromQL braces in a link as `%7B` and `%7D`.
 
 ## Run
 
+`PY` is the interpreter `bash ~/.claude/skills/{{name}}/bin/python.sh` prints and
+`E` is `~/.claude/skills/{{name}}/bin/{{module}}.py`. Write both out in full in
+every command: shell variables do not survive between calls.
+
 ```
-PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
-$PY ~/.claude/skills/{{name}}/bin/{{module}}.py links alert.json --lookback 30m
-pbpaste | $PY ~/.claude/skills/{{name}}/bin/{{module}}.py links
+PY E links alert.json --lookback 30m
+pbpaste | PY E links
 ```
 
 The payload is an Alertmanager webhook body or one alert with `labels`,

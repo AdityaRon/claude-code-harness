@@ -47,7 +47,8 @@ ENV = "{{env_prefix}}"
 DNS = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?")
 AUTH = re.compile(r"(?i)must be logged in|unauthorized|token has expired|expired token|sso session"
                   r"|getting credentials: exec|executable \S+ failed|invalid_grant|reauthenticat")
-SINGLE = {"FAILED": 1, "ABSENT": EXIT_ABSENT, "TIMEOUT": EXIT_PARTIAL, "AUTH": EXIT_AUTH, "SKIPPED": EXIT_REFUSED}
+SINGLE = {"FAILED": 1, "ABSENT": EXIT_ABSENT, "TIMEOUT": EXIT_PARTIAL, "AUTH": EXIT_AUTH, "SKIPPED": EXIT_REFUSED,
+          "ERROR": EXIT_REFUSED, "LOST": EXIT_PARTIAL}
 clock = time.monotonic
 sleep = time.sleep
 
@@ -107,6 +108,7 @@ def run_one(ctx: str, a, contexts: list[str], out: list[str], name: str) -> tupl
     if ctx not in contexts:
         return "SKIPPED", "context absent from the kubeconfig"
     relogin = os.environ.get(f"{ENV}_RELOGIN", f"(set {ENV}_RELOGIN)")
+    job = None
     try:
         if a.from_cronjob:
             if not cronjob_exists(base, a.from_cronjob):
@@ -135,6 +137,11 @@ def run_one(ctx: str, a, contexts: list[str], out: list[str], name: str) -> tupl
         return "TIMEOUT", f"still running after {a.timeout}; the logs above are a snapshot"
     except AuthError as e:
         return "AUTH", f"{e}. An expired login, not an empty answer; re-login: {relogin}"
+    except Refused as e:
+        # One cluster's error must not stop the others, and a Job already made must be named.
+        if job:
+            return "LOST", f"created job/{job}, then lost track of it ({e}); check it by hand"
+        return "ERROR", str(e)
 
 
 def do_run(a) -> int:

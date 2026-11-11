@@ -21,10 +21,13 @@ Answers one question: **{{question}}?** Drafted by skill-forge
 
 ## Run
 
+`PY` is the interpreter `bash ~/.claude/skills/{{name}}/bin/python.sh` prints and
+`E` is `~/.claude/skills/{{name}}/bin/{{module}}.py`. Write both out in full in
+every command: shell variables do not survive between calls.
+
 ```
-PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
-$PY ~/.claude/skills/{{name}}/bin/{{module}}.py get '/tenants/{id}/flags' --id cust-42
-$PY ~/.claude/skills/{{name}}/bin/{{module}}.py get /tickets --param status=open --max-pages 10
+PY E get '/tenants/{id}/flags' --id cust-42
+PY E get /tickets --param status=open --max-pages 10
 ```
 
 It sends GET only; nothing else can leave it.

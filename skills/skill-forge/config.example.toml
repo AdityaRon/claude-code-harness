@@ -28,3 +28,6 @@ transcript_dirs = ["~/.claude/projects"]
 history_files = ["~/.zsh_history", "~/.bash_history"]
 since_days = 60
 top = 10
+# Programs to leave out of the ranking, when development commands crowd out
+# the operational ones (for example "git").
+ignore_programs = []

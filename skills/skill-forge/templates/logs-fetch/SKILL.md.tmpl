@@ -21,11 +21,13 @@ lines that answer it.
 
 ## Run
 
+`PY` is the interpreter `bash ~/.claude/skills/{{name}}/bin/python.sh` prints and
+`E` is `~/.claude/skills/{{name}}/bin/{{module}}.py`. Write both out in full in
+every command: shell variables do not survive between calls.
+
 ```
-PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
-E=~/.claude/skills/{{name}}/bin/{{module}}.py
-$PY $E streams --service checkout --namespace prod
-$PY $E fetch --service checkout --namespace prod --filter 'timeout' --window 30m --end now
+PY E streams --service checkout --namespace prod
+PY E fetch --service checkout --namespace prod --filter 'timeout' --window 30m --end now
 ```
 
 Times take `now`, `now-2h` or ISO 8601 with a zone; a bare local time is refused.

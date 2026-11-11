@@ -17,6 +17,12 @@ Mutations that must turn this file red:
   questions-dropped: demand.py: `out.append({"kind": "question"` => `(lambda d: None)({"kind": "question"`
   filters-as-steps: demand.py: `if r and r[0] not in FILTERS:` => `if r:`
   arguments-as-verbs: demand.py: `while prog in SUBCOMMANDS and j < len(rest)` => `while j < len(rest)`
+  redirections-as-steps: demand.py: `cmd = REDIRECT.sub(" ", cmd.replace("\\n", " ; "))` => `cmd = cmd.replace("\\n", " ; ")`
+  numbers-as-programs: demand.py: `r"[A-Za-z_.][A-Za-z0-9_.+-]{0,39}"` => `r"[A-Za-z0-9_.+-]{1,40}"`
+  briefs-as-questions: demand.py: `if len(w) >= 2 and len(t) <= MAX_PROMPT:` => `if len(w) >= 2:`
+  question-steps-uncapped: demand.py: `min(MAX_QUESTION_STEPS, round(` => `min(10**6, round(`
+  shell-keywords-as-steps: demand.py: `"do", "then", "else", "elif", "if", "while", "until", "!", "{"}` => `}`
+  unanswered-questions-kept: demand.py: `if len(c["sids"]) >= min_sessions and steps >= 1:` => `if len(c["sids"]) >= min_sessions:`
 """
 from __future__ import annotations
 
@@ -236,6 +242,33 @@ class InputTest(unittest.TestCase):
         self.assertEqual(ranked[0]["label"], "psql → pg_dump → vim")
         self.assertEqual(ranked[0]["sessions"], 3)
         self.assertIn("shell history", ranked[0]["examples"][0])
+
+    def test_a_redirection_is_never_a_step(self):
+        self.assertEqual([demand.step_of(p) for p in demand.pipelines("bash run.sh 2>&1 | tail -5; make test &> log; jq . < in.json")],
+                         [("bash", "run.sh", ""), ("make", "test", ""), None])
+
+    def test_shell_keywords_and_numbers_are_not_programs(self):
+        steps = [demand.step_of(p) for p in demand.pipelines("for c in a b; do kubectl --context $c get pods; done; until gh pr checks 1; do sleep 5; done")]
+        self.assertEqual([s for s in steps if s], [("kubectl", "get", "pods"), ("gh", "pr", "checks")])
+        self.assertIsNone(demand.step_of([["2", "x"]]))
+
+    def test_a_question_no_command_answered_is_left_out(self):
+        for i in range(3):
+            self.t.session([P("what does the export dashboard show")], days_ago=i + 1)
+        self.t.dir.mkdir(parents=True, exist_ok=True)
+        self.assertEqual([c for c in self.t.ranked() if c["kind"] == "question"], [])
+
+    def test_a_pasted_brief_is_not_a_question(self):
+        brief = "deploy the export job: " + " ".join(f"requirement{i} rollout{i}" for i in range(40))
+        for i in range(3):
+            self.t.session([P(brief), B("kubectl get pods")], days_ago=i + 1)
+        self.assertEqual([c for c in self.t.ranked() if c["kind"] == "question"], [])
+
+    def test_a_long_run_after_a_question_counts_at_most_ten_steps(self):
+        for i in range(2):
+            self.t.session([P("why is the nightly export slow")] + [B(f"make step{k}") for k in range(25)], days_ago=i + 1)
+        q = [c for c in self.t.ranked() if c["kind"] == "question"][0]
+        self.assertEqual(q["steps"], 10)
 
     def test_shapes_cut_arguments_and_skip_filters(self):
         self.assertEqual(demand.step_of([["KUBECONFIG=x", "kubectl", "--context", "prod", "-n", "web", "get", "pods"]]), ("kubectl", "get", "pods"))

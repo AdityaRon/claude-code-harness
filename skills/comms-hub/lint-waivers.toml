@@ -4,7 +4,7 @@
 # waiver with no reason, or one whose check passes, so these go when fixed.
 
 [C1]
-reason = "review_lint.py's only write, the review POST, is gated by its own --post flag: without it the script lints and posts nothing, which is the dry run convention 1 asks for under another name. Renaming the flag would break the commands the comms tick already runs."
+reason = "resolve_threads.py's GraphQL write already passes (behind --apply, with a dry-run test). review_lint.py's only write, the review POST, is gated by its own --post flag: without it the script lints and posts nothing, which is the dry run convention 1 asks for under another name. Renaming the flag would break the commands the comms tick already runs."
 
 [C3]
 reason = "The two hits (tests/test_check_draft.py:159 and :161) are fake secret shapes that test check_draft.py's own secret detector. They are built from fragments or marked EXAMPLE, and are not credentials."

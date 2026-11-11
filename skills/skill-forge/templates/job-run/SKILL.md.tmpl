@@ -16,12 +16,14 @@ clusters it runs in.
 
 ## Run
 
+`PY` is the interpreter `bash ~/.claude/skills/{{name}}/bin/python.sh` prints and
+`E` is `~/.claude/skills/{{name}}/bin/{{module}}.py`. Write both out in full in
+every command: shell variables do not survive between calls.
+
 ```
-PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
-E=~/.claude/skills/{{name}}/bin/{{module}}.py
-$PY $E run --from-cronjob <cronjob> --contexts <a>,<b> --namespace <ns>            # dry run
-$PY $E run --from-cronjob <cronjob> --contexts <a>,<b> --namespace <ns> --apply    # create and watch
-$PY $E run --manifest job.yaml --contexts <a> --namespace <ns> --apply
+PY E run --from-cronjob <cronjob> --contexts <a>,<b> --namespace <ns>            # dry run
+PY E run --from-cronjob <cronjob> --contexts <a>,<b> --namespace <ns> --apply    # create and watch
+PY E run --manifest job.yaml --contexts <a> --namespace <ns> --apply
 ```
 
 `--timeout` (default 30m) bounds the watch, `--poll` (10s) its interval,

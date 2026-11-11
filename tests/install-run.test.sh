@@ -141,6 +141,11 @@ SF_PY=$(bash "$SF/bin/python.sh" 2>/dev/null)
 F_OUT=$(SKILL_FORGE_STATE="$TMP/sf-state" "${SF_PY:-python3}" -B "$SF/bin/forge.py" list 2>&1)
 grep -q '^sql-readonly ' <<<"$F_OUT" \
   && pass "the installed forge.py finds the installed templates" || fail "installed forge.py lists archetypes" "$(printf '%s' "$F_OUT" | head -3)"
+SF_ENV=(SKILL_FORGE_STATE="$TMP/sf-state" SKILL_FORGE_CONFIG="$TMP/none.toml")
+env "${SF_ENV[@]}" "${SF_PY:-python3}" -B "$SF/bin/forge.py" draft metrics-query job-latency --question "why is this job slow" >/dev/null 2>&1
+V_OUT=$(env "${SF_ENV[@]}" "${SF_PY:-python3}" -B "$SF/bin/forge.py" verify "$TMP/sf-state/drafts/job-latency" --no-mutate 2>&1); V_RC=$?
+[ "$V_RC" = 0 ] && grep -q '^skill_lint: PASS' <<<"$V_OUT" && grep -q '^tests: exit 0' <<<"$V_OUT" \
+  && pass "the installed forge.py drafts a skill whose tests and lint pass" || fail "installed draft verifies" "$(printf '%s' "$V_OUT" | tail -5)"
 
 # The rest of the install still has to work; a rules change must not break it.
 [ -f "$HOME/.claude/settings.json" ] \

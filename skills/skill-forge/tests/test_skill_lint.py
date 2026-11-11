@@ -21,6 +21,7 @@ Mutations that must turn this file red (deleting any check must be seen):
   own-skill-path-flagged: skill_lint.py: `n not in (sk.name, sk.root.name) for n in names` => `True for n in names`
   docstrings-scanned: skill_lint.py: `docs.add(id(first.value))` => `pass`
   no-help-missed: skill_lint.py: `if no_help:` => `if False:`
+  graphql-write-unseen: skill_lint.py: `\\s*mutation\\b` => `\\s*NEVERmutation\\b`
 """
 from __future__ import annotations
 
@@ -118,6 +119,16 @@ class RuleTest(unittest.TestCase):
         with Workdir() as root:
             self.assertEqual(skill_lint.lint(root, budget=5)["C8"].status, "FAIL")
             self.assertEqual(skill_lint.lint(root, budget=500)["C8"].status, "PASS")
+
+    def test_a_graphql_mutation_is_a_write(self):
+        with Workdir() as root:
+            m = root / "forge.toml"
+            m.write_text(m.read_text().replace("write_verbs = ['(?i)update\\s+flags\\s+set']\n", ""))
+            (root / "bin" / "flip.py").write_text('"""flip.py --apply"""\nimport argparse\n'
+                                                  'FLIP = """mutation Flip($id: ID!) { flip(id: $id) { ok } }"""\n'
+                                                  'argparse.ArgumentParser().add_argument("--apply")\n')
+            res = skill_lint.lint(root)
+        self.assertIn("flip.py", res["C1"].detail)
 
     def test_a_script_with_no_help_fails_c8(self):
         with Workdir() as root:

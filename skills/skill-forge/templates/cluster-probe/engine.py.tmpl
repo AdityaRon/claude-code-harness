@@ -13,7 +13,9 @@ Without --apply, run prints the pod it would create and every kubectl command,
 and changes nothing. With --apply it creates a throwaway pod that runs as the
 service account's workload identity (no stored credential), waits for it, sends
 the script on stdin to `sh -s`, and deletes the pod in a finally handler. The pod
-also carries activeDeadlineSeconds, so the cluster kills it if this process dies.
+also carries activeDeadlineSeconds, so if this process dies the cluster stops its
+containers; the stopped pod object stays until `cleanup --apply` deletes it, and
+the leftover guard below refuses a new probe until then.
 
 Guards: the context must exist in the local kubeconfig (and match
 ${{env_prefix}}_EXPECT_CONTEXT, a regex, when set); the header names the context and
@@ -110,7 +112,7 @@ def leftovers(base: list[str]) -> list[str]:
 
 def show_plan(base: list[str], pod: str, a, script: str, tgt: str) -> int:
     emit(header(tgt, f"n/a: a point-in-time probe, planned at {iso(datetime.now(timezone.utc))}", rows="dry run"))
-    emit(f"would create pod {pod}, deleted in a finally handler and by activeDeadlineSeconds:")
+    emit(f"would create pod {pod}, deleted in a finally handler (activeDeadlineSeconds stops it if this process dies; cleanup deletes what is left):")
     emit(json.dumps(manifest(pod, a), indent=2))
     emit(f"would run: {shlex.join(base + ['create', '-f', '-'])}   (the manifest above on stdin)")
     emit(f"would run: {shlex.join(base + ['wait', '--for=condition=Ready', 'pod/' + pod, '--timeout=' + a.timeout])}")

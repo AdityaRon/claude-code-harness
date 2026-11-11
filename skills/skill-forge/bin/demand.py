@@ -9,7 +9,9 @@ comes with its evidence (counts, example sessions by date), never the content.
 Three kinds of candidate:
   sequence   the same 2 to 5 command steps, in order, in several sessions
   question   a prompt asked again, in other words, in several sessions; its steps
-             are the commands run before the next prompt
+             are the commands run before the next prompt, at most 10, since a
+             longer run is a task, not an answer. A prompt over 400 characters
+             is a pasted brief, not a question, and is skipped
   failing    one command that failed in several sessions
 A command is cut to its shape, the program and its subcommands (`kubectl logs`),
 so no argument, id, host or secret reaches the output. A subcommand counts only
@@ -41,10 +43,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mask import EXIT_OK, Window, config_path, emit, header, masker, read_toml  # noqa: E402
 
 NOISE = {"cd", "echo", "printf", "sleep", "true", "false", "export", "set", "unset", "source", ".", "clear", "ls", "pwd",
-         "exit", "date", "which", "command", "type", "history", "test", "[", "mkdir", "touch", "rm", "cp", "mv", "chmod", "open"}
+         "exit", "date", "which", "command", "type", "history", "test", "[", "mkdir", "touch", "rm", "cp", "mv", "chmod", "open",
+         "for", "case", "select", "function", "done", "fi", "esac", "}", "in", "read", "local", "return", "break", "continue"}
 FILTERS = {"grep", "rg", "egrep", "jq", "yq", "head", "tail", "sort", "uniq", "wc", "cut", "awk", "sed", "tr", "less", "more",
            "cat", "tee", "xargs", "column", "fzf", "bat", "nl", "fold", "base64"}
-WRAPPERS = {"sudo", "time", "env", "nohup", "exec", "builtin", "nice", "timeout"}
+# Skipped in front of a command; a shell keyword that opens a body is one too (`do kubectl get ...`).
+WRAPPERS = {"sudo", "time", "env", "nohup", "exec", "builtin", "nice", "timeout",
+            "do", "then", "else", "elif", "if", "while", "until", "!", "{"}
 INTERPRETERS = re.compile(r"^(?:python[\d.]*|node|bash|sh|zsh|ruby|perl|deno|bun)$")
 # Programs whose next words are subcommands. Anything else is cut to its name, so
 # `pg_dump app` cannot turn a database name into part of a shape.
@@ -56,6 +61,8 @@ VALUE_FLAGS = {"-n", "--namespace", "--context", "--profile", "--region", "-o", 
                "--project", "-R", "--repo", "-C", "-p", "-u", "--user", "-d", "-h", "--host", "-U", "-H", "-X", "--since",
                "--tail", "-A", "-B", "-e", "--cluster", "--kubeconfig", "-w"}
 VERB = re.compile(r"[a-z][a-z0-9-]{1,24}")
+MAX_PROMPT = 400          # characters; a longer prompt is a pasted brief, not a question
+MAX_QUESTION_STEPS = 10   # a longer run after a prompt is a task, not its answer
 STOP = set("""a an the and or but if so of to in on at by for with from as is are was were be been being do does did
 done this that these those it its i me my we our you your they them their can could would should will shall may
 might must please pls why what how when where which who whom there here any some all just now again still also
@@ -80,8 +87,13 @@ class Session:
     prompts: list = field(default_factory=list)   # (words, index of the first step after it)
 
 
+REDIRECT = re.compile(r"\d*>&\d*-?|(?:&>>?|\d*>>?|<<-?|<)\s*[^\s;&|]+")
+
+
 def tokens(cmd: str) -> list[str]:
-    lex = shlex.shlex(cmd.replace("\n", " ; "), posix=True, punctuation_chars=";&|")
+    # `2>&1` would split on its `&` and make `1` a command; a redirection is never a step.
+    cmd = REDIRECT.sub(" ", cmd.replace("\n", " ; "))
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|")
     lex.whitespace_split = True
     try:
         return list(lex)
@@ -114,7 +126,7 @@ def raw_shape(simple: list[str]) -> tuple | None:
     if i >= len(simple):
         return None
     prog = os.path.basename(simple[i])
-    if not re.fullmatch(r"[A-Za-z0-9_.+-]{1,40}", prog) or prog in NOISE or prog.startswith("-"):
+    if not re.fullmatch(r"[A-Za-z_.][A-Za-z0-9_.+-]{0,39}", prog) or prog in NOISE or prog.startswith("-"):
         return None
     rest = simple[i + 1:]
     if INTERPRETERS.match(prog):
@@ -181,8 +193,7 @@ def read_transcripts(dirs: list[str], since: datetime, ignore: set) -> tuple[lis
                 bad += 1
                 continue
             s = Session(f.stem[:8], project_label(f.parent.name), "")
-            uses: dict = {}
-            pending: list = []
+            uses: dict = {}   # a command with no result never finished, and is left out
             for line in lines:
                 try:
                     rec = json.loads(line)
@@ -216,10 +227,8 @@ def read_transcripts(dirs: list[str], since: datetime, ignore: set) -> tuple[lis
                         if rec.get("isMeta") or not t.strip() or t.lstrip().startswith(("<", "[Request interrupted", "Caveat:")):
                             continue
                         w = words(t)
-                        if len(w) >= 2:
+                        if len(w) >= 2 and len(t) <= MAX_PROMPT:
                             s.prompts.append((w, len(s.steps)))
-            for cmd in pending:
-                add_command(s, cmd, False, ignore)
             if s.steps or s.prompts:
                 sessions.append(s)
     return sessions, bad
@@ -355,9 +364,9 @@ def candidates(sessions: list[Session], min_sessions: int) -> list[dict]:
             home["fails"] += sum(st.fails for st in after)
             home["nsteps"].append(len(after))
     for c in clusters:
-        if len(c["sids"]) >= min_sessions:
+        steps = min(MAX_QUESTION_STEPS, round(sum(c["nsteps"]) / len(c["nsteps"])))
+        if len(c["sids"]) >= min_sessions and steps >= 1:   # a question no command answered gives a skill nothing to run
             label = " ".join(c["forms"].most_common(1)[0][0])
-            steps = max(1, round(sum(c["nsteps"]) / len(c["nsteps"])))
             out.append({"kind": "question", "label": label, "steps": steps, **_stats(c)})
     for c in out:
         c["score"] = round(c["sessions"] * c["steps"] * smoothed(c["failures"], c["attempts"]), 2)

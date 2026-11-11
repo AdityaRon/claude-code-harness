@@ -48,6 +48,7 @@ DEFAULT_WRITE_VERBS = [
     r"""["'](?:POST|PUT|PATCH|DELETE)["']""",
     r"""\b(?:kubectl|helm|kube\w*)\b[^\n]*["'](?:apply|create|delete|patch|replace|scale|annotate|label|cordon|drain|rollout|install|upgrade|uninstall)["']""",
     r"""(?i)["']\s*(?:insert\s+into|update\s+[\w."]+\s+set|delete\s+from|truncate|drop\s+(?:table|schema)|alter\s+table)\b""",
+    r"""["']\s*mutation\b""",   # a GraphQL write
 ]
 SELF_TEST_OPT = re.compile(r"""add_argument\(\s*["']--self-test["']|["']--self-test["']\s+in\s+sys\.argv""")
 SQL_CLIENT = re.compile(r"\b(?:psql|psycopg2?|pg8000|asyncpg|sqlite3\.connect|pymysql|mysql\.connector|snowflake\.connector|clickhouse_connect|trino\.dbapi)\b")

@@ -18,15 +18,17 @@ answer it.
 
 ## Run
 
+`PY` is the interpreter `bash ~/.claude/skills/{{name}}/bin/python.sh` prints and
+`E` is `~/.claude/skills/{{name}}/bin/{{module}}.py`. Write both out in full in
+every command: shell variables do not survive between calls.
+
 ```
-PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
-E=~/.claude/skills/{{name}}/bin/{{module}}.py
-$PY $E query 'sum by (job) (rate(http_requests_total[5m]))' --window 6h --step 5m
-$PY $E instant 'up{job="api"}'
-$PY $E series 'http_requests_total{job="api"}' --limit 50
-$PY $E ab 'histogram_quantile(0.99, sum by (le, version, tenant) (rate(latency_bucket[5m])))' \
+PY E query 'sum by (job) (rate(http_requests_total[5m]))' --window 6h --step 5m
+PY E instant 'up{job="api"}'
+PY E series 'http_requests_total{job="api"}' --limit 50
+PY E ab 'histogram_quantile(0.99, sum by (le, version, tenant) (rate(latency_bucket[5m])))' \
     --version-label version --a v41 --b v42 --by tenant --size 'sum by (tenant) (rate(requests_total[5m]))'
-$PY $E volume-step 'sum(rate(errors_total[5m]))' --input 'sum(rate(requests_total[5m]))' --at 2026-11-10T05:00:00Z
+PY E volume-step 'sum(rate(errors_total[5m]))' --input 'sum(rate(requests_total[5m]))' --at 2026-11-10T05:00:00Z
 ```
 
 Times take `now`, `now-2h` or ISO 8601 with a zone; a bare local time is refused.

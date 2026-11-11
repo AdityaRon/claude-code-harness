@@ -19,12 +19,14 @@ tag production runs, with synthetic rows; it reads no production data.
 
 ## Run
 
+`PY` is the interpreter `bash ~/.claude/skills/{{name}}/bin/python.sh` prints and
+`E` is `~/.claude/skills/{{name}}/bin/{{module}}.py`. Write both out in full in
+every command: shell variables do not survive between calls.
+
 ```
-PY=$(bash ~/.claude/skills/{{name}}/bin/python.sh)
-E=~/.claude/skills/{{name}}/bin/{{module}}.py
-$PY $E plan --image registry.example/app-db:16.4 --schema schema.sql --rows 200
-$PY $E up   --image registry.example/app-db:16.4 --schema schema.sql --apply
-$PY $E down --apply
+PY E plan --image registry.example/app-db:16.4 --schema schema.sql --rows 200
+PY E up   --image registry.example/app-db:16.4 --schema schema.sql --apply
+PY E down --apply
 ```
 
 Without `--apply`, `up` and `down` print exactly what they would run. The
