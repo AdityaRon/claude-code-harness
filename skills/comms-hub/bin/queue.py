@@ -449,7 +449,7 @@ def pr_facts(ref: str, pr: dict, me: str) -> dict:
 
 
 def write_prs(cfg: dict, at: dt.datetime, reviewing: list[dict], authored: list[dict]) -> None:
-    """prs.json, whole or not at all: the panel reads it as each turn ends."""
+    """prs.json, whole or not at all: the panel reads it each minute."""
     p = hub.state_dir(cfg) / "prs.json"
     tmp = p.with_name("prs.json.tmp")
     tmp.write_text(json.dumps({"written_at": at.isoformat(), "reviewing": reviewing, "authored": authored}) + "\n")

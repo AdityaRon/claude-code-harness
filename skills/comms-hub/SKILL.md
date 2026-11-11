@@ -73,17 +73,19 @@ Nothing here depends on which server it is: step 0 records the tool names.
    scan, with its age), what goes out and when, what is with other sessions,
    what is held, reviewed, approved and merged over the last five active days,
    and the last two log days' events with a dot on each since the user last
-   looked, from `PY B/hub.py panel` as each turn ends and each minute while
-   it is drawn, so it costs no tokens and its ages stay true while the
-   session idles (`/comms` opens it again and counts as a look). Its foot
-   gives the next tick with how late ticks have started lately, and the last
-   scan with the ticks due since that did not run. A `+k more` button opens
-   its section alone, and `fewer` in its place closes it; a look closes it
-   too. Expanded view (`e` with the pane focused, or the `expand` button)
-   shows every row and each message whole, with `compact` at the top and at
-   the end. The phone app docks no pane: there `/comms` answers with the
-   same state as text, and while a phone is attached the counts ride the
-   status line.
+   looked, from `PY B/hub.py panel` as each turn ends, each minute while it
+   is drawn or a phone is attached, and when it is drawn after waiting
+   undrawn, so it costs no tokens and its ages stay true while the session
+   idles. PR rows move only when a tick scans. `/comms` opens it again and
+   counts as a look; `seen` (`s`) takes every dot off. Its foot gives an
+   expired trigger, the next tick with how late ticks have started lately,
+   and the last scan with the ticks due since that did not run. A `+k more`
+   button opens its section alone, and `fewer` in its place closes it; a
+   look closes it too. Expanded view (`e` with the pane focused, or the
+   `expand` button) shows every row and each message whole, with `compact`
+   at the top and at the end. The phone app docks no pane: there `/comms`
+   puts the same state in the transcript as notices the model is not sent,
+   and while a phone is attached the counts ride the status line.
    Keep the machine awake through active
    hours: one that slept ran no tick until 09:55, so nothing re-gated the
    messages scheduled for 08:30, and it woke to a lost login and a DNS

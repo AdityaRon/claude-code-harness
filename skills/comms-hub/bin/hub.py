@@ -455,7 +455,7 @@ def launch_env(cfg: dict) -> dict[str, str]:
 
 
 def panel_dir() -> Path | None:
-    """The skill's panel mod beside bin/: held drafts and today's log in a pane.
+    """The skill's panel mod beside bin/: the comms state in a pane (`hub.py panel`).
     Only the comms session loads it, through the command `launch` prints."""
     p = Path(__file__).resolve().parent.parent / "panel"
     return p if (p / ".claude-plugin" / "plugin.json").is_file() else None
