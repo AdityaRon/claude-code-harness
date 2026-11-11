@@ -2,6 +2,8 @@
 """The GitHub side of a comms tick.
 
   queue.py scan [--wall-limit S]
+  queue.py check   the PRs the last scan listed, read again between ticks for the
+                   panel (prs-checked.json); writes nothing else
 
 Sections: INBOUND (review requested from me personally, not through a team,
 drafts left out), REVIEWED (anyone's open PR whose head moved since my last
@@ -393,6 +395,85 @@ def my_last_review(pr: dict, me: str) -> dict | None:
     mine = sorted((r for r in pr["reviews"]["nodes"] if hub.is_me(r.get("author"), me) and r.get("state") != "PENDING"),
                   key=lambda r: r.get("submittedAt") or "")
     return mine[-1] if mine else None
+
+
+DECIDED = {"APPROVED": "you approved", "CHANGES_REQUESTED": "you requested changes"}
+
+
+def answered(pr: dict, me: str) -> str:
+    """Why a review row of mine is done, '' while it is not: the PR is no longer
+    open, or my standing review approves or asks for changes. The scan closes
+    the row on it, and `check` hides it from the panel on it between ticks."""
+    if pr["state"] != "OPEN":
+        return pr["state"].lower()
+    mine = next((v for v in hub.standing_reviews(pr["reviews"]["nodes"]).values() if hub.is_me(v.get("author"), me)),
+                None)
+    return DECIDED.get((mine or {}).get("state"), "")
+
+
+# What check reads of each PR: pr_facts' fields and the reviews answered() reads,
+# without the comments only a scan routes.
+CHECK_FIELDS = """fragment F on PullRequest{number url title state isDraft headRefOid mergeStateStatus reviewDecision
+ author{login}
+ reviewRequests(first:50){nodes{requestedReviewer{__typename ... on User{login} ... on Team{slug}
+  ... on Bot{login} ... on Mannequin{login}}}}
+ reviews(first:100){pageInfo{hasNextPage} nodes{author{login __typename} state submittedAt commit{oid}}}
+ reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}
+ commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage}
+  nodes{__typename ... on CheckRun{name status conclusion startedAt completedAt}
+  ... on StatusContext{context state createdAt}}}}}}}}"""
+CHECK_BATCH = 25  # PRs a query: 3 or 25 cost 1 point of the hour's 5,000 (measured 2026-11-10)
+
+
+def check_query(n: int) -> str:
+    """One query for n PRs, each an alias p0..p(n-1) with its own variables."""
+    params = ",".join(f"$o{i}:String!,$n{i}:String!,$p{i}:Int!" for i in range(n))
+    body = " ".join(f"p{i}:repository(owner:$o{i},name:$n{i}){{pullRequest(number:$p{i}){{...F}}}}" for i in range(n))
+    return f"query CommsCheck({params}){{{body}}}\n{CHECK_FIELDS}"
+
+
+def check(cfg: dict, gh: hub.Gh, emit=print) -> int:
+    """Between ticks, the PRs the last scan listed, read again: an approval or a
+    merge stayed under NEEDS YOU until the next scan, up to a tick later. It
+    writes prs-checked.json alone, tied to that prs.json; the panel lays it
+    over. prs.json stays the scan's, whose history diffs the last one. Inside
+    the window only, as the tick, and it stops no scan."""
+    at = hub.now()
+    if hub.window(cfg, at)[1]:
+        emit("check: the window is closed")
+        return 0
+    data = read_prs(cfg)
+    if not data or not data.get("written_at"):
+        emit("check: no prs.json yet")
+        return 0
+    me = cfg["github"]["login"]
+    refs = [p["ref"] for p in data.get("reviewing", []) + data.get("authored", [])]
+    out, unread = {}, []
+    for i in range(0, len(refs), CHECK_BATCH):
+        chunk = refs[i:i + CHECK_BATCH]
+        variables = {}
+        for j, ref in enumerate(chunk):
+            variables[f"o{j}"], variables[f"n{j}"], variables[f"p{j}"] = hub.split_pr(ref)
+        try:
+            got, _ = gh.graphql_partial(check_query(len(chunk)), **variables)
+        except hub.GhError as e:
+            emit(f"check: GitHub unread: {e}")
+            return 1
+        for j, ref in enumerate(chunk):
+            pr = (got.get(f"p{j}") or {}).get("pullRequest")
+            # Unread stays as the scan had it: a PR GitHub could not resolve, or
+            # one with more reviews or threads than one page, as fetch_pr refuses.
+            if not pr or pr["reviews"]["pageInfo"]["hasNextPage"] or pr["reviewThreads"]["pageInfo"]["hasNextPage"]:
+                unread.append(ref)
+                continue
+            why = answered(pr, me)
+            out[ref] = {"gone": why} if pr["state"] != "OPEN" else {"facts": pr_facts(ref, pr, me), "answered": why}
+    hub.write_whole(hub.state_dir(cfg) / "prs-checked.json",
+                    json.dumps({"checked_at": at.isoformat(), "of": data["written_at"], "prs": out}) + "\n")
+    settled = sum(1 for c in out.values() if c.get("answered") or c.get("gone"))
+    emit(f"check: {len(out)} read, {settled} answered or closed"
+         + (f", {len(unread)} unread ({' '.join(unread)})" if unread else ""))
+    return 0
 
 
 def watched_row(ref: str, pr: dict, me: str, requested: bool, updated: str, mark: dict | None = None) -> str | None:
@@ -840,15 +921,11 @@ def remember(cfg: dict, emit, details: dict, me: str, route: list[dict], to_revi
         pr = details.get(pr_ref(r["ref"]))
         if not pr:
             continue
-        mine = hub.standing_reviews(pr["reviews"]["nodes"])
-        mine = next((v for w, v in mine.items() if hub.is_me(v.get("author"), me)), None)
         sha = (re.search(r"\bsha=([0-9a-f]{40})\b", r.get("detail") or "") or [None, None])[1]
-        decided = (mine or {}).get("state") in ("APPROVED", "CHANGES_REQUESTED")
         posted = any(hub.is_me(v.get("author"), me) and v.get("state") != "PENDING"
                      and (v.get("commit") or {}).get("oid") == pr["headRefOid"] for v in pr["reviews"]["nodes"])
-        if pr["state"] != "OPEN" or decided:
-            why = (pr["state"].lower() if pr["state"] != "OPEN"
-                   else "you approved" if mine["state"] == "APPROVED" else "you requested changes")
+        why = answered(pr, me)
+        if why:
             closed.append(hub.log_event(cfg, "answered", why, ref=r["ref"], corrects=r["id"]))
         elif sha and sha != pr["headRefOid"] and posted:
             # A review at the head posted outside review_lint.py --post (hub.py
@@ -863,7 +940,7 @@ def remember(cfg: dict, emit, details: dict, me: str, route: list[dict], to_revi
 
 def main(argv=None, gh=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("command", choices=["scan"])
+    ap.add_argument("command", choices=["scan", "check"])
     ap.add_argument("--wall-limit", type=float, default=WALL_LIMIT)
     ap.add_argument("--config")
     args = ap.parse_args(argv)
@@ -872,6 +949,9 @@ def main(argv=None, gh=None) -> int:
     except hub.ConfigError as e:
         print(f"config: {e}")
         return 2
+    # Before the scan's pid file, kill and watchdog: a check stops no scan.
+    if args.command == "check":
+        return check(cfg, gh or hub.Gh())
     pidfile = hub.state_dir(cfg) / "queue.pid"
     killed = kill_previous(pidfile)
     if killed:

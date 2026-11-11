@@ -657,8 +657,11 @@ const TRACEBACK = 'Traceback (most recent call last):\n  File "hub.py", line 962
 // milliseconds; `fails` names host calls that reject.
 function live(on, { placed = true, surfaces = ['terminal'] } = {}) {
   const clock = mock.clock(on, { now: NOW })
+  // `checks` counts `queue.py check` runs, answered `checkOut` after `checkSlow` ms.
   const w = { clock, placed, surfaces, out: aged('0m', '10:00') as object, reads: 0, slow: 0,
-              statuses: [] as (string | undefined)[], fails: new Set<string>() }
+              statuses: [] as (string | undefined)[], fails: new Set<string>(), checks: 0,
+              checkOut: { exitCode: 0, stdout: 'check: 5 read, 0 answered or closed\n', stderr: '' } as object,
+              checkSlow: 0, logs: [] as { text: string; to: string }[] }
   const or = (name: string, value: unknown) => {
     if (w.fails.has(name)) throw new Error(`${name} failed`)
     return { value }
@@ -667,7 +670,7 @@ function live(on, { placed = true, surfaces = ['terminal'] } = {}) {
   on('ui.open', () => ({ value: w.placed ? { isPlaced: true } : { isPlaced: false, reason: 'narrow' } }))
   on('ui.panes', () => ({ value: [{ id: 'comms', title: 'Comms', isShown: w.placed, isFocused: false, isPlaced: w.placed }] }))
   on('ui.status', (_, e) => { w.statuses.push(e.text); return { value: undefined } })
-  on('ui.log', () => ({ value: undefined }))
+  on('ui.log', (_, e) => { w.logs.push({ text: e.text, to: e.to }); return { value: undefined } })
   on('session.surfaces', () => or('session.surfaces', w.surfaces))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.attach', (_, e) => ({ clientId: e.clientId }))
@@ -675,6 +678,11 @@ function live(on, { placed = true, surfaces = ['terminal'] } = {}) {
   on('turn.complete', () => ({ text: 'done' }))
   on('process.run', async (_, e) => {
     if (e.argv[0] === 'bash') return { value: { exitCode: 0, stdout: '/usr/bin/python3.12\n', stderr: '' } }
+    if (e.argv[1]?.endsWith('/queue.py')) {
+      w.checks += 1
+      if (w.checkSlow) await clock.sleep(w.checkSlow)
+      return { value: w.checkOut }
+    }
     w.reads += 1
     const answer = w.out
     const hold = w.slow
@@ -818,4 +826,44 @@ test('a phone still listed when its detach is heard comes off the status line at
   w.surfaces = ['terminal']
   await w.clock.advance(60_000)
   expect(w.statuses.at(-1)).toBeUndefined()
+})
+
+// ---- the PRs read again between ticks (queue.py check) ------------------------
+
+// Between ticks an approval or a merge stayed under NEEDS YOU until the next scan.
+test('every fifth minute read while drawn also checks the PRs, and the pane reads again when it lands', async ($, on) => {
+  const w = live(on)
+  await start($, w)
+  const before = w.reads
+  for (let i = 0; i < 4; i++) await w.clock.advance(60_000)
+  expect(w.checks).toBe(0)
+  await w.clock.advance(60_000)
+  expect([w.checks, w.reads - before]).toEqual([1, 6])
+})
+
+test('a check that fails says so in the debug log alone, and stops no read', async ($, on) => {
+  const w = live(on)
+  w.checkOut = { exitCode: 1, stdout: 'check: GitHub unread: gh api graphql: HTTP 502 (tried 2x)\n', stderr: '' }
+  await start($, w)
+  const before = w.reads
+  for (let i = 0; i < 5; i++) await w.clock.advance(60_000)
+  expect([w.checks, w.reads - before]).toEqual([1, 5])
+  expect(w.logs.filter(l => l.text.includes('queue.py check'))).toEqual(
+    [{ text: 'comms panel: queue.py check: check: GitHub unread: gh api graphql: HTTP 502 (tried 2x)', to: 'debug' }])
+  expect((await texts($)).some(t => t.includes('read failed'))).toBe(false)
+})
+
+test('a check that hangs stops no minute read, and no second check starts beside it', async ($, on) => {
+  const w = live(on)
+  w.checkSlow = 30 * 60_000
+  await start($, w)
+  const before = w.reads
+  for (let i = 0; i < 10; i++) await w.clock.advance(60_000)
+  expect([w.checks, w.reads - before]).toEqual([1, 10])
+})
+
+test('PRS says when the PRs were last checked between ticks', async ($, on) => {
+  world(on, { now: json({ ...PANEL, prs: { ...PANEL.prs, checked: '10:21' } }) })
+  await $.command.run({ command: 'comms', args: '' })
+  expect(await texts($)).toContain('PRS · 5  as of 10:00 (0m ago)  checked 10:21')
 })

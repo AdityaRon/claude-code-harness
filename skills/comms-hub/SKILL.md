@@ -76,7 +76,10 @@ Nothing here depends on which server it is: step 0 records the tool names.
    looked, from `PY B/hub.py panel` as each turn ends, each minute while it
    is drawn or a phone is attached, and when it is drawn after waiting
    undrawn, so it costs no tokens and its ages stay true while the session
-   idles. PR rows move only when a tick scans. `/comms` opens it again and
+   idles. PR rows move when a tick scans, and every five minutes while it is
+   drawn in active hours: `queue.py check` reads the listed PRs again (one
+   GraphQL query per 25, no model) so an approval or merge leaves NEEDS YOU
+   then; it writes prs-checked.json alone. `/comms` opens it again and
    counts as a look; `seen` (`s`) takes every dot off. Its foot gives an
    expired trigger, the next tick with how late ticks have started lately,
    and the last scan with the ticks due since that did not run. A `+k more`
@@ -507,6 +510,7 @@ whole context.
 | `threads.json` | each thread the hub sent into for a peer in the last two weeks, with that peer, which owns its replies |
 | `last-scan` | when the last scan started, BLOCKED or not; the panel calls an older `prs.json` stale |
 | `prs.json` | the last scan that did not end BLOCKED: each open PR I review or authored, which the panel's PRS section reads |
+| `prs-checked.json` | what `queue.py check` read of those PRs since that scan; the panel lays it over prs.json, and ignores one for an older scan |
 | `prs-history.jsonl` | what changed between two `prs.json`, one row each (reviewed, approved, merged, by day), for the panel's last five days |
 | `parked.json` | the PRs the user parked with `hub.py park`, with when and why |
 | `relooked.json` | the head each PR was re-looked at by hand with `hub.py relooked`, with when and why |

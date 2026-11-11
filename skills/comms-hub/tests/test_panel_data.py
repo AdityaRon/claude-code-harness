@@ -32,6 +32,13 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   needs-unsorted: hub.py: `rows.sort(key=lambda r: (not r["needs"], r["group"] != "reviewing", short_ref(cfg, r["ref"])))` => `rows.sort(key=lambda r: short_ref(cfg, r["ref"]))`
   repo-needs-uncounted: hub.py: `c[0] += r["needs"]` => `pass`
   old-file-live: hub.py: `stale = written is None or bool(second and second + lag + LATE_GRACE <= now()) \` => `stale = written is None or False \`
+  check-ignored: hub.py: `checks, checked = pr_checks(cfg, (data or {}).get("written_at"))` => `checks, checked = {}, None`
+  check-of-any-scan: hub.py: `if not written or rec.get("of") != written or at is None` => `if at is None`
+  check-gone-shown: hub.py: `if not (checks.get(p["ref"]) or {}).get("gone")]` => `]`
+  check-facts-unapplied: hub.py: `return [{**p, **(checks.get(p["ref"]) or {}).get("facts", {})} for p in` => `return [p for p in`
+  check-verdict-kept: hub.py: `verdict = "" if (checks.get(p["ref"]) or {}).get("answered") else verdicts.get(p["ref"], "")` => `verdict = verdicts.get(p["ref"], "")`
+  check-needs-kept: hub.py: `for r in asks if not (r["kind"] == "reviewed" and pr_ref(r["ref"]) in settled)]` => `for r in asks]`
+  check-unsaid: hub.py: `"checked": _when(cfg, checked) if checked else "",` => `"checked": "",`
   stale-after-one-tick: hub.py: `second = next_tick(cfg, next_tick(cfg, written) or now()) if written else None` => `second = next_tick(cfg, written) if written else None`
   stale-without-lag: hub.py: `second + lag + LATE_GRACE <= now()` => `second + LATE_GRACE <= now()`
   stale-without-grace: hub.py: `second + lag + LATE_GRACE <= now()` => `second + lag <= now()`
@@ -509,6 +516,38 @@ class Prs(unittest.TestCase):
             line = json.loads(main_out("panel")[1])["prs"]["rows"][0]["line"]
         self.assertIn("new commits", line)
         self.assertNotIn("approvable", line)
+
+    def check(self, env, prs, of=NOW):
+        (env.state / "prs-checked.json").write_text(json.dumps({"checked_at": "2026-10-21T16:58:00+00:00", "of": of,
+                                                                "prs": prs}))
+
+    def settled(self, env, of=NOW):
+        """#32 approvable by me, #40 approved and mine to merge; then a check sees
+        me approve #32 and #40 merge."""
+        self.write(env, reviewing=[pr("acme/application-server#32", my_state="COMMENTED", my_sha=SHA2)],
+                   authored=[pr("acme/application-server#40", decision="APPROVED")])
+        main_out("log", "--kind", "reviewed", "--needs-user", "--ref",
+                 "https://github.com/acme/application-server/pull/32", "approvable")
+        before = json.loads(main_out("panel")[1])
+        self.check(env, {"acme/application-server#32": {"facts": {"my_state": "APPROVED", "my_sha": SHA2},
+                                                        "answered": "you approved"},
+                         "acme/application-server#40": {"gone": "merged"}}, of=of)
+        return before, json.loads(main_out("panel")[1])
+
+    def test_between_ticks_a_check_settles_what_github_shows_done(self):
+        """An approval or a merge stayed under NEEDS YOU until the next scan, up to a tick later."""
+        with Env(config=NAMES, now=NOW) as env:
+            before, after = self.settled(env)
+        self.assertEqual([n["text"] for n in before["needs"]], ["approvable"])
+        self.assertEqual(after["needs"], [], "the review row leaves NEEDS YOU, as the next scan would close it")
+        self.assertEqual([(r["needs"], r["line"]) for r in after["prs"]["rows"]],
+                         [(False, "app #32  dana  approved@2222222 · CI green")], "#40 merged and leaves")
+        self.assertEqual((after["prs"]["checked"], before["prs"]["checked"]), ("09:58", ""))
+
+    def test_a_check_of_an_older_scan_is_left_out(self):
+        with Env(config=NAMES, now=NOW) as env:
+            before, after = self.settled(env, of="2026-10-21T16:14:00+00:00")
+        self.assertEqual(after, before, "the newer scan read them since")
 
     def test_it_counts_what_is_parked(self):
         with Env(now=NOW) as env:

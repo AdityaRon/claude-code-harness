@@ -29,8 +29,10 @@ export type LogEvent = {
 export type PrRow = { key: string; group: 'reviewing' | 'authored'; needs: boolean; line: string }
 export type PrRepo = { repo: string; needs: number; total: number }
 export type PrDay = { day: string; reviewed: number; approved: number; merged: number }
-// `parked`: how many PRs `hub.py park` keeps off it.
-export type Prs = { as_of: string; age: string; stale: boolean; repos: PrRepo[]; rows: PrRow[]; days: PrDay[]; parked?: number }
+// `parked`: how many PRs `hub.py park` keeps off it. `checked`: when `queue.py
+// check` last read them between ticks, '' when none since the scan.
+export type Prs = { as_of: string; age: string; stale: boolean; repos: PrRepo[]; rows: PrRow[]; days: PrDay[]; parked?: number
+                    checked?: string }
 export type Panel = {
   state: string
   day: string
