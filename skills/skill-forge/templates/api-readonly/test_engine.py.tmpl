@@ -17,6 +17,11 @@ Mutations that must turn this file red:
   link-header-ignored: {{module}}.py: `m = LINK_NEXT.search(headers.get("link", ""))` => `m = None`
   next-field-ignored: {{module}}.py: `for k in ("next", "next_page", "nextPage"):` => `for k in ():`
   auth-header-name-ignored: {{module}}.py: `name, _, scheme = spec.partition(":")` => `name, scheme = "Authorization", "Bearer"`
+  probe-skipped: {{module}}.py: `probing = probe if os.environ.get(f"{ENV}_API_PROBE") else None` => `probing = None`
+  probe-404-accepted: {{module}}.py: `        return "HTTP 404"` => `        return None`
+  kube-auth-unmapped: {{module}}.py: `except (AuthError, access.AccessAuth) as e:` => `except AuthError as e:`
+  route-refusal-unmapped: {{module}}.py: `except (Refused, ValueError, access.AccessRefused) as e:` => `except (Refused, ValueError) as e:`
+  apply-ignored: {{module}}.py: `PREFIXES, a.apply) as ROUTE` => `PREFIXES, True) as ROUTE`
   unmasked-items: {{module}}.py: `emit(json.dumps(item, sort_keys=True))` => `sys.stdout.write(json.dumps(item, sort_keys=True))`
 """
 from __future__ import annotations
@@ -83,7 +88,7 @@ class GetTest(unittest.TestCase):
         rc, out, _ = run("get", "/flags")
         self.assertEqual(rc, 0)
         lines = out.splitlines()
-        self.assertEqual(lines[0], "# target:  https://api.test/v1/flags (GET)")
+        self.assertEqual(lines[0], f"# target:  GET /flags at https://api.test/v1 (direct) · prefix / (not probed; set {ENV}_API_PROBE)")
         self.assertTrue(lines[1].startswith("# window:  n/a: the API's state as of "))
         self.assertTrue(lines[2].startswith("# command: "))
         self.assertEqual(lines[3:], ["# rows:    2 from 1 page(s)", "# partial: no",
@@ -123,6 +128,41 @@ class GetTest(unittest.TestCase):
         rc, out, _ = run("get", "/tickets")
         self.assertEqual(rc, 0)
         self.assertIn('{"id": 2}', out)
+
+
+class RouteTest(unittest.TestCase):
+    def test_guard_wrong_target_the_prefix_is_probed_and_echoed(self):
+        run = Run({BASE + "/me": (404, {"Content-Type": "text/plain"}, "404 page not found"),
+                   BASE + "/api/me": (200, JSON, {"id": "u1"}),
+                   BASE + "/api/flags": (200, JSON, [{"key": "beta"}])},
+                  env={f"{ENV}_API_PROBE": "/me", f"{ENV}_PATH_PREFIXES": ",/api"})
+        rc, out, err = run("get", "/flags")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out.splitlines()[0], "# target:  GET /flags at https://api.test/v1 (direct) · prefix /api (probed; no API at /: HTTP 404)")
+
+    def test_guard_wrong_target_a_probe_that_is_not_json_refuses(self):
+        run = Run({BASE + "/me": (200, {"Content-Type": "text/plain"}, "ok")}, env={f"{ENV}_API_PROBE": "/me"})
+        rc, out, err = run("get", "/flags")
+        self.assertEqual(rc, 5)
+        self.assertEqual(out, "")
+        self.assertIn("no API answered at https://api.test/v1 (direct) under any prefix tried", err)
+
+    def test_a_pod_route_without_apply_creates_nothing(self):
+        env = {f"{ENV}_ACCESS": "pod flags-api:8080 in tools", f"{ENV}_CONTEXT": "kind-test"}
+        with mock.patch.object(eng.access, "kubectl", return_value=(0, "kind-test\n", "")) as k:
+            rc, out, err = Run(env=env)("get", "/flags")
+        self.assertEqual(rc, 5)
+        self.assertIn("needs --apply", err)
+        self.assertFalse(any("run" in c.args[0] for c in k.call_args_list))
+
+    def test_guard_expired_auth_kube_login_is_auth_not_no_data(self):
+        env = {f"{ENV}_ACCESS": "port-forward flags-api:8080 in tools", f"{ENV}_CONTEXT": "kind-test", f"{ENV}_RELOGIN": "kube-login"}
+        gone = eng.access.AccessAuth("kubectl: error: You must be logged in to the server (Unauthorized)")
+        with mock.patch.object(eng.access, "kubectl", side_effect=gone):
+            rc, out, err = Run(env=env)("get", "/flags")
+        self.assertEqual(rc, 4)
+        self.assertEqual(out, "")
+        self.assertIn("Re-login with: kube-login", err)
 
 
 class GuardTest(unittest.TestCase):

@@ -51,7 +51,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mask import config_path, emit, header, read_toml  # noqa: E402
 
 # Copied into a skill by forge.py draft, each with the test copied beside it (None: no test).
-VENDORED = {"mask.py": "test_mask.py", "sqlguard.py": "test_sqlguard.py", "python.sh": None}
+VENDORED = {"mask.py": "test_mask.py", "sqlguard.py": "test_sqlguard.py", "access.py": "test_access.py", "python.sh": None}
 DEFAULT_BUDGET = 150
 ENGINE_CHECKS = ("C1", "C2", "C4", "C5", "C6", "C7", "C9")
 NOT_READ = {"fixtures", "templates", "node_modules", ".git", "__pycache__", ".venv", "venv"}

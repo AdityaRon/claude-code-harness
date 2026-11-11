@@ -12,7 +12,13 @@ only together with its test.
 
 ${{env_prefix}}_LOKI_URL is the Loki API's base URL. A bearer token, when it
 needs one, comes from ${{env_prefix}}_LOKI_TOKEN and goes in a header, never a
-URL or argv. ${{env_prefix}}_RELOGIN is printed when auth fails.
+URL or argv. ${{env_prefix}}_RELOGIN is printed when auth fails. A store only the
+cluster reaches: set ${{env_prefix}}_ACCESS to "port-forward SVC[:PORT] in NS" or
+"pod SVC[:PORT] in NS" (a throwaway pod, created only with --apply) and
+${{env_prefix}}_CONTEXT; access.py has the details. The path prefix in front of
+/loki/api/v1 is probed with the labels API, never guessed
+(${{env_prefix}}_PATH_PREFIXES, by default none), and the route that answered
+opens the header.
 ${{env_prefix}}_SELECTOR_TEMPLATE (default: namespace="{ns}",app="{service}") is
 how this job names a service's streams. The selector is computed from it, not
 guessed, and the computed selector prints in the header.
@@ -35,16 +41,17 @@ import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import access  # noqa: E402
 from mask import (EXIT_ABSENT, EXIT_AUTH, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED,  # noqa: E402
                   Window, emit, header, parse_duration, parse_time)
 
 ENV = "{{env_prefix}}"
+PREFIXES = [""]
+ROUTE = None   # the access.Route main() opens; every request goes through it
 DEFAULT_TEMPLATE = 'namespace="{ns}",app="{service}"'
 SLOT = re.compile(r"\{(\w+)\}")
 EQ_MATCHER = re.compile(r'([a-zA-Z_]\w*)\s*=\s*"((?:[^"\\]|\\.)+)"')
@@ -70,19 +77,18 @@ def base_url() -> str:
 
 
 def fetch(path: str, params: dict) -> dict:
-    """GET one API path. Raises AuthError on a login wall, returns the JSON."""
+    """GET one API path through the route. Raises AuthError on a login wall, returns the JSON."""
     q = urllib.parse.urlencode([(k, v) for k, vs in params.items() for v in (vs if isinstance(vs, list) else [vs])])
-    req = urllib.request.Request(f"{base_url()}{path}?{q}", method="GET")
+    headers = {}
     token = os.environ.get(f"{ENV}_LOKI_TOKEN")
     if token:
-        req.add_header("Authorization", "Bearer " + token)
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            body, ctype = r.read().decode("utf-8", "replace"), r.headers.get("Content-Type", "")
-    except urllib.error.HTTPError as e:
-        if e.code in (401, 403):
-            raise AuthError(f"HTTP {e.code} from {path}")
-        body, ctype = e.read().decode("utf-8", "replace"), e.headers.get("Content-Type", "")
+        headers["Authorization"] = "Bearer " + token
+    status, got, body = ROUTE.get(path, q, headers)
+    ctype = got.get("content-type", "")
+    if status in (401, 403):
+        raise AuthError(f"HTTP {status} from {path}")
+    if status == 404:
+        raise ValueError(f"HTTP 404 from {path}: no API there")
     if "html" in ctype or body.lstrip()[:1] == "<":
         raise AuthError(f"{path} answered with an HTML page, most likely a login wall, not the API")
     return json.loads(body)
@@ -198,12 +204,19 @@ def explain_empty(sel: str, w: Window, filt: str | None) -> tuple[str, str]:
     return "ABSENT", f"no stream matches {sel} as a whole, though each label value exists; check the template pairs them"
 
 
+def probe() -> str | None:
+    """None when the Loki API answers at the route's prefix, else what did."""
+    d = fetch("/loki/api/v1/labels", {})
+    ok = d.get("status") == "success" and isinstance(d.get("data"), list)
+    return None if ok else f"not a labels answer: {json.dumps(d)[:60]}"
+
+
 def target(sel: str) -> str:
     try:
         v = fetch("/loki/api/v1/status/buildinfo", {}).get("version")
     except (AuthError, ValueError, OSError):
         v = None
-    return f"loki {base_url()}" + (f" v{v}" if v else "") + f" selector {sel}"
+    return f"loki{f' v{v}' if v else ''} at {ROUTE.describe()} · selector {sel}"
 
 
 def stream_label(labels: dict) -> str:
@@ -267,10 +280,13 @@ def do_streams(a) -> int:
 
 
 def main(argv=None) -> int:
+    global ROUTE
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n", 1)[1])
     sub = p.add_subparsers(dest="cmd", required=True)
+    route_opts = argparse.ArgumentParser(add_help=False)
+    route_opts.add_argument("--apply", action="store_true", help="create the throwaway pod a pod route needs; nothing else here writes")
     for name in ("fetch", "streams"):
-        sp = sub.add_parser(name)
+        sp = sub.add_parser(name, parents=[route_opts])
         sp.add_argument("--service")
         sp.add_argument("--namespace")
         sp.add_argument("--selector")
@@ -283,16 +299,17 @@ def main(argv=None) -> int:
             sp.add_argument("--skew", default="5m")
     a = p.parse_args(argv)
     try:
-        return do_fetch(a) if a.cmd == "fetch" else do_streams(a)
-    except AuthError as e:
+        with access.route(ENV, base_url, probe, PREFIXES, a.apply) as ROUTE:
+            return do_fetch(a) if a.cmd == "fetch" else do_streams(a)
+    except (AuthError, access.AccessAuth) as e:
         relogin = os.environ.get(f"{ENV}_RELOGIN", f"(set {ENV}_RELOGIN to the command that renews access)")
         emit(f"AUTH: {e}. This is an expired or missing login, not an empty answer. Re-login with: {relogin}", err=True)
         return EXIT_AUTH
-    except (Refused, ValueError) as e:
+    except (Refused, ValueError, access.AccessRefused) as e:
         emit(f"REFUSED: {e}", err=True)
         return EXIT_REFUSED
     except OSError as e:
-        emit(f"could not reach {os.environ.get(ENV + '_LOKI_URL', '?')}: {e}", err=True)
+        emit(f"could not reach {ROUTE.describe() if ROUTE and ROUTE.base else os.environ.get(ENV + '_LOKI_URL', '?')}: {e}", err=True)
         return 1
 
 

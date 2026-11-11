@@ -12,9 +12,14 @@ Mutations that must turn this file red:
   missing-namespace-ok: {{module}}.py: `    if missing:` => `    if False:`
   skew-unsaid: {{module}}.py: `if d > skew:` => `if False:`
   auth-html-missed: {{module}}.py: `if "html" in ctype or body.lstrip()[:1] == "<":` => `if False:`
-  auth-401-missed: {{module}}.py: `if e.code in (401, 403):` => `if False:`
+  auth-401-missed: {{module}}.py: `if status in (401, 403):` => `if False:`
   creds-in-url-ok: {{module}}.py: `if "@" in urllib.parse.urlsplit(url).netloc:` => `if False:`
-  token-in-url: {{module}}.py: `req.add_header("Authorization", "Bearer " + token)` => `req.full_url += "&token=" + token`
+  token-in-url: {{module}}.py: `headers["Authorization"] = "Bearer " + token` => `q += "&token=" + token`
+  probe-skipped: {{module}}.py: `access.route(ENV, base_url, probe, PREFIXES, a.apply)` => `access.route(ENV, base_url, None, PREFIXES, a.apply)`
+  404-unnamed: {{module}}.py: `    if status == 404:` => `    if False:`
+  kube-auth-unmapped: {{module}}.py: `except (AuthError, access.AccessAuth) as e:` => `except AuthError as e:`
+  route-refusal-unmapped: {{module}}.py: `except (Refused, ValueError, access.AccessRefused) as e:` => `except (Refused, ValueError) as e:`
+  apply-ignored: {{module}}.py: `PREFIXES, a.apply) as ROUTE` => `PREFIXES, True) as ROUTE`
   filter-unescaped: {{module}}.py: `' |= "' + esc(filt) + '"'` => `' |= "' + filt + '"'`
   value-unescaped: {{module}}.py: `SLOT.sub(lambda m: esc(values[m.group(1)]), tmpl)` => `SLOT.sub(lambda m: values[m.group(1)], tmpl)`
   unmasked-lines: {{module}}.py: `emit(f"{stamp(ts)} {stream_label(labels)} {line}")` => `sys.stdout.write(f"{stamp(ts)} {stream_label(labels)} {line}\\n")`
@@ -29,6 +34,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+import urllib.parse
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -114,7 +120,7 @@ class FetchTest(unittest.TestCase):
         rc, out, _ = Run(fake)("fetch", *SVC)
         self.assertEqual(rc, 0, out)
         lines = out.splitlines()
-        self.assertEqual(lines[0], '# target:  loki http://loki.test:3100 v3.1.0 selector {namespace="prod",app="api"}')
+        self.assertEqual(lines[0], '# target:  loki v3.1.0 at http://loki.test:3100 (direct) · prefix / not probed · selector {namespace="prod",app="api"}')
         self.assertEqual(lines[1], "# window:  2026-11-10T05:00:00Z .. 2026-11-10T06:00:00Z (UTC, bounds [start, end))")
         self.assertTrue(lines[2].startswith("# command: "))
         self.assertEqual(lines[3:], ["# rows:    2 lines from 1 page(s)", "# partial: no",
@@ -220,6 +226,73 @@ class QuotingTest(unittest.TestCase):
         self.assertEqual(eng.selector_for('a"b', "prod"), '{namespace="prod",app="a\\"b"}')
 
 
+def routed():
+    """A direct route with no probe, for a test that calls fetch() itself."""
+    class Routed:
+        def __enter__(self):
+            self.cm = eng.access.route(ENV, eng.base_url, None, [""])
+            eng.ROUTE = self.cm.__enter__()
+
+        def __exit__(self, *exc):
+            eng.ROUTE = None
+            return self.cm.__exit__(*exc)
+    return Routed()
+
+
+def answering(paths: dict, seen=None):
+    """A fake urlopen that answers by URL path; any other path is a 404, as a wrong prefix is."""
+    def urlopen(req, timeout):
+        if seen is not None:
+            seen.append(req)
+        path = urllib.parse.urlsplit(req.full_url).path
+        if path in paths:
+            return FakeResponse(json.dumps(paths[path]).encode(), "application/json")
+        if "*" in paths:
+            return FakeResponse(json.dumps(paths["*"]).encode(), "application/json")
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {"Content-Type": "text/plain"}, io.BytesIO(b"404 page not found"))
+    return urlopen
+
+
+class RouteTest(unittest.TestCase):
+    def test_guard_wrong_target_the_prefix_is_probed_and_echoed(self):
+        streams = [{"stream": API, "values": [[str(ns(1)), "hello"]]}]
+        paths = {"/logs/loki/api/v1/labels": {"status": "success", "data": ["app", "namespace"]},
+                 "/logs/loki/api/v1/status/buildinfo": {"version": "3.1.0"},
+                 "/logs/loki/api/v1/query_range": {"status": "success", "data": {"resultType": "streams", "result": streams}}}
+        seen = []
+        with mock.patch("urllib.request.urlopen", answering(paths, seen)):
+            rc, out, err = Run(env={f"{ENV}_PATH_PREFIXES": ",/logs"})("fetch", *SVC)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out.splitlines()[0], "# target:  loki v3.1.0 at http://loki.test:3100 (direct) · prefix /logs "
+                                              "(probed; no API at /: HTTP 404 from /loki/api/v1/labels: no API there) · "
+                                              'selector {namespace="prod",app="api"}')
+        self.assertEqual([urllib.parse.urlsplit(r.full_url).path for r in seen][:2], ["/loki/api/v1/labels", "/logs/loki/api/v1/labels"])
+
+    def test_guard_wrong_target_a_prefix_answering_200_is_not_an_empty_answer(self):
+        with mock.patch("urllib.request.urlopen", answering({"*": {}})):
+            rc, out, err = Run()("fetch", *SVC)
+        self.assertEqual(rc, 5)
+        self.assertEqual(out, "")
+        self.assertIn("no API answered at http://loki.test:3100 (direct) under any prefix tried", err)
+
+    def test_a_pod_route_without_apply_creates_nothing(self):
+        env = {f"{ENV}_ACCESS": "pod loki:3100 in logging", f"{ENV}_CONTEXT": "kind-test"}
+        with mock.patch.object(eng.access, "kubectl", return_value=(0, "kind-test\n", "")) as k:
+            rc, out, err = Run(env=env)("fetch", *SVC)
+        self.assertEqual(rc, 5)
+        self.assertIn("needs --apply", err)
+        self.assertFalse(any("run" in c.args[0] for c in k.call_args_list))
+
+    def test_guard_expired_auth_kube_login_is_auth_not_no_data(self):
+        env = {f"{ENV}_ACCESS": "port-forward loki:3100 in logging", f"{ENV}_CONTEXT": "kind-test", f"{ENV}_RELOGIN": "kube-login"}
+        gone = eng.access.AccessAuth("kubectl: error: You must be logged in to the server (Unauthorized)")
+        with mock.patch.object(eng.access, "kubectl", side_effect=gone):
+            rc, out, err = Run(env=env)("fetch", *SVC)
+        self.assertEqual(rc, 4)
+        self.assertEqual(out, "")
+        self.assertIn("Re-login with: kube-login", err)
+
+
 class FakeResponse:
     def __init__(self, body: bytes, ctype: str):
         self.body, self.headers = body, {"Content-Type": ctype}
@@ -248,7 +321,8 @@ class TransportTest(unittest.TestCase):
         body = json.dumps({"status": "success", "data": {"result": []}}).encode()
         with mock.patch("urllib.request.urlopen", FakeResponse.factory(body, "application/json", seen)), \
                 mock.patch.dict(os.environ, {f"{ENV}_LOKI_URL": "http://loki.test", f"{ENV}_LOKI_TOKEN": "tok-123456789"}):
-            eng.fetch("/loki/api/v1/query_range", {"query": "{app=\"x\"}"})
+            with routed():
+                eng.fetch("/loki/api/v1/query_range", {"query": "{app=\"x\"}"})
         self.assertEqual(seen[0].get_header("Authorization"), "Bearer tok-123456789")
         self.assertNotIn("tok-123456789", seen[0].full_url)
         self.assertEqual(seen[0].get_method(), "GET")

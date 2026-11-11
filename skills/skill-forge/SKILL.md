@@ -75,6 +75,11 @@ included, is in `~/.local/state/skill-forge/`.
 | runbook | an alert payload to deep links and the next skill | absent, wrong target, window |
 | local-repro | Docker on production's exact image tag, synthetic seed data | wrong target, absent, incomplete capture |
 
+metrics-query, logs-fetch and api-readonly reach their API through `access.py`:
+`<ENV>_ACCESS` is `direct` (the URL variable), `port-forward SVC[:PORT] in NS`,
+or `pod SVC[:PORT] in NS` (it creates a pod, so it needs `--apply`), with
+`<ENV>_CONTEXT` named. The path prefix is probed, and the header names the route.
+
 ## The conventions skill_lint checks
 
 `PY F/skill_lint.py SKILL_DIR` lints any skill, drafted or hand-written, with
