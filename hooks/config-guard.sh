@@ -76,16 +76,20 @@ H=$(abs_path "$HOME")
 HR=$(cd "$H" 2>/dev/null && pwd -P) || HR=$H
 
 level_of() {   # level_of PATH DESTRUCTIVE: deny, harness, settings, plugins, startup, mods or nothing
-  local p="$1" h c s
+  local p="$1" h c s d
   case "$p" in */.claude/settings.json|*/.claude/settings.local.json) echo settings; return ;; esac
   # The file tools reach mod-gate.sh, which reviews the mod; a removal adds no code.
   local mods=""
   [[ ("$TOOL" == Bash || "$TOOL" == Monitor) && -z "$REMOVING" ]] && mods=1
   if [[ -n "$mods" ]]; then
     case "$p" in
-      */.claude/skills/?*/?*)
-        s="${p%%/.claude/skills/*}/.claude/skills/"; s="$s$(c=${p#"$s"}; printf '%s' "${c%%/*}")"
-        [[ -f "$s/.claude-plugin/plugin.json" ]] && { echo mods; return; } ;;
+      */.claude/skills/?*/.claude-plugin/plugin.json) echo mods; return ;;
+      */.claude/skills/?*)   # the nearest manifest, as mod-gate.sh finds the mod
+        s="${p%%/.claude/skills/*}/.claude/skills"; d=$p
+        while [[ "$d" == "$s/"?* ]]; do
+          [[ -f "$d/.claude-plugin/plugin.json" ]] && { echo mods; return; }
+          d=${d%/*}
+        done ;;
     esac
   fi
   for h in "$H" "$HR"; do
@@ -128,8 +132,11 @@ check_word() {   # check_word WORD DESTRUCTIVE
   # `cd DIR && cat > x` writes DIR/x: a relative word is read in each such DIR too.
   # shellcheck disable=SC2088  # '~' is the tilde as typed
   case "$w" in /*|'~'|'~/'*|'$HOME'|'$HOME/'*|'${HOME}'|'${HOME}/'*) return ;; esac
+  # Which cd a word follows is not tracked, so what one raises stops at ask.
+  local l
   for m in ${BASES[@]+"${BASES[@]}"}; do
-    note "$(classify_one "$(CWD=$m; abs_path "$w")" "$2")" "$w"
+    l=$(classify_one "$(CWD=$m; abs_path "$w")" "$2"); [[ "$l" == deny ]] && l=harness
+    note "$l" "$w"
   done
 }
 
@@ -228,10 +235,12 @@ case "$TOOL" in
     while IFS= read -r seg; do SEGS+=("$seg"); done < <(
       printf '%s\n' "$NORM" | sed -E "s/$REDIR//g; s/<[[:space:]]*[^[:space:];&|<>()]+//g" \
         | tr '\n' ';' | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;&]/\n/g')
+    here=${CWD:-$PWD}
     for seg in ${SEGS[@]+"${SEGS[@]}"}; do
       set -f; read -ra words <<<"$seg"; set +f
       case "${words[0]:-}" in
-        cd|pushd) if [[ ${#words[@]} -gt 1 ]]; then BASES+=("$(abs_path "${words[$((${#words[@]} - 1))]}")"); else BASES+=("$H"); fi ;;
+        cd|pushd) if [[ ${#words[@]} -gt 1 ]]; then here=$(CWD=$here; abs_path "${words[$((${#words[@]} - 1))]}"); else here=$H; fi
+                  BASES+=("$here") ;;
       esac
     done
     while IFS= read -r w; do

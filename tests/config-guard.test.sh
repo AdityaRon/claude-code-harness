@@ -12,7 +12,8 @@ mkdir -p "$HOME/.claude/hooks" "$HOME/.claude/plugins/cache/p/hooks" "$HOME/Libr
 touch "$HOME/.claude/hooks/env-guard.sh" "$HOME/.claude/hooks/lib.sh" "$HOME/.claude/statusline.sh"
 ln -s "$HOME/.claude/hooks" "$TMP/link"
 ln -s "$HOME/.claude/plugins" "$TMP/plink"
-for m in "$HOME/.claude/dev-mods/s/m" "$HOME/.claude/skills/tally" "$TMP/proj/.claude/skills/pm" "$HOME/.claude/jobs/j/tmp/copy"; do
+for m in "$HOME/.claude/dev-mods/s/m" "$HOME/.claude/skills/tally" "$TMP/proj/.claude/skills/pm" "$HOME/.claude/jobs/j/tmp/copy" \
+         "$HOME/.claude/skills/hub/panel"; do
   mkdir -p "$m/.claude-plugin" "$m/hooks"; printf '{"name":"x"}' > "$m/.claude-plugin/plugin.json"
 done
 mkdir -p "$HOME/.claude/skills/plain"
@@ -104,6 +105,11 @@ bash_is ask 'sed -i "" s/a/b/ ~/.claude/skills/tally/hooks/register.tsx'
 bash_is ask "cp x.tsx $TMP/proj/.claude/skills/pm/hooks/register.tsx"
 bash_is ask 'printf x > hooks/register.tsx' "$TMP/proj/.claude/skills/pm"
 bash_is ask 'cd ~/.claude/hooks && echo "exit 0" > lib.sh'
+bash_is ask 'sed -i "" s/a/b/ ~/.claude/skills/hub/panel/hooks/register.tsx'
+bash_is ask 'echo "{}" > ~/.claude/skills/plain/.claude-plugin/plugin.json'
+bash_is ask 'cd ~/.claude/skills && cd tally && echo x > hooks/r.tsx'
+bash_is ask 'cd ~ && cd proj && rm -rf .claude'
+bash_is allow 'echo x > ~/.claude/skills/hub/notes.md'
 monitor_is() {   # monitor_is WANT TOOL-INPUT-JSON
   local got; got=$(verdict Monitor "$2")
   if [[ "$got" == "$1" ]]; then echo "  OK ($1): Monitor $2"; PASS=$((PASS+1))
