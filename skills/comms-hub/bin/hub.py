@@ -82,7 +82,8 @@ MAX_CHARS = 2500
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 CADENCES = (10, 15, 20, 30, 60)
 TICK_MINUTE = 7          # off the hour, when every other schedule fires
-TRIGGER_RENEW_DAYS = 6   # Claude Code deletes a recurring task 7 days after it was created
+TRIGGER_EXPIRY_DAYS = 7  # Claude Code deletes a recurring task 7 days after it was created
+TRIGGER_RENEW_DAYS = 6   # so the tick renews it a day before
 KNOWN_BOTS: set[str] = set()  # github.bots from the config, lower-cased; load_config fills it
 
 
@@ -1162,7 +1163,18 @@ def panel(cfg: dict) -> dict:
             "last_tick": f"{dated(rows[scans[-1]])}, " + (
                 "quiet" if not since_scan else f"{len(since_scan)} event{'s' * (len(since_scan) != 1)}")
             + (f" · {len(late)} missed since" if late else "")
-            if scans else "none yet", "read": f"{local_now(cfg):%H:%M}"}
+            if scans else "none yet", "read": f"{local_now(cfg):%H:%M}", "trigger": trigger_expired(cfg)}
+
+
+def trigger_expired(cfg: dict) -> str:
+    """Said once Claude Code has deleted the tick's trigger: after that no tick
+    runs, and the pane only counted the ticks missed, with no reason."""
+    try:
+        created = parse_time(_record(cfg, "trigger.json").get("created"))
+    except ValueError:
+        return ""
+    gone = created + dt.timedelta(days=TRIGGER_EXPIRY_DAYS) if created else None
+    return f"trigger expired {_when(cfg, gone)}" if gone and gone <= now() else ""
 
 
 def pending_scheduled(cfg: dict) -> list[dict]:

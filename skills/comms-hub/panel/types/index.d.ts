@@ -43,6 +43,8 @@ export type Panel = {
   next_tick: string
   last_tick: string
   read: string
+  // "trigger expired Tue 10:07" once Claude Code deleted the tick's trigger; a hub.py from before prints none.
+  trigger?: string
 }
 
 // What the pane draws, as last read.

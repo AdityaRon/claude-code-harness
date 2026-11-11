@@ -181,6 +181,15 @@ test('GOING OUT puts the status before the message, and colours only what was ch
   await ui.unmount()
 })
 
+// Claude Code deletes the tick's trigger after 7 days: "missed since" then only counted up.
+test('an expired trigger leads the foot, in amber', async ($, on) => {
+  world(on, { now: json({ ...PANEL, trigger: 'trigger expired 09:07' }) })
+  await $.command.run({ command: 'comms', args: '' })
+
+  expect(await texts($)).toContain('trigger expired 09:07 · next tick 10:07 · last scan: 09:45, 1 event · read 10:00')
+  expect(await colorOf($, /^trigger expired 09:07$/)).toBe('warning')
+})
+
 // Ages and "stale" come from hub.py as it reads, so with no turn ending they froze.
 test('the pane reads again each minute while it is drawn or a phone is here, and not while it waits undrawn', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })

@@ -50,6 +50,13 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   last-tick-untimed: hub.py: `"last_tick": f"{dated(rows[scans[-1]])}, " + (` => `"last_tick": "" + (`
   last-tick-undated: hub.py: `"last_tick": f"{dated(rows[scans[-1]])}, " + (` => `"last_tick": f"{rows[scans[-1]]['at']}, " + (`
   scans-of-today-only: hub.py: `rows = rows_since(cfg, now() - dt.timedelta(days=OPEN_DAYS))` => `rows = rows_since(cfg, now())`
+  trigger-expiry-unsaid: hub.py: `return f"trigger expired {_when(cfg, gone)}" if gone and gone <= now() else ""` => `return ""`
+  trigger-expiry-early: hub.py: `if gone and gone <= now() else ""` => `if gone else ""`
+  trigger-junk-crashes: hub.py: `    except ValueError:
+        return ""
+    gone =` => `    except OSError:
+        return ""
+    gone =`
   next-tick-ignores-lag: hub.py: `nxt = next_tick(cfg, now() - lag)` => `nxt = next_tick(cfg, now())`
   lag-unshown: hub.py: `+ (f" (+{lag_m}m lately)" if lag_m else "")` => `+ ""`
   lag-the-latest: hub.py: `return lags[len(lags) // 2] if len(lags) >= 3 else None` => `return lags[-1] if len(lags) >= 3 else None`
@@ -409,6 +416,19 @@ class NoTickDue(unittest.TestCase):
         self.assertEqual(p["day"], "Mon 26 Oct")
         self.assertEqual([(e["at"], e["text"]) for e in p["events"]], [("Fri 17:50", "reply to carol")])
         self.assertEqual(p["last_tick"], "Fri 17:44, 1 event")
+
+    def test_an_expired_trigger_is_said(self):
+        """Claude Code deletes the tick's trigger 7 days after it was created: no tick
+        runs, and the pane only counted the ticks missed."""
+        def said(record):
+            (env.state / "trigger.json").write_text(record)
+            return json.loads(main_out("panel")[1])["trigger"]
+        with Env(now=NOW) as env:
+            env.state.mkdir(parents=True)
+            self.assertEqual(said(json.dumps({"expr": "x", "created": "2026-10-14T16:07:00+00:00"})), "trigger expired 09:07")
+            self.assertEqual(said(json.dumps({"expr": "x", "created": "2026-10-14T17:07:00+00:00"})), "", "it expires at 10:07")
+            self.assertEqual(said(json.dumps({"created": "not a time"})), "")
+            self.assertEqual(said('{"created": "2026-10-1'), "")
 
     def test_a_row_before_the_days_first_scan_does_not_hide_the_last_scan(self):
         """A draft held at 07:00 started the day's log, which then read "none yet"

@@ -201,7 +201,7 @@ function summary(s: Snapshot, since: number): string {
   const fresh = freshOf(p, since)
   return [
     ...(s.problem ? [`read failed, showing ${p.read}: ${s.problem}`] : []),
-    `Comms${p.day ? ` · ${p.day}` : ''}: ${counts(p, since)} · next tick ${p.next_tick}`,
+    `Comms${p.day ? ` · ${p.day}` : ''}: ${counts(p, since)} · next tick ${p.next_tick}${p.trigger ? ` · ${p.trigger}` : ''}`,
     ...p.needs.map(n => `● ${words(n.ref, n.target, n.note)}: ${n.text}`),
     ...(p.prs?.rows ?? []).filter(r => r.needs).map(r => `● ${r.line}`),
     // The status before the message, as in the pane: a phone's narrow line cuts the end.
@@ -349,8 +349,11 @@ export const register: Register = on => {
     // The strip only once something happened in it; mono so the columns line up on a desktop too.
     const days = prs.days.some(d => d.reviewed || d.approved || d.merged) ? prs.days : []
     const col = (v: string | number) => `${v}`.padStart(7)
-    // The foot is dim but for ticks missed since the last scan, a problem the user should see.
-    const foot = `next tick ${p.next_tick} · last scan: ${p.last_tick} · read ${p.read}`.split(' · ')
+    // The foot is dim but for the problems the user should see: an expired
+    // trigger, and the ticks missed since the last scan.
+    const foot = [p.trigger, ...`next tick ${p.next_tick} · last scan: ${p.last_tick} · read ${p.read}`.split(' · ')]
+      .filter(Boolean) as string[]
+    const problem = (part: string) => part === p.trigger || part.endsWith('missed since')
     // A status is green only once checked; re-check due waits on the next tick, so plain.
     const goingColor = (g: { status: string; warn: boolean }) =>
       g.warn ? 'warning' : g.status.startsWith('gated') ? 'success' : undefined
@@ -367,7 +370,7 @@ export const register: Register = on => {
             <Text>
               {foot.map((part, i) => [
                 i ? <Text dimColor>{' · '}</Text> : '',
-                part.endsWith('missed since') ? <Text color="warning">{part}</Text> : <Text dimColor>{part}</Text>,
+                problem(part) ? <Text color="warning">{part}</Text> : <Text dimColor>{part}</Text>,
               ])}
             </Text>
           </Box>
