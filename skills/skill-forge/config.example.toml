@@ -18,6 +18,8 @@ patterns = [
 # Git clones up to two levels under these roots are checked for charts,
 # manifests, queries, dashboards and CI.
 repo_roots = ["~/code", "~/src", "~/work"]
+# Installed skills to list; skills/ and .claude/skills/ in each clone are read too.
+skill_dirs = ["~/.claude/skills"]
 # Kube contexts to leave out of the inventory (fnmatch globs).
 exclude_contexts = []
 # Contexts that count as production: --probe-context asks before touching one.

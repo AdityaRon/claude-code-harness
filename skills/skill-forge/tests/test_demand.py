@@ -20,7 +20,7 @@ Mutations that must turn this file red:
   redirections-as-steps: demand.py: `flat = REDIRECT.sub(" ", flat)` => `flat = flat`
   heredoc-bodies-read: demand.py: `flat, balanced = separate_lines(drop_heredocs(cmd))` => `flat, balanced = separate_lines(cmd)`
   shell-heredoc-dropped: demand.py: `            elif keep:` => `            elif False:`
-  quoted-newlines-split: demand.py: `out.append(" " if ch == "\\n" else ch)` => `out.append(" ; " if ch == "\\n" else ch)`
+  quotes-untracked: demand.py: `q = None if ch == q else q` => `q = None`
   script-name-dropped: demand.py: `if a and (p in SCRIPT_RUNNERS or len(v1[(p, a)]) >= 2):` => `if a and len(v1[(p, a)]) >= 2:`
   skill-script-unqualified: demand.py: `return f"{m.group(1)}/{m.group(2)}" if m else os.path.basename(path)` => `return os.path.basename(path)`
   window-by-file-age: demand.py: `if t is not None and t < since:` => `if False:`
@@ -325,10 +325,10 @@ class NoiseTest(unittest.TestCase):
         self.assertEqual([s for s in steps if s], [("kubectl", "get", "pods")])
 
     def test_a_script_an_interpreter_runs_keeps_its_name(self):
-        cases = {"python3 -W ignore ~/.claude/skills/hand-metrics/tool.py query x": ("python", "hand-metrics/tool.py", ""),
+        cases = {"python3 -W ignore ~/code/ops/skills/hand-metrics/tool.py query x": ("python", "hand-metrics/tool.py", ""),
                  "uv run discover.py --probe-local": ("python", "discover.py", ""),
                  "python -m pytest -q": ("python", "-m pytest", ""),
-                 "~/.claude/skills/flags/bin/flag.sh show x": ("bash", "flags/flag.sh", "")}
+                 "~/code/ops/skills/flags/bin/flag.sh show x": ("bash", "flags/flag.sh", "")}
         for cmd, want in cases.items():
             self.assertEqual(demand.step_of(demand.pipelines(cmd)[0]), want, cmd)
         for i in range(2):   # a script run in one session only still keeps its name: it is not an id
@@ -385,7 +385,7 @@ class NoiseTest(unittest.TestCase):
         (skills / "SKILL.md").write_text("---\nname: hand-metrics\n---\n")
         (skills / "tool.py").write_text("")
         for i in range(2):
-            self.t.session([B("python3 ~/.claude/skills/hand-metrics/tool.py query x"), B("kubectl get pods")], days_ago=i + 1)
+            self.t.session([B("python3 ~/code/ops/skills/hand-metrics/tool.py query x"), B("kubectl get pods")], days_ago=i + 1)
         ranked = self.t.ranked("--skills", str(self.t.tmp / "skills"))
         hit = [c for c in ranked if "hand-metrics/tool.py" in c["label"]]
         self.assertTrue(hit)

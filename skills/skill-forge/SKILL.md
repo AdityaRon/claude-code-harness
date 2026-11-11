@@ -22,8 +22,11 @@ included, is in `~/.local/state/skill-forge/`.
 
 1. **Discover, read-only.** `PY F/discover.py` writes `inventory.md`: access
    (contexts, profiles, SSO and secret CLIs, each with its re-login command and
-   what an expired session looks like), observability, data stores, control
-   planes and repos, each line with the command that found it. Names only.
+   what an expired session looks like), services (MCP and API names),
+   observability, data stores, control planes, the skills already here with an
+   archetype guess, and repos by origin, each line with the command that found
+   it. Names only. A bastion's databases and apps are listed only when its
+   session is already live; discover never starts a login.
    `--probe-local` reads local containers. `--probe-context CTX` lists one
    cluster's cronjobs and services; ask the user before `--yes-prod`, and never
    port-forward or connect to production without that yes.

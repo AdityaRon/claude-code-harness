@@ -138,7 +138,7 @@ def drop_heredocs(cmd: str) -> str:
 
 
 def separate_lines(cmd: str) -> tuple[str, bool]:
-    """Unquoted newlines become `;`, quoted ones a space; comments go. Also says whether the quotes balance."""
+    """Unquoted newlines become `;`; a quoted one stays in its argument. Comments go. Also says whether the quotes balance."""
     out, q, i, n = [], None, 0, len(cmd)
     while i < n:
         ch = cmd[i]
@@ -148,7 +148,7 @@ def separate_lines(cmd: str) -> tuple[str, bool]:
             continue
         if q:
             q = None if ch == q else q
-            out.append(" " if ch == "\n" else ch)
+            out.append(ch)
         elif ch in "'\"":
             q = ch
             out.append(ch)
