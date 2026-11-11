@@ -182,8 +182,10 @@ answer from a missing metric, a partial one and an expired login. It is not a
 library of prebuilt infra skills: the archetypes are templates it specializes.
 
 - `skills/skill-forge/bin/skill_lint.py` checks any skill against the ten
-  conventions. `tests/skill-lint.test.sh` runs it over every skill here; a
-  finding is fixed, or waived in that skill's `lint-waivers.toml` with its reason.
+  conventions, with its scripts in `bin/` or at the skill root.
+  `tests/skill-lint.test.sh` runs it over every skill here; a finding is fixed,
+  or waived in that skill's `lint-waivers.toml` with its reason. A skill whose
+  every engine check is N/A gets WARN, not a clean pass.
 - Config in `~/.config/skill-forge/config.toml` (mask patterns, transcript
   dirs, excluded contexts, line budget), from the skill's `config.example.toml`;
   state, `inventory.md` included, in `~/.local/state/skill-forge/`; templates in

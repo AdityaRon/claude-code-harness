@@ -66,9 +66,13 @@ included, is in `~/.local/state/skill-forge/`.
 
 ## The conventions skill_lint checks
 
-`PY F/skill_lint.py SKILL_DIR` lints any skill, drafted or hand-written.
-Fix a finding, or waive it in the skill's `lint-waivers.toml` with a reason. A
-waiver without a reason fails, and so does one for a check that now passes.
+`PY F/skill_lint.py SKILL_DIR` lints any skill, drafted or hand-written, with
+its scripts in `bin/` or at the skill root (`*.py`, `*.sh`) and its tests in
+`tests/` or at the root. Fix a finding, or waive it in the skill's
+`lint-waivers.toml` with a reason. A waiver without a reason fails, and so does
+one for a check that now passes. WARN means every engine check was N/A: the
+lint saw nothing to judge, and its note says what SKILL.md runs that it did not
+read. That is not a pass.
 
 | # | convention | the check |
 |---|---|---|
@@ -77,11 +81,11 @@ waiver without a reason fails, and so does one for a check that now passes.
 | C3 | no stored credentials; borrowed identity; secrets by env or stdin | no secret-named flag, argv secret or secret shape |
 | C4 | a write and its audit row in one transaction | a test says so |
 | C5 | guards against confident wrong answers | each required guard has a `test_guard_<id>` |
-| C6 | a provenance header opens every output | the engine calls `header()`; a golden test |
-| C7 | every print goes through the masker | no `print` in an engine; a planted-pattern test |
+| C6 | a provenance header opens every output | the engine calls `header()` (shell: prints `# target:`); a golden test |
+| C7 | every print goes through the masker | no `print` in an engine (shell: pipes through `mask.py --filter`); a planted-pattern test |
 | C8 | thin SKILL.md, thick engine, literal trigger phrasings | `Use when` in the description; line budget; `--help` |
 | C9 | a test file per script; mutations listed; no real clients in tests | the files, the lists, a quoting test where shell or SQL is built |
-| C10 | a self-contained folder | anything outside goes through a declared env var |
+| C10 | a self-contained folder | anything outside goes through a declared env var; every script of its own SKILL.md runs is one the lint read |
 
 ## Reading the output
 

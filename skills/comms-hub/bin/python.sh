@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prints the first interpreter on PATH that can run comms-hub: Python 3.10 or
+# Prints the first interpreter on PATH that can run this skill: Python 3.10 or
 # newer with a TOML reader (tomllib from 3.11, the tomli package on 3.10).
 # macOS ships python3 3.9, so a bare `python3` is not enough.
 for c in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do

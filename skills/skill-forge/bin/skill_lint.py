@@ -8,23 +8,31 @@
                                             skill-forge config, else 150)
 
 It reads SKILL.md, forge.toml (the skill's manifest; optional), lint-waivers.toml,
-bin/*.py and bin/*.sh, tests/*.py and the top-level *.toml. It does not descend
-into tests/fixtures/ or templates/, which hold violations and placeholders on purpose.
-C2 runs the skill's own `--self-test`, so lint only skills you would run.
+the top-level *.toml, and the scripts and tests in either layout: *.py and *.sh
+at the skill root and in bin/ are scripts, test_*.py and *.test.sh there or in
+tests/ are tests. It does not descend into tests/fixtures/ or templates/, which
+hold violations and placeholders on purpose; any other code file is listed as
+not read. C2 runs the skill's own `--self-test`, so lint only skills you would run.
 
 forge.toml keys it reads (a hand-written skill needs none of them):
-  engines      bin scripts the output rules (C6, C7) apply to; default every
-               bin/*.py except the vendored mask.py and sqlguard.py
+  engines      scripts the output rules (C6, C7) apply to; default every script
+               except the vendored mask.py, sqlguard.py and python.sh
   guards       guard ids, each needing a test named test_guard_<id>...
-  write_verbs  regexes that mark a write; default DEFAULT_WRITE_VERBS
-  sql          true or false; default: look for a SQL client in bin/
+  write_verbs  regexes that mark a write; default DEFAULT_WRITE_VERBS for
+               Python, SHELL_WRITE_VERBS for shell
+  sql          true or false; default: look for a SQL client in the scripts
   audit_table  the table a write's audit row goes to
   [deps]       other-skill = "ENV_VAR" for anything outside the folder
+  [tests]      "bin/x.sh" = "path/to/its.test.sh", for a test kept outside the
+               skill's own test locations; the path must exist
 
 lint-waivers.toml holds `[C8]` tables with a `reason`. A waiver without a
 reason fails, and so does one for a check that now passes.
 
-Statuses: PASS, FAIL, N/A (does not apply), SKIP (--no-exec), WAIVED.
+Statuses: PASS, FAIL, N/A (does not apply), SKIP (--no-exec), WAIVED. Each skill
+also gets a verdict: FAIL when a check fails, WARN when every engine check
+(C1, C2, C4, C5, C6, C7, C9) is N/A, since then the lint saw nothing to judge,
+else PASS. Only FAIL sets the exit status.
 """
 from __future__ import annotations
 
@@ -35,21 +43,38 @@ import os
 import re
 import subprocess
 import sys
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mask import config_path, emit, header, read_toml  # noqa: E402
 
-VENDORED = {"mask.py", "sqlguard.py"}
+# Copied into a skill by forge.py draft, each with the test copied beside it (None: no test).
+VENDORED = {"mask.py": "test_mask.py", "sqlguard.py": "test_sqlguard.py", "python.sh": None}
 DEFAULT_BUDGET = 150
+ENGINE_CHECKS = ("C1", "C2", "C4", "C5", "C6", "C7", "C9")
+NOT_READ = {"fixtures", "templates", "node_modules", ".git", "__pycache__", ".venv", "venv"}
 
 DEFAULT_WRITE_VERBS = [
     r"""["'](?:POST|PUT|PATCH|DELETE)["']""",
     r"""\b(?:kubectl|helm|kube\w*)\b[^\n]*["'](?:apply|create|delete|patch|replace|scale|annotate|label|cordon|drain|rollout|install|upgrade|uninstall)["']""",
     r"""(?i)["']\s*(?:insert\s+into|update\s+[\w."]+\s+set|delete\s+from|truncate|drop\s+(?:table|schema)|alter\s+table)\b""",
     r"""["']\s*mutation\b""",   # a GraphQL write
+    r"""\b(?:requests|httpx)\.(?:post|put|patch|delete)\(""",
 ]
+# Shell has no quotes around a verb, so these read the command line itself.
+SHELL_WRITE_VERBS = [
+    r"""\bkubectl\b[^\n|;&]*?\s(?:apply|create|delete|patch|replace|scale|annotate|label|taint|cordon|uncordon|drain|edit)\b""",
+    r"""\bkubectl\b[^\n|;&]*?\srollout\s+(?:restart|undo|pause|resume)\b""",
+    r"""\bhelm\b[^\n|;&]*?\s(?:install|upgrade|uninstall|rollback)\b""",
+    r"""\b(?:curl|http|xh)\b[^\n|;&]*?(?:-X\s*|--request[ =])["']?(?:POST|PUT|PATCH|DELETE)\b""",
+    r"""\bgh\s+api\b[^\n|;&]*?(?:-X\s*|--method[ =])(?:POST|PUT|PATCH|DELETE)\b""",
+    r"""(?i)\b(?:insert\s+into|update\s+[\w."]+\s+set|delete\s+from|truncate\s+table|drop\s+(?:table|schema)|alter\s+table)\b""",
+]
+SH_MASKED = re.compile(r"\bmask\.py\b[^\n]*--filter")
+SH_SELF_TEST = re.compile(r"--self-test\b")
+SCRIPT_REF = re.compile(r"(?<![\w.$-])((?:[\w.~${}<>-]*/)*[\w.-]+\.(?:py|sh))\b")
 SELF_TEST_OPT = re.compile(r"""add_argument\(\s*["']--self-test["']|["']--self-test["']\s+in\s+sys\.argv""")
 SQL_CLIENT = re.compile(r"\b(?:psql|psycopg2?|pg8000|asyncpg|sqlite3\.connect|pymysql|mysql\.connector|snowflake\.connector|clickhouse_connect|trino\.dbapi)\b")
 AUDIT_WRITE = re.compile(r"(?i)insert\s+into\s+[\w.\"]*audit")
@@ -86,10 +111,11 @@ class Skill:
     front: dict
     manifest: dict
     waivers: dict
-    scripts: dict = field(default_factory=dict)   # bin/*.py name -> source
-    shells: dict = field(default_factory=dict)    # bin/*.sh
-    tests: dict = field(default_factory=dict)     # tests/*.py
-    tomls: dict = field(default_factory=dict)     # top-level *.toml text
+    scripts: dict = field(default_factory=dict)       # relative path -> source: *.py, *.sh at the root and in bin/
+    tests: dict = field(default_factory=dict)         # test_*.py at the root, every *.py in tests/
+    shell_tests: dict = field(default_factory=dict)   # *.test.sh, test_*.sh at the root and in tests/
+    tomls: dict = field(default_factory=dict)         # top-level *.toml text
+    unread: list = field(default_factory=list)        # code files under the folder the lint did not read
 
     @property
     def name(self) -> str:
@@ -97,11 +123,12 @@ class Skill:
 
     def engines(self) -> list[str]:
         if "engines" in self.manifest:
-            return [e for e in self.manifest["engines"] if e in self.scripts]
-        return [n for n in self.scripts if n not in VENDORED]
+            want = set(self.manifest["engines"])
+            return [n for n in self.scripts if n in want or Path(n).name in want]
+        return list(self.own_scripts())
 
     def own_scripts(self) -> dict:
-        return {n: s for n, s in self.scripts.items() if n not in VENDORED}
+        return {n: s for n, s in self.scripts.items() if Path(n).name not in VENDORED}
 
     def test_names(self) -> list[str]:
         names = []
@@ -123,19 +150,63 @@ def frontmatter(md: str) -> dict:
     return out
 
 
+def is_shell(name: str) -> bool:
+    return name.endswith(".sh")
+
+
+def is_test(name: str) -> bool:
+    return name.startswith("test_") or name.endswith(".test.sh") or name == "conftest.py"
+
+
 def load(root: Path) -> Skill:
     md_path = root / "SKILL.md"
     md = md_path.read_text() if md_path.is_file() else None
     sk = Skill(root, md, frontmatter(md or ""), read_toml(root / "forge.toml"), read_toml(root / "lint-waivers.toml"))
-    for p in sorted((root / "bin").glob("*.py")):
-        sk.scripts[p.name] = p.read_text()
-    for p in sorted((root / "bin").glob("*.sh")):
-        sk.shells[p.name] = p.read_text()
-    for p in sorted((root / "tests").glob("*.py")):
-        sk.tests[p.name] = p.read_text()
+    for d in (root, root / "bin", root / "tests"):
+        for p in sorted(d.glob("*.py")) + sorted(d.glob("*.sh")):
+            rel = p.relative_to(root).as_posix()
+            if p.name == "__init__.py":
+                continue
+            if d == root / "tests" or is_test(p.name):
+                (sk.shell_tests if is_shell(p.name) else sk.tests)[rel] = p.read_text()
+            else:
+                sk.scripts[rel] = p.read_text()
     for p in sorted(root.glob("*.toml")):
         sk.tomls[p.name] = p.read_text()
+    read = {*sk.scripts, *sk.tests, *sk.shell_tests}
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root)
+        if p.suffix in (".py", ".sh") and p.is_file() and rel.as_posix() not in read and p.name != "__init__.py" \
+                and not NOT_READ.intersection(rel.parts):
+            sk.unread.append(rel.as_posix())
     return sk
+
+
+def parse(src: str) -> ast.Module:
+    """ast.parse, quietly: a linted file's own invalid escapes would print as <unknown>:N warnings."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*invalid escape sequence")
+        return ast.parse(src)
+
+
+def shell_code(src: str) -> str:
+    """The script with comment lines blanked, so line numbers still hold."""
+    return "\n".join("" if line.lstrip().startswith("#") else line for line in src.splitlines())
+
+
+def skill_md_refs(sk: Skill) -> tuple[list[str], list[str]]:
+    """Scripts SKILL.md names: (the skill's own the lint did not read, those outside the folder)."""
+    read = {Path(n).name for n in (*sk.scripts, *sk.tests, *sk.shell_tests)}
+    unread = {Path(u).name for u in sk.unread}
+    mine, outside = set(), set()
+    for m in SCRIPT_REF.finditer(sk.md or ""):
+        ref = m.group(1)
+        base = ref.rsplit("/", 1)[-1]
+        if base in read:
+            continue
+        own = base in unread or any(f"skills/{n}/" in ref for n in (sk.name, sk.root.name))
+        (mine if own else outside).add(ref)
+    return sorted(mine), sorted(outside)
 
 
 def has_test(sk: Skill, rx: str) -> bool:
@@ -144,7 +215,7 @@ def has_test(sk: Skill, rx: str) -> bool:
 
 def calls(src: str):
     try:
-        tree = ast.parse(src)
+        tree = parse(src)
     except SyntaxError:
         return
     for node in ast.walk(tree):
@@ -166,18 +237,26 @@ def call_name(node: ast.Call) -> str:
 
 # ---- the checks ---------------------------------------------------------------
 
+def has_apply(name: str, src: str) -> bool:
+    if is_shell(name):
+        return "--apply" in shell_code(src)
+    return '"--apply"' in src or "'--apply'" in src
+
+
 def check_readonly(sk: Skill, opts) -> Result:
-    verbs = [re.compile(v) for v in sk.manifest.get("write_verbs", DEFAULT_WRITE_VERBS)]
+    custom = sk.manifest.get("write_verbs")
     writers = {}
     for name, src in sk.own_scripts().items():
-        for rx in verbs:
-            m = rx.search(src)
+        verbs = custom or (SHELL_WRITE_VERBS if is_shell(name) else DEFAULT_WRITE_VERBS)
+        text = shell_code(src) if is_shell(name) else src
+        for v in verbs:
+            m = re.search(v, text)
             if m:
                 writers[name] = m.group(0).strip()[:60]
                 break
     if not writers:
-        return Result("N/A", "no write verb in bin/")
-    bad = [f"{n} writes ({w}) with no --apply" for n, w in writers.items() if '"--apply"' not in sk.scripts[n] and "'--apply'" not in sk.scripts[n]]
+        return Result("N/A", "no write verb in the scripts")
+    bad = [f"{n} writes ({w}) with no --apply" for n, w in writers.items() if not has_apply(n, sk.scripts[n])]
     if not has_test(sk, r"dry_run|without_apply|default_is_dry"):
         bad.append("no test of the default (dry-run) path: name one test_..._dry_run_...")
     return Result("FAIL", "; ".join(bad)) if bad else Result("PASS", f"--apply gates the writes in {', '.join(writers)}")
@@ -189,8 +268,9 @@ def check_sql_layers(sk: Skill, opts) -> Result:
         return Result("N/A", "forge.toml says sql = false")
     users = [n for n, s in sk.own_scripts().items() if SQL_CLIENT.search(s)]
     if not (declared or sk.manifest.get("archetype") == "sql-readonly" or users):
-        return Result("N/A", "no SQL client in bin/")
-    selftest = [n for n, s in sk.own_scripts().items() if SELF_TEST_OPT.search(s)]
+        return Result("N/A", "no SQL client in the scripts")
+    selftest = [n for n, s in sk.own_scripts().items()
+                if (SH_SELF_TEST.search(shell_code(s)) if is_shell(n) else SELF_TEST_OPT.search(s))]
     if not selftest:
         return Result("FAIL", f"runs SQL ({', '.join(users) or 'forge.toml sql = true'}) but no script has --self-test")
     if opts.no_exec:
@@ -198,7 +278,8 @@ def check_sql_layers(sk: Skill, opts) -> Result:
     bad = []
     for n in selftest:
         try:
-            p = subprocess.run([sys.executable, "-B", str(sk.root / "bin" / n), "--self-test"], cwd=sk.root,
+            run = ["bash"] if is_shell(n) else [sys.executable, "-B"]
+            p = subprocess.run([*run, str(sk.root / n), "--self-test"], cwd=sk.root, stdin=subprocess.DEVNULL,
                                capture_output=True, text=True, timeout=120)
             rc, tail = p.returncode, (p.stdout + p.stderr).strip().splitlines()[-1:] or [""]
         except subprocess.TimeoutExpired:
@@ -209,8 +290,7 @@ def check_sql_layers(sk: Skill, opts) -> Result:
 
 
 def check_no_stored_credentials(sk: Skill, opts) -> Result:
-    files = {f"bin/{n}": s for n, s in {**sk.scripts, **sk.shells}.items()}
-    files.update({f"tests/{n}": s for n, s in sk.tests.items()})
+    files = {**sk.scripts, **sk.tests, **sk.shell_tests}
     files.update({n: s for n, s in sk.tomls.items()})
     if sk.md is not None:
         files["SKILL.md"] = sk.md
@@ -247,11 +327,17 @@ def check_guards(sk: Skill, opts) -> Result:
     return Result("PASS", f"{len(guards)} guards, each with a test_guard_<id>")
 
 
+def has_header(name: str, src: str) -> bool:
+    if is_shell(name):
+        return "# target:" in shell_code(src)
+    return any(call_name(c).split(".")[-1] == "header" for c in calls(src))
+
+
 def check_provenance(sk: Skill, opts) -> Result:
     engines = sk.engines()
     if not engines:
         return Result("N/A", "no engine")
-    bad = [f"no header() call in {e}" for e in engines if not any(call_name(c).split(".")[-1] == "header" for c in calls(sk.scripts[e]))]
+    bad = [f"no header() call in {e}" for e in engines if not has_header(e, sk.scripts[e])]
     if not has_test(sk, r"golden|provenance"):
         bad.append("no golden-output test (test_..._golden_... or ..._provenance_...)")
     if bad:
@@ -266,6 +352,10 @@ def check_masker(sk: Skill, opts) -> Result:
     bad = []
     for e in engines:
         src = sk.scripts[e]
+        if is_shell(e):
+            if not SH_MASKED.search(shell_code(src)):
+                bad.append(f"{e} prints without the masker: no line pipes its output through the skill's mask.py --filter")
+            continue
         raw = [c.lineno for c in calls(src) if call_name(c) in ("print", "sys.stdout.write", "sys.stderr.write", "stdout.write", "stderr.write")]
         if raw:
             bad.append(f"{e} prints around the masker (line {', '.join(map(str, raw[:5]))})")
@@ -287,7 +377,8 @@ def check_thin_skill_md(sk: Skill, opts) -> Result:
     lines = sk.md.count("\n")
     if lines > budget:
         bad.append(f"SKILL.md is {lines} lines, over the {budget}-line budget")
-    no_help = [n for n, s in sk.own_scripts().items() if "argparse" not in s and "--help" not in s]
+    no_help = [n for n, s in sk.own_scripts().items()
+               if "--help" not in s and ("usage" not in s.lower() if is_shell(n) else "argparse" not in s)]
     if no_help:
         bad.append("no --help in " + ", ".join(no_help))
     note = "" if re.search(r"(?i)\bnot for\b|does not cover", desc) else ' (note: the description names nothing it does not cover)'
@@ -301,7 +392,7 @@ def builds_shell_or_sql(src: str) -> str:
         if call_name(c) in ("os.system", "os.popen"):
             return call_name(c)
     try:
-        tree = ast.parse(src)
+        tree = parse(src)
     except SyntaxError:
         return ""
     for node in ast.walk(tree):
@@ -323,28 +414,42 @@ def builds_shell_or_sql(src: str) -> str:
     return ""
 
 
+def tested(sk: Skill, n: str) -> bool:
+    """A test file for script n: test_<stem>.py, or for shell also test_<stem>.sh or <stem>.test.sh,
+    in either layout; or the one forge.toml [tests] declares for it, if that file exists."""
+    stem = Path(n).stem
+    want = {f"test_{stem}.py"} | ({f"test_{stem}.sh", f"{stem}.test.sh"} if is_shell(n) else set())
+    if want & {Path(t).name for t in (*sk.tests, *sk.shell_tests)}:
+        return True
+    declared = (sk.manifest.get("tests") or {}).get(n)
+    return bool(declared) and (sk.root / declared).is_file()
+
+
 def check_tests(sk: Skill, opts) -> Result:
     bad = []
-    for n in sk.scripts:
-        if f"test_{n}" not in sk.tests:
-            bad.append(f"no tests/test_{n} for bin/{n}")
+    needs = [n for n in sk.scripts if Path(n).name not in VENDORED or VENDORED[Path(n).name]]
+    for n in needs:
+        if not tested(sk, n):
+            bad.append(f"no test_{Path(n).stem}.py for {n}")
     for n, src in sk.tests.items():
-        if not n.startswith("test_"):
+        if not Path(n).name.startswith("test_"):
             continue
         try:
-            doc = ast.get_docstring(ast.parse(src)) or ""
+            doc = ast.get_docstring(parse(src)) or ""
         except SyntaxError:
             doc = ""
         if not MUTATION_LINE.search(doc):
-            bad.append(f"tests/{n}'s docstring lists no mutations")
+            bad.append(f"{n}'s docstring lists no mutations")
         for m in CLIENT_CTORS.finditer(src):
-            bad.append(f"tests/{n}:{src.count(chr(10), 0, m.start()) + 1} constructs a real client ({m.group(0)})")
-    builders = {n: why for n, s in sk.own_scripts().items() if (why := builds_shell_or_sql(s))}
+            bad.append(f"{n}:{src.count(chr(10), 0, m.start()) + 1} constructs a real client ({m.group(0)})")
+    builders = {n: why for n, s in sk.own_scripts().items() if not is_shell(n) and (why := builds_shell_or_sql(s))}
     if builders and not has_test(sk, r"quot|escap|inject"):
         bad.append("builds shell or SQL (" + ", ".join(f"{n}: {w}" for n, w in builders.items()) + ") with no quoting test")
     if not sk.scripts:
         return Result("FAIL", "; ".join(bad)) if bad else Result("N/A", "no scripts")
-    return Result("FAIL", "; ".join(bad)) if bad else Result("PASS", f"{len(sk.scripts)} scripts, each with a test file listing mutations")
+    untested = len(sk.scripts) - len(needs)
+    return Result("FAIL", "; ".join(bad)) if bad else Result(
+        "PASS", f"{len(needs)} scripts, each with a test file listing mutations" + (f" ({untested} vendored with none)" if untested else ""))
 
 
 CLIMB = re.compile(r"(?:^|/)\.\./\.\.(?:/|$)")
@@ -356,7 +461,7 @@ PARENTS = re.compile(r"Path\(__file__\)(?:\.resolve\(\))?((?:\.parent)+)|\.paren
 def code_strings(src: str):
     """(line, value) for each string literal in code; docstrings are prose and skipped."""
     try:
-        tree = ast.parse(src)
+        tree = parse(src)
     except SyntaxError:
         return
     docs = set()
@@ -373,28 +478,35 @@ def code_strings(src: str):
 def check_self_contained(sk: Skill, opts) -> Result:
     deps = set((sk.manifest.get("deps") or {}).values())
     bad = []
-    files = {f"bin/{n}": s for n, s in sk.scripts.items()}
-    files.update({f"tests/{n}": s for n, s in sk.tests.items()})
+    files = {**sk.scripts, **sk.tests, **sk.shell_tests}
     for path, src in files.items():
         lines = src.splitlines()
         hits = set()
-        for i, value in code_strings(src):
+        strings = enumerate(shell_code(src).splitlines(), 1) if is_shell(path) else code_strings(src)
+        for i, value in strings:
             names = [m.group(1) for m in CLAUDE_SKILL.finditer(value)] + [m.group(1) for m in SIBLING.finditer(value)]
             if CLIMB.search(value) or any(n not in (sk.name, sk.root.name) for n in names):
                 hits.add(i)
         for i, line in enumerate(lines, 1):
-            if line.lstrip().startswith("#"):
+            if line.lstrip().startswith("#") or is_shell(path):
                 continue
             for m in PARENTS.finditer(line):
                 if (m.group(1) and m.group(1).count(".parent") > 2) or (m.group(2) and int(m.group(2)) > 1) or m.group(3):
                     hits.add(i)
         for i in sorted(hits):
             line = lines[i - 1] if i - 1 < len(lines) else ""
-            if not any(re.search(rf"""(?:environ(?:\.get)?\(?\[?|getenv\()\s*["']{re.escape(d)}["']""", line) for d in deps):
+            if not any(re.search(rf"""(?:environ(?:\.get)?\(?\[?|getenv\()\s*["']{re.escape(d)}["']|\$\{{?{re.escape(d)}\b""", line) for d in deps):
                 bad.append(f"{path}:{i} reaches outside the folder without a declared env var")
     if bad:
-        return Result("FAIL", "; ".join(bad[:6]) + ("; declare it in forge.toml [deps] and read it from the environment" if deps == set() else ""))
-    return Result("PASS", "nothing reaches outside the folder" + (f" except through {', '.join(sorted(deps))}" if deps else ""))
+        bad[:] = bad[:6] + (["declare it in forge.toml [deps] and read it from the environment"] if deps == set() else [])
+    mine, outside = skill_md_refs(sk)
+    for ref in mine:
+        where = next((u for u in sk.unread if Path(u).name == ref.rsplit("/", 1)[-1]), "")
+        bad.append(f"SKILL.md runs {ref}; lint found no engine" + (f" (it is at {where}, which the lint does not read)" if where else ""))
+    if bad:
+        return Result("FAIL", "; ".join(bad))
+    also = f"; SKILL.md also names {', '.join(outside[:4])}{' and more' if len(outside) > 4 else ''} outside the folder" if outside else ""
+    return Result("PASS", "nothing reaches outside the folder" + (f" except through {', '.join(sorted(deps))}" if deps else "") + also)
 
 
 CHECKS = [
@@ -412,8 +524,29 @@ CHECKS = [
 
 
 def lint(root: Path, budget: int | None = None, no_exec: bool = False) -> dict:
-    opts = argparse.Namespace(budget=budget, no_exec=no_exec)
+    """{check id: Result} for one skill folder."""
+    return report(root, budget, no_exec)["checks"]
+
+
+def report(root: Path, budget: int | None = None, no_exec: bool = False) -> dict:
+    """The checks plus the skill's verdict (PASS, WARN or FAIL), its N/A count and a note for WARN."""
     sk = load(Path(root).resolve())
+    results = run_checks(sk, argparse.Namespace(budget=budget, no_exec=no_exec))
+    statuses = {k: r.status for k, r in results.items()}
+    na = sum(s == "N/A" for s in statuses.values())
+    verdict, note = ("FAIL" if "FAIL" in statuses.values() else "PASS"), ""
+    if verdict == "PASS" and all(statuses.get(c) == "N/A" for c in ENGINE_CHECKS):
+        verdict = "WARN"
+        _, outside = skill_md_refs(sk)
+        note = f"every engine check is N/A: the lint read {len(sk.scripts)} scripts and {len(sk.tests) + len(sk.shell_tests)} test files"
+        if outside:
+            note += f"; SKILL.md names {', '.join(outside[:5])} outside the folder, which the lint does not judge"
+        if sk.unread:
+            note += f"; not read: {', '.join(sk.unread[:5])}"
+    return {"verdict": verdict, "na": na, "note": note, "checks": results}
+
+
+def run_checks(sk: Skill, opts) -> dict:
     results = {}
     for cid, fn in CHECKS:
         results[cid] = fn(sk, opts)
@@ -438,23 +571,28 @@ def main(argv=None) -> int:
     p.add_argument("--no-exec", action="store_true")
     p.add_argument("--budget", type=int)
     a = p.parse_args(argv)
-    failed = 0
-    report = {}
+    out = {}
     for root in a.skills:
-        res = lint(root, a.budget, a.no_exec)
-        report[str(root)] = {k: vars(v) for k, v in res.items()}
-        failed += any(r.status == "FAIL" for r in res.values())
+        if not root.is_dir():
+            emit(f"skill_lint: {root} is not a directory, skipped", err=True)
+            continue
+        r = report(root, a.budget, a.no_exec)
+        out[str(root)] = {**r, "checks": {k: vars(v) for k, v in r["checks"].items()}}
+    failed = sum(r["verdict"] == "FAIL" for r in out.values())
     if a.json:
-        emit(json.dumps(report, indent=2))
+        emit(json.dumps(out, indent=2))
         return 1 if failed else 0
-    emit(header(target=", ".join(map(str, a.skills)), window="n/a: reads files as they are now", rows=len(a.skills),
+    emit(header(target=", ".join(out) or "none", window="n/a: reads files as they are now", rows=len(out),
                 partial="--no-exec skipped C2" if a.no_exec else None))
-    for root, res in report.items():
-        nfail = sum(r["status"] == "FAIL" for r in res.values())
-        nwaive = sum(r["status"] == "WAIVED" for r in res.values())
-        emit(f"\n{root}: {'FAIL' if nfail else 'PASS'} ({nfail} FAIL, {nwaive} WAIVED)")
-        for cid, r in res.items():
-            emit(f"  {cid:<4} {r['status']:<7} {r['detail']}")
+    for root, r in out.items():
+        res = r["checks"]
+        nfail = sum(c["status"] == "FAIL" for c in res.values())
+        nwaive = sum(c["status"] == "WAIVED" for c in res.values())
+        emit(f"\n{root}: {r['verdict']} ({nfail} FAIL, {nwaive} WAIVED, {r['na']} N/A)")
+        if r["note"]:
+            emit(f"  WARN {r['note']}")
+        for cid, c in res.items():
+            emit(f"  {cid:<4} {c['status']:<7} {c['detail']}")
     return 1 if failed else 0
 
 
