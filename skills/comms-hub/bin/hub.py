@@ -1045,6 +1045,21 @@ MERGEABLE = ("CLEAN", "HAS_HOOKS", "UNSTABLE")
 STRIP_DAYS = 5
 
 
+def pr_checks(cfg: dict, written: str | None) -> tuple[dict, dt.datetime | None]:
+    """What `queue.py check` read of the PRs the scan at `written` listed, and
+    when: {owner/repo#N: {"facts": ..., "answered": why} or {"gone": "merged"}}.
+    A check of an older prs.json is none: the newer scan read them since."""
+    rec = _record(cfg, "prs-checked.json")
+    try:
+        at = parse_time(rec.get("checked_at"))
+    except ValueError:
+        at = None
+    prs = rec.get("prs")
+    if not written or rec.get("of") != written or at is None or not isinstance(prs, dict):
+        return {}, None
+    return prs, at
+
+
 def prs_panel(cfg: dict, verdicts: dict[str, str], lag: dt.timedelta = dt.timedelta(0)) -> dict:
     """The PRS section from the last prs.json, which a scan that did not end
     BLOCKED writes: what needs the user first, a count per repo, and how old it
@@ -1059,13 +1074,22 @@ def prs_panel(cfg: dict, verdicts: dict[str, str], lag: dt.timedelta = dt.timede
         written = parse_time(data["written_at"])
     except (OSError, ValueError, KeyError, TypeError):
         data, written = None, None
+    # Between ticks, each PR as the last check read it: one merged or closed
+    # since leaves, and a review row it saw answered drops its verdict, as the
+    # next scan would. A PR the check could not read stays as the scan had it.
+    checks, checked = pr_checks(cfg, (data or {}).get("written_at"))
+
+    def current(group: str) -> list[dict]:
+        return [{**p, **(checks.get(p["ref"]) or {}).get("facts", {})} for p in (data or {}).get(group, [])
+                if not (checks.get(p["ref"]) or {}).get("gone")]
+
     rows, marks = [], relooked(cfg)
-    for p in (data or {}).get("reviewing", []):
+    for p in current("reviewing"):
         # A head re-looked by hand counts as reviewed, from the moment it is recorded.
         behind = bool(p.get("my_sha")) and p["my_sha"] != p["head"]
         looked = behind and (marks.get(p["ref"]) or {}).get("sha") == p["head"]
         moved = behind and not looked
-        verdict = verdicts.get(p["ref"], "")
+        verdict = "" if (checks.get(p["ref"]) or {}).get("answered") else verdicts.get(p["ref"], "")
         asked = p.get("requested_me") and not p.get("my_sha")
         parts = [f"{STATE_WORDS.get(p.get('my_state'), 'reviewed')}@{p['my_sha'][:7]}" if p.get("my_sha")
                  else "not reviewed", "re-looked" if looked else "", "new commits" if moved else verdict,
@@ -1073,7 +1097,7 @@ def prs_panel(cfg: dict, verdicts: dict[str, str], lag: dt.timedelta = dt.timede
                  f"approved by {','.join(p['approvals'])}" if p.get("approvals") else ""]
         rows.append({"ref": p["ref"], "group": "reviewing", "needs": bool(moved or verdict or asked),
                      "line": f"{short_ref(cfg, p['ref'])}  {p['author']}  " + " · ".join(x for x in parts if x)})
-    for p in (data or {}).get("authored", []):
+    for p in current("authored"):
         merge_me = p.get("decision") == "APPROVED" and p.get("merge") in MERGEABLE
         conflicts = p.get("merge") == "DIRTY"
         parts = ["approved, needs your merge" if merge_me else DECISION_WORDS.get(p.get("decision"), "no decision"),
@@ -1095,6 +1119,7 @@ def prs_panel(cfg: dict, verdicts: dict[str, str], lag: dt.timedelta = dt.timede
     stale = written is None or bool(second and second + lag + LATE_GRACE <= now()) \
         or bool(last_scan and last_scan - written > dt.timedelta(minutes=1))
     return {"as_of": _when(cfg, written) if written else "", "age": _age(written) if written else "", "stale": stale,
+            "checked": _when(cfg, checked) if checked else "",
             "repos": [{"repo": k, "needs": v[0], "total": v[1]} for k, v in sorted(repos.items(), key=lambda kv: (-kv[1][0], kv[0]))],
             "rows": [{"key": f"pr:{r['ref']}", **{k: r[k] for k in ("group", "needs", "line")}} for r in rows],
             "days": strip(cfg), "parked": len(parked(cfg))}
@@ -1136,9 +1161,13 @@ def panel(cfg: dict) -> dict:
         else:
             held.append({**row, "reason": h.get("reason", "")})
     asks, routed_ = open_items(cfg)
+    # A review row whose PR the last check saw answered (you approved or asked
+    # for changes, or it merged or closed) leaves now, not at the next scan.
+    checks, _ = pr_checks(cfg, _record(cfg, "prs.json").get("written_at"))
+    settled = {ref for ref, c in checks.items() if c.get("answered") or c.get("gone")}
     needs += [{"key": f"row:{r['id']}", "ref": short_ref(cfg, r["ref"]), "target": target_label(cfg, r["target"]),
                "text": r["text"], "note": "" if r["kind"] == "asked" else r["kind"], "age": _age(parse_time(r["ts"]))}
-              for r in asks]
+              for r in asks if not (r["kind"] == "reviewed" and pr_ref(r["ref"]) in settled)]
     sessions = [{"key": f"row:{r['id']}", "who": r["who"], "ref": short_ref(cfg, r["ref"]), "text": r["text"],
                  "since": _when(cfg, parse_time(r["ts"]))} for r in routed_]
     logs = sorted(p.stem for p in (d / "log").glob("*.md") if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.stem)) \
@@ -1391,12 +1420,42 @@ class Gh:
         except ValueError:
             raise GhError(f"gh {' '.join(args[:2])}: not JSON: {out[:120]!r}")
 
-    def graphql(self, query: str, **variables) -> dict:
+    @staticmethod
+    def _graphql_args(query: str, variables: dict) -> list[str]:
         args = ["api", "graphql", "-f", f"query={query}"]
         for k, v in variables.items():
             if v is None:
                 continue
             args += ["-F" if isinstance(v, (int, bool)) else "-f", f"{k}={v}"]
+        return args
+
+    def graphql_partial(self, query: str, **variables) -> tuple[dict, list[str]]:
+        """A query over several aliases, and GitHub's errors beside its data: an
+        alias it cannot resolve (a PR deleted, a repo gone) comes back null, and
+        gh exits 1 with the rest printed (measured 2026-11-10). Raises only when
+        no data came back at all."""
+        args, why = self._graphql_args(query, variables), ""
+        for attempt in range(self.retries + 1):
+            try:
+                p = self.runner(args, self.timeout)
+            except subprocess.TimeoutExpired:
+                why = f"timed out after {self.timeout:g}s"
+            except OSError as e:
+                raise GhError(f"gh did not start: {e}")
+            else:
+                try:
+                    body = json.loads(p.stdout or "")
+                except ValueError:
+                    body = None
+                if isinstance(body, dict) and isinstance(body.get("data"), dict):
+                    return body["data"], [e.get("message", "?") for e in body.get("errors") or []]
+                why = ((p.stderr or p.stdout or "").strip().splitlines()[-1:] or [f"exit {p.returncode}"])[0][:300]
+            if attempt < self.retries:
+                time.sleep(self.pause)
+        raise GhError(f"gh api graphql: {why} (tried {self.retries + 1}x)")
+
+    def graphql(self, query: str, **variables) -> dict:
+        args = self._graphql_args(query, variables)
         data = self.json(args)
         if data.get("errors"):
             raise GhError("graphql: " + "; ".join(e.get("message", "?") for e in data["errors"])[:300])
