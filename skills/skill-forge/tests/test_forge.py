@@ -293,6 +293,19 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(rc, 0, out + err)
         self.assertIn("SAME: exit 0 and the same 2 numbers", out)
 
+    def test_relative_folders_run_from_where_they_are(self):
+        cwd = os.getcwd()
+        with Tmp() as tmp, FakeProm() as url, mock.patch.dict(os.environ, {"DEMO_METRICS_PROM_URL": url, "HAND_PROM_URL": url}):
+            d = forge.draft("metrics-query", "demo-metrics", "request rate by job", out=tmp / "d")
+            os.chdir(HAND.parent)
+            try:
+                rc, out, err = quiet(forge.main, ["compare", os.path.relpath(d), "hand-metrics",
+                                                  "--run", "instant x", "--run-existing", "query x"])
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("SAME: exit 0 and the same 2 numbers", out)
+
     def test_run_tells_different_numbers_apart(self):
         with Tmp() as tmp, FakeProm() as url, mock.patch.dict(os.environ, {"DEMO_METRICS_PROM_URL": url, "HAND_PROM_URL": url}):
             rc, out, err = self.compare(tmp, "--run", "instant x", "--run-existing", "top x --k 1")

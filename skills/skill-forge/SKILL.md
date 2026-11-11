@@ -30,6 +30,8 @@ included, is in `~/.local/state/skill-forge/`.
 2. **Find demand.** `PY F/demand.py --top 10` ranks repeated command
    sequences, repeated questions and repeated failures from transcripts and
    shell history. Evidence is counts and sessions by date, never content.
+   Re-login loops rank apart as access friction (fix the session, not a
+   skill), and `covered by <skill>` means an installed skill already runs there.
 3. **Choose.** Show the ranked list; the user picks one. One skill per run.
 4. **Draft.** `PY F/forge.py list`, then
    `PY F/forge.py draft ARCHETYPE NAME --question "..."` renders into
