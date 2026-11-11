@@ -12,6 +12,10 @@ mkdir -p "$HOME/.claude/hooks" "$HOME/.claude/plugins/cache/p/hooks" "$HOME/Libr
 touch "$HOME/.claude/hooks/env-guard.sh" "$HOME/.claude/hooks/lib.sh" "$HOME/.claude/statusline.sh"
 ln -s "$HOME/.claude/hooks" "$TMP/link"
 ln -s "$HOME/.claude/plugins" "$TMP/plink"
+for m in "$HOME/.claude/dev-mods/s/m" "$HOME/.claude/skills/tally" "$TMP/proj/.claude/skills/pm" "$HOME/.claude/jobs/j/tmp/copy"; do
+  mkdir -p "$m/.claude-plugin" "$m/hooks"; printf '{"name":"x"}' > "$m/.claude-plugin/plugin.json"
+done
+mkdir -p "$HOME/.claude/skills/plain"
 
 verdict() {   # verdict TOOL JSON-INPUT [CWD]
   local out
@@ -88,6 +92,36 @@ bash_is allow 'jq . ~/.claude/plugins/installed_plugins.json'
 bash_is allow 'cp ~/.claude/plugins/cache/p/hooks/hooks.json /srv/backup/'
 file_is allow Read "$HOME/.claude/plugins/cache/p/hooks/hooks.json"
 
+echo "=== a mod Claude Code loads by itself, written from Bash: ask (mod-gate reviews the file tools) ==="
+bash_is ask "$(printf 'cd ~/.claude/dev-mods/s/m && cat > hooks/register.tsx <<'"'"'EOF'"'"'\nexport const register = () => {}\nEOF')"
+bash_is ask "$(printf 'cat > ~/.claude/dev-mods/s/m/hooks/register.tsx <<EOF\nx\nEOF')"
+bash_is ask 'pushd ~/.claude/dev-mods/s/m; tee hooks/a.ts < /srv/a.ts'
+bash_is ask 'printf x > hooks/register.tsx' "$HOME/.claude/dev-mods/s/m"
+bash_is ask 'cp -R /srv/mod ~/.claude/dev-mods/s/new'
+bash_is ask 'mv /srv/r.tsx ~/.claude/dev-mods/s/m/hooks/register.tsx'
+bash_is ask 'mv ~/.claude/dev-mods/s/m /srv/m'
+bash_is ask 'sed -i "" s/a/b/ ~/.claude/skills/tally/hooks/register.tsx'
+bash_is ask "cp x.tsx $TMP/proj/.claude/skills/pm/hooks/register.tsx"
+bash_is ask 'printf x > hooks/register.tsx' "$TMP/proj/.claude/skills/pm"
+bash_is ask 'cd ~/.claude/hooks && echo "exit 0" > lib.sh'
+monitor_is() {   # monitor_is WANT TOOL-INPUT-JSON
+  local got; got=$(verdict Monitor "$2")
+  if [[ "$got" == "$1" ]]; then echo "  OK ($1): Monitor $2"; PASS=$((PASS+1))
+  else echo "  FAIL: want $1, got $got: Monitor $2"; FAIL=$((FAIL+1)); fi
+}
+monitor_is ask '{"command":"cp x ~/.claude/dev-mods/s/m/hooks/a.ts"}'
+bash_is allow 'rm -rf ~/.claude/dev-mods/s/m'
+bash_is allow 'rm ~/.claude/skills/tally/hooks/old.ts'
+bash_is allow 'claude plugin validate ~/.claude/dev-mods/s/m'
+bash_is allow 'cd ~/.claude/dev-mods/s/m && claude plugin test .'
+bash_is allow 'mkdir -p ~/.claude/dev-mods/s/m/types && ls -la ~/.claude/dev-mods/s/m/hooks'
+bash_is allow 'cd ~/.claude/dev-mods/s/m && cat hooks/register.tsx > /srv/copy.tsx'
+bash_is allow 'sed -i "" s/a/b/ ~/.claude/jobs/j/tmp/copy/hooks/register.tsx'
+bash_is allow 'cd ~/.claude/jobs/j/tmp && echo y > out.txt'
+bash_is allow 'echo x > ~/.claude/skills/plain/notes.md'
+file_is allow Write "$HOME/.claude/dev-mods/s/m/hooks/register.tsx"
+file_is allow Edit "$HOME/.claude/skills/tally/hooks/register.tsx"
+
 echo "=== reads and unrelated writes: allow ==="
 bash_is allow 'cmp -s hooks/env-guard.sh ~/.claude/hooks/env-guard.sh'
 bash_is allow 'diff -q hooks/lib.sh ~/.claude/hooks/lib.sh'
@@ -112,11 +146,6 @@ file_is allow Edit "$TMP/proj/hooks/env-guard.sh"
 file_is allow Write "$HOME/.claude/jobs/abc/tmp/x.sh"
 
 echo "=== a monitor's command is checked as a Bash command ==="
-monitor_is() {   # monitor_is WANT TOOL-INPUT-JSON
-  local got; got=$(verdict Monitor "$2")
-  if [[ "$got" == "$1" ]]; then echo "  OK ($1): Monitor $2"; PASS=$((PASS+1))
-  else echo "  FAIL: want $1, got $got: Monitor $2"; FAIL=$((FAIL+1)); fi
-}
 monitor_is ask '{"command":"sleep 300; cp /srv/x.sh ~/.claude/hooks/env-guard.sh"}'
 monitor_is ask '{"command":"echo export A=1 >> ~/.zshrc"}'
 monitor_is allow '{"command":"tail -f ~/.claude/audit.log"}'
