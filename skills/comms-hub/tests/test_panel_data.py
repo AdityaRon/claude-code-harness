@@ -59,6 +59,13 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   missed-without-lag: hub.py: `now() - lag - LATE_GRACE, rows)` => `now() - LATE_GRACE, rows)`
   age-hours-only: hub.py: `return (f"{h}h{m}m" if m else f"{h}h")` => `return f"{h}h"`
   torn-row-read: hub.py: `if lines and not text.endswith("\n"):` => `if False:`
+  half-gate-record-fails: hub.py: `continue  # caught mid-write, or left half by a crash` => `raise  # caught mid-write, or left half by a crash`
+  half-stamp-fails: hub.py: `        return parse_time((state_dir(cfg) / "last-scan").read_text().strip())
+    except (OSError, ValueError):` => `        return parse_time((state_dir(cfg) / "last-scan").read_text().strip())
+    except OSError:`
+  written-in-place: hub.py: `tmp = path.with_name(path.name + ".tmp")` => `tmp = path`
+  gate-written-in-place: check_draft.py: `hub.write_whole(p, json.dumps(stamp, indent=1))` => `p.write_text(json.dumps(stamp, indent=1))`
+  stamp-written-in-place: queue.py: `hub.write_whole(stamp, at.isoformat() + "\n")` => `stamp.write_text(at.isoformat() + "\n")`
   parked-uncounted: hub.py: `"parked": len(parked(cfg))}` => `"parked": 0}`
   held-text-uncut: hub.py: `"text": clip(h["first"]), "full"` => `"text": h["first"], "full"`
   held-full-first-line: hub.py: `"full": whole(h["body"])}` => `"full": h["first"]}`
@@ -315,6 +322,17 @@ class Panel(unittest.TestCase):
                          "the day before keeps its rows, dated; two log days back has gone")
         self.assertEqual(p["day"], "Wed 21 Oct")
 
+    def test_a_gate_record_or_scan_stamp_caught_half_written_does_not_fail_the_read(self):
+        """One half-written gate record failed every read with a traceback the pane showed whole."""
+        with Env(config=NAMES, now=NOW) as env:
+            self.build(env)
+            (env.state / "gate" / "half.json").write_text('{"path": "/synthetic/draft-1.md",\n "sha')
+            (env.state / "last-scan").write_text("2026-10-2")
+            rc, out = main_out("panel")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([g["key"] for g in json.loads(out)["going"]], ["going:Q0001", "going:Q0003", "going:unrecorded"],
+                         "the half record is left out, the rest stay")
+
     def test_a_row_still_being_written_waits_for_the_next_read(self):
         with Env(config=NAMES, now=NOW) as env:
             main_out("log", "--kind", "sent", "--target", "D0DMBOBXX1", "reply to bob", now="2026-10-21T16:10:00+00:00")
@@ -530,6 +548,29 @@ class Lint(unittest.TestCase):
             code = re.sub(r"'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"|`(?:\\.|[^`\\])*`", "''", code)
             found += [f"{p.name}: {m.group(0)!r}" for m in re.finditer(r"(?<![\w$.])h(?![\w$])", code)]
         self.assertEqual(found, [], "no identifier h in the panel: it is the JSX factory")
+
+    def test_gate_records_and_the_scan_stamp_are_written_whole(self):
+        """The panel reads them each minute: a write in place can be met half done."""
+        import re
+        bin_ = hub.Path(hub.__file__).resolve().parent
+        found = [f"check_draft.py: {m.group(0)}" for m in
+                 re.finditer(r"\.write_text\(json\.dumps\(", (bin_ / "check_draft.py").read_text())]
+        found += [f"queue.py: {m.group(0)}" for m in re.finditer(r"stamp\.write_text\(", (bin_ / "queue.py").read_text())]
+        self.assertEqual(found, [], "through hub.write_whole")
+
+
+class WriteWhole(unittest.TestCase):
+    def test_a_rename_that_fails_leaves_the_old_file_whole(self):
+        with Env(now=NOW) as env:
+            env.state.mkdir(parents=True)
+            p = env.state / "Q0001.json"
+            p.write_text('{"old": true}')
+            with mock.patch.object(hub.os, "replace", side_effect=OSError("disk full")), \
+                    self.assertRaises(OSError):
+                hub.write_whole(p, '{"new": tru')
+            self.assertEqual(p.read_text(), '{"old": true}')
+            hub.write_whole(p, '{"new": true}')
+            self.assertEqual((p.read_text(), sorted(x.name for x in env.state.iterdir())), ('{"new": true}', ["Q0001.json"]))
 
 
 if __name__ == "__main__":

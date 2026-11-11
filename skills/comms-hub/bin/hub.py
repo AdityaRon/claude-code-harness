@@ -951,15 +951,33 @@ def tick_lag(cfg: dict, rows: list[dict]) -> dt.timedelta | None:
 LATE_GRACE = dt.timedelta(minutes=5)
 
 
+def write_whole(path: Path, text: str) -> None:
+    """`text` into a file beside `path`, then renamed over it: the panel reads
+    each minute and once met a gate record half written, which failed the read."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def last_scan_at(cfg: dict) -> dt.datetime | None:
+    """When the last scan started; None with no stamp, or one that does not parse."""
+    try:
+        return parse_time((state_dir(cfg) / "last-scan").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def going_out(cfg: dict) -> list[dict]:
     """Scheduled messages still ahead of post_at, from the gate's records: one the
     session has not recorded yet (no sent_id) is going out all the same."""
     at = now()
-    last_scan = parse_time((state_dir(cfg) / "last-scan").read_text().strip()) \
-        if (state_dir(cfg) / "last-scan").is_file() else None
+    last_scan = last_scan_at(cfg)
     out = []
     for p in sorted((state_dir(cfg) / "gate").glob("*.json")) if (state_dir(cfg) / "gate").is_dir() else []:
-        s = json.loads(p.read_text())
+        try:
+            s = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue  # caught mid-write, or left half by a crash: this record, not the whole read
         if s.get("send") != "schedule" or s.get("withdrawn_at") or s.get("regate_of") or not s.get("post_at"):
             continue
         post = parse_time(s["post_at"])
@@ -1047,7 +1065,7 @@ def prs_panel(cfg: dict, verdicts: dict[str, str], lag: dt.timedelta = dt.timede
         c = repos.setdefault(short_ref(cfg, r["ref"]).rsplit(" #", 1)[0], [0, 0])
         c[0] += r["needs"]
         c[1] += 1
-    last_scan = parse_time((d / "last-scan").read_text().strip()) if (d / "last-scan").is_file() else None
+    last_scan = last_scan_at(cfg)
     # The amber said "stale" every evening and weekend, when no tick was due.
     second = next_tick(cfg, next_tick(cfg, written) or now()) if written else None
     stale = written is None or bool(second and second + lag + LATE_GRACE <= now()) \

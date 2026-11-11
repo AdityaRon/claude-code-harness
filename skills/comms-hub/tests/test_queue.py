@@ -18,7 +18,7 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   case-sensitive-me: hub.py: `return (login(actor) or "").lower() == me.lower()` => `return login(actor) == me`
   archived-counted: queue.py: `if n["repository"].get("isArchived"):  # search's archived:false drops it too` => `if False:`
   old-activity-counts: queue.py: `events = sorted((e for e in events if e[0] > last_reply), key=lambda e: e[:3])` => `events = sorted(events, key=lambda e: e[:3])`
-  no-previous-scan: queue.py: `stamp.write_text(at.isoformat() + "\n")` => `pass`
+  no-previous-scan: queue.py: `hub.write_whole(stamp, at.isoformat() + "\n")` => `pass`
   main-thread-wall: queue.py: `if time.time() - wall0 > wall_limit:` => `if False:`
   monotonic-watchdog: queue.py: `clock = time.time` => `clock = time.monotonic`
   watchdog-no-exit: queue.py: `exit_fn(3)` => `pass`

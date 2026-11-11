@@ -568,7 +568,7 @@ def scan(cfg: dict, gh: hub.Gh, emit=print, wall_limit: float = WALL_LIMIT) -> i
     emit(f"scheduled-pending: {len(pending)}"
          + (f" ({' '.join(s['sent_id'] for s in pending)}): gate each copy again this tick (check_draft.py --scheduled)"
             if pending else ""))
-    stamp.write_text(at.isoformat() + "\n")
+    hub.write_whole(stamp, at.isoformat() + "\n")
     hub.log_event(cfg, "scan", "scan started", detail=f"{at:%Y-%m-%dT%H:%M:%SZ}")
     plan = hub.scan_plan(cfg, at)
     # A fire that failed before the session could act left nothing in the log: say so for it.
