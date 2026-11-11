@@ -1,0 +1,7 @@
+archetype = "cluster-probe"
+summary = "Runs a probe script inside the cluster from a throwaway pod with a workload identity, and always deletes the pod."
+not_for = "running a workload's own job (use the job-run skill), or changing anything the probe can reach"
+guards = ["incomplete_capture", "leftover_probe", "expired_auth", "wrong_target"]
+write_verbs = ['''["']create["']''', '''["']delete["']''']
+sql = false
+vendor = []

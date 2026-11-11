@@ -1,7 +1,14 @@
 r"""review_lint.py: the body's shape, the PR's live state, and that a review from here is a COMMENT.
 
 Mutations (run.py --mutate applies each and expects this file to fail):
-  hint-hand-post: review_lint.py: `print(f"PASS: the body. Post the review with review_lint.py --post <review.json> --pr {owner}/{repo}#{n}, "` => `print(f"post: gh pr review {n} --repo {owner}/{repo} --comment --body-file {args.file} "`
+  hint-hand-post: review_lint.py: `print(f"PASS: the body. Post the review with review_lint.py --post <review.json> --pr {owner}/{repo}#{n} --apply, "` => `print(f"post: gh pr review {n} --repo {owner}/{repo} --comment --body-file {args.file} "`
+  hint-no-apply: review_lint.py: `--pr {owner}/{repo}#{n} --apply, "` => `--pr {owner}/{repo}#{n}, "`
+  dry-run-posts: review_lint.py: `if not args.apply:` => `if False:`
+  apply-never-posts: review_lint.py: `if not args.apply:` => `if True:`
+  dry-run-unmarked: review_lint.py: `print(f"NOT POSTED: a dry run.` => `print(f"a dry run.`
+  dry-run-no-command: review_lint.py: `--pr {owner}/{repo}#{n} --apply")` => `--pr {owner}/{repo}#{n}")`
+  dry-run-inline-unlisted: review_lint.py: `where = [f"{c['path']}:{c['line']}" for c in r.get("comments") or []]` => `where = []`
+  apply-with-file-ok: review_lint.py: ` or (args.apply and not args.post):` => `:`
   closed-ok: review_lint.py: `if d.get("state") != "OPEN":` => `if False:`
   draft-ok: review_lint.py: `if d.get("isDraft"):` => `if False:`
   head-unchecked: review_lint.py: `if now != head:` => `if False:`
@@ -50,9 +57,16 @@ class Lint(unittest.TestCase):
         with Env() as env:
             rc, out = run(env, "One finding: the retry loop never backs off (src/a.py:3).\n")
             self.assertEqual(rc, 0, out)
-            self.assertIn("review_lint.py --post <review.json> --pr acme/app#12", out)
+            self.assertIn("review_lint.py --post <review.json> --pr acme/app#12 --apply", out)
             self.assertNotIn("gh pr review", out)
             self.assertNotIn("approve", out.lower())
+
+    def test_apply_without_post_is_a_usage_error(self):
+        # A body lint posts nothing, so --apply there would read as a post that never happened.
+        with Env() as env:
+            rc, out = run(env, "fine\n", "--apply")
+            self.assertEqual(rc, 2, out)
+            self.assertIn("usage:", out)
 
     def test_shape_failures(self):
         with Env() as env:
@@ -97,7 +111,7 @@ def review(**over):
             "findings": [{"kind": "nit"}, {"kind": "consider"}], **over}
 
 
-def post(env, r, state=None, answer=None):
+def post(env, r, state=None, answer=None, apply=True):
     path = env.dir / "review.json"
     path.write_text(r if isinstance(r, str) else __import__("json").dumps(r))
     sent = []
@@ -109,7 +123,7 @@ def post(env, r, state=None, answer=None):
     gh = hub.Gh(runner=FakeGh(rest={"pr view": state or {**OPEN, "headRefOid": FULL}, "post": on_post}), pause=0)
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        rc = rl.main(["--post", str(path), "--pr", "acme/app#12"], gh=gh)
+        rc = rl.main(["--post", str(path), "--pr", "acme/app#12", *(["--apply"] if apply else [])], gh=gh)
     return rc, out.getvalue(), sent
 
 
@@ -119,6 +133,24 @@ def logged(env):
 
 
 class Post(unittest.TestCase):
+    def test_post_without_apply_is_a_dry_run_that_posts_and_logs_nothing(self):
+        # The todo stays open, so a session still on the old one-step command finds the review to do.
+        with Env(now="2026-10-21T17:00:00+00:00") as env:
+            cfg = hub.load_config()
+            todo = hub.log_event(cfg, "todo", "review requested", ref="https://github.com/acme/app/pull/12",
+                                 detail="key=review:acme/app#12@abcdef1")
+            rc, out, sent = post(env, review(), apply=False)
+            self.assertEqual((rc, sent), (0, []), out)
+            self.assertIn("would post: a COMMENT review on acme/app#12 at abcdef1, body 44 characters, "
+                          "1 inline comment (src/a.py:3), logged as approvable", out)
+            self.assertEqual(out.strip().splitlines()[-1],
+                             f"NOT POSTED: a dry run. Post it with review_lint.py --post {env.dir / 'review.json'} "
+                             "--pr acme/app#12 --apply")
+            self.assertEqual([r["id"] for r in logged(env)], [todo["id"]])
+            rc, out, sent = post(env, review(body="x" * 2600), apply=False)
+            self.assertEqual((rc, sent), (1, []), "the dry run refuses what --apply would")
+            self.assertNotIn("NOT POSTED", out)
+
     def test_a_clean_review_posts_as_a_comment_with_its_inline_comments_and_is_logged(self):
         with Env(now="2026-10-21T17:00:00+00:00") as env:
             rc, out, sent = post(env, review())

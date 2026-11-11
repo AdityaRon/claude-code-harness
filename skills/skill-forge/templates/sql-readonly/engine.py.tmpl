@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""{{name}}: {{question}}?
+
+Archetype sql-readonly, drafted by skill-forge on {{date}}. Each guard below is
+here because the dangerous output is a clean-looking wrong answer; change one
+only together with its test.
+
+  {{module}}.py query [--sql TEXT | --file F | statement on stdin] [--max-rows N] [--timeout 30s]
+  {{module}}.py --self-test     the read-only corpus and the wrapper's cases, offline
+
+Where it connects: ${{env_prefix}}_PSQL, a command line that runs psql, which
+gets the statement on stdin. For example:
+  psql "service=replica-ro"                      an entry in pg_service.conf, as a read-only role
+  kubectl exec -i deploy/app -- psql -d app      the service's own connection, borrowed
+  docker exec -i some-db psql -U reader -d app
+A password reaches psql through PGPASSWORD, PGPASSFILE or the service file; a
+command line that carries one is refused, since argv shows in ps and pod specs.
+${{env_prefix}}_RELOGIN is printed when auth fails; ${{env_prefix}}_EXPECT_DB, when
+set, refuses any other database.
+
+Read-only layers: sqlguard.py's client checks (one statement, an allowlisted
+first keyword, no nested write, no side-effecting function, no psql backslash
+command), then BEGIN READ ONLY with a statement_timeout on the server, under
+the role ${{env_prefix}}_PSQL connects as, which should be read-only as well.
+
+Exit status: 0 rows or EMPTY, 2 ABSENT, 3 PARTIAL, 4 AUTH, 5 BLOCKED or REFUSED.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import difflib
+import io
+import os
+import re
+import shlex
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sqlguard  # noqa: E402
+from mask import (EXIT_ABSENT, EXIT_AUTH, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED,  # noqa: E402
+                  emit, header, iso, parse_duration)
+
+ENV = "{{env_prefix}}"
+PSQL_FLAGS = ["-X", "-q", "-v", "ON_ERROR_STOP=1", "--csv"]
+AUTH = re.compile(r"(?i)password authentication failed|no password supplied|authentication failed|token (?:has )?expired"
+                  r"|sso session|must be logged in|unauthorized|forbidden|PAM authentication|IAM authentication|access denied")
+ABSENT = re.compile(r'(relation|column|schema|function|table) "?([^"\s]+?)"? does not exist')
+# Also catches `docker exec -e PGPASSWORD=x`: pass the variable by name (`-e PGPASSWORD`) instead.
+SECRET_ARG = re.compile(r"(?i)pass" + r"word=|://[^/\s:@]+:[^/\s@]+@")
+
+
+class Refused(Exception):
+    pass
+
+
+def runner() -> list[str]:
+    cmd = os.environ.get(f"{ENV}_PSQL", "").strip()
+    if not cmd:
+        raise Refused(f"set {ENV}_PSQL to the psql command that reaches the database (--help shows examples)")
+    argv = shlex.split(cmd)
+    if any(SECRET_ARG.search(a) for a in argv):
+        raise Refused(f"{ENV}_PSQL carries a password on the command line, where ps shows it; use PGPASSWORD, PGPASSFILE or a service file")
+    at = [i for i, a in enumerate(argv) if os.path.basename(a) == "psql"]
+    if not at:
+        raise Refused(f"{ENV}_PSQL must run psql; got {argv[0]!r}")
+    i = at[0] + 1
+    return argv[:i] + PSQL_FLAGS + argv[i:]
+
+
+def run_psql(argv: list[str], stdin: str, timeout: float) -> tuple[int, str, str]:
+    p = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout)
+    return p.returncode, p.stdout, p.stderr
+
+
+def wrap(sql: str, cap: int, timeout: str) -> str:
+    """The statement inside a READ ONLY transaction, capped at cap + 1 rows so
+    one more than the cap shows the answer is partial."""
+    body = re.sub(r";\s*(?:--[^\n]*\s*)*$", "", sql.strip()).strip()
+    first = body.split(None, 1)[0].upper() if body else ""
+    if first in ("SELECT", "WITH", "VALUES", "TABLE"):
+        body = f"SELECT * FROM (\n{body}\n) AS _forge_q LIMIT {cap + 1}"
+    secs = int(parse_duration(timeout).total_seconds() * 1000)
+    return f"BEGIN READ ONLY;\nSET LOCAL statement_timeout = {secs};\n{body}\n;\nROLLBACK;\n"
+
+
+def rows_of(out: str) -> list[list[str]]:
+    return [r for r in csv.reader(io.StringIO(out)) if r]
+
+
+def identity(argv: list[str], timeout: float) -> dict:
+    q = ("SELECT current_database() AS db, current_user AS role, pg_is_in_recovery() AS replica,"
+         " split_part(current_setting('server_version'), ' ', 1) AS version,"
+         " (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) AS superuser")
+    rc, out, err = run_psql(argv, wrap(q, 1, "10s"), timeout)
+    if rc != 0:
+        return {"error": err.strip() or f"psql exit {rc}"}
+    rows = rows_of(out)
+    return dict(zip(rows[0], rows[1])) if len(rows) > 1 else {"error": "no identity row"}
+
+
+def suggestions(argv: list[str], kind: str, name: str, timeout: float) -> list[str]:
+    col = "column_name" if kind == "column" else "table_name"
+    src = "columns" if kind == "column" else "tables"
+    q = f"SELECT DISTINCT {col} FROM information_schema.{src} WHERE table_schema NOT IN ('pg_catalog', 'information_schema')"
+    rc, out, _ = run_psql(argv, wrap(q, 5000, "10s"), timeout)
+    names = [r[0] for r in rows_of(out)[1:]] if rc == 0 else []
+    return difflib.get_close_matches(name.split(".")[-1], names, n=3, cutoff=0.5)
+
+
+def target_line(who: dict) -> str:
+    if "error" in who:
+        return f"postgres via ${ENV}_PSQL (identity unknown: {who['error'].splitlines()[0][:120]})"
+    replica = "replica" if who.get("replica") == "t" else "primary"
+    su = "; role is a SUPERUSER, use a read-only role" if who.get("superuser") == "t" else ""
+    return f"postgres db={who.get('db')} role={who.get('role')} {replica} v{who.get('version')} via ${ENV}_PSQL{su}"
+
+
+def query(sql: str, cap: int, timeout: str) -> int:
+    ok, why = sqlguard.check(sql)
+    if not ok:
+        emit(f"BLOCKED: {why}", err=True)
+        return EXIT_REFUSED
+    argv = runner()
+    limit = parse_duration(timeout).total_seconds() + 30
+    who = identity(argv, limit)
+    if "error" in who and AUTH.search(who["error"]):
+        return auth_failed(who["error"])
+    expect = os.environ.get(f"{ENV}_EXPECT_DB")
+    if expect and who.get("db") != expect:
+        emit(f"REFUSED: connected to database {who.get('db')!r}, expected {expect!r} ({ENV}_EXPECT_DB)", err=True)
+        return EXIT_REFUSED
+    window = f"n/a: the database as of {iso(datetime.now(timezone.utc))}; any time window is the statement's own WHERE"
+    rc, out, err = run_psql(argv, wrap(sql, cap, timeout), limit)
+    if rc != 0:
+        if AUTH.search(err):
+            return auth_failed(err)
+        m = ABSENT.search(err)
+        if m:
+            near = suggestions(argv, m.group(1), m.group(2), limit)
+            emit(header(target_line(who), window, rows="ABSENT", partial=None))
+            emit(f"ABSENT: {m.group(1)} {m.group(2)} does not exist, so the answer is unknown, not zero."
+                 + (f" Closest: {', '.join(near)}" if near else " Nothing close; check the schema and the identifier's form."))
+            return EXIT_ABSENT
+        emit(f"psql failed (exit {rc}): {err.strip()[:500]}", err=True)
+        return 1
+    rows = rows_of(out)
+    head, data = (rows[0], rows[1:]) if rows else ([], [])
+    partial = f"row cap {cap} reached; more rows exist (aggregate in SQL, or raise --max-rows)" if len(data) > cap else None
+    data = data[:cap]
+    emit(header(target_line(who), window, rows=len(data), partial=partial))
+    if not data:
+        emit("EMPTY: the statement ran and returned 0 rows; its tables and columns exist.")
+        return EXIT_OK
+    buf = io.StringIO()
+    csv.writer(buf, lineterminator="\n").writerows([head] + data)
+    emit(buf.getvalue().rstrip("\n"))
+    if partial:
+        emit(f"PARTIAL: printed the first {cap} rows of more.")
+        return EXIT_PARTIAL
+    return EXIT_OK
+
+
+def auth_failed(err: str) -> int:
+    relogin = os.environ.get(f"{ENV}_RELOGIN", f"(set {ENV}_RELOGIN to the command that renews access)")
+    emit(f"AUTH: {err.strip().splitlines()[-1][:200]}", err=True)
+    emit(f"This is an expired or wrong login, not an empty answer. Re-login with: {relogin}", err=True)
+    return EXIT_AUTH
+
+
+def self_test() -> int:
+    bad = sqlguard.self_test(io.StringIO())
+    cases = {
+        "SELECT 1;": "SELECT * FROM (\nSELECT 1\n) AS _forge_q LIMIT 6",
+        "SELECT 1 -- trailing": "SELECT * FROM (\nSELECT 1 -- trailing\n) AS _forge_q LIMIT 6",
+        "SELECT 1; -- after": "SELECT * FROM (\nSELECT 1\n) AS _forge_q LIMIT 6",
+        "SHOW server_version": "SHOW server_version",
+    }
+    for q, want in cases.items():
+        if want not in wrap(q, 5, "5s") or not wrap(q, 5, "5s").startswith("BEGIN READ ONLY;"):
+            bad += 1
+            emit(f"MISS wrap({q!r})", err=True)
+    os.environ[f"{ENV}_PSQL"] = "psql host=db pass" + "word=x"
+    try:
+        runner()
+        bad += 1
+        emit("MISS a password on the runner command line was accepted", err=True)
+    except Refused:
+        pass
+    emit(f"self-test: sqlguard corpus, {len(cases)} wrapper cases, runner refusal: {'FAILED' if bad else 'passed'}")
+    return 1 if bad else EXIT_OK
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n", 1)[1])
+    p.add_argument("--self-test", action="store_true", help="run the read-only corpus offline")
+    sub = p.add_subparsers(dest="cmd")
+    q = sub.add_parser("query", help="run one read-only statement")
+    src = q.add_mutually_exclusive_group()
+    src.add_argument("--sql")
+    src.add_argument("--file")
+    q.add_argument("--max-rows", type=int, default=1000)
+    q.add_argument("--timeout", default="30s")
+    a = p.parse_args(argv)
+    if a.self_test:
+        return self_test()
+    if a.cmd != "query":
+        p.print_help()
+        return 1
+    sql = a.sql if a.sql is not None else open(a.file).read() if a.file else sys.stdin.read()
+    try:
+        return query(sql, a.max_rows, a.timeout)
+    except Refused as e:
+        emit(f"REFUSED: {e}", err=True)
+        return EXIT_REFUSED
+
+
+if __name__ == "__main__":
+    sys.exit(main())

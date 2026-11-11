@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+"""{{name}}: {{question}}?
+
+Archetype metrics-query, drafted by skill-forge on {{date}}. Each guard below is
+here because the dangerous output is a clean-looking wrong number; change one
+only together with its test.
+
+  {{module}}.py query EXPR [--window 1h] [--end now] [--step 60s] [--max-series 50]
+  {{module}}.py instant EXPR [--at now] [--max-series 50]
+  {{module}}.py series SELECTOR [--window 1h] [--limit 100]
+  {{module}}.py ab EXPR --version-label L --a V1 --b V2 --by ENTITY [--size EXPR] [--window 24h]
+  {{module}}.py volume-step EXPR --input EXPR --at TIME [--window 1h] [--tolerance 0.2]
+
+${{env_prefix}}_PROM_URL is the API's base URL. A bearer token, when the API needs
+one, comes from ${{env_prefix}}_PROM_TOKEN and goes in a header, never a URL or
+argv. ${{env_prefix}}_RELOGIN is printed when auth fails.
+
+Guards: an empty result is checked against the series API and reported ABSENT
+(no such metric, or no series with that label value; the closest names
+follow) or EMPTY (the series exist, no samples in the window). A backend
+warning, or more series than --max-series, is PARTIAL. A 401, a 403 or an HTML
+login page is AUTH, not no-data. The window prints in UTC with its step, and a
+series whose last sample is well before the window's end is called out.
+
+`ab` cohorts by the version label, not by a timestamp cut that straddles a
+rollout; pairs each entity that ran both versions; and buckets the pairs by
+size, since a pooled median hides who a change helped. `volume-step` voids a
+before/after magnitude when the input volume moved more than --tolerance.
+
+Exit status: 0 an answer or EMPTY, 2 ABSENT, 3 PARTIAL or VOID, 4 AUTH, 5 REFUSED.
+"""
+from __future__ import annotations
+
+import argparse
+import difflib
+import json
+import os
+import re
+import statistics
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mask import (EXIT_ABSENT, EXIT_AUTH, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED,  # noqa: E402
+                  Window, emit, header, iso, parse_duration, parse_time)
+
+ENV = "{{env_prefix}}"
+MAX_POINTS = 11000
+GROUPING = {"by", "without", "on", "ignoring", "group_left", "group_right"}
+AGGREGATIONS = {"sum", "avg", "min", "max", "count", "stddev", "stdvar", "topk", "bottomk", "quantile",
+                "count_values", "group", "limitk", "limit_ratio"}
+KEYWORDS = GROUPING | AGGREGATIONS | {"offset", "bool", "and", "or", "unless", "inf", "nan", "atan2", "start", "end"}
+MATCHER = re.compile(r"""([a-zA-Z_]\w*)\s*(=~|!~|!=|=)\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')""")
+
+
+class Refused(Exception):
+    pass
+
+
+class AuthError(Exception):
+    pass
+
+
+def base_url() -> str:
+    url = os.environ.get(f"{ENV}_PROM_URL", "").strip().rstrip("/")
+    if not url:
+        raise Refused(f"set {ENV}_PROM_URL to the Prometheus-compatible API's base URL")
+    if "@" in urllib.parse.urlsplit(url).netloc:
+        raise Refused(f"{ENV}_PROM_URL carries credentials; put a token in {ENV}_PROM_TOKEN instead")
+    return url
+
+
+def fetch(path: str, params: dict) -> dict:
+    """GET one API path. Raises AuthError on a login wall, returns the JSON."""
+    q = urllib.parse.urlencode([(k, v) for k, vs in params.items() for v in (vs if isinstance(vs, list) else [vs])])
+    req = urllib.request.Request(f"{base_url()}{path}?{q}", method="GET")
+    token = os.environ.get(f"{ENV}_PROM_TOKEN")
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            body, ctype = r.read().decode("utf-8", "replace"), r.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise AuthError(f"HTTP {e.code} from {path}")
+        body, ctype = e.read().decode("utf-8", "replace"), e.headers.get("Content-Type", "")
+    if "html" in ctype or body.lstrip()[:1] == "<":
+        raise AuthError(f"{path} answered with an HTML page, most likely a login wall, not the API")
+    return json.loads(body)
+
+
+def api(path: str, params: dict) -> dict:
+    d = fetch(path, params)
+    if d.get("status") != "success":
+        raise Refused(f"{path}: {d.get('errorType', 'error')}: {d.get('error', d)}")
+    return d
+
+
+def target() -> str:
+    try:
+        v = fetch("/api/v1/status/buildinfo", {}).get("data", {}).get("version")
+    except (AuthError, ValueError, OSError):
+        v = None
+    return f"prometheus-compatible {base_url()}" + (f" v{v}" if v else " (no buildinfo)")
+
+
+def selectors(expr: str) -> list:
+    """(metric, [(label, op, value)]) for each vector selector in EXPR."""
+    out, i, n = [], 0, len(expr)
+    while i < n:
+        c = expr[i]
+        if c in "\"'`":
+            j = i + 1
+            while j < n and expr[j] != c:
+                j += 2 if expr[j] == "\\" else 1
+            i = j + 1
+        elif c == "[":
+            i = expr.find("]", i) + 1 or n
+        elif c == "{":
+            j = _close(expr, i)
+            ms = [(m[0], m[1], m[2] or m[3]) for m in MATCHER.findall(expr[i + 1:j])]
+            name = next((v for l, op, v in ms if l == "__name__" and op == "="), None)
+            if name:
+                out.append((name, [m for m in ms if m[0] != "__name__"]))
+            i = j + 1
+        elif c.isdigit():
+            while i < n and (expr[i].isalnum() or expr[i] == "."):
+                i += 1
+        elif c.isalpha() or c in "_:":
+            j = i
+            while j < n and (expr[j].isalnum() or expr[j] in "_:"):
+                j += 1
+            word, k = expr[i:j], j
+            while k < n and expr[k] == " ":
+                k += 1
+            if word.lower() in GROUPING and k < n and expr[k] == "(":
+                i = expr.find(")", k) + 1 or n
+            elif (k < n and expr[k] == "(") or word.lower() in KEYWORDS:
+                i = j
+            else:
+                ms = []
+                if k < n and expr[k] == "{":
+                    end = _close(expr, k)
+                    ms = [(m[0], m[1], m[2] or m[3]) for m in MATCHER.findall(expr[k + 1:end])]
+                    j = end + 1
+                out.append((word, ms))
+                i = j
+        else:
+            i += 1
+    return out
+
+
+def _close(expr: str, i: int) -> int:
+    j, n = i + 1, len(expr)
+    while j < n and expr[j] != "}":
+        if expr[j] in "\"'":
+            q, j = expr[j], j + 1
+            while j < n and expr[j] != q:
+                j += 2 if expr[j] == "\\" else 1
+        j += 1
+    return j
+
+
+def esc(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def selector(metric: str, label: str | None = None, value: str | None = None) -> str:
+    if label is None:
+        return metric
+    return metric + "{" + label + '="' + esc(value) + '"}'
+
+
+def partial_of(warn: list, n: int, cap: int) -> str | None:
+    reasons = list(warn)
+    if n > cap:
+        reasons.append(f"{n} series, printed the first {cap} (--max-series)")
+    return "; ".join(reasons) or None
+
+
+def answer_empty(expr: str, w: Window, partial: str | None) -> int:
+    kind, why = explain_empty(expr, w)
+    emit(header(target(), w, rows=kind, partial=partial))
+    emit(f"{kind}: {why}")
+    return EXIT_ABSENT if kind == "ABSENT" else (EXIT_PARTIAL if partial else EXIT_OK)
+
+
+def explain_empty(expr: str, w: Window) -> tuple[str, str]:
+    span = {"start": iso(w.start), "end": iso(w.end)}
+    for metric, ms in selectors(expr):
+        if not api("/api/v1/series", {"match[]": selector(metric), **span, "limit": "1"})["data"]:
+            names = api("/api/v1/label/__name__/values", {})["data"]
+            near = difflib.get_close_matches(metric, names, n=3, cutoff=0.6)
+            return "ABSENT", f"metric {metric} has no series in the window" + (
+                f"; did you mean {', '.join(near)}?" if near else "; no metric by a similar name either")
+        for label, op, value in ms:
+            if op != "=":
+                continue
+            if not api("/api/v1/series", {"match[]": selector(metric, label, value), **span, "limit": "1"})["data"]:
+                seen = api(f"/api/v1/label/{urllib.parse.quote(label)}/values", {"match[]": metric, **span})["data"]
+                near = difflib.get_close_matches(value, seen, n=3, cutoff=0.5)
+                return "ABSENT", (f'no series of {metric} has {label}="{value}"; '
+                                  + (f"closest: {', '.join(near)}" if near else f"values seen: {', '.join(seen[:8]) or 'none'}"))
+    return "EMPTY", "the series exist; the expression returned no samples in the window (a rate range shorter than two scrapes, or the series went stale)"
+
+
+def labels(m: dict) -> str:
+    name = m.get("__name__", "")
+    rest = ", ".join(f'{k}="{v}"' for k, v in sorted(m.items()) if k != "__name__")
+    return name + "{" + rest + "}"
+
+
+def window_of(args, now: datetime | None = None) -> Window:
+    end = parse_time(args.end, now)
+    return Window(end - parse_duration(args.window), end, step=args.step)
+
+
+def do_query(a) -> int:
+    w = window_of(a)
+    step = parse_duration(a.step).total_seconds()
+    points = int((w.end - w.start).total_seconds() // step) + 1
+    if points > MAX_POINTS:
+        raise Refused(f"{points} points per series over the API's {MAX_POINTS} cap; raise --step")
+    d = api("/api/v1/query_range", {"query": a.expr, "start": iso(w.start), "end": iso(w.end), "step": a.step})
+    res = d["data"]["result"]
+    partial = partial_of(d.get("warnings", []), len(res), a.max_series)
+    if not res:
+        return answer_empty(a.expr, w, partial)
+    emit(header(target(), w, rows=f"{min(len(res), a.max_series)} series", partial=partial))
+    lag = []
+    for s in res[:a.max_series]:
+        vals = [float(v) for _, v in s["values"]]
+        last_t = datetime.fromtimestamp(s["values"][-1][0], timezone.utc)
+        if w.end - last_t > timedelta(seconds=2 * step) and w.end - last_t > timedelta(minutes=5):
+            lag.append(f"{labels(s['metric'])} last sample {iso(last_t)}")
+        emit(f"{labels(s['metric'])}  last={vals[-1]:g} min={min(vals):g} max={max(vals):g} "
+             f"avg={statistics.fmean(vals):g} points={len(vals)}")
+    for ln in lag:
+        emit(f"WINDOW: {ln}, well before the window's end; the end of the window has no data for it")
+    if partial:
+        emit(f"PARTIAL: {partial}")
+        return EXIT_PARTIAL
+    return EXIT_OK
+
+
+def do_instant(a) -> int:
+    at = parse_time(a.at)
+    w = Window(at - timedelta(minutes=5), at, bounds="instant at the end, 5m lookback")
+    d = api("/api/v1/query", {"query": a.expr, "time": iso(at)})
+    res = d["data"]["result"]
+    if d["data"].get("resultType") == "scalar":
+        res = [{"metric": {}, "value": res}]
+    partial = partial_of(d.get("warnings", []), len(res), a.max_series)
+    if not res:
+        return answer_empty(a.expr, w, partial)
+    emit(header(target(), w, rows=f"{min(len(res), a.max_series)} series", partial=partial))
+    for s in res[:a.max_series]:
+        emit(f"{labels(s['metric'])}  {float(s['value'][1]):g}")
+    if partial:
+        emit(f"PARTIAL: {partial}")
+        return EXIT_PARTIAL
+    return EXIT_OK
+
+
+def do_series(a) -> int:
+    w = window_of(a)
+    d = api("/api/v1/series", {"match[]": a.selector, "start": iso(w.start), "end": iso(w.end), "limit": str(a.limit)})
+    res, warn = d["data"], d.get("warnings", [])
+    partial = "; ".join(warn) if warn else (f"--limit {a.limit} reached" if len(res) >= a.limit else None)
+    if not res:
+        return answer_empty(a.selector, w, None)
+    emit(header(target(), w, rows=f"{len(res)} series", partial=partial))
+    for m in res:
+        emit(labels(m))
+    if partial:
+        emit(f"PARTIAL: {partial}")
+        return EXIT_PARTIAL
+    return EXIT_OK
+
+
+def instant_vector(expr: str, at: datetime) -> list:
+    return api("/api/v1/query", {"query": expr, "time": iso(at)})["data"]["result"]
+
+
+def do_ab(a) -> int:
+    w = window_of(a)
+    sub = f"[{a.window}:{a.step}]"
+    q = f"avg by ({a.version_label}, {a.by}) (avg_over_time(({a.expr}){sub}))"
+    rows = instant_vector(q, w.end)
+    a_vals = {r["metric"].get(a.by): float(r["value"][1]) for r in rows if r["metric"].get(a.version_label) == a.a}
+    b_vals = {r["metric"].get(a.by): float(r["value"][1]) for r in rows if r["metric"].get(a.version_label) == a.b}
+    tgt = target()
+    if not a_vals or not b_vals:
+        seen = sorted({r["metric"].get(a.version_label, "") for r in rows})
+        emit(header(tgt, w, command=None, rows="ABSENT"))
+        missing = " and ".join(f'{a.version_label}="{v}"' for v, vals in ((a.a, a_vals), (a.b, b_vals)) if not vals)
+        emit(f"ABSENT: no series with {missing}; versions seen: {', '.join(seen) or 'none'}")
+        return EXIT_ABSENT
+    pairs = sorted(set(a_vals) & set(b_vals))
+    sizes = {}
+    if a.size:
+        sizes = {r["metric"].get(a.by): float(r["value"][1])
+                 for r in instant_vector(f"sum by ({a.by}) (sum_over_time(({a.size}){sub}))", w.end)}
+    partial = None if len(pairs) >= a.min_pairs else f"{len(pairs)} entities ran both versions; --min-pairs is {a.min_pairs}"
+    emit(header(tgt, w, rows=f"{len(pairs)} pairs ({len(a_vals)} on {a.a}, {len(b_vals)} on {a.b})", partial=partial))
+    if partial:
+        emit(f"PARTIAL: {partial}; no comparison printed")
+        return EXIT_PARTIAL
+    ratio = {e: (b_vals[e] / a_vals[e]) if a_vals[e] else float("inf") for e in pairs}
+    ordered = sorted(pairs, key=lambda e: sizes.get(e, 0.0))
+    third = max(1, len(ordered) // 3)
+    buckets = [("all", ordered)] if not sizes else [
+        ("small", ordered[:third]), ("medium", ordered[third:len(ordered) - third]), ("large", ordered[len(ordered) - third:])]
+    emit(f"bucket  entities  size range        median {a.b}/{a.a}  {a.b} lower  {a.b} higher")
+    for name, es in buckets:
+        if not es:
+            continue
+        rng = f"{sizes.get(es[0], 0):g}..{sizes.get(es[-1], 0):g}" if sizes else "-"
+        rs = [ratio[e] for e in es]
+        emit(f"{name:<7} {len(es):>8}  {rng:<16} {statistics.median(rs):>12.3f}  {sum(r < 1 for r in rs):>8}  {sum(r > 1 for r in rs):>9}")
+    emit(f"pooled median {a.b}/{a.a}: {statistics.median(ratio.values()):.3f} (read the buckets: a pooled median hides who it helped)")
+    return EXIT_OK
+
+
+def do_volume_step(a) -> int:
+    at = parse_time(a.at)
+    width = parse_duration(a.window)
+    w = Window(at - width, at + width, step=a.step, bounds="before [start, at], after [at, end]")
+    sub = f"[{a.window}:{a.step}]"
+
+    def mean(expr: str, t: datetime) -> float | None:
+        r = instant_vector(f"sum(avg_over_time(({expr}){sub}))", t)
+        return float(r[0]["value"][1]) if r else None
+
+    before, after = mean(a.expr, at), mean(a.expr, at + width)
+    vin_b, vin_a = mean(a.input, at), mean(a.input, at + width)
+    tgt = target()
+    if None in (before, after, vin_b, vin_a):
+        emit(header(tgt, w, rows="ABSENT"))
+        which = a.expr if None in (before, after) else a.input
+        kind, why = explain_empty(which, w)
+        emit(f"{kind}: {why}")
+        return EXIT_ABSENT if kind == "ABSENT" else EXIT_PARTIAL
+    moved = (vin_a / vin_b - 1) if vin_b else float("inf")
+    void = abs(moved) > a.tolerance
+    emit(header(tgt, w, rows=2, partial=f"input volume moved {moved:+.0%}" if void else None))
+    emit(f"input   before={vin_b:g} after={vin_a:g} change={moved:+.1%}")
+    emit(f"metric  before={before:g} after={after:g} change={(after / before - 1) if before else float('inf'):+.1%}")
+    if void:
+        per_b, per_a = before / vin_b if vin_b else float("inf"), after / vin_a if vin_a else float("inf")
+        emit(f"VOID: the input moved {moved:+.0%} (over --tolerance {a.tolerance:.0%}), so the metric's before/after "
+             f"magnitude is not a claim. Per unit of input: before={per_b:g} after={per_a:g} change={(per_a / per_b - 1) if per_b else float('inf'):+.1%}")
+        return EXIT_PARTIAL
+    return EXIT_OK
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n", 1)[1])
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def windowed(sp, window="1h"):
+        sp.add_argument("--window", default=window)
+        sp.add_argument("--end", default="now")
+        sp.add_argument("--step", default="60s")
+
+    q = sub.add_parser("query")
+    q.add_argument("expr")
+    windowed(q)
+    q.add_argument("--max-series", type=int, default=50)
+    i = sub.add_parser("instant")
+    i.add_argument("expr")
+    i.add_argument("--at", default="now")
+    i.add_argument("--max-series", type=int, default=50)
+    s = sub.add_parser("series")
+    s.add_argument("selector")
+    windowed(s)
+    s.add_argument("--limit", type=int, default=100)
+    ab = sub.add_parser("ab")
+    ab.add_argument("expr")
+    windowed(ab, "24h")
+    ab.add_argument("--version-label", required=True)
+    ab.add_argument("--a", required=True)
+    ab.add_argument("--b", required=True)
+    ab.add_argument("--by", required=True)
+    ab.add_argument("--size")
+    ab.add_argument("--min-pairs", type=int, default=3)
+    vs = sub.add_parser("volume-step")
+    vs.add_argument("expr")
+    vs.add_argument("--input", required=True)
+    vs.add_argument("--at", required=True)
+    vs.add_argument("--window", default="1h")
+    vs.add_argument("--step", default="60s")
+    vs.add_argument("--tolerance", type=float, default=0.2)
+    a = p.parse_args(argv)
+    run = {"query": do_query, "instant": do_instant, "series": do_series, "ab": do_ab, "volume-step": do_volume_step}[a.cmd]
+    try:
+        return run(a)
+    except AuthError as e:
+        relogin = os.environ.get(f"{ENV}_RELOGIN", f"(set {ENV}_RELOGIN to the command that renews access)")
+        emit(f"AUTH: {e}. This is an expired or missing login, not an empty answer. Re-login with: {relogin}", err=True)
+        return EXIT_AUTH
+    except (Refused, ValueError) as e:
+        emit(f"REFUSED: {e}", err=True)
+        return EXIT_REFUSED
+    except OSError as e:
+        emit(f"could not reach {os.environ.get(ENV + '_PROM_URL', '?')}: {e}", err=True)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,48 @@
+---
+name: {{name}}
+description: {{description}}
+---
+
+# {{name}}
+
+Answers one question: **{{question}}?** Drafted by skill-forge
+({{archetype}}, {{date}}). It reads an alert and builds links; it fetches
+nothing, so the skill it names next does the reading.
+
+## Setup
+
+Edit `~/.claude/skills/{{name}}/runbook.toml`: one `[[rule]]` per alert family,
+with `match` globs on labels, `steps`, `links` and `next_skill`. Links take
+`{label}` fields and `{from_ms}`, `{to_ms}`, `{from_iso}`, `{to_iso}`. Write
+PromQL braces in a link as `%7B` and `%7D`.
+
+## Run
+
+`PY` is the interpreter `bash ~/.claude/skills/{{name}}/bin/python.sh` prints and
+`E` is `~/.claude/skills/{{name}}/bin/{{module}}.py`. Write both out in full in
+every command: shell variables do not survive between calls.
+
+```
+PY E links alert.json --lookback 30m
+pbpaste | PY E links
+```
+
+The payload is an Alertmanager webhook body or one alert with `labels`,
+`startsAt` and `endsAt`.
+
+## Reading the output
+
+The `#` lines carry the rules file, the alert names, the window and the link
+count. Each alert gets its window, the steps, the links and the next skill.
+
+- Links span the alert's own window: startsAt minus `--lookback` to endsAt,
+  or startsAt plus `--lookahead` while it fires. Never "now".
+- `NO RULE` (exit 2): no rule matches; add one rather than guessing.
+- `REFUSED link` (exit 3 if others were built, 5 if none): the link needs a
+  label the alert lacks or has empty. A link with a blank shows the wrong
+  thing confidently, so it is not built.
+
+## Gotchas
+
+None yet. When a session hits a trap, add the guard to the engine with its
+test, and one line here.

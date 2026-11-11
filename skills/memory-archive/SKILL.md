@@ -1,6 +1,6 @@
 ---
 name: memory-archive
-description: Relieve a MEMORY.md index that Claude Code reports as over or approaching its read limit (200 lines, 25,000 bytes), by proposing index lines to archive or lessons to group, never deletions. Use only on that error, or when asked to clean up, archive or merge the memory index. Never as routine maintenance.
+description: Relieve a MEMORY.md index that Claude Code reports as over or approaching its read limit (200 lines, 25,000 bytes), by proposing index lines to archive or lessons to group, never deletions. Use when Claude Code reports that error, and only then, or when asked to clean up, archive or merge the memory index. Never as routine maintenance.
 ---
 
 # Relieving a memory index that is over its read limit

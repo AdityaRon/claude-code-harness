@@ -1,0 +1,13 @@
+# skill_lint reads this manifest. skill-forge is the tool that drafts skills, not
+# a drafted one, so it declares no guards; its writes are the install copy.
+name = "skill-forge"
+archetype = "forge"
+engines = ["discover.py", "demand.py", "skill_lint.py", "forge.py"]
+guards = []
+write_verbs = ['shutil\.copytree\(']
+# discover.py --probe-local reads Postgres roles, so its --self-test checks those queries.
+sql = true
+audit_table = ""
+
+[deps]
+templates = "SKILL_FORGE_TEMPLATES"

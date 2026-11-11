@@ -1,0 +1,7 @@
+archetype = "sql-readonly"
+summary = "Runs one read-only SQL statement through layered checks and prints the rows with where they came from."
+not_for = "changing data or schema, or questions a metrics backend answers faster (use the metrics-query skill)"
+guards = ["absent", "partial", "expired_auth", "wrong_target"]
+write_verbs = []
+sql = true
+vendor = ["sqlguard.py"]

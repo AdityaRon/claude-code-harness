@@ -1,0 +1,198 @@
+"""Tests for {{module}}.py. psql is faked: no test opens a connection.
+
+Mutations that must turn this file red:
+  no-read-only-txn: {{module}}.py: `return f"BEGIN READ ONLY;` => `return f"BEGIN;`
+  no-client-check: {{module}}.py: `ok, why = sqlguard.check(sql)` => `ok, why = True, ""`
+  no-row-cap: {{module}}.py: `LIMIT {cap + 1}"` => `"`
+  partial-hidden: {{module}}.py: `if len(data) > cap else None` => `if False else None`
+  absent-as-error: {{module}}.py: `m = ABSENT.search(err)` => `m = None`
+  empty-unsaid: {{module}}.py: `emit("EMPTY: the statement ran` => `(lambda *a: None)("EMPTY: the statement ran`
+  auth-as-error: {{module}}.py: `        if AUTH.search(err):
+            return auth_failed(err)` => ``
+  expect-db-ignored: {{module}}.py: `if expect and who.get("db") != expect:` => `if False:`
+  password-argv-ok: {{module}}.py: `if any(SECRET_ARG.search(a) for a in argv):` => `if False:`
+  env-flag-password-ok: {{module}}.py: `r"(?i)pass" + r"word=` => `r"(?i)\bpass" + r"word=`
+  flags-after-dbname: {{module}}.py: `return argv[:i] + PSQL_FLAGS + argv[i:]` => `return argv + PSQL_FLAGS`
+  comment-swallows-wrapper: {{module}}.py: `body = f"SELECT * FROM (\\n{body}\\n)` => `body = f"SELECT * FROM ({body})`
+  unmasked-rows: {{module}}.py: `    emit(buf.getvalue().rstrip("\\n"))` => `    sys.stdout.write(buf.getvalue())`
+  superuser-unsaid: {{module}}.py: `if who.get("superuser") == "t" else ""` => `if False else ""`
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "bin"))
+import mask  # noqa: E402
+import {{module}} as eng  # noqa: E402
+
+ENV = eng.ENV
+IDENTITY = "db,role,replica,version,superuser\napp,reader,t,16.4,f\n"
+
+
+class FakePsql:
+    """Answers the identity query, then the statement, from canned results."""
+
+    def __init__(self, rc=0, out="n\n1\n", err="", identity=IDENTITY, identity_rc=0, catalog="table_name\norders\norder_items\n"):
+        self.rc, self.out, self.err = rc, out, err
+        self.identity, self.identity_rc, self.catalog = identity, identity_rc, catalog
+        self.calls = []
+
+    def __call__(self, argv, stdin, timeout):
+        self.calls.append((argv, stdin))
+        if "current_database()" in stdin:
+            return self.identity_rc, self.identity if self.identity_rc == 0 else "", "" if self.identity_rc == 0 else self.err
+        if "information_schema" in stdin:
+            return 0, self.catalog, ""
+        return self.rc, self.out, self.err
+
+
+class Run:
+    def __init__(self, fake, env=None, patterns=()):
+        self.fake, self.env, self.patterns = fake, env or {}, patterns
+
+    def __call__(self, *argv, stdin=""):
+        tmp = tempfile.TemporaryDirectory()
+        cfg = Path(tmp.name) / "config.toml"
+        cfg.write_text("[mask]\npatterns = " + json.dumps(list(self.patterns)) + "\n")
+        env = {f"{ENV}_PSQL": "docker exec -i db psql -U reader -d app", "SKILL_FORGE_CONFIG": str(cfg), **self.env}
+        out, err = io.StringIO(), io.StringIO()
+        mask._MASKER = None
+        try:
+            with mock.patch.dict(os.environ, env), mock.patch.object(eng, "run_psql", self.fake), \
+                    mock.patch("sys.stdin", io.StringIO(stdin)), redirect_stdout(out), redirect_stderr(err):
+                rc = eng.main(list(argv))
+        finally:
+            mask._MASKER = None
+            tmp.cleanup()
+        return rc, out.getvalue(), err.getvalue()
+
+
+class QueryTest(unittest.TestCase):
+    def test_golden_provenance_header_and_rows(self):
+        rc, out, _ = Run(FakePsql(out="tenant,n\nt1,3\nt2,1\n"))("query", "--sql", "SELECT tenant, count(*) AS n FROM orders GROUP BY 1")
+        self.assertEqual(rc, 0)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "# target:  postgres db=app role=reader replica v16.4 via $" + ENV + "_PSQL")
+        self.assertTrue(lines[1].startswith("# window:  n/a: the database as of "))
+        self.assertTrue(lines[2].startswith("# command: "))
+        self.assertEqual(lines[3:], ["# rows:    2", "# partial: no", "tenant,n", "t1,3", "t2,1"])
+
+    def test_the_statement_runs_read_only_capped_on_stdin(self):
+        fake = FakePsql()
+        Run(fake)("query", "--sql", "SELECT 1", "--max-rows", "50", "--timeout", "5s")
+        argv, stdin = fake.calls[-1]
+        self.assertEqual(stdin, "BEGIN READ ONLY;\nSET LOCAL statement_timeout = 5000;\n"
+                                "SELECT * FROM (\nSELECT 1\n) AS _forge_q LIMIT 51\n;\nROLLBACK;\n")
+        self.assertNotIn("SELECT 1", " ".join(argv))
+
+    def test_psql_flags_go_right_after_the_psql_token(self):
+        fake = FakePsql()
+        Run(fake)("query", "--sql", "SELECT 1")
+        argv, _ = fake.calls[-1]
+        self.assertEqual(argv, ["docker", "exec", "-i", "db", "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "--csv", "-U", "reader", "-d", "app"])
+
+    def test_a_write_is_blocked_before_psql_runs(self):
+        fake = FakePsql()
+        rc, _, err = Run(fake)("query", "--sql", "WITH x AS (DELETE FROM orders RETURNING 1) SELECT * FROM x")
+        self.assertEqual(rc, 5)
+        self.assertIn("BLOCKED", err)
+        self.assertEqual(fake.calls, [])
+
+    def test_a_password_on_the_runner_command_is_refused(self):
+        fake = FakePsql()
+        rc, _, err = Run(fake, env={f"{ENV}_PSQL": "psql postgresql://reader:" + "pw123@db/app"})("query", "--sql", "SELECT 1")
+        self.assertEqual(rc, 5)
+        self.assertIn("ps shows it", err)
+        self.assertEqual(fake.calls, [])
+
+    def test_a_password_in_a_docker_env_flag_is_refused_but_a_name_is_not(self):
+        fake = FakePsql()
+        rc, _, _ = Run(fake, env={f"{ENV}_PSQL": "docker exec -i -e PGPASS" + "WORD=pw123 db psql -U app"})("query", "--sql", "SELECT 1")
+        self.assertEqual(rc, 5)
+        self.assertEqual(fake.calls, [])
+        rc, _, _ = Run(fake, env={f"{ENV}_PSQL": "docker exec -i -e PGPASSWORD db psql -U app"})("query", "--sql", "SELECT 1")
+        self.assertEqual(rc, 0)
+
+    def test_self_test_passes(self):
+        with mock.patch.dict(os.environ, {}), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(eng.main(["--self-test"]), 0)
+
+
+class GuardTest(unittest.TestCase):
+    def test_guard_absent_a_missing_table_is_not_an_empty_answer(self):
+        fake = FakePsql(rc=3, out="", err='psql:<stdin>:3: ERROR:  relation "ordrs" does not exist\nLINE 2: SELECT * FROM ordrs')
+        rc, out, _ = Run(fake)("query", "--sql", "SELECT * FROM ordrs")
+        self.assertEqual(rc, 2)
+        self.assertIn("ABSENT: relation ordrs does not exist", out)
+        self.assertIn("Closest: orders", out)
+        self.assertNotIn("EMPTY", out)
+
+    def test_guard_absent_and_empty_differ(self):
+        rc, out, _ = Run(FakePsql(out="id\n"))("query", "--sql", "SELECT id FROM orders WHERE false")
+        self.assertEqual(rc, 0)
+        self.assertIn("# rows:    0", out)
+        self.assertIn("EMPTY: the statement ran and returned 0 rows", out)
+
+    def test_guard_partial_more_rows_than_the_cap(self):
+        rows = "id\n" + "".join(f"{i}\n" for i in range(4))
+        rc, out, _ = Run(FakePsql(out=rows))("query", "--sql", "SELECT id FROM orders", "--max-rows", "3")
+        self.assertEqual(rc, 3)
+        self.assertIn("# partial: YES: row cap 3 reached", out)
+        self.assertIn("PARTIAL", out)
+        self.assertNotIn("\n3\n", out)
+
+    def test_guard_expired_auth_says_relogin_not_empty(self):
+        fake = FakePsql(identity_rc=2, err='psql: error: connection to server failed: FATAL:  password authentication failed for user "reader"')
+        rc, out, err = Run(fake, env={f"{ENV}_RELOGIN": "vault-login-db"})("query", "--sql", "SELECT 1")
+        self.assertEqual(rc, 4)
+        self.assertIn("Re-login with: vault-login-db", err)
+        self.assertNotIn("EMPTY", out)
+
+    def test_guard_expired_auth_on_the_statement_itself(self):
+        fake = FakePsql(rc=2, out="", err="FATAL:  IAM authentication failed: token has expired")
+        rc, _, err = Run(fake)("query", "--sql", "SELECT 1")
+        self.assertEqual(rc, 4)
+        self.assertIn("AUTH:", err)
+
+    def test_guard_wrong_target_refuses_another_database(self):
+        rc, _, err = Run(FakePsql(), env={f"{ENV}_EXPECT_DB": "billing"})("query", "--sql", "SELECT 1")
+        self.assertEqual(rc, 5)
+        self.assertIn("expected 'billing'", err)
+
+    def test_guard_wrong_target_a_superuser_role_is_named(self):
+        ident = "db,role,replica,version,superuser\napp,postgres,f,16.4,t\n"
+        _, out, _ = Run(FakePsql(identity=ident))("query", "--sql", "SELECT 1")
+        self.assertIn("role is a SUPERUSER", out)
+        self.assertIn(" primary ", out)
+
+
+class QuotingTest(unittest.TestCase):
+    def test_quoting_a_trailing_comment_cannot_swallow_the_wrapper(self):
+        fake = FakePsql()
+        Run(fake)("query", "--sql", "SELECT 1 -- note")
+        _, stdin = fake.calls[-1]
+        self.assertIn("SELECT 1 -- note\n) AS _forge_q", stdin)
+
+    def test_quoting_a_semicolon_then_comment_is_stripped(self):
+        self.assertIn("SELECT 1\n) AS _forge_q", eng.wrap("SELECT 1; -- done", 9, "1s"))
+
+
+class MaskTest(unittest.TestCase):
+    def test_mask_planted_identifier_in_a_row(self):
+        rc, out, _ = Run(FakePsql(out="tenant\ncust-acme\n"), patterns=[r"\bcust-[a-z]+"])("query", "--sql", "SELECT tenant FROM t")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("cust-acme", out)
+        self.assertIn("<masked-1>", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

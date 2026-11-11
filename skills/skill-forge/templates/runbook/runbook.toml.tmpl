@@ -1,0 +1,23 @@
+# Rules for {{name}}. The first rule whose every match glob holds wins; a glob
+# needs its label present. Links take single-brace fields: any alert label
+# (URL-quoted), and from_ms, to_ms, from_iso, to_iso, the alert's own window.
+# A link that needs a label the alert lacks, or has empty, is refused, never
+# built with a blank. Write PromQL braces in a link as %7B and %7D.
+
+[[rule]]
+match = { alertname = "HighErrorRate*" }
+steps = [
+  "Check whether the rise starts at a deploy: compare by the version label, not by a timestamp cut.",
+  "Check the input volume over the same window before calling it a regression.",
+]
+links = [
+  "https://grafana.example/d/service-errors?var-namespace={namespace}&var-service={service}&from={from_ms}&to={to_ms}",
+  "https://prometheus.example/graph?g0.expr=sum%20by%20(code)%20(rate(http_requests_total%7Bservice%3D%22{service}%22%7D%5B5m%5D))&g0.range_input=1h",
+]
+next_skill = "the metrics-query skill drafted for this service"
+
+[[rule]]
+match = { alertname = "*JobFailed", severity = "page" }
+steps = ["Read the failed run's logs before re-running it."]
+links = ["https://logs.example/search?q=job%3D{job}&start={from_iso}&end={to_iso}"]
+next_skill = "the job-run skill"

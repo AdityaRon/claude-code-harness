@@ -1,0 +1,148 @@
+# One fixture per convention, as a change to ./baseline: tests/test_skill_lint.py
+# copies the baseline, applies the entry, and requires that `check` is the only
+# check to FAIL. `old` must occur exactly once in `file`; `delete = true`
+# removes the file instead.
+
+[[violation]]
+check = "C1"
+why = "a write with no --apply flag"
+file = "bin/engine.py"
+old = '''p.add_argument("--apply", action="store_true", help="make the change; without it, print it")'''
+new = '''p.add_argument("--yes", action="store_true", help="make the change")'''
+
+[[violation]]
+check = "C1"
+why = "no test covers the default (dry-run) path"
+file = "tests/test_engine.py"
+old = '''def test_flip_is_a_dry_run_without_apply(self):'''
+new = '''def test_flip_returns_zero(self):'''
+
+[[violation]]
+check = "C2"
+why = "runs SQL with no --self-test"
+file = "bin/engine.py"
+old = '''p.add_argument("--self-test", action="store_true", help="run the read-only corpus offline")'''
+new = '''p.add_argument("--corpus", action="store_true", help="run the read-only corpus offline")'''
+
+[[violation]]
+check = "C2"
+why = "the --self-test fails"
+file = "bin/engine.py"
+old = '''ok = read_only("SELECT 1") and not read_only("DELETE FROM t")'''
+new = '''ok = read_only("SELECT 1") and read_only("DELETE FROM t")'''
+
+[[violation]]
+check = "C3"
+why = "a secret-named CLI flag"
+file = "bin/engine.py"
+old = '''    p.add_argument("cmd", nargs="?", choices=["show", "flip"])'''
+new = '''    p.add_argument("--db-password")
+    p.add_argument("cmd", nargs="?", choices=["show", "flip"])'''
+
+[[violation]]
+check = "C3"
+why = "a secret on psql's argv, where ps shows it"
+file = "bin/engine.py"
+old = '''["psql", "-X", "--csv"]'''
+new = '''["psql", "-X", "--csv", "--password=" + os.environ.get("PW", "")]'''
+
+[[violation]]
+check = "C3"
+why = "a literal secret value"
+file = "bin/engine.py"
+old = '''BLOCK = ("insert", "update", "delete")'''
+new = '''BLOCK = ("insert", "update", "delete")
+TOKEN = "f1x7ure0nly0000"'''
+
+[[violation]]
+check = "C4"
+why = "an audit row with no test that it shares the write's transaction"
+file = "tests/test_engine.py"
+old = '''def test_write_and_audit_one_transaction(self):'''
+new = '''def test_flip_writes(self):'''
+
+[[violation]]
+check = "C5"
+why = "a required guard with no fault-injection test"
+file = "tests/test_engine.py"
+old = '''def test_guard_partial_is_flagged(self):'''
+new = '''def test_partial_is_flagged(self):'''
+
+[[violation]]
+check = "C6"
+why = "output with no provenance header"
+file = "bin/engine.py"
+old = '''emit(header("flags table", "n/a: the current state", rows=len(rows)))'''
+new = '''emit("flags table")'''
+
+[[violation]]
+check = "C6"
+why = "no golden-output test"
+file = "tests/test_engine.py"
+old = '''def test_golden_header(self):'''
+new = '''def test_header(self):'''
+
+[[violation]]
+check = "C7"
+why = "a print that skips the masker"
+file = "bin/engine.py"
+old = '''        emit(r)'''
+new = '''        print(r)'''
+
+[[violation]]
+check = "C7"
+why = "no test plants a pattern for the masker"
+file = "tests/test_engine.py"
+old = '''def test_mask_planted_tenant(self):'''
+new = '''def test_planted_tenant(self):'''
+
+[[violation]]
+check = "C8"
+why = "the description lacks the literal Use when"
+file = "SKILL.md"
+old = '''description: Use when asked whether'''
+new = '''description: For questions about whether'''
+
+[[violation]]
+check = "C9"
+why = "a test file whose docstring lists no mutations"
+file = "tests/test_mask.py"
+old = '''  no-newline: mask.py: `str(text) + "\\n"` => `str(text)`
+'''
+new = ''
+
+[[violation]]
+check = "C9"
+why = "a unit test that constructs a real cloud client"
+file = "tests/test_engine.py"
+old = '''        self.assertTrue(callable(engine.emit))'''
+new = '''        import boto3
+        boto3.client("s3")'''
+
+[[violation]]
+check = "C9"
+why = "SQL built from a template with no quoting test"
+file = "tests/test_engine.py"
+old = '''def test_quoting_a_tenant_with_a_quote(self):'''
+new = '''def test_a_tenant_with_an_apostrophe(self):'''
+
+[[violation]]
+check = "C9"
+why = "a script with no test file"
+file = "tests/test_mask.py"
+delete = true
+
+[[violation]]
+check = "C10"
+why = "an import from another skill's folder with no declared env var"
+file = "bin/engine.py"
+old = '''sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))'''
+new = '''sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.expanduser("~/.claude/skills/flag-common/bin"))'''
+
+[[violation]]
+check = "C10"
+why = "a path that climbs out of the folder"
+file = "tests/test_engine.py"
+old = '''sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin"))'''
+new = '''sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../shared", "bin"))'''

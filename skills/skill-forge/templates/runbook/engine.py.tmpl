@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""{{name}}: {{question}}?
+
+Archetype runbook, drafted by skill-forge on {{date}}. It reads an alert and
+builds links; it opens no connection. Each guard below is here because a
+link that looks right and shows the wrong thing is worse than none.
+
+  {{module}}.py links [ALERT.json] [--rules runbook.toml] [--lookback 30m] [--lookahead 30m]
+
+ALERT.json (or stdin) is an Alertmanager webhook payload, or one alert with
+labels, annotations, startsAt and endsAt. Rules live in runbook.toml beside
+this skill's SKILL.md; the first rule whose globs all match wins.
+
+Guards: no matching rule is NO RULE (ABSENT), naming the alertnames the rules
+cover. A link that needs a label the alert lacks or has empty is refused and
+the label named; a link is never built with a blank. Links span the alert's
+own window, startsAt minus --lookback to endsAt (or startsAt plus --lookahead
+while it fires), never "now"; an alert without startsAt is refused. Label
+values are URL-quoted.
+
+Exit status: 0 links built, 2 ABSENT (no rule), 3 PARTIAL (some links
+refused), 5 REFUSED (no link could be built).
+"""
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import json
+import os
+import string
+import sys
+import urllib.parse
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mask import (EXIT_ABSENT, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED, Window,  # noqa: E402
+                  emit, header, iso, parse_duration, parse_time, read_toml)
+
+RULES = Path(__file__).resolve().parent.parent / "runbook.toml"
+
+
+class Refused(Exception):
+    pass
+
+
+def alerts_of(payload) -> list:
+    alerts = payload["alerts"] if isinstance(payload, dict) and "alerts" in payload else [payload]
+    return [a for a in alerts if isinstance(a, dict)]
+
+
+def match_rule(rules: list, labels: dict):
+    for i, rule in enumerate(rules, 1):
+        if all(k in labels and fnmatch.fnmatchcase(str(labels[k]), pat) for k, pat in rule.get("match", {}).items()):
+            return i, rule
+    return None
+
+
+def alert_window(alert: dict, lookback, lookahead) -> Window:
+    if not alert.get("startsAt"):
+        raise Refused("the alert has no startsAt; refusing to invent a window from now")
+    starts = parse_time(alert["startsAt"])
+    ends = parse_time(alert["endsAt"]) if alert.get("endsAt") else None
+    # A firing alert's endsAt is 0001-01-01 or a moment ahead of resolution.
+    end = ends if ends and ends > starts else starts + lookahead
+    return Window(starts - lookback, end, bounds="startsAt - lookback, endsAt or startsAt + lookahead")
+
+
+def fields_of(labels: dict, w: Window) -> dict:
+    fields = {k: urllib.parse.quote(str(v), safe="") for k, v in labels.items()}
+    fields.update(from_ms=str(int(w.start.timestamp() * 1000)), to_ms=str(int(w.end.timestamp() * 1000)),
+                  from_iso=iso(w.start), to_iso=iso(w.end))
+    return fields
+
+
+def build(link: str, fields: dict) -> tuple[str | None, list]:
+    names = [f for _, f, _, _ in string.Formatter().parse(link) if f]
+    missing = [f for f in names if not fields.get(f)]
+    if missing:
+        return None, missing
+    return link.format_map(fields), []
+
+
+def do_links(a) -> int:
+    rules_path = Path(a.rules) if a.rules else RULES
+    rules = read_toml(rules_path).get("rule", [])
+    payload = json.load(open(a.alert)) if a.alert else json.load(sys.stdin)
+    alerts = alerts_of(payload)
+    lookback, lookahead = parse_duration(a.lookback), parse_duration(a.lookahead)
+    plans, windows = [], []
+    for alert in alerts:
+        labels = alert.get("labels", {})
+        w = alert_window(alert, lookback, lookahead)
+        windows.append(w)
+        plans.append((labels, w, match_rule(rules, labels)))
+    names = ", ".join(sorted({str(l.get("alertname", "?")) for l, _, _ in plans})) or "none"
+    target = f"runbook {rules_path.name} ({len(rules)} rules) for alert {names}"
+    span = Window(min(w.start for w in windows), max(w.end for w in windows), bounds=windows[0].bounds) if windows else "n/a: no alerts"
+    unmatched = [labels for labels, _, m in plans if m is None]
+    if unmatched or not plans:
+        covered = ", ".join(r.get("match", {}).get("alertname", "*") for r in rules) or "nothing"
+        emit(header(target, span, rows="ABSENT"))
+        for labels in unmatched or [{}]:
+            emit(f"NO RULE: no rule matches alertname={labels.get('alertname', '?')}; the rules cover {covered}. Add one to {rules_path.name}.")
+        return EXIT_ABSENT
+    built, refused, lines = 0, 0, []
+    for labels, w, (i, rule) in plans:
+        lines.append(f"alert {labels.get('alertname', '?')} window {w}  (rule {i})")
+        for step in rule.get("steps", []):
+            lines.append(f"  step: {step}")
+        fields = fields_of(labels, w)
+        for link in rule.get("links", []):
+            url, missing = build(link, fields)
+            if url:
+                built += 1
+                lines.append(f"  link: {url}")
+            else:
+                refused += 1
+                lines.append(f"  REFUSED link: needs {', '.join(missing)}, which the alert lacks or has empty: {link.split('?')[0]}")
+        if rule.get("next_skill"):
+            lines.append(f"  next: {rule['next_skill']}")
+    total = built + refused
+    partial = f"{refused} of {total} links refused for missing labels" if refused else None
+    emit(header(target, span, rows=f"{built} links", partial=partial))
+    for ln in lines:
+        emit(ln)
+    if refused and not built:
+        return EXIT_REFUSED
+    return EXIT_PARTIAL if refused else EXIT_OK
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n", 1)[1])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    ln = sub.add_parser("links", help="steps, links and the next skill for an alert")
+    ln.add_argument("alert", nargs="?")
+    ln.add_argument("--rules")
+    ln.add_argument("--lookback", default="30m")
+    ln.add_argument("--lookahead", default="30m")
+    a = p.parse_args(argv)
+    try:
+        return do_links(a)
+    except (Refused, ValueError) as e:
+        emit(f"REFUSED: {e}", err=True)
+        return EXIT_REFUSED
+
+
+if __name__ == "__main__":
+    sys.exit(main())

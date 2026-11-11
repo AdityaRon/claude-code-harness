@@ -1,0 +1,7 @@
+archetype = "metrics-query"
+summary = "Queries a Prometheus-compatible API and tells an empty answer from a missing metric, a partial one and an expired login."
+not_for = "logs or traces (use the logs-fetch skill), or anything that writes"
+guards = ["absent", "partial", "expired_auth", "window", "wrong_target"]
+write_verbs = []
+sql = false
+vendor = []

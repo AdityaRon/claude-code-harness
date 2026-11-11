@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""{{name}}: {{question}}?
+
+Archetype api-readonly, drafted by skill-forge on {{date}}. Each guard below is
+here because the dangerous output is a clean-looking wrong answer; change one
+only together with its test.
+
+  {{module}}.py get PATH [--id ID] [--param k=v ...] [--max-pages 5] [--id-pattern REGEX]
+
+PATH is relative to ${{env_prefix}}_API_URL and may hold {id}, filled from --id
+and URL-quoted. ${{env_prefix}}_API_TOKEN goes in a header, never the URL or argv:
+${{env_prefix}}_AUTH_HEADER names it (default "Authorization: Bearer"; write
+"X-Api-Key:" for a bare key). ${{env_prefix}}_RELOGIN is printed when auth fails,
+and ${{env_prefix}}_ID_PATTERN (or --id-pattern) is the shape an id must have.
+
+Guards: the one function that talks to the API sends GET and nothing else. An
+id of the wrong shape is refused before any request. A 404 is ABSENT, told
+apart from an empty list or object, which is EMPTY. Pages are followed (a Link
+rel=next header, or a next / next_page field) up to --max-pages; more left is
+PARTIAL. A next link to another host is refused, so the token never leaves. A
+401, a 403 or an HTML login page is AUTH, not no-data.
+
+Exit status: 0 an answer or EMPTY, 2 ABSENT, 3 PARTIAL, 4 AUTH, 5 REFUSED.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mask import EXIT_ABSENT, EXIT_AUTH, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED, emit, header, iso  # noqa: E402
+
+ENV = "{{env_prefix}}"
+LINK_NEXT = re.compile(r'<([^>]+)>\s*;\s*rel="?next"?')
+LIST_KEYS = ("items", "data", "results", "values", "records")
+
+
+class Refused(Exception):
+    pass
+
+
+class AuthError(Exception):
+    pass
+
+
+class NotFound(Exception):
+    pass
+
+
+def base_url() -> str:
+    url = os.environ.get(f"{ENV}_API_URL", "").strip().rstrip("/")
+    if not url:
+        raise Refused(f"set {ENV}_API_URL to the API's base URL")
+    if "@" in urllib.parse.urlsplit(url).netloc:
+        raise Refused(f"{ENV}_API_URL carries credentials; put the token in {ENV}_API_TOKEN instead")
+    return url
+
+
+def auth_header() -> tuple[str, str] | None:
+    token = os.environ.get(f"{ENV}_API_TOKEN")
+    if not token:
+        return None
+    spec = os.environ.get(f"{ENV}_AUTH_HEADER", "Authorization: Bearer")
+    name, _, scheme = spec.partition(":")
+    return name.strip(), (scheme.strip() + " " + token) if scheme.strip() else token
+
+
+def transport(req: urllib.request.Request) -> tuple[int, dict, str]:
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status, dict(r.headers), r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers or {}), e.read().decode("utf-8", "replace")
+
+
+def request(method: str, url: str) -> tuple[int, dict, str]:
+    """The only way out to the API. It permits GET and nothing else, so a write
+    cannot be built here even by mistake."""
+    if method != "GET":
+        raise Refused(f"{method} refused: this skill only reads")
+    req = urllib.request.Request(url, method="GET")
+    h = auth_header()
+    if h:
+        name, value = h
+        req.add_header(name, value)
+    status, headers, body = transport(req)
+    return status, {k.lower(): v for k, v in headers.items()}, body
+
+
+def fetch_json(url: str):
+    status, headers, body = request("GET", url)
+    if status in (401, 403):
+        raise AuthError(f"HTTP {status}")
+    if "html" in headers.get("content-type", "").lower() or body.lstrip()[:1] == "<":
+        raise AuthError("an HTML page came back, most likely a login wall, not the API")
+    if status == 404:
+        raise NotFound(url)
+    if status >= 400:
+        raise Refused(f"HTTP {status}: {body.strip()[:200]}")
+    return json.loads(body) if body.strip() else None, headers
+
+
+def next_url(headers: dict, data, current: str) -> str | None:
+    m = LINK_NEXT.search(headers.get("link", ""))
+    if m:
+        return urllib.parse.urljoin(current, m.group(1))
+    if isinstance(data, dict):
+        for k in ("next", "next_page", "nextPage"):
+            v = data.get(k)
+            if isinstance(v, str) and v:
+                return urllib.parse.urljoin(current, v)
+    return None
+
+
+def same_host(url: str, base: str) -> None:
+    u, b = urllib.parse.urlsplit(url), urllib.parse.urlsplit(base)
+    if (u.scheme, u.netloc) != (b.scheme, b.netloc):
+        raise Refused(f"a next link points at {u.scheme}://{u.netloc}, not {b.netloc}; not sending the token there")
+
+
+def items_of(data) -> list:
+    if data is None:
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for k in LIST_KEYS:
+            if isinstance(data.get(k), list):
+                return data[k]
+        return [data] if data else []
+    return [data]
+
+
+def resolve(path: str, ident: str | None, pattern: str | None) -> str:
+    if "{id}" in path:
+        if not ident:
+            raise Refused(f"{path} needs --id")
+        if pattern and not re.fullmatch(pattern, ident):
+            raise Refused(f"id {ident!r} does not have the shape {pattern} (wrong prefix, case or form?); no request sent")
+        path = path.replace("{id}", urllib.parse.quote(ident, safe=""))
+    return "/" + path.lstrip("/")
+
+
+def do_get(a) -> int:
+    base = base_url()
+    pattern = a.id_pattern or os.environ.get(f"{ENV}_ID_PATTERN")
+    path = resolve(a.path, a.id, pattern)
+    params = [tuple(p.split("=", 1)) for p in a.param]
+    url = base + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    target = f"{base}{path} (GET)"
+    window = f"n/a: the API's state as of {iso(datetime.now(timezone.utc))}"
+    pages, items = 0, []
+    try:
+        while url and pages < a.max_pages:
+            data, headers = fetch_json(url)
+            pages += 1
+            items += items_of(data)
+            url = next_url(headers, data, url)
+            if url:
+                same_host(url, base)
+    except NotFound:
+        emit(header(target, window, rows="ABSENT"))
+        emit(f"ABSENT: {path} returned 404, so the resource does not exist (or the id has the wrong form); the answer is unknown, not empty.")
+        return EXIT_ABSENT
+    partial = f"more pages remain after {pages} (--max-pages {a.max_pages})" if url else None
+    emit(header(target, window, rows=f"{len(items)} from {pages} page(s)", partial=partial))
+    if not items:
+        emit("EMPTY: the resource exists and holds nothing.")
+        return EXIT_OK
+    for item in items:
+        emit(json.dumps(item, sort_keys=True))
+    if partial:
+        emit(f"PARTIAL: {partial}")
+        return EXIT_PARTIAL
+    return EXIT_OK
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n", 1)[1])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    g = sub.add_parser("get", help="read one resource, following pages")
+    g.add_argument("path")
+    g.add_argument("--id")
+    g.add_argument("--param", action="append", default=[], metavar="K=V")
+    g.add_argument("--max-pages", type=int, default=5)
+    g.add_argument("--id-pattern")
+    a = p.parse_args(argv)
+    try:
+        return do_get(a)
+    except AuthError as e:
+        relogin = os.environ.get(f"{ENV}_RELOGIN", f"(set {ENV}_RELOGIN to the command that renews access)")
+        emit(f"AUTH: {e}. This is an expired or missing login, not an empty answer. Re-login with: {relogin}", err=True)
+        return EXIT_AUTH
+    except (Refused, ValueError) as e:
+        emit(f"REFUSED: {e}", err=True)
+        return EXIT_REFUSED
+    except OSError as e:
+        emit(f"could not reach {os.environ.get(ENV + '_API_URL', '?')}: {e}", err=True)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

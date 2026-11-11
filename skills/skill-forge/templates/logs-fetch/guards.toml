@@ -1,0 +1,7 @@
+archetype = "logs-fetch"
+summary = "Fetches a service's log lines from Loki through a selector it computes, and tells a missing stream from an empty window, a truncated page and an expired login."
+not_for = "metrics (use the metrics-query skill), or anything that writes"
+guards = ["absent", "partial", "expired_auth", "window", "wrong_target"]
+write_verbs = []
+sql = false
+vendor = []

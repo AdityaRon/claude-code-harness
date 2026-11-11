@@ -1,0 +1,53 @@
+---
+name: {{name}}
+description: {{description}}
+---
+
+# {{name}}
+
+Answers one question: **{{question}}?** Drafted by skill-forge
+({{archetype}}, {{date}}); edit this file to name the services and the log
+lines that answer it.
+
+## Setup, once per machine
+
+- `{{env_prefix}}_LOKI_URL`: the Loki API's base URL. No credentials in it; it
+  is refused.
+- `{{env_prefix}}_LOKI_TOKEN` (when the API needs one): sent as a bearer header.
+- `{{env_prefix}}_RELOGIN`: the command that renews access, printed on AUTH.
+- `{{env_prefix}}_SELECTOR_TEMPLATE`: how this job's streams name a service,
+  for example `namespace="{ns}",app="{service}"`. Read it off a stream that
+  `streams` lists once; after that the selector is computed, never guessed.
+
+## Run
+
+`PY` is the interpreter `bash ~/.claude/skills/{{name}}/bin/python.sh` prints and
+`E` is `~/.claude/skills/{{name}}/bin/{{module}}.py`. Write both out in full in
+every command: shell variables do not survive between calls.
+
+```
+PY E streams --service checkout --namespace prod
+PY E fetch --service checkout --namespace prod --filter 'timeout' --window 30m --end now
+```
+
+Times take `now`, `now-2h` or ISO 8601 with a zone; a bare local time is refused.
+
+## Reading the output
+
+The `#` lines carry the backend, the computed selector, the window in UTC
+(Loki's end is exclusive), the command, the line count and whether it is
+partial. Paste them with any line you quote.
+
+- `EMPTY` (exit 0): the streams exist and nothing in the window matched.
+- `ABSENT` (exit 2): no stream has that label value; the closest follow. The
+  question was asked of nothing, so it is not "no errors".
+- `PARTIAL` (exit 3): the last page under `--max-pages` was full, or the
+  backend warned. More lines may exist; narrow the window or the filter.
+- `WINDOW:` lines: events whose own time is far from the store's time. The
+  window selects by store time.
+- `AUTH` (exit 4): a 401, a 403 or a login page. Run the printed re-login.
+
+## Gotchas
+
+None yet. When a session hits a trap, add the guard to the engine with its
+test, and one line here.

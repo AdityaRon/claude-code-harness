@@ -1,0 +1,213 @@
+"""Tests for {{module}}.py. Docker is faked at run_docker(), and the clock at
+monotonic() and sleep(); no test starts a container.
+
+Mutations that must turn this file red:
+  latest-ok: {{module}}.py: `if tag == "latest":` => `if False:`
+  untagged-ok: {{module}}.py: `    if not tag:` => `    if False:`
+  no-tables-ok: {{module}}.py: `if not tables:
+            emit(header(` => `if False:
+            emit(header(`
+  marker-ignored: {{module}}.py: `if marker in logs:` => `if True:`
+  incomplete-as-ok: {{module}}.py: `    return EXIT_PARTIAL` => `    return EXIT_OK`
+  dry-run-runs: {{module}}.py: `if not apply:` => `if False:`
+  unquoted: {{module}}.py: `return "'" + s.replace("'", "''") + "'"` => `return "'" + s + "'"`
+  unseeded: {{module}}.py: `rng = random.Random(seed)` => `rng = random.Random()`
+  ids-random: {{module}}.py: `if col.pk or col.name == "id":` => `if False:`
+  leftover-kept: {{module}}.py: `["docker", "rm", "-f", NAME],
+        ["docker", "run", "-d"` => `["docker", "run", "-d"`
+  all-interfaces: {{module}}.py: `f"127.0.0.1:{a.port}:{a.container_port}"` => `f"{a.port}:{a.container_port}"`
+  fk-triggers-on: {{module}}.py: `"SET session_replication_role = replica;\\n"` => `""`
+  constraints-as-columns: {{module}}.py: `if CONSTRAINT.match(part):` => `if False:`
+  unmasked-tables: {{module}}.py: `emit(f"table {t.name}:` => `sys.stdout.write(f"table {t.name}:`
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "bin"))
+import mask  # noqa: E402
+import {{module}} as eng  # noqa: E402
+
+SCHEMA = """
+SET statement_timeout = 0;
+CREATE TABLE public.orders (
+    id bigint NOT NULL,
+    tenant character varying(12) NOT NULL,
+    total numeric(10,2) DEFAULT 0,
+    paid boolean,
+    created_at timestamp with time zone DEFAULT now(),
+    meta jsonb,
+    ref uuid,
+    note text,
+    CONSTRAINT orders_total_check CHECK ((total >= (0)::numeric)),
+    PRIMARY KEY (id)
+);
+ALTER TABLE public.orders OWNER TO app_owner;
+CREATE TABLE IF NOT EXISTS public.order_items (
+    order_id bigint REFERENCES public.orders(id),
+    qty integer,
+    shape point
+);
+"""
+
+
+class FakeDocker:
+    def __init__(self, logs=("",)):
+        self.logs, self.calls = list(logs), []
+
+    def __call__(self, argv):
+        self.calls.append(argv)
+        if argv[1] == "logs":
+            return 0, self.logs.pop(0) if len(self.logs) > 1 else self.logs[0], ""
+        return 0, "abc123\n", ""
+
+
+class Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def monotonic(self):
+        self.t += 1
+        return self.t
+
+
+class Run:
+    def __init__(self, docker=None, schema=SCHEMA, patterns=()):
+        self.docker, self.schema, self.patterns = docker or FakeDocker(), schema, patterns
+
+    def __call__(self, *argv):
+        tmp = tempfile.TemporaryDirectory()
+        d = Path(tmp.name)
+        (d / "config.toml").write_text("[mask]\npatterns = " + json.dumps(list(self.patterns)) + "\n")
+        (d / "schema.sql").write_text(self.schema)
+        self.out = d / "out"
+        args = [a.replace("SCHEMA", str(d / "schema.sql")).replace("OUT", str(self.out)) for a in argv]
+        out, err = io.StringIO(), io.StringIO()
+        mask._MASKER = None
+        clock = Clock()
+        try:
+            with mock.patch.dict(os.environ, {"SKILL_FORGE_CONFIG": str(d / "config.toml")}), \
+                    mock.patch.object(eng, "run_docker", self.docker), mock.patch.object(eng, "sleep", lambda s: None), \
+                    mock.patch.object(eng, "monotonic", clock.monotonic), redirect_stdout(out), redirect_stderr(err):
+                rc = eng.main(args)
+            self.seed = (self.out / "seed.sql").read_text() if (self.out / "seed.sql").exists() else ""
+        finally:
+            mask._MASKER = None
+            tmp.cleanup()
+        return rc, out.getvalue(), err.getvalue()
+
+
+PLAN = ["plan", "--image", "postgres:16.4", "--schema", "SCHEMA", "--out", "OUT", "--rows", "3"]
+UP = ["up", "--image", "postgres:16.4", "--schema", "SCHEMA", "--out", "OUT", "--rows", "3", "--timeout", "5s"]
+
+
+class PlanTest(unittest.TestCase):
+    def test_golden_provenance_header_and_plan(self):
+        run = Run()
+        rc, out, _ = run(*PLAN)
+        self.assertEqual(rc, 0, out)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "# target:  docker image postgres:16.4 as {{name}}-repro")
+        self.assertEqual(lines[1], "# window:  n/a: a local reproduction; no production data read")
+        self.assertEqual(lines[3:7], ["# rows:    2 tables x 3 synthetic rows",
+                                      "# partial: YES: 1 columns of a type this engine does not generate are NULL",
+                                      "table public.orders: 8 columns, 3 rows", "table public.order_items: 3 columns, 3 rows"])
+        self.assertTrue(lines[-2].startswith("would run: docker rm -f {{name}}-repro"))
+        self.assertIn("-p 127.0.0.1:5432:5432", lines[-1])
+        self.assertIn("seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro postgres:16.4", lines[-1])
+        self.assertEqual(run.docker.calls, [])
+
+    def test_seed_is_deterministic_typed_and_synthetic(self):
+        a, b = Run(), Run()
+        a(*PLAN)
+        b(*PLAN)
+        self.assertEqual(a.seed, b.seed)
+        c = Run()
+        c(*PLAN[:-2], "--rows", "3", "--seed", "7")
+        self.assertNotEqual(a.seed, c.seed)
+        self.assertIn("SET session_replication_role = replica;", a.seed)
+        self.assertIn("CREATE TABLE public.orders (", a.seed)
+        self.assertNotIn("OWNER TO", a.seed)
+        first = [ln for ln in a.seed.splitlines() if ln.startswith("INSERT INTO public.orders")][0]
+        self.assertRegex(first, r"VALUES \(1, '[^']*(''[^']*)*', \d+\.\d\d, (true|false), '2026-")
+        self.assertIn('("order_id", "qty", "shape")', a.seed)
+        self.assertRegex(a.seed, r"INSERT INTO public.order_items .* VALUES \(\d+, \d+, NULL\);")
+
+    def test_up_is_a_dry_run_without_apply(self):
+        run = Run()
+        rc, out, _ = run(*UP)
+        self.assertEqual(rc, 0)
+        self.assertIn("would run: docker run -d --name {{name}}-repro", out)
+        self.assertIn("dry run: nothing ran", out)
+        self.assertEqual(run.docker.calls, [])
+
+    def test_down_is_a_dry_run_without_apply(self):
+        run = Run()
+        _, out, _ = run("down")
+        self.assertIn("would run: docker rm -f {{name}}-repro", out)
+        self.assertEqual(run.docker.calls, [])
+
+    def test_up_with_apply_removes_a_leftover_starts_and_waits(self):
+        docker = FakeDocker(logs=["initdb...", "LOG:  database system is ready to accept connections"])
+        rc, out, _ = Run(docker)(*UP, "--apply")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([c[1] for c in docker.calls], ["rm", "run", "logs", "logs"])
+        self.assertIn("ready:", out)
+
+
+class GuardTest(unittest.TestCase):
+    def test_guard_wrong_target_an_untagged_image_is_refused(self):
+        rc, _, err = Run()("plan", "--image", "registry.example:5000/team/app", "--schema", "SCHEMA", "--out", "OUT")
+        self.assertEqual(rc, 5)
+        self.assertIn("has no tag or digest", err)
+
+    def test_guard_wrong_target_latest_is_refused(self):
+        rc, _, err = Run()("plan", "--image", "postgres:latest", "--schema", "SCHEMA", "--out", "OUT")
+        self.assertEqual(rc, 5)
+        self.assertIn("tagged latest", err)
+
+    def test_guard_wrong_target_a_digest_is_accepted(self):
+        rc, _, _ = Run()("plan", "--image", "postgres@sha256:" + "a" * 64, "--schema", "SCHEMA", "--out", "OUT")
+        self.assertEqual(rc, 0)
+
+    def test_guard_absent_a_schema_without_tables(self):
+        rc, out, _ = Run(schema="SET x = 1;\nCREATE INDEX i ON t (a);\n")(*PLAN)
+        self.assertEqual(rc, 2)
+        self.assertIn("ABSENT:", out)
+
+    def test_guard_incomplete_capture_without_the_marker_is_partial(self):
+        docker = FakeDocker(logs=["initdb: waiting", "FATAL: could not bind"])
+        rc, out, _ = Run(docker)(*UP, "--apply")
+        self.assertEqual(rc, 3)
+        self.assertIn("PARTIAL: no 'database system is ready to accept connections'", out)
+        self.assertIn("FATAL: could not bind", out)
+
+
+class QuotingTest(unittest.TestCase):
+    def test_quoting_text_with_a_quote_is_escaped(self):
+        self.assertEqual(eng.sql_text("o'hara"), "'o''hara'")
+        run = Run()
+        run("plan", "--image", "postgres:16.4", "--schema", "SCHEMA", "--out", "OUT", "--rows", "40")
+        self.assertIn("o''hara", run.seed)
+        self.assertNotRegex(run.seed, r"[^']o'hara")
+
+
+class MaskTest(unittest.TestCase):
+    def test_mask_planted_table_name(self):
+        rc, out, _ = Run(schema="CREATE TABLE cust_acme_orders (id int);\n", patterns=[r"\bcust_[a-z]+"])(*PLAN)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("cust_acme", out)
+        self.assertIn("table <masked-1>_orders", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

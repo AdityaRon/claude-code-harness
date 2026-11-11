@@ -156,9 +156,9 @@ class Shape(unittest.TestCase):
     def test_more_token_shapes_fail(self):
         fakes = {"AWS temporary key": "ASIA" + "EXAMPLEEXAMPLE00",
                  "LaunchDarkly key": "sdk-00000000-0000-0000-0000-000000000000",
-                 "PEM block": "-----BEGIN EXAMPLE PRIVATE KEY-----",
+                 "PEM block": "-----BEGIN EXAMPLE " + "PRIVATE KEY-----",
                  "key assignment": "api_key=examplevalue0000",
-                 "token assignment": "token: 'example-token-0000'"}
+                 "token assignment": "token: " + "'example-token-0000'"}
         for name, fixture in fakes.items():
             rc, out = self.check(f"config has {fixture} in it\n")
             self.assertEqual(rc, 1, name)

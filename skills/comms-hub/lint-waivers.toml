@@ -1,0 +1,13 @@
+# skill_lint waivers (skills/skill-forge/bin/skill_lint.py). comms-hub predates
+# skill-forge and runs on every tick of a live session. C1, C3 and the C8
+# description were fixed; these three stay because the fix would break or risk
+# that session. The lint fails a waiver with no reason, or one whose check passes.
+
+[C6]
+reason = "hub.py panel's stdout is parsed as JSON by the panel (panel/hooks/register.tsx:87, JSON.parse(out.stdout)), so a provenance header in front of it breaks the panel. The rest is queue, draft and tick state the comms session acts on, not an answer pasted elsewhere."
+
+[C7]
+reason = "A vendored mask.py reads skill-forge's config, so a mask pattern added for a forged skill would also rewrite the names and repos comms-hub routes on. Its 8 scripts print directly (144 lines with print(, grep -c over bin/*.py on 2026-11-11), and check_draft.py already scans every outgoing Slack draft for secrets and names."
+
+[C8]
+reason = "SKILL.md is 520 lines (wc -l, 2026-11-11), over the 150-line budget, and the tick section alone is 335. Every session that sends Slack loads it all for the 29-line peer section. Moving the tick into its own file changes what the live comms session must re-read after compaction, which no test here exercises, so that waits for a decision and a live trial."

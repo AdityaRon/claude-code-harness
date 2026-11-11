@@ -135,11 +135,26 @@ for skill in "$REPO"/skills/*/; do
       fi
     done
   fi
+  # A skill's templates/ (skill-forge's archetypes) go to the data dir, never
+  # under ~/.claude/skills, so no template can be read as a skill. Copied whole
+  # beside the old set and swapped in, so a removed template does not linger.
+  if [[ -d "$skill"templates ]]; then
+    data="${XDG_DATA_HOME:-$HOME/.local/share}/$name"
+    mkdir -p "$data"
+    rm -rf "$data/templates.new"
+    cp -R "$skill"templates "$data/templates.new" && rm -rf "$data/templates" && mv "$data/templates.new" "$data/templates"
+  fi
   echo "  ✓ skills/$name"
 done
 if [[ -d "$REPO/skills/comms-hub" && ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/comms-hub/config.toml" ]]; then
   echo "  ℹ comms-hub is not configured (optional): the Setup section of ~/.claude/skills/comms-hub/SKILL.md"
   echo "     starts with hub.py init, which writes ~/.config/comms-hub/config.toml; then: bash doctor.sh --skill comms-hub"
+fi
+# skill-forge reads ~/.config/skill-forge/config.toml (its mask patterns can name
+# customers), which this installer never creates or touches either.
+if [[ -d "$REPO/skills/skill-forge" && ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/skill-forge/config.toml" ]]; then
+  echo "  ℹ skill-forge is not configured (optional): copy ~/.claude/skills/skill-forge/config.example.toml"
+  echo "     to ~/.config/skill-forge/config.toml and add your mask patterns"
 fi
 
 # ---- Personal rules --------------------------------------------------

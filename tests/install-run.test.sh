@@ -17,7 +17,7 @@ fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"
-unset XDG_CONFIG_HOME
+unset XDG_CONFIG_HOME XDG_DATA_HOME SKILL_FORGE_TEMPLATES
 mkdir -p "$HOME/.claude/rules"
 
 # A machine-local rule, and a stray file the installer has never heard of.
@@ -124,6 +124,28 @@ SK="$HOME/.claude/skills/comms-hub"
   || fail "comms-hub config untouched" "$(ls -A "$HOME/.config/comms-hub")"
 ! grep -qF 'comms-hub is not configured' <<<"$OUT" \
   && pass "no setup hint when the config exists" || fail "no setup hint when the config exists" "hint printed"
+
+echo ""
+echo "=== skill-forge's templates go to the data dir, never under ~/.claude/skills ==="
+SF="$HOME/.claude/skills/skill-forge"
+[ -x "$SF/bin/forge.py" ] && [ -f "$SF/bin/skill_lint.py" ] && [ -f "$SF/config.example.toml" ] && [ ! -e "$SF/tests" ] \
+  && pass "skill-forge's SKILL.md, bin/ and example config installed, not its tests" || fail "skill-forge installed" "$(ls -R "$SF" 2>&1 | head -5)"
+T="$HOME/.local/share/skill-forge/templates"
+[ -f "$T/sql-readonly/engine.py.tmpl" ] && [ -f "$T/_shared/tests/run.py" ] \
+  && pass "its templates are in ~/.local/share/skill-forge/templates" || fail "templates in the data dir" "$(ls "$T" 2>&1 | head -3)"
+[ -z "$(find "$HOME/.claude/skills" \( -name '*.tmpl' -o -name templates \) 2>/dev/null)" ] \
+  && pass "no template sits under ~/.claude/skills" || fail "no template under ~/.claude/skills" "$(find "$HOME/.claude/skills" -name '*.tmpl' | head -3)"
+[ ! -e "$HOME/.config/skill-forge" ] && grep -qF 'skill-forge is not configured' <<<"$OUT" \
+  && pass "its config is neither created nor needed; a hint says how" || fail "skill-forge config left alone" "$(ls -A "$HOME/.config/skill-forge" 2>&1)"
+SF_PY=$(bash "$SF/bin/python.sh" 2>/dev/null)
+F_OUT=$(SKILL_FORGE_STATE="$TMP/sf-state" "${SF_PY:-python3}" -B "$SF/bin/forge.py" list 2>&1)
+grep -q '^sql-readonly ' <<<"$F_OUT" \
+  && pass "the installed forge.py finds the installed templates" || fail "installed forge.py lists archetypes" "$(printf '%s' "$F_OUT" | head -3)"
+SF_ENV=(SKILL_FORGE_STATE="$TMP/sf-state" SKILL_FORGE_CONFIG="$TMP/none.toml")
+env "${SF_ENV[@]}" "${SF_PY:-python3}" -B "$SF/bin/forge.py" draft metrics-query job-latency --question "why is this job slow" >/dev/null 2>&1
+V_OUT=$(env "${SF_ENV[@]}" "${SF_PY:-python3}" -B "$SF/bin/forge.py" verify "$TMP/sf-state/drafts/job-latency" --no-mutate 2>&1); V_RC=$?
+[ "$V_RC" = 0 ] && grep -q '^skill_lint: PASS' <<<"$V_OUT" && grep -q '^tests: exit 0' <<<"$V_OUT" \
+  && pass "the installed forge.py drafts a skill whose tests and lint pass" || fail "installed draft verifies" "$(printf '%s' "$V_OUT" | tail -5)"
 
 # The rest of the install still has to work; a rules change must not break it.
 [ -f "$HOME/.claude/settings.json" ] \

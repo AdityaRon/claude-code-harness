@@ -1,0 +1,7 @@
+archetype = "api-readonly"
+summary = "Reads one REST resource with GET only, following pages up to a cap, and tells a missing resource from an empty one and an expired login."
+not_for = "changing anything through the API (it cannot send anything but GET), or metrics and logs (use the metrics-query or logs-fetch skill)"
+guards = ["absent", "partial", "expired_auth", "wrong_target"]
+write_verbs = []
+sql = false
+vendor = []
