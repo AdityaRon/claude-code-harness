@@ -11,6 +11,8 @@ import type { Look, Panel, Prs, Snapshot, View } from '../types'
 // the comms session alone.
 const PANE = 'comms'
 const TITLE = 'Comms'
+// The minute read; a drawn snapshot older than 1.5 of these asks for its own.
+const PERIOD = 60_000
 const EMPTY: Snapshot = { panel: null, problem: '', readAt: 0 }
 // Change a tag when its fields change: it declines what an earlier version
 // stored, which outlives a reload.
@@ -24,9 +26,18 @@ const ROWS = { needs: 8, prs: 10, going: 6, sessions: 6, held: 6, events: 12 }
 
 // The interpreter the scripts use, found once; a failure is asked again.
 let python: string | undefined
-// The phones attached now. The mobile app docks no pane, so while one is here
-// the counts also ride the status line, which a remote surface draws.
-const phones = new Set<string>()
+// The variables below are this environment's: a reload starts them over.
+// Whether these counts are on the status line, so they come off once no phone is listed.
+let pinned = false
+// The minute's timer, armed by whichever hook runs first: one environment never heard session.start.
+let minute: { cancel: () => void } | undefined
+// A draw asked for a read that has not landed: the draws until then ask for no more.
+let asked = false
+// Reads begun, and the newest on screen: with two in flight (the minute's and a
+// turn's) the older answered last and stood until the next minute. Counted, not
+// timed, so a clock set back makes no read late.
+let begun = 0
+let shown = 0
 
 async function hub($: EngineInterface, args: string[]) {
   const bin = `${$.plugin.root}/../bin`
@@ -42,18 +53,66 @@ async function snapshotOf($: EngineInterface): Promise<Snapshot> {
   const readAt = await $.clock.now()
   try {
     const out = await hub($, ['panel'])
-    if (out.exitCode !== 0) throw new Error(out.stdout.trim() || out.stderr.trim() || 'hub.py panel failed')
+    if (out.exitCode !== 0) {
+      const said = out.stdout.trim() || out.stderr.trim() || 'hub.py panel failed'
+      // A traceback's last line says what failed; all of it filled the pane.
+      throw new Error(said.includes('Traceback (most recent call last)') ? said.split('\n').at(-1) : said)
+    }
     return { panel: JSON.parse(out.stdout) as Panel, problem: '', readAt }
   } catch (err) {
     return { ...EMPTY, problem: `comms-hub: ${err instanceof Error ? err.message : String(err)}`, readAt }
   }
 }
 
+// A phone attached, from the engine's roster: a set kept here forgot the phone
+// at each reload. A failed ask is no phone, and never stops a read.
+async function phoneHere($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.session.surfaces()).includes('mobile')
+  } catch {
+    return false
+  }
+}
+
+// The mobile app docks no pane, so while a phone is here the counts also ride
+// the status line, which a remote surface draws.
+async function pin($: EngineInterface, s: Snapshot): Promise<void> {
+  if (await phoneHere($)) {
+    $.ui.status(statusLine(s, (await read($, look)).since))
+    pinned = true
+  } else if (pinned) {
+    $.ui.status(undefined)
+    pinned = false
+  }
+}
+
 async function refresh($: EngineInterface): Promise<Snapshot> {
-  const next = await snapshotOf($)
-  await update($, snapshot, () => next)
-  if (phones.size) $.ui.status(statusLine(next, (await read($, look)).since))
+  const mine = ++begun
+  const got = await snapshotOf($)
+  const next = await update($, snapshot, cur => {
+    if (mine < shown) return cur
+    shown = mine
+    // A failed read keeps the last good panel on screen, and says why.
+    return got.problem && cur.panel ? { panel: cur.panel, problem: got.problem, readAt: got.readAt } : got
+  })
+  await pin($, next)
   return next
+}
+
+// Ages, "stale" and missed ticks are worked out as hub.py reads, so they froze
+// while the session idled: a read each minute keeps them true (0.26s a read,
+// timed on the hub machine), while the pane is drawn or a phone is here.
+function arm($: EngineInterface): void {
+  minute ??= $.clock.every(PERIOD, () => {
+    void Promise.all([$.ui.panes().catch(() => []), phoneHere($)]).then(([panes, phone]) => {
+      if (phone || panes.some(p => p.id === PANE && p.isPlaced)) return refresh($)
+      // The phone left while its detach still listed it.
+      if (pinned) {
+        $.ui.status(undefined)
+        pinned = false
+      }
+    })
+  })
 }
 
 // Opening the pane or running /comms is a look: what was logged before the
@@ -84,9 +143,9 @@ function counts(p: Panel, since: number): string {
 
 // One line for the status line while a phone is attached.
 function statusLine(s: Snapshot, since: number): string {
-  if (s.problem) return s.problem
-  if (!s.panel) return 'Comms: reading the state'
-  return `Comms: ${counts(s.panel, since)} · next tick ${s.panel.next_tick} · /comms for the list`
+  if (!s.panel) return s.problem || 'Comms: reading the state'
+  return `Comms: ${counts(s.panel, since)} · next tick ${s.panel.next_tick} · `
+    + (s.problem ? `read failed, as of ${s.panel.read}` : '/comms for the list')
 }
 
 // A section of the text below: its title, then at most its compact rows.
@@ -100,10 +159,11 @@ function lines<T>(title: string, items: T[], max: number, line: (item: T) => str
 // the user, the PRs that do, then what goes out, what is with sessions, what
 // is held, and what was logged since the look before this one.
 function summary(s: Snapshot, since: number): string {
-  if (s.problem || !s.panel) return statusLine(s, since)
+  if (!s.panel) return statusLine(s, since)
   const p = s.panel
   const fresh = freshOf(p, since)
   return [
+    ...(s.problem ? [`read failed, showing ${p.read}: ${s.problem}`] : []),
     `Comms${p.day ? ` · ${p.day}` : ''}: ${counts(p, since)} · next tick ${p.next_tick}`,
     ...p.needs.map(n => `● ${words(n.ref, n.target, n.note)}: ${n.text}`),
     ...(p.prs?.rows ?? []).filter(r => r.needs).map(r => `● ${r.line}`),
@@ -139,15 +199,10 @@ export const register: Register = on => {
     // Unasked, a pane waits undrawn on a narrow terminal or a surface that docks none: say why, off screen.
     void $.ui.open({ id: PANE, title: TITLE })
       .then(o => { if (!o.isPlaced) $.ui.log(`comms panel not drawn: ${o.reason}`, { to: 'debug' }) })
-    void looked($).then(() => refresh($))
-    // Ages, "stale" and missed ticks are worked out as hub.py reads, so they froze
-    // while the session idled: a read each minute keeps them true (0.26s a read,
-    // timed on the hub machine), while the pane is drawn or a phone is here.
-    $.clock.every(60_000, () => {
-      void $.ui.panes().then(panes => {
-        if (phones.size || panes.some(p => p.id === PANE && p.isPlaced)) return refresh($)
-      })
-    })
+    // Raised again for a reload or a worker respawn, with the look kept: that
+    // once cleared every dot. Only the first is a look.
+    void read($, look).then(l => (l.last ? undefined : looked($))).then(() => refresh($))
+    arm($)
 
     return next(e)
   })
@@ -163,12 +218,12 @@ export const register: Register = on => {
     return { text: `${summary(s, since)}\n(no pane here: ${opened.reason})` }
   })
 
-  // A phone joining: open the pane for it, and keep the counts on the status
-  // line, in case its app draws no pane at all.
-  on('session.attach', { surface: 'mobile' }, async ($, e, next) => {
+  // A client joining reads at once, so it never draws the last turn's
+  // snapshot. A phone also gets the pane opened for it, and the counts on the
+  // status line in case its app draws no pane at all.
+  on('session.attach', async ($, e, next) => {
     const done = await next(e)
-    phones.add(e.clientId)
-    await $.ui.open({ id: PANE, title: TITLE })
+    if (e.surface === 'mobile') await $.ui.open({ id: PANE, title: TITLE })
     await refresh($)
 
     return done
@@ -176,17 +231,18 @@ export const register: Register = on => {
 
   on('session.detach', { surface: 'mobile' }, async ($, e, next) => {
     const done = await next(e)
-    phones.delete(e.clientId)
-    if (!phones.size) $.ui.status(undefined)
+    await pin($, await read($, snapshot))
 
     return done
   })
 
   // The comms session changes its state dir in its own turns, so a read as
-  // each ends shows what the turn did at once.
+  // each ends shows what the turn did at once. Unawaited: the turn's end
+  // waited on it, up to hub.py's 20s timeout.
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
-    if (e.agentId === undefined) await refresh($)
+    arm($)
+    if (e.agentId === undefined) void refresh($)
 
     return done
   })
@@ -194,9 +250,20 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const s = await read($, snapshot)
-    if (s.problem) return <Text color="error">{s.problem}</Text>
+    // Drawn after waiting undrawn (a terminal widened, a client joined), the
+    // snapshot is as old as the last read: ask for one from a timer, as a draw
+    // may not write. Never before the first read, which is already on its way.
+    const at = await $.clock.now().catch(() => s.readAt)
+    if (!asked && s.readAt && at - s.readAt > 1.5 * PERIOD) {
+      asked = true
+      try {
+        $.clock.after(0, () => { void refresh($).finally(() => { asked = false }) })
+      } catch {
+        asked = false
+      }
+    }
     const p = s.panel
-    if (!p) return <Text dimColor>Reading the comms-hub state.</Text>
+    if (!p) return s.problem ? <Text color="error">{s.problem}</Text> : <Text dimColor>Reading the comms-hub state.</Text>
     const { since } = await read($, look)
     const { full, open } = await read($, view)
     // Compact cuts a row at the pane's edge; expanded wraps it, so all of it reads.
@@ -252,6 +319,8 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap={1}>
+        {/* The last read failed: what is below is the read before it, and says so. */}
+        {s.problem !== '' && <Text color="error" wrap="wrap">{`read failed, showing ${p.read}: ${s.problem}`}</Text>}
         <Box flexDirection="column" borderStyle="round" borderColor={p.needs.length || prNeeds ? 'warning' : 'subtle'}
              paddingX={1}>
           <Box flexDirection="row" justifyContent="space-between" flexWrap="wrap" columnGap={2}>
