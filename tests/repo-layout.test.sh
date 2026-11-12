@@ -164,6 +164,7 @@ echo "=== The README layout block names every bin/ and tools/ file and each skil
 # tests/ the line did name.
 MISSING_BIN=""
 for f in bin/* tools/*; do
+  [ -f "$f" ] || continue   # a test's __pycache__/ is not a tool; install.sh skips it too
   b=$(basename "$f")
   printf '%s' "$BLOCK" | grep -qF "$b" || MISSING_BIN="$MISSING_BIN $f"
 done
@@ -196,6 +197,7 @@ echo "=== Every hook, bin/ and tools/ file is named by at least one suite ==="
 # no suite names at all is one nothing exercises.
 UNNAMED=""
 for f in hooks/*.sh bin/* tools/*; do
+  [ -f "$f" ] || continue
   b=$(basename "$f")
   grep -qF "$b" tests/*.test.sh || UNNAMED="$UNNAMED $f"
 done

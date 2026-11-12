@@ -93,12 +93,14 @@ echo "=== bin/ installs flat into ~/.claude, every file of it; tools/ never does
 # setting, the launchd job, skills and allow rules name them.
 MISSING=""
 for f in "$REPO"/bin/*; do
+  [[ -f "$f" ]] || continue   # a test's __pycache__/, which install.sh skips too
   b=$(basename "$f"); [[ -x "$HOME/.claude/$b" ]] || MISSING="$MISSING $b"
 done
 [[ -z "$MISSING" ]] && pass "every bin/ file installed, executable" \
   || fail "every bin/ file installed, executable" "missing:$MISSING"
 LEAKED=""
 for f in "$REPO"/tools/*; do
+  [[ -f "$f" ]] || continue
   b=$(basename "$f"); if [[ -e "$HOME/.claude/$b" ]]; then LEAKED="$LEAKED $b"; fi
 done
 [[ -z "$LEAKED" ]] && pass "no tools/ file installed" || fail "no tools/ file installed" "installed:$LEAKED"
