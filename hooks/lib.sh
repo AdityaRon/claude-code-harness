@@ -914,7 +914,7 @@ host_binary_check() {
   now=$(command -v claude 2>/dev/null)
   [[ -n "$now" ]] && now=" claude on PATH is now $(readlink -f "$now" 2>/dev/null || printf '%s' "$now")."
   echo "## This session's Claude Code binary is gone"
-  echo "The session host, pid $pid, runs from $comm, which no longer exists: an upgrade deleted it and the host runs on from memory.$now macOS keys a background host's Desktop, Documents and Downloads access to that path, so once tccd restarts every access there fails with 'Operation not permitted' (git: couldn't read packed-refs). Save work, then restart this session so it runs from the current binary. A clone outside those folders is unaffected: bin/relocate-clones.sh moves one. Check all hosts: bash doctor.sh --hosts."
+  echo "The session host, pid $pid, runs from $comm, which no longer exists: an upgrade deleted it and the host runs on from memory.$now macOS keys a background host's Desktop, Documents and Downloads access to that path, so once tccd restarts every access there fails with 'Operation not permitted' (git: couldn't read packed-refs). Save work, then restart this session so it runs from the current binary. A clone outside those folders is unaffected: ~/.claude/relocate-clones.sh moves one. Check all hosts: bash -c 'source ~/.claude/hooks/lib.sh; stale_claude_hosts'."
   marker=$(expand_tilde "${CLAUDE_CLI_UPGRADED:-$HOME/.claude/state/cli-upgraded}")
   [[ -f "$marker" ]] && echo "harness-update.sh's last CLI upgrade: $(head -1 "$marker")"
   return 1

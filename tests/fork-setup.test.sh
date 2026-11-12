@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for bin/fork-setup.sh against a stand-in gh that answers from files and
+# Tests for tools/fork-setup.sh against a stand-in gh that answers from files and
 # logs each call, so a report is shown to change nothing and --apply to change
 # only what GitHub turned off.
 set -u
@@ -8,7 +8,7 @@ pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; [[ -n "${2:-}" ]] && printf '    %s\n' "$2"; FAIL=$((FAIL+1)); }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-S="$REPO/bin/fork-setup.sh"
+S="$REPO/tools/fork-setup.sh"
 export STUB="$TMP/stub" PATH="$TMP/bin:$PATH"
 mkdir -p "$STUB" "$TMP/bin"
 cat > "$TMP/bin/gh" <<'EOF'

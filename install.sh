@@ -46,49 +46,18 @@ for f in "$REPO"/hooks/*.sh; do
   echo "  ✓ hooks/$b"
 done
 
-# ---- Statusline -------------------------------------------------------
-place "$REPO/bin/statusline.sh" ~/.claude/statusline.sh 755
-echo "  ✓ statusline.sh"
-
-# ---- Memory tools -----------------------------------------------------
-# Not a hook: checking memories against GitHub costs a network call, which has
-# no business running on every session start. Invoked on demand instead.
-# All three, together: memory-audit invokes them as a set, and installing only
-# some of them is what left the skill resolving one script from ~/.claude and
-# another from a hardcoded checkout path — so the ~/.claude copy went stale by a
-# day without anything noticing.
-for t in memory-verify memory-fix memory-index memory-provenance; do
-  place "$REPO/bin/$t.sh" ~/.claude/"$t.sh" 755
-  echo "  ✓ $t.sh"
+# ---- Tools: every file in bin/, flat into ~/.claude -------------------
+# Globbed like hooks/, so a new tool installs the day it lands; clone-only
+# tools live in tools/ and never install. Flat, because settings.json's
+# statusLine, the launchd job and the skills name ~/.claude/<tool>. None is a
+# hook: memory-audit runs the memory tools on demand, comms-hub's tick runs
+# spend-report.py, and harness-update.sh updates from ~/.claude/harness-src.
+for f in "$REPO"/bin/*; do
+  [[ -f "$f" ]] || continue
+  b=$(basename "$f")
+  place "$f" ~/.claude/"$b" 755
+  echo "  ✓ $b"
 done
-
-# ---- Session routing --------------------------------------------------
-# Also not a hook, and for the same reason as the memory tools: it answers a
-# question you ask at a decision point ("which session owns this PR?"), not one
-# worth answering on every session start. Reads only local transcripts and job
-# records, so no network call and nothing to configure.
-place "$REPO/bin/session-route.sh" ~/.claude/session-route.sh 755
-echo "  ✓ session-route.sh"
-
-# ---- Spend report -----------------------------------------------------
-# What sessions, subagents and loop ticks cost, read from local transcripts.
-# The comms-hub tick runs it once a day for its alerts.
-place "$REPO/bin/spend-report.py" ~/.claude/spend-report.py 755
-echo "  ✓ spend-report.py"
-
-# Hosts network-guard allows on this machine only, read from local-settings at
-# every call; see docs/customization.md.
-for t in sandbox sandbox-trial; do
-  place "$REPO/bin/$t.sh" ~/.claude/"$t.sh" 755; echo "  ✓ $t.sh"
-done
-place "$REPO/bin/net-allowlist.sh" ~/.claude/net-allowlist.sh 755
-echo "  ✓ net-allowlist.sh"
-
-# Updates from its own clone, ~/.claude/harness-src, cloned from origin= below:
-# launchd cannot read ~/Desktop or ~/Documents, where this clone may live.
-# Replaced by rename: it is the script running this install when it updates.
-place "$REPO/bin/harness-update.sh" ~/.claude/harness-update.sh 755
-echo "  ✓ harness-update.sh"
 
 # ---- Contract pin -----------------------------------------------------
 # session-start.sh compares this with `claude --version`, so a session says when

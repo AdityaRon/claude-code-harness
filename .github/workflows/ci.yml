@@ -58,7 +58,7 @@ jobs:
         run: |
           INTENDED=$(printf '%s\n' "$PR_BODY" | sed -nE 's/^intended-decisions:[[:space:]]*//p' | tr '\n' ' ')
           set +e
-          python3 bin/hook-bench.py --base "origin/$BASE" --head HEAD --quick --gate --intended "$INTENDED" --md bench.md >/dev/null
+          python3 tools/hook-bench.py --base "origin/$BASE" --head HEAD --quick --gate --intended "$INTENDED" --md bench.md >/dev/null
           RC=$?
           cat bench.md >> "$GITHUB_STEP_SUMMARY"
           [ "$RC" = 0 ] || echo "::error::the benchmark gate failed; see the job summary."
@@ -78,4 +78,4 @@ jobs:
         # linted the day it lands instead of the day someone remembers. .github
         # is in the list because CI's own helpers are shell too, and a broken
         # one fails every job before anything else gets a chance to run.
-        run: shellcheck -S warning hooks/*.sh bin/*.sh ./*.sh .github/*.sh skills/*/bin/*.sh
+        run: shellcheck -S warning hooks/*.sh bin/*.sh tools/*.sh ./*.sh .github/*.sh skills/*/bin/*.sh

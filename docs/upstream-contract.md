@@ -13,10 +13,10 @@ A push-triggered CI run can never catch this, because upstream changes when the
 repo stands still. So:
 
 ```bash
-bash bin/upstream-check.sh
+bash tools/upstream-check.sh
 ```
 
-`bin/upstream-check.sh` compares the harness against the **installed** CLI, using only
+`tools/upstream-check.sh` compares the harness against the **installed** CLI, using only
 auth-free commands (`claude doctor`, `claude --version`) so CI needs no credentials.
 It checks that the shipped `settings.json` still validates, that every hook event
 the harness registers still exists, and that the shipped `defaultMode` is still
@@ -97,7 +97,7 @@ runs and tags what landed ([releases.md](releases.md)).
 Setup, once: run `/install-github-app` in Claude Code for this repo. It installs
 the Claude GitHub App, which lets the draft PR run CI, and stores
 `CLAUDE_CODE_OAUTH_TOKEN`; confirm with `gh secret list`. The reviews use your
-plan's usage. On a fork, `bin/fork-setup.sh` checks this and the rest GitHub
+plan's usage. On a fork, `tools/fork-setup.sh` checks this and the rest GitHub
 leaves off, and `--apply` turns on the workflows and the PR permission.
 
 ## /insights

@@ -12,10 +12,10 @@ resolved (`permissionDecision`), so a prompt Claude Code raised itself (an ask
 rule, a protected path, a mode) and the human approved is counted too. Older
 transcripts show only the rejections.
 
-  bin/permission-friction.py --days 49 --out DIR   # DIR/report.md + DIR/friction.json
-  bin/permission-friction.py --days 49             # report to stdout
-  bin/permission-friction.py --replay hooks/       # also re-run recorded asks/blocks through these guards
-  bin/permission-friction.py --days 2 --project tradedesk   # only calls whose cwd contains this
+  tools/permission-friction.py --days 49 --out DIR   # DIR/report.md + DIR/friction.json
+  tools/permission-friction.py --days 49             # report to stdout
+  tools/permission-friction.py --replay hooks/       # also re-run recorded asks/blocks through these guards
+  tools/permission-friction.py --days 2 --project tradedesk   # only calls whose cwd contains this
 """
 import argparse, collections, datetime as dt, glob, json, os, re, shlex, subprocess, sys
 
@@ -497,7 +497,7 @@ def render(d):
     L.append('# Claude Code permission friction\n')
     L.append(f"Window {w['start']} to {w['end']} (UTC). Source: {w['transcript_files']} transcript files under "
              "`~/.claude/projects` (main sessions and subagents), cross-checked against `~/.claude/logs/audit.log*`. "
-             "Produced by `bin/permission-friction.py` in claude-code-harness.\n")
+             "Produced by `tools/permission-friction.py` in claude-code-harness.\n")
     L.append(f"{t['tool_calls']} tool calls ({t['bash_calls']} Bash) across {t['sessions']} sessions. "
              f"{t['friction_events']} calls met a permission decision other than a silent allow.\n")
     meaning = dict(guard_ask='harness guard returned `ask`: a human prompt',

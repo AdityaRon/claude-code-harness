@@ -12,7 +12,7 @@ Release workflow runs when that run completes (and on
 `gh workflow run release.yml`, which takes `-f version=v1.2.0` or
 `-f bump=minor`) and tags main whenever anything but `CHANGELOG.md` changed
 since the previous tag, after `doctor.sh` and, when `hooks/` or
-`config/settings.json` changed, `bin/hook-bench.py --gate` against that tag:
+`config/settings.json` changed, `tools/hook-bench.py --gate` against that tag:
 no release when a tool class's wait grew more than 20% and 5 ms at p50 or p95,
 or when a payload's decision changed and no merged PR body declared it with an
 `intended-decisions: <payload ids>` line. A blocked release opens or updates
@@ -64,15 +64,15 @@ the one installed.
 
 ## The benchmark by hand
 
-`bin/hook-bench.py --base v1.0.0` compares that tag with the working tree
+`tools/hook-bench.py --base v1.0.0` compares that tag with the working tree
 (`--md` for the table); `--corpus audit` replays this machine's audit log and
 its output must stay on the machine.
 
 ```
-bin/hook-bench.py                                  # latest tag vs the working tree
-bin/hook-bench.py --base origin/main --head HEAD   # two refs, same run
-bin/hook-bench.py --gate --intended id1,id2 --md bench.md --json bench.json
-bin/hook-bench.py --corpus audit                   # this machine's audit log; never publish
+tools/hook-bench.py                                  # latest tag vs the working tree
+tools/hook-bench.py --base origin/main --head HEAD   # two refs, same run
+tools/hook-bench.py --gate --intended id1,id2 --md bench.md --json bench.json
+tools/hook-bench.py --corpus audit                   # this machine's audit log; never publish
 ```
 
 Every payload in `tests/bench-corpus.jsonl` is fed to each PreToolUse command
