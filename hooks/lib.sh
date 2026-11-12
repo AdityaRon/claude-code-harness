@@ -149,6 +149,71 @@ normalize_command() {
   printf '%s' "${s:-$1}"
 }
 
+# Where a heredoc really starts, as bash reads the line. Not inside quotes (a
+# quoted string may span lines), a # comment, (( )), $(( )), $[ ], backticks or
+# a <<< here-string, each of which once hid the commands after it. hd_scan sets
+# HD_POS (0: none), HD_LEN (through the delimiter), HD_TERM, HD_DASH, HD_LIT;
+# HD_BAD when a << it cannot read for certain may open one: the caller then keeps
+# the command as typed. Call it only on lines outside a body: bodies are data.
+HEREDOC_AWK='
+function hd_arith(s, i,    d, n, c) {
+  d = 0; n = length(s)
+  for (; i <= n; i++) { c = substr(s, i, 1); if (c == "(") d++; else if (c == ")" && --d == 0) return i }
+  return 0
+}
+function hd_word(s, i,    j, c, k, w) {
+  j = i + 2; HD_DASH = 0; HD_LIT = 0
+  if (substr(s, j, 1) == "-") { HD_DASH = 1; j++ }
+  while (substr(s, j, 1) ~ /[ \t]/) j++
+  c = substr(s, j, 1)
+  if (c == "\047" || c == "\"") {
+    k = index(substr(s, j + 1), c); if (!k) return 0
+    w = substr(s, j + 1, k - 1); j += k + 1; HD_LIT = 1
+    if (w == "" || (c == "\"" && w ~ /[\\$`]/)) return 0
+  } else {
+    if (c == "\\") { HD_LIT = 1; j++ }
+    if (!match(substr(s, j), /^[A-Za-z0-9_.-]+/)) return 0
+    w = substr(s, j, RLENGTH); j += RLENGTH
+  }
+  c = substr(s, j, 1)
+  if (c != "" && c !~ /[ \t;&|()<>]/) return 0
+  HD_POS = i; HD_LEN = j - i; HD_TERM = w
+  return 1
+}
+function hd_scan(s,    i, n, c, j) {
+  HD_POS = 0; HD_LEN = 0; HD_BAD = 0; n = length(s)
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (hq == "\047") { if (c == "\047") hq = ""; continue }
+    if (hq == "A") { if (c == "\\") i++; else if (c == "\047") hq = ""; continue }
+    if (c == "\\") { i++; continue }
+    if (hq == "\"") {
+      if (c == "\"") hq = ""
+      else if (c == "`") hbt = !hbt
+      else if (c == "$" && substr(s, i + 1, 2) == "((") { j = hd_arith(s, i + 1); if (!j) { HD_BAD = 1; return } i = j }
+      else if (c == "$" && substr(s, i + 1, 1) == "(") { hup[++hsp] = "\""; hdep[hsp] = 1; hq = ""; i++ }
+      continue
+    }
+    if (c == "\047") { hq = (i > 1 && substr(s, i - 1, 1) == "$") ? "A" : "\047"; continue }
+    if (c == "\"") { hq = "\""; continue }
+    if (c == "`") { hbt = !hbt; continue }
+    if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;&|()]/)) break
+    if (c == "(" && substr(s, i + 1, 1) == "(") { j = hd_arith(s, i); if (!j) { HD_BAD = 1; return } i = j; continue }
+    if (c == "$" && substr(s, i + 1, 1) == "[") { j = index(substr(s, i), "]"); if (!j) { HD_BAD = 1; return } i += j - 1; continue }
+    if (hsp > 0 && c == "(") hdep[hsp]++
+    if (hsp > 0 && c == ")" && --hdep[hsp] == 0) { hq = hup[hsp--]; continue }
+    if (c == "<" && substr(s, i + 1, 1) == "<") {
+      if (substr(s, i + 2, 1) == "<") { i += 2; continue }
+      if (hbt) { HD_BAD = 1; return }
+      if (HD_POS) { i++; continue }
+      if (!hd_word(s, i)) { HD_BAD = 1; return }
+      i += HD_LEN - 1
+    }
+  }
+  if (HD_POS && hq != "") HD_BAD = 1
+}
+'
+
 # A heredoc fed to `git commit -F -` or `gh pr|issue … --body-file -` is a
 # commit message or PR body: nothing runs it, whatever else the line does. The
 # body goes; the opener and terminator stay, so the command itself is scanned
@@ -157,25 +222,25 @@ normalize_command() {
 # `-m "$(cat <<'EOF'` is the same message when the line ends at the delimiter:
 # anything after it (`| bash`) would run the body.
 strip_message_heredocs() {
+  local out
   case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
-  printf '%s\n' "$1" | awk '
+  out=$(printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
     body { t = $0; if (dash) sub(/^\t+/, "", t)
-           if (t == term) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = ""; print }
-           else if (!lit) buf = buf $0 "\n"
+           if (t == term) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = ""; print; next }
+           if (keep) print; else if (!lit) buf = buf $0 "\n"
            next }
-    { print
-      if (match($0, /<<-?[ \t]*["\047\\]?[A-Za-z_][A-Za-z0-9_]*/)) {
-        pre = substr($0, 1, RSTART - 1); n = split(pre, seg, /\|\||&&|[|;&]/); last = seg[n]
-        oq = substr($0, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", oq); oq = substr(oq, 1, 1)
-        post = substr($0, RSTART + RLENGTH); if (oq == "\047" || oq == "\"") sub("^" oq, "", post)
-        if (last ~ /^[ \t]*(git[ \t]+(-[^ \t]+[ \t]+)*commit|gh[ \t]+(pr|issue))[ \t]/ \
+    { print; hd_scan($0)
+      if (HD_BAD) { bad = 1; exit }
+      if (HD_POS) {
+        pre = substr($0, 1, HD_POS - 1); n = split(pre, seg, /\|\||&&|[|;&]/); last = seg[n]
+        post = substr($0, HD_POS + HD_LEN)
+        keep = !(last ~ /^[ \t]*(git[ \t]+(-[^ \t]+[ \t]+)*commit|gh[ \t]+(pr|issue))[ \t]/ \
             && (last ~ /(^|[ \t])(-F|--file|--body-file)[ \t]*=?[ \t]*-([ \t]|$)/ \
                 || (last ~ /(^|[ \t])(-[A-Za-z]*m|--message|-[tb]|--title|--body)[ \t]*=?[ \t]*"\$\([ \t]*cat[ \t]*$/ \
-                    && post ~ /^[ \t]*$/))) {
-          term = substr($0, RSTART + 2, RLENGTH - 2); dash = (term ~ /^-/)
-          lit = (term ~ /^-?[ \t]*["\047\\]/); buf = ""
-          sub(/^-?[ \t]*["\047\\]?/, "", term); body = 1 } } }
-    END { if (body && buf ~ /[$`]/) printf "%s", buf }'
+                    && post ~ /^[ \t]*$/)))
+        term = HD_TERM; dash = HD_DASH; lit = HD_LIT; buf = ""; body = 1 } }
+    END { if (bad) exit 3; if (body && !keep && buf ~ /[$`]/) printf "%s", buf }') || { printf '%s' "$1"; return; }
+  printf '%s' "$out"
 }
 
 # A quoted -m or --message to git commit, or -t, -b, --title or --body to gh
@@ -239,15 +304,15 @@ strip_inert_heredocs() {
   case "$s" in *'<<'*) ;; *) printf '%s' "$s"; return ;; esac
   s=$(strip_message_heredocs "$s")
   # An unquoted body holding $ or ` is expanded by the shell, so it stays (lib.sh above).
-  rest=$(printf '%s\n' "$s" | awk '
-    body { if ($0 ~ ("^[ \t]*" term "[ \t]*$")) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = "" }
+  rest=$(printf '%s\n' "$s" | awk "$HEREDOC_AWK"'
+    body { t = $0; if (dash) sub(/^\t+/, "", t)
+           if (t == term) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = "" }
            else if (!lit) buf = buf $0 "\n"
            next }
-    match($0, /<<-?[ \t]*["'"'"'\\]?[A-Za-z_][A-Za-z0-9_]*/) {
-      term = substr($0, RSTART, RLENGTH); lit = (term ~ /^<<-?[ \t]*["'"'"'\\]/); buf = ""
-      sub(/^<<-?[ \t]*["'"'"'\\]?/, "", term); body = 1 }
+    { hd_scan($0); if (HD_BAD) { bad = 1; exit }
+      if (HD_POS) { term = HD_TERM; dash = HD_DASH; lit = HD_LIT; buf = ""; body = 1 } }
     { print }
-    END { if (body && buf ~ /[$`]/) printf "%s", buf }')
+    END { if (bad) exit 3; if (body && buf ~ /[$`]/) printf "%s", buf }') || { printf '%s' "$s"; return; }
   if printf '%s\n' "$rest" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g' | sed -E 's/^[[:space:]]+//' \
        | grep -vE '^[[:space:]]*$' | grep -qvE "$INERT_SEG"; then
     printf '%s' "$s"; return
@@ -270,6 +335,25 @@ strip_inert_heredocs() {
   printf '%s' "$rest"
 }
 
+
+# A heredoc body is the data a command reads, unless that command is a shell
+# (config-guard). Unterminated, or an opener hd_scan cannot read, it is all kept.
+drop_data_heredocs() {
+  local out
+  case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
+  out=$(printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+    body { t = $0; if (dash) sub(/^\t+/, "", t)
+           if (t == term) { body = 0; print; next }
+           if (shell) print
+           next }
+    { print; hd_scan($0)
+      if (HD_BAD) { bad = 1; exit }
+      if (HD_POS) {
+        shell = (substr($0, 1, HD_POS - 1) ~ /(^|[;&|(])[ \t]*(bash|sh|zsh|dash|ksh)([ \t][^;&|]*)?$/)
+        term = HD_TERM; dash = HD_DASH; body = 1 } }
+    END { if (bad || body) exit 3 }') || { printf '%s' "$1"; return; }
+  printf '%s' "$out"
+}
 # A quoted or backslash-escaped `&`, `;` or `|` is text, not a separator, but the
 # guards' [^|;&] spans stop at it and hid the flags after it. Rewritten to %26,
 # %3B, %7C for matching only. An unquoted one, URL or not, still separates.
