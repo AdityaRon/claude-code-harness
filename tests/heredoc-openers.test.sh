@@ -62,6 +62,7 @@ CASES=(
   "a body run by eval"          $'eval "$(cat <<\'EOF\'\n'"$M"$'\nEOF\n)"'
   "a body sourced from stdin"   $'source /dev/stdin <<\'EOF\'\n'"$M"$'\nEOF'
   "EOF) ends a body in \$( ) (bash 3.2)" $'x=$(cat <<EOF\nhi\nEOF)\n'"$M"$'\nEOF'
+  "a comment's apostrophe, then a body" $'true # it\'s\ncat <<\'EOF\' > n.md\nx\nEOF\n'"$M"
 )
 
 echo "=== bash runs the marker: every stripper keeps it ==="
@@ -167,6 +168,13 @@ for g in "${!GUARDS[@]}"; do
     v=$(verdict "${GUARDS[$g]}" "$COMMIT $tail")
     [ "$v" = "$ctl" ] && pass "${GUARDS[$g]}, a commit message then '$tail': $v" || fail "${GUARDS[$g]}, a commit message then '$tail'" "$v, alone: $ctl"
   done
+done
+
+# bash 3.2 ends a "$( )" at a ) in its heredoc body and runs what follows: such
+# a body is read as before hd_scan, plain or grouped.
+for r in 'rm -rf ~/' '(rm -rf ~/)'; do
+  v=$(verdict rm-guard "git commit -m \"\$(cat <<'EOF'"$'\n'"a )\" ; $r ; echo \""$'\n'"EOF"$'\n'")\"")
+  [ "$v" = deny ] && pass "rm-guard, '$r' after a ) in a \"\$( )\" message: deny" || fail "rm-guard, '$r' after a ) in a \"\$( )\" message" "$v"
 done
 
 GROUPED="(kubectl delete ns prod)"
