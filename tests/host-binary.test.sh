@@ -55,6 +55,7 @@ has "names the host pid and the path" "pid 100, runs from $BIN, which no longer 
 has "names the symptom" "'Operation not permitted'" "$OUT"
 has "and the fix" "restart this session" "$OUT"
 has "and the way out, at the installed path" "~/.claude/relocate-clones.sh" "$OUT"
+has "and the all-hosts check, from the installed lib.sh" "source ~/.claude/hooks/lib.sh; stale_claude_hosts" "$OUT"
 lacks "no marker: no updater line" "harness-update.sh's last CLI upgrade" "$OUT"
 printf 'claude-code@latest 2.1.306 -> 2.1.307 at 2026-10-22T21:27:26Z; pids running the old binary: 100\n' > "$CLAUDE_CLI_UPGRADED"
 OUT=$(CLAUDE_HOST_START=400 lib 'host_binary_check')

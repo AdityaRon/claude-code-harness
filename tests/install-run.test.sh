@@ -117,7 +117,9 @@ echo "=== installed tools find what they probe for in the installed layout ==="
 # net-allowlist.sh looks for hooks/lib.sh beside itself, then in ../hooks (the
 # clone); session-start.sh for ../memory-index.sh, then ../bin/. Every other
 # suite runs from the clone, so only these reach the first of each.
-ERR=$(bash "$HOME/.claude/net-allowlist.sh" list 2>&1 >/dev/null)
+# env -i: the caller's CLAUDE_* overrides must not steer the installed copies, and
+# a missing pin keeps session-start from starting the real CLI.
+ERR=$(env -i HOME="$HOME" PATH="$PATH" bash "$HOME/.claude/net-allowlist.sh" list 2>&1 >/dev/null)
 [[ -z "$ERR" ]] && pass "the installed net-allowlist.sh sources lib.sh" \
   || fail "the installed net-allowlist.sh sources lib.sh" "$ERR"
 LAUNCH="$TMP/launch"; mkdir -p "$LAUNCH"; LAUNCH=$(cd "$LAUNCH" && pwd)
@@ -127,8 +129,10 @@ for m in project_old:project feedback_one:feedback; do
   printf -- '---\nname: %s\ndescription: d\nmetadata:\n  type: %s\n---\n\nbody\n' "${m%%:*}" "${m#*:}" > "$STORE/${m%%:*}.md"
 done
 printf -- '- [P](project_old.md) — hook\n- [F](feedback_one.md) — hook\n' > "$STORE/MEMORY.md"
-( cd "$LAUNCH" && jq -nc '{source:"resume", session_id:"inst", hook_event_name:"SessionStart"}' \
-    | MEMORY_INDEX_PRESSURE_LINES=1 bash "$HOME/.claude/hooks/session-start.sh" >/dev/null 2>&1 )
+( cd "$LAUNCH" && jq -nc --arg d "$LAUNCH" '{source:"resume", session_id:"inst", hook_event_name:"SessionStart", cwd:$d}' \
+    | env -i HOME="$HOME" PATH="$PATH" MEMORY_INDEX_PRESSURE_LINES=1 CLAUDE_CONTRACT_PIN="$TMP/no-pin" \
+        CLAUDE_HARNESS_LATEST="$TMP/no-latest" CLAUDE_HARNESS_VERSION="$TMP/no-version" \
+        bash "$HOME/.claude/hooks/session-start.sh" >/dev/null 2>&1 )
 [[ "$(grep -o 'feedback_one\|project_old' "$STORE/MEMORY.md" | head -1)" = feedback_one ]] \
   && pass "the installed session-start.sh finds memory-index.sh and reorders" \
   || fail "the installed session-start.sh finds memory-index.sh and reorders" "$(cat "$STORE/MEMORY.md")"

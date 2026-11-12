@@ -49,6 +49,10 @@ INDEX_MAX_BYTES="${MEMORY_INDEX_MAX_CHARS:-25000}"
 INDEX_PRESSURE_BYTES="${MEMORY_INDEX_PRESSURE_CHARS:-20000}"
 INDEX_PRESSURE_LINES="${MEMORY_INDEX_PRESSURE_LINES:-180}"
 INDEX_MAX_LINES="${MEMORY_INDEX_MAX_LINES:-200}"   # same name memory-verify reads
+# The fix for an out-of-order index, at the installed path, for this store:
+# projects/<slug>/memory/<file>.
+_d=${FILE%/*}; _d=${_d%/*}
+REINDEX="bash ~/.claude/memory-index.sh --store ${_d##*/} --write"
 
 # ---- the index itself ---------------------------------------------------
 # The per-memory checks below do not apply to an index, so this is its own pass.
@@ -64,7 +68,7 @@ if [ "$BASE" = "MEMORY.md" ]; then
   # is silently not loaded, and feedback_ only works when loaded.
   BELOW=$(grep -n '^- \[' "$FILE" 2>/dev/null | awk -F: -v cut="$INDEX_MAX_LINES" '$1>cut' | grep -c 'feedback_' || true)
   [ "${BELOW:-0}" -gt 0 ] \
-    && iadd "${BELOW} feedback_ memor$([ "$BELOW" = 1 ] && echo y || echo ies) sit past line ${INDEX_MAX_LINES} and will not load. Re-run \`memory-index.sh --write\` to restore tier order, or move them up by hand."
+    && iadd "${BELOW} feedback_ memor$([ "$BELOW" = 1 ] && echo y || echo ies) sit past line ${INDEX_MAX_LINES} and will not load. Run \`$REINDEX\` to restore tier order, or move them up by hand."
 
   # A line that is neither an entry nor a tier marker is usually an append with
   # no trailing newline that collided with the next line. It stops being an
@@ -295,11 +299,11 @@ if [ -f "$DIR/MEMORY.md" ]; then
     case "$SECTION" in
       *"ACTIVE WORK"*|"") ;;                       # hand-curated, or unsorted index
       *FEEDBACK*)  [ "$TYPE" = "feedback" ] || [ "$TYPE" = "user" ] \
-                     || add "its index line sits in the FEEDBACK section but the memory is \`type: $TYPE\`. Run: bash ~/.claude/memory-index.sh --store <slug> --write" ;;
+                     || add "its index line sits in the FEEDBACK section but the memory is \`type: $TYPE\`. Run: $REINDEX" ;;
       *REFERENCE*) [ "$TYPE" = "reference" ] \
-                     || add "its index line sits in the REFERENCE section but the memory is \`type: $TYPE\`. Run: bash ~/.claude/memory-index.sh --store <slug> --write" ;;
+                     || add "its index line sits in the REFERENCE section but the memory is \`type: $TYPE\`. Run: $REINDEX" ;;
       *PROJECT*)   [ "$TYPE" = "project" ] \
-                     || add "its index line sits in the PROJECT section but the memory is \`type: $TYPE\`. Run: bash ~/.claude/memory-index.sh --store <slug> --write" ;;
+                     || add "its index line sits in the PROJECT section but the memory is \`type: $TYPE\`. Run: $REINDEX" ;;
     esac
   fi
 fi

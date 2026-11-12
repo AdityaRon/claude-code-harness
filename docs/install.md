@@ -21,7 +21,7 @@ holds your work skills. A machine that already has its rules in
 
 ## File layout after install
 
-As written by `install.sh` at a6197da, plus what the hooks and
+As written by `install.sh`, plus what the hooks and
 `harness-update.sh` write as they run.
 Paths inside `~/.claude` are flat: every file in the repo's `bin/` lands at
 `~/.claude/<name>`, and `tools/` stays in the clone. The grouping in the README's

@@ -204,7 +204,7 @@ mk_index PROJECT refmem.md
 OUT=$(lint "$STORE/refmem.md")
 check_contains "wrong section flagged"   "sits in the PROJECT section" "$OUT"
 check_contains "names the actual type"   "type: reference"             "$OUT"
-check_contains "says how to fix it, at the installed path" "bash ~/.claude/memory-index.sh --store" "$OUT"
+check_contains "says how to fix it, installed path and this store" "bash ~/.claude/memory-index.sh --store teststore --write" "$OUT"
 
 mk_index REFERENCE refmem.md
 check_absent "right section is silent" "sits in the" "$(lint "$STORE/refmem.md")"
@@ -265,6 +265,8 @@ check_eq "and exits 0"               "0" "$(lint_rc "$STORE/MEMORY.md")"
 OUT=$(lint "$STORE/MEMORY.md")
 check_contains "a feedback_ entry past the cut is flagged" "past line 200" "$OUT"
 check_contains "says it will not load"                     "will not load"  "$OUT"
+check_contains "names the fix: installed path, this store" \
+  "Run \`bash ~/.claude/memory-index.sh --store teststore --write\` to restore tier order" "$OUT"
 # The size itself is the CLI's finding: since 2.1.210 a write that leaves the
 # index over its limit gets an error from Claude Code, so saying it twice is noise.
 check_absent   "the over-limit size is not repeated"       "over the 200-line limit" "$OUT"
