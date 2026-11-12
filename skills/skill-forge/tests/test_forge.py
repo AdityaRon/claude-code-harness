@@ -13,7 +13,7 @@ Mutations that must turn this file red:
   any-forge-toml-is-a-draft: forge.py: `if "archetype" not in (read_toml(out / "forge.toml") if (out / "forge.toml").is_file() else {}):` => `if not (out / "forge.toml").is_file():`
   lint-skipped: forge.py: `    if failing:` => `    if False:`
   question-unrecorded: forge.py: `    record(name, m.get("question", "?"), m.get("archetype", "?"), dest)` => `    pass`
-  non-draft-replaced: forge.py: `if not (out / "forge.toml").is_file():` => `if False:`
+  non-draft-replaced: forge.py: `raise ValueError(f"{out} exists and is not a draft` => `print(f"{out}`
   bad-name-allowed: forge.py: `if not NAME.fullmatch(name):` => `if False:`
   yaml-unquoted: forge.py: `if ": " in text or " #" in text or` => `if False and`
   guards-dropped: forge.py: `f"guards = {toml_value(spec.get('guards', []))}",` => `"guards = []",`
