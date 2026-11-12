@@ -26,7 +26,7 @@ included, is in `~/.local/state/skill-forge/`.
    observability, data stores, control planes, the skills already here with an
    archetype guess, and repos by origin, each line with the command that found
    it. Names only. A bastion's databases and apps are listed only when its
-   session is already live; discover never starts a login.
+   session is already live.
    `--probe-local` reads local containers. `--probe-context CTX` lists one
    cluster's cronjobs and services; ask the user before `--yes-prod`, and never
    port-forward or connect to production without that yes.
@@ -78,7 +78,8 @@ included, is in `~/.local/state/skill-forge/`.
 metrics-query, logs-fetch and api-readonly reach their API through `access.py`:
 `<ENV>_ACCESS` is `direct` (the URL variable), `port-forward SVC[:PORT] in NS`,
 or `pod SVC[:PORT] in NS` (it creates a pod, so it needs `--apply`), with
-`<ENV>_CONTEXT` named. The path prefix is probed, and the header names the route.
+`<ENV>_CONTEXT` named. metrics-query and logs-fetch probe the path prefix;
+api-readonly does when `<ENV>_API_PROBE` names a path. The header names the route.
 
 ## The conventions skill_lint checks
 

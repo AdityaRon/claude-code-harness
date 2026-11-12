@@ -28,7 +28,6 @@ Mutations that must turn this file red:
   mcp-project-scope-unread: discover.py: `scopes += [(f"project` => `scopes += [] and [(f"project`
   warehouse-unread: discover.py: `        if not path.is_file():` => `        if True:`
   bastion-without-session: discover.py: `    if live != 0:` => `    if False:`
-  bastion-may-relogin: discover.py: `argv = ["tsh", "--no-relogin", what,` => `argv = ["tsh", what,`
   proxy-unnamed: discover.py: `return relogin.replace("<proxy>", named) if proxies else relogin` => `return relogin`
   skills-unlisted: discover.py: `for md in sorted(home.glob("*/SKILL.md")):` => `for md in []:`
   repo-skills-unlisted: discover.py: `for d in repo_dirs for sub in ("skills", ".claude/skills")]` => `for d in [] for sub in ()]`
@@ -298,7 +297,7 @@ class SourcesTest(unittest.TestCase):
             os.environ["TSH_LIVE"] = "1"
             _, _, _, inv = e.run()
             calls = [ln for ln in e.log.read_text().splitlines() if ln.startswith("tsh ")]
-        self.assertEqual(calls, ["tsh status", "tsh --no-relogin db ls --format=json", "tsh --no-relogin apps ls --format=json"])
+        self.assertEqual(calls, ["tsh status", "tsh db ls --format=json", "tsh apps ls --format=json"])
         self.assertIn("Teleport databases: `orders-replica`", "\n".join(finding_lines(inv, "data")))
         self.assertIn("Teleport apps: `billing-admin`, `grafana`", "\n".join(finding_lines(inv, "control")))
 

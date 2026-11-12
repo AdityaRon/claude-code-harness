@@ -15,7 +15,8 @@ The setting and a direct URL are checked when the route is made; a cluster route
 opens on the engine's first request, so a refused command starts nothing and
 sends nothing. Then the prefix is probed, never guessed: each
 candidate goes to the engine's own probe, which accepts only the API's own
-success answer. describe() is the route that answered, for the header. A failed
+success answer; a login wall at one prefix is AUTH only if no other prefix
+answers. describe() is the route that answered, for the header. A failed
 open or probe is kept and raised again on every later request, so no request
 goes out on a route that was never confirmed.
 
@@ -195,17 +196,24 @@ class Route:
             self.prefix = self.candidates[0]
             self.probed = f"(not probed; set {self.env}_API_PROBE)"
             return
-        tried = []
+        tried, held = [], None
         for prefix in self.candidates:
             self.prefix = prefix
             try:
                 why = self.probe()
+            except OSError:
+                raise   # the host, not the prefix: no other prefix will answer
             except (ValueError, KeyError, TypeError, AttributeError) as e:
                 why = str(e)[:80] or type(e).__name__
+            except Exception as e:   # a login wall here may be a different service from the API at the next prefix
+                held = held or e
+                why = f"{type(e).__name__}: {e}"[:80]
             if why is None:
                 self.probed = "(probed" + (f"; no API at {', '.join(tried)}" if tried else "") + ")"
                 return
             tried.append(f"{prefix or '/'}: {why}")
+        if held is not None:
+            raise held
         raise AccessRefused(f"no API answered at {self.via} under any prefix tried ({'; '.join(tried)}), so nothing was "
                             f"queried and there is no answer; set {self.env}_PATH_PREFIXES")
 

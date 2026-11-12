@@ -7,6 +7,7 @@ curl config from stdin and answers from the same server.
 
 Mutations that must turn this file red:
   prefix-guessed: access.py: `            why = self.probe()` => `            why = None`
+  login-wall-ends-search: access.py: `                held = held or e` => `                raise`
   failure-forgotten: access.py: `            self.state, self.error = "failed", e` => `            self.state = "new"`
   current-context-assumed: access.py: `        if not ctx:` => `        if False:`
   context-unchecked: access.py: `        if ctx not in out.split():` => `        if False:`
@@ -222,6 +223,14 @@ class PrefixTest(unittest.TestCase):
                 with self.assertRaises(Login):
                     r.get("/api/v1/query", "query=up")
         self.assertEqual(len(Api.seen), 1)
+
+    def test_a_login_wall_at_one_prefix_does_not_hide_the_api_at_the_next(self):
+        fx = Fixture(self, T_PATH_PREFIXES="/wall,/prom")
+        cm, h = opened(fx)
+        with cm as r:
+            h["r"] = r
+            self.assertEqual(r.get("/api/v1/query", "query=up")[0], 200)
+            self.assertIn("prefix /prom (probed; no API at /wall: Login: HTTP 200)", r.describe())
 
     def test_no_probe_says_so_in_the_route(self):
         fx = Fixture(self)

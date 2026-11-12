@@ -21,7 +21,7 @@ What it reads, names only:
   data           database containers and env vars; the connection names in warehouse
                  and database CLI configs (snowsql, Snowflake CLI, dbt, Databricks,
                  pg_service); a live Teleport session's databases (`tsh db ls`, run only
-                 after `tsh status` succeeds, stdin closed, so it never starts a login);
+                 after `tsh status` succeeds, stdin closed, so no session means no login);
                  with --probe-local, Postgres roles and whether the server is a replica
   control        feature-flag services, schedulers, CI and deploy CLIs; a live
                  Teleport session's apps (`tsh apps ls`)
@@ -320,8 +320,9 @@ def tools() -> list[Finding]:
 
 def bastion() -> list[Finding]:
     """A live Teleport session's databases and apps, names only. `tsh status` first, stdin closed:
-    with no session this lists nothing and starts no login. --no-relogin covers a session that
-    expires between the two calls."""
+    with no session this lists nothing and starts no login. tsh documents --no-relogin only for
+    ssh, proxy ssh and scp, so a session that lapses in the seconds between the calls could
+    still prompt one."""
     if not shutil.which("tsh"):
         return []
     live, _, _ = run(["tsh", "status"], stdin="", timeout=10)
@@ -329,7 +330,7 @@ def bastion() -> list[Finding]:
         return [Finding("access", "tsh: no live session, so its databases and apps were not listed (no login was started)", "tsh status")]
     found = []
     for what, kind in (("db", "data"), ("apps", "control")):
-        argv = ["tsh", "--no-relogin", what, "ls", "--format=json"]
+        argv = ["tsh", what, "ls", "--format=json"]
         rc, out, err = run(argv, stdin="", timeout=20)
         if rc != 0:
             found.append(Finding(kind, f"tsh {what} ls failed: {first_line(err)}", " ".join(argv)))
