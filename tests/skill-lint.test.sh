@@ -23,7 +23,8 @@ for s in "$REPO"/skills/*/; do
   name=$(basename "$s")
   # A config of the machine's own (its line_budget) must not change the verdict.
   if OUT=$(PYTHONDONTWRITEBYTECODE=1 SKILL_FORGE_CONFIG="$TMP/none.toml" "$PY" -B "$REPO/skills/skill-forge/bin/skill_lint.py" "$s" 2>&1); then
-    pass "$name: $(printf '%s\n' "$OUT" | grep -cE '^  C[0-9]+ +WAIVED') waived, the rest pass or do not apply"
+    # The verdict line, e.g. "PASS (0 FAIL, 3 WAIVED, 3 N/A)"; WARN is no failure but is shown.
+    pass "$name: $(printf '%s\n' "$OUT" | grep -oE ': (PASS|WARN) \([^)]*\)$' | head -1 | cut -c3-)"
   else
     fail "$name" "$(printf '%s\n' "$OUT" | grep -E '^  C[0-9]+ +FAIL')"
   fi

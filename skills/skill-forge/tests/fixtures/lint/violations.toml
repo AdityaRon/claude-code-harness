@@ -146,3 +146,10 @@ why = "a path that climbs out of the folder"
 file = "tests/test_engine.py"
 old = '''sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin"))'''
 new = '''sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../shared", "bin"))'''
+
+[[violation]]
+check = "C10"
+why = "SKILL.md runs a script of the skill's own that the lint never read"
+file = "SKILL.md"
+old = '''`python3 bin/engine.py show TENANT` prints the tenant's flags.'''
+new = '''`python3 ~/.claude/skills/lint-baseline/bin/report.py TENANT` prints the tenant's flags.'''
