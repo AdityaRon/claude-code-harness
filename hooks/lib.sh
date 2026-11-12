@@ -6,8 +6,9 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 # Bytes, not characters: macOS awk's substr cut a "⏎" in half, its regex match
 # then failed (towc), and a lexer that died there returned half the command, so
-# git-guard never read a force push after one in a commit message. The shell
-# splits on ASCII bytes, so nothing here needs a character view.
+# git-guard never read a force push after one in a commit message. It holds for
+# every hook that sources this file, not just the lexers: an awk missed there
+# would die on command text, where under bytes a length counts a "⏎" as 3.
 awk() { LC_ALL=C command awk "$@"; }
 
 # Expand leading ~ in a path; needed because the hook runtime passes env
@@ -197,6 +198,16 @@ function hd_word(s, i,    j, c, k, w) {
 function hd_cls(i, cls,    ch) { ch = substr(HDS, i, 1); if (ch != "" && index("();&|{}", ch)) HCLS[i] = cls }
 function hd_span(a, b, cls,    k) { if (HD_CLS) for (k = a; k <= b; k++) hd_cls(k, cls) }
 function hd_ctx(q) { return q == "" ? "c" : q == "H" ? "d" : "q" }
+# How many unescaped $ come just before i, e being the escaped position. After
+# an odd run a quote opens ANSI-C quoting; $$ is the pid, and its quote is plain.
+function hd_dollars(s, i, e,    j) { for (j = i - 1; j > 0 && substr(s, j, 1) == "$" && e != j; j--); return i - 1 - j }
+# Inside backticks bash ends the substitution at the next backtick, even one a
+# quote would hide, so a quote there that holds one is unreadable.
+function hd_btq(s, i, c,    j, d, n) {
+  n = length(s)
+  for (j = i + 1; j <= n; j++) { d = substr(s, j, 1); if (d == "\\" && c == "\"") j++; else if (d == c) return 0; else if (d == "`") return 1 }
+  return 0
+}
 function hd_scan(s,    i, n, c, j, w) {
   HD_POS = 0; HD_LEN = 0; HD_BAD = 0; n = length(s); hesc = -1
   if (HD_CLS) { split("", HCLS); HDS = s }
@@ -206,11 +217,12 @@ function hd_scan(s,    i, n, c, j, w) {
     if (hq == "\047") { if (c == "\047") hq = ""; continue }
     if (hq == "A") { if (c == "\\") { i++; hd_span(i, i, "q") } else if (c == "\047") hq = ""; continue }
     if (c == "\\") { hesc = i + 1; i++; hd_span(i, i, hq == "H" ? "d" : "q"); continue }
+    # A ${ } is one word: a ; ( or | inside it separates nothing.
     if (c == "$" && substr(s, i + 1, 1) == "{") {
       j = index(substr(s, i + 2), "}"); if (!j) { HD_BAD = 1; return }
       w = substr(s, i + 2, j - 1)
       if (hq == "H" ? (w ~ /`|\$\(/) : (w ~ /[\047"`{]|<<|\$\(/)) { HD_BAD = 1; return }
-      hd_span(i, i + j + 1, hd_ctx(hq)); i += j + 1; continue
+      hd_span(i, i + j + 1, hq == "H" ? "d" : "q"); i += j + 1; continue
     }
     # In double quotes or a heredoc body, $( ) and backticks start code again.
     if (hq == "\"" || hq == "H") {
@@ -221,7 +233,8 @@ function hd_scan(s,    i, n, c, j, w) {
       continue
     }
     if (hsp > 0 && hbtf[hsp] && c == "`") { hq = hup[hsp--]; continue }
-    if (c == "\047") { hq = (i > 1 && substr(s, i - 1, 1) == "$" && hesc != i - 1) ? "A" : "\047"; continue }
+    if ((hbt || (hsp > 0 && hbtf[hsp])) && (c == "\"" || c == "\047") && hd_btq(s, i, c)) { HD_BAD = 1; return }
+    if (c == "\047") { hq = hd_dollars(s, i, hesc) % 2 ? "A" : "\047"; continue }
     if (c == "\"") { hq = "\""; continue }
     if (c == "`") { hbt = !hbt; continue }
     if (c == "#" && hesc != i - 1 && (i == 1 ? !hcont : substr(s, i - 1, 1) ~ /[ \t;&|()]/)) break
@@ -229,14 +242,18 @@ function hd_scan(s,    i, n, c, j, w) {
     if (c == "$" && substr(s, i + 1, 1) == "[") { j = index(substr(s, i), "]"); if (!j) { HD_BAD = 1; return } i += j - 1; continue }
     if (hsp > 0 && !hbtf[hsp] && c == "(") hdep[hsp]++
     if (hsp > 0 && !hbtf[hsp] && c == ")" && --hdep[hsp] == 0) { hd_span(i, i, hd_ctx(hup[hsp])); hq = hup[hsp--]; continue }
+    # A case pattern ) would close the $( ) early (bash 3.2 rejects it, zsh runs on).
+    if (hsp > 0 && !hbtf[hsp] && c == "c" && substr(s, i, 5) ~ /^case[ \t]/ && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;&|(]/)) { HD_BAD = 1; return }
     if (c == "<" && substr(s, i + 1, 1) == "<") {
       if (substr(s, i + 2, 1) == "<") { i += 2; continue }
       if (hbt || HD_POS || (hsp > 0 && hbtf[hsp])) { HD_BAD = 1; return }
       if (!hd_word(s, i)) { HD_BAD = 1; return }
+      HD_INSUB = HD_SUBSEEN || substr(s, 1, i) ~ /\$\(|`/
       hd_span(i, i + HD_LEN - 1, "q"); i += HD_LEN - 1
     }
   }
   hcont = (hesc == n + 1)
+  if (s ~ /\$\(|`/) HD_SUBSEEN = 1
   if (HD_POS && (hq != "" || hcont)) HD_BAD = 1
 }
 # The classes of a whole command held in line[1..nl]: CLS[k, i] for line k, and
@@ -252,6 +269,7 @@ function sh_classify(nl,    k, t, i, body, lit, shell, found) {
   for (k = 1; k <= nl; k++) {
     if (body) {
       if (hd_end(line[k])) { body = 0; sh_restore(); continue }
+      if (hd_bad_end(line[k])) { SH_BAD = 1; return }
       if (!shell) DATA[k] = 1
       if (lit && !shell) continue
       hd_scan(line[k]); for (i in HCLS) CLS[k, i] = HCLS[i]
@@ -268,7 +286,12 @@ function sh_classify(nl,    k, t, i, body, lit, shell, found) {
   }
 }
 function hd_end(s) { if (HD_DASH) sub(/^\t+/, "", s); return s == HD_TERM }
-function hd_shell(s) { return s ~ /(^|[^A-Za-z0-9_.-])(ba|z|da|k|fi|s)?sh([^A-Za-z0-9_.-]|$)/ }
+# Inside $( ), bash 3.2 also ends a body at a line like EOF) and zsh does not.
+# After a $( or backtick anywhere before the opener, such a line is unreadable.
+function hd_bad_end(s) { if (HD_DASH) sub(/^\t+/, "", s); return HD_INSUB && s == HD_TERM ")" }
+# A body some shell reads: a shell named on the line, $SHELL, or eval, source
+# or . in command position.
+function hd_shell(s) { return s ~ /(^|[^A-Za-z0-9_.-])(ba|z|da|k|fi|s)?sh([^A-Za-z0-9_.-]|$)|\$\{?SHELL([^A-Za-z0-9_]|$)|(^|[;&|(])[ \t]*(eval|source|\.)[ \t]/ }
 '
 
 # A heredoc fed to `git commit -F -` or `gh pr|issue … --body-file -` is a
@@ -282,6 +305,7 @@ strip_message_heredocs() {
   local out
   case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
   out=$(printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+    body && hd_bad_end($0) { bad = 1; exit }
     body { if (hd_end($0)) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = ""; print; next }
            if (keep) print; else if (!lit) buf = buf $0 "\n"
            next }
@@ -361,6 +385,7 @@ strip_inert_heredocs() {
   s=$(strip_message_heredocs "$s")
   # An unquoted body holding $ or ` is expanded by the shell, so it stays (lib.sh above).
   rest=$(printf '%s\n' "$s" | awk "$HEREDOC_AWK"'
+    body && hd_bad_end($0) { bad = 1; exit }
     body { if (hd_end($0)) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = "" }
            else if (!lit) buf = buf $0 "\n"
            next }
@@ -398,6 +423,7 @@ drop_data_heredocs() {
   local out
   case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
   out=$(printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+    body && hd_bad_end($0) { bad = 1; exit }
     body { if (hd_end($0)) { body = 0; print; next }
            if (shell) print
            next }
@@ -419,7 +445,8 @@ neutralize_quoted_separators() {
   printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
     function hide(ch) { return ch == "&" ? "%26" : ch == ";" ? "%3B" : ch == "|" ? "%7C" : ch }
     # The reading before hd_scan: quotes and $( only. Kept for heredoc data and
-    # for a command hd_scan cannot read.
+    # for a command hd_scan cannot read; a separator hd_scan marked as code (in
+    # a $( ) of an unquoted body) is never hidden.
     function naive(s,    out, n, i, c, esc) {
       out = ""; n = length(s); esc = 0
       for (i = 1; i <= n; i++) {
@@ -429,11 +456,11 @@ neutralize_quoted_separators() {
         if (oq == "" && osp > 0 && c == "(") odep[osp]++
         if (oq == "" && osp > 0 && c == ")" && --odep[osp] == 0) { oq = oup[osp--]; out = out c; continue }
         if (oq == "") {
-          if (c == "\047") oq = (i > 1 && substr(s, i - 1, 1) == "$" && esc != i - 1) ? "A" : "\047"
+          if (c == "\047") oq = hd_dollars(s, i, esc) % 2 ? "A" : "\047"
           else if (c == "\"") oq = "\""
         } else if (c == "\047" && (oq == "\047" || oq == "A")) oq = ""
         else if (c == "\"" && oq == "\"") oq = ""
-        else c = hide(c)
+        else if (CLS[k, i] != "c") c = hide(c)
         out = out c
       }
       return out
@@ -845,13 +872,18 @@ emit_ask() {
   fi
 }
 
-# neutralize_quoted_separators returns 3, with its old reading, on a command
-# hd_scan cannot read. The guard goes on with that reading, so a deny or ask
-# stands, and an allow becomes an ask: which ; & | run there is unknown.
+# A command hd_scan cannot read: the guard goes on with its old reading, so a
+# deny or ask stands, and an allow becomes an ask, since which ; & | run there
+# is unknown. Each guard calls this in its own shell once the command concerns
+# it; only text holding what can make it unreadable pays for the awk.
+unreadable_check() {  # guard text
+  case "$2" in *'<<'*|*'${'*|*'(('*|*'$['*|*'`'*|*'$('*) ;; *) return 0 ;; esac
+  printf '%s\n' "$2" | awk "$HEREDOC_AWK"'{ line[NR] = $0 } END { sh_classify(NR); exit SH_BAD ? 3 : 0 }' || unreadable_floor "$1"
+}
 unreadable_floor() { UNREADABLE_GUARD=$1; trap unreadable_exit EXIT; }
 unreadable_exit() {
   [[ $? -eq 0 && -z "${HOOK_DECIDED:-}" ]] || return 0
-  emit_ask "$UNREADABLE_GUARD: this command's quoting is more than the guard can read for certain (a \${ } holding quotes, or a heredoc opener it cannot parse), so it cannot tell which ; & | separate commands. Check what it runs."
+  emit_ask "$UNREADABLE_GUARD: this command's quoting is more than the guard can read for certain (a \${ } holding quotes, a heredoc opener it cannot parse, or a quote inside backticks), so it cannot tell which ; & | separate commands. Check what it runs."
 }
 
 # Secret-shaped values out of an audit line: URL credentials, well-known token

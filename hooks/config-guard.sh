@@ -210,7 +210,8 @@ case "$TOOL" in
   Edit|Write|MultiEdit|NotebookEdit) check_word "$TARGET" 0 ;;
   Bash|Monitor)
     # Quoted separators hidden, groups opened, wrappers and /bin/ paths gone (lib.sh).
-    NQS=$(neutralize_quoted_separators "$(drop_data_heredocs "$TARGET")") || unreadable_floor config-guard
+    DD=$(drop_data_heredocs "$TARGET"); unreadable_check config-guard "$DD"
+    NQS=$(neutralize_quoted_separators "$DD")
     NORM=$(normalize_command "$NQS")
     REDIR='[0-9&]*>>?\|?[[:space:]]*[^[:space:];&|<>()]+'
     SEGS=()

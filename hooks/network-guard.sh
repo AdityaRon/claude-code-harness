@@ -172,7 +172,8 @@ case "$TOOL" in
     # them once those are gone is done before ~25 ms of normalizing.
     printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qiE 'curl|wget|scp|rsync|sftp|http|php|net-allowlist|local-settings' || exit 0
     CMD=$(strip_inert_heredocs "$CMD")
-    CMD=$(neutralize_quoted_separators "$CMD") || unreadable_floor network-guard
+    unreadable_check network-guard "$CMD"
+    CMD=$(neutralize_quoted_separators "$CMD")
     # `/usr/bin/curl` and `CURL` are curl too: scan the normalized form (lib.sh) as
     # a second line.
     CMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")

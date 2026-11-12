@@ -33,6 +33,7 @@ CMD=$(jq_get '.tool_input.command')
 printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qiE 'python|node|ruby|perl|php|bash|zsh|deno|bun|(^|[^a-z0-9_.-])sh([^a-z0-9_-]|$)' || exit 0
 # A commit message or a notes file is text, not a command (lib.sh).
 CMD=$(strip_inert_heredocs "$CMD")
+unreadable_check interpreter-guard "$CMD"
 # `/usr/bin/python3` and `PYTHON3` run python too. ICMD adds the normalized form
 # (lib.sh) as a second line; the stream-edit exemption below keeps to CMD.
 ICMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
