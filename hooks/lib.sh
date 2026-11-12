@@ -159,9 +159,15 @@ normalize_command() {
 # a caller then keeps the command as typed. Call it only outside a body, and
 # hd_end only inside one. A missed real opener is as unsafe as a false one.
 HEREDOC_AWK='
-function hd_arith(s, i,    d, n, c) {
+# Where the (( at i closes, or 0. bash reads `((cmd) )` as two subshells, so
+# a (( that does not close as one `))` is not arithmetic and is not skipped.
+function hd_arith(s, i,    d, n, c, p) {
   d = 0; n = length(s)
-  for (; i <= n; i++) { c = substr(s, i, 1); if (c == "(") d++; else if (c == ")" && --d == 0) return i }
+  for (; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (c == "(") d++
+    else if (c == ")") { if (--d == 1) p = i; else if (d == 0) return (p == i - 1) ? i : 0 }
+  }
   return 0
 }
 function hd_word(s, i,    j, c, k, w) {
