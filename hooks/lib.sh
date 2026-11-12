@@ -218,12 +218,13 @@ function hd_scan(s,    i, n, c, j, w) {
     if (hq == "\047") { if (c == "\047") hq = ""; continue }
     if (hq == "A") { if (c == "\\") { i++; hd_span(i, i, "q") } else if (c == "\047") hq = ""; continue }
     if (c == "\\") { hesc = i + 1; i++; hd_span(i, i, hq == "H" ? "d" : "q"); continue }
-    # A ${ } is one word: a ; ( or | inside it separates nothing.
+    # A ${ } is one word: a ; ( or | inside it separates nothing, except in a
+    # <( ) or >( ) there, which bash runs.
     if (c == "$" && substr(s, i + 1, 1) == "{") {
       j = index(substr(s, i + 2), "}"); if (!j) { HD_BAD = 1; return }
       w = substr(s, i + 2, j - 1)
       if (hq == "H" ? (w ~ /`|\$\(/) : (w ~ /[\047"`{]|<<|\$\(/)) { HD_BAD = 1; return }
-      hd_span(i, i + j + 1, hq == "H" ? "d" : "q"); i += j + 1; continue
+      hd_span(i, i + j + 1, hq == "H" ? "d" : (hq == "" && w ~ /[<>]\(/) ? "c" : "q"); i += j + 1; continue
     }
     # In double quotes or a heredoc body, $( ) and backticks start code again.
     if (hq == "\"" || hq == "H") {
@@ -238,7 +239,12 @@ function hd_scan(s,    i, n, c, j, w) {
     if (c == "\047") { hq = hd_dollars(s, i, hesc) % 2 ? "A" : "\047"; continue }
     if (c == "\"") { hq = "\""; continue }
     if (c == "`") { hbt = !hbt; continue }
-    if (c == "#" && hesc != i - 1 && (i == 1 ? !hcont : substr(s, i - 1, 1) ~ /[ \t;&|()]/)) break
+    if (c == "#" && hesc != i - 1 && (i == 1 ? !hcont : substr(s, i - 1, 1) ~ /[ \t;&|()]/)) {
+      # Inside backticks a comment ends at the backtick that ends the substitution.
+      if (!hbt && !(hsp > 0 && hbtf[hsp])) break
+      j = index(substr(s, i + 1), "`"); if (!j) { HD_BAD = 1; return }
+      i += j - 1; continue
+    }
     if (c == "(" && substr(s, i + 1, 1) == "(") { j = hd_arith(s, i); if (!j) { HD_BAD = 1; return } i = j; continue }
     if (c == "$" && substr(s, i + 1, 1) == "[") { j = index(substr(s, i), "]"); if (!j) { HD_BAD = 1; return } i += j - 1; continue }
     if (hsp > 0 && !hbtf[hsp] && c == "(") hdep[hsp]++
@@ -264,13 +270,16 @@ function hd_scan(s,    i, n, c, j, w) {
 # no terminator line (a caller dropped the body) leaves the lines after it code.
 function sh_save(   k) { sq = hq; ssp = hsp; sbt = hbt; scont = hcont; for (k = 1; k <= hsp; k++) { sup[k] = hup[k]; sdep[k] = hdep[k]; sbtf[k] = hbtf[k] } }
 function sh_restore(   k) { hq = sq; hsp = ssp; hbt = sbt; hcont = scont; for (k = 1; k <= ssp; k++) { hup[k] = sup[k]; hdep[k] = sdep[k]; hbtf[k] = sbtf[k] } }
-function sh_classify(nl,    k, t, i, body, lit, shell, found) {
+function sh_classify(nl,    k, t, i, body, lit, shell, found, insub) {
   SH_BAD = 0; split("", CLS); split("", DATA); HD_CLS = 1
   hq = ""; hsp = 0; hbt = 0; hcont = 0
   for (k = 1; k <= nl; k++) {
     if (body) {
       if (hd_end(line[k])) { body = 0; sh_restore(); continue }
       if (hd_bad_end(line[k])) { SH_BAD = 1; return }
+      # After a $( or backtick, bash 3.2 can end the substitution at a ) in the
+      # body and run the rest, so such a body is code, and is not scanned.
+      if (insub && !shell) continue
       if (!shell) DATA[k] = 1
       if (lit && !shell) continue
       hd_scan(line[k]); for (i in HCLS) CLS[k, i] = HCLS[i]
@@ -282,7 +291,7 @@ function sh_classify(nl,    k, t, i, body, lit, shell, found) {
     if (!HD_POS) continue
     found = 0; for (t = k + 1; t <= nl; t++) if (hd_end(line[t])) { found = 1; break }
     if (!found) continue
-    body = 1; lit = HD_LIT; shell = hd_shell(line[k]); sh_save()
+    body = 1; lit = HD_LIT; shell = hd_shell(line[k]); insub = HD_INSUB; sh_save()
     hq = (shell || lit) ? "" : "H"; hsp = 0; hbt = 0; hcont = 0
   }
 }

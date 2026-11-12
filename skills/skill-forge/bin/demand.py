@@ -246,7 +246,13 @@ class Heredocs:
             elif c == "`":
                 self.bt = not self.bt
             elif c == "#" and esc != i - 1 and (not self.cont if i == 0 else s[i - 1] in " \t;&|()"):
-                break
+                if not self.bt and not (self.frames and self.frames[-1][2]):
+                    break
+                j = s.find("`", i + 1)      # inside backticks the comment ends there
+                if j < 0:
+                    raise ValueError(s)
+                i = j
+                continue
             elif c == "(" and s[i + 1:i + 2] == "(":
                 i = _arith(s, i)
                 if i < 0:
