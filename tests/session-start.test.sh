@@ -305,5 +305,39 @@ check_not_contains "stale record pruned" "wt-gone" "$WT"
 check_contains "live worktree kept" "wt-live" "$WT"
 
 echo ""
+echo "=== input: one jq reads all three fields, and a value is data, never code ==="
+# The hook evals jq's @sh output, so a field built to break out of the quoting
+# must arrive whole and run nothing.
+EV="$TMP/ev"; mkdir -p "$EV"
+SID="x'; touch pwned1; '\$(touch pwned2)\`touch pwned3\` \"q"
+jq -n --arg p "$TARGET" --arg h "$STALE_HASH" '{git_head:"", edited_files:[{path:$p, sha256:$h, exists:true}]}' \
+  > "$CLAUDE_STATE_DIR/$SID.json"
+OUT=$(cd "$EV" && jq -nc --arg sid "$SID" --arg cwd "$EV/it's \$(touch pwned4)" '{source:"resume", session_id:$sid, cwd:$cwd}' \
+  | bash "$OLDPWD/$HOOK" 2>/dev/null)
+check_contains "the exact session id finds its snapshot" "drifted: $TARGET" "$OUT"
+check_eq "no field ran as code" "" "$(ls "$EV")"
+
+echo ""
+echo "=== store_slug: the same slug sed gives, in this locale and in C ==="
+lib() { bash -c "source hooks/lib.sh; $*"; }
+for s in '/Users/someone/Desktop' '/tmp/a b/c.d_e-f' '/x/é/ü/日本/🙂' '/A-Z/[x]/*?/\q'; do
+  check_eq "store_slug: $s" "$(printf '%s' "$s" | sed 's/[^A-Za-z0-9]/-/g')" "$(lib "store_slug '$s'")"
+  check_eq "store_slug, C locale: $s" "$(printf '%s' "$s" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')" "$(LC_ALL=C lib "store_slug '$s'")"
+done
+
+echo ""
+echo "=== cli_version: read from the path claude resolves to, else asked ==="
+C="$TMP/cli"; mkdir -p "$C/Caskroom/claude-code@latest/2.1.322" "$C/versions" "$C/bin" "$C/npm"
+touch "$C/Caskroom/claude-code@latest/2.1.322/claude" "$C/versions/2.1.330"
+ln -s "$C/versions/2.1.330" "$C/bin/claude"
+printf '#!/bin/sh\necho "9.9.9 (Claude Code)"\n' > "$C/npm/cli"; chmod +x "$C/npm/cli"
+check_eq "a cask install: its folder names the version" "2.1.322" "$(CLAUDE_CLI_PATH="$C/Caskroom/claude-code@latest/2.1.322/claude" lib cli_version)"
+check_eq "a link into versions/: resolved, then named" "2.1.330" "$(CLAUDE_CLI_PATH="$C/bin/claude" lib cli_version)"
+check_eq "no version in the path: the binary is asked" "9.9.9" "$(CLAUDE_CLI_PATH="$C/npm/cli" lib cli_version)"
+printf '2.1.331\n' > "$TMP/pin"
+OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_PATH="$C/bin/claude" CLAUDE_STATE_DIR="$TMP/state-cli" run_resume "sess-clean")
+check_contains "the contract nudge uses it" "Installed 2.1.330; the harness was verified at 2.1.331" "$OUT"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

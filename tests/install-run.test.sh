@@ -88,6 +88,56 @@ grep -qE '^version=.+' "$V" && grep -qE '^commit=[0-9a-f]{40}$' "$V" \
 [ -x "$HOME/.claude/harness-update.sh" ] && pass "harness-update.sh installed executable" || fail "harness-update.sh" "missing"
 
 echo ""
+echo "=== bin/ installs flat into ~/.claude, every file of it; tools/ never does ==="
+# The eleven names v1.2.0 installed by hand keep their paths: the statusLine
+# setting, the launchd job, skills and allow rules name them.
+MISSING=""
+for f in "$REPO"/bin/*; do
+  [[ -f "$f" ]] || continue   # a test's __pycache__/, which install.sh skips too
+  b=$(basename "$f"); [[ -x "$HOME/.claude/$b" ]] || MISSING="$MISSING $b"
+done
+[[ -z "$MISSING" ]] && pass "every bin/ file installed, executable" \
+  || fail "every bin/ file installed, executable" "missing:$MISSING"
+LEAKED=""
+for f in "$REPO"/tools/*; do
+  [[ -f "$f" ]] || continue
+  b=$(basename "$f"); if [[ -e "$HOME/.claude/$b" ]]; then LEAKED="$LEAKED $b"; fi
+done
+[[ -z "$LEAKED" ]] && pass "no tools/ file installed" || fail "no tools/ file installed" "installed:$LEAKED"
+GONE=""
+for b in statusline.sh memory-verify.sh memory-fix.sh memory-index.sh memory-provenance.sh session-route.sh \
+         spend-report.py sandbox.sh sandbox-trial.sh net-allowlist.sh harness-update.sh; do
+  [[ -x "$HOME/.claude/$b" ]] || GONE="$GONE $b"
+done
+[[ -z "$GONE" ]] && pass "the eleven tools v1.2.0 installed keep their paths" \
+  || fail "the eleven tools v1.2.0 installed keep their paths" "missing:$GONE"
+
+echo ""
+echo "=== installed tools find what they probe for in the installed layout ==="
+# net-allowlist.sh looks for hooks/lib.sh beside itself, then in ../hooks (the
+# clone); session-start.sh for ../memory-index.sh, then ../bin/. Every other
+# suite runs from the clone, so only these reach the first of each.
+# env -i: the caller's CLAUDE_* overrides must not steer the installed copies, and
+# a missing pin keeps session-start from starting the real CLI.
+ERR=$(env -i HOME="$HOME" PATH="$PATH" bash "$HOME/.claude/net-allowlist.sh" list 2>&1 >/dev/null)
+[[ -z "$ERR" ]] && pass "the installed net-allowlist.sh sources lib.sh" \
+  || fail "the installed net-allowlist.sh sources lib.sh" "$ERR"
+LAUNCH="$TMP/launch"; mkdir -p "$LAUNCH"; LAUNCH=$(cd "$LAUNCH" && pwd)
+STORE="$HOME/.claude/projects/$(printf '%s' "$LAUNCH" | sed 's/[^A-Za-z0-9]/-/g')/memory"
+mkdir -p "$STORE"
+for m in project_old:project feedback_one:feedback; do
+  printf -- '---\nname: %s\ndescription: d\nmetadata:\n  type: %s\n---\n\nbody\n' "${m%%:*}" "${m#*:}" > "$STORE/${m%%:*}.md"
+done
+printf -- '- [P](project_old.md) — hook\n- [F](feedback_one.md) — hook\n' > "$STORE/MEMORY.md"
+( cd "$LAUNCH" && jq -nc --arg d "$LAUNCH" '{source:"resume", session_id:"inst", hook_event_name:"SessionStart", cwd:$d}' \
+    | env -i HOME="$HOME" PATH="$PATH" MEMORY_INDEX_PRESSURE_LINES=1 CLAUDE_CONTRACT_PIN="$TMP/no-pin" \
+        CLAUDE_HARNESS_LATEST="$TMP/no-latest" CLAUDE_HARNESS_VERSION="$TMP/no-version" \
+        bash "$HOME/.claude/hooks/session-start.sh" >/dev/null 2>&1 )
+[[ "$(grep -o 'feedback_one\|project_old' "$STORE/MEMORY.md" | head -1)" = feedback_one ]] \
+  && pass "the installed session-start.sh finds memory-index.sh and reorders" \
+  || fail "the installed session-start.sh finds memory-index.sh and reorders" "$(cat "$STORE/MEMORY.md")"
+
+echo ""
 echo "=== machine-local rules survive the install byte for byte ==="
 [ -f "$HOME/.claude/rules/local-work.md" ] \
   && pass "local-work.md still exists" || fail "local-work.md still exists" "deleted by install"

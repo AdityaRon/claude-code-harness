@@ -10,8 +10,12 @@
 source "$(dirname "$0")/lib.sh"
 
 read_input
-SOURCE=$(jq_get '.source')
-SESSION_ID=$(jq_get '.session_id')
+# One jq for the three fields, where jq_get would start one each. @sh quotes
+# every value for the eval; with no jq, or input that is not an object, all stay empty.
+SOURCE="" SESSION_ID="" LAUNCH_DIR=""
+if command -v jq &>/dev/null; then
+  eval "$(printf '%s\n' "$INPUT" | jq -r '@sh "SOURCE=\(.source // "") SESSION_ID=\(.session_id // "") LAUNCH_DIR=\(.cwd // "")"' 2>/dev/null)"
+fi
 
 # Skipped on startup: the CLI's own system prompt already carries branch,
 # main branch, status and `git log --oneline -n 5` (its gitStatus block), so
@@ -56,21 +60,20 @@ STATE_DIR=$(expand_tilde "${CLAUDE_STATE_DIR:-$HOME/.claude/state/sessions}")
 #     means the CLI's own consolidation may be rewriting this store.
 # Only THIS session's store: the others are not being loaded here.
 PROJECTS_DIR=$(expand_tilde "${CLAUDE_MEMORY_PROJECTS_DIR:-$HOME/.claude/projects}")
-LAUNCH_DIR=$(jq_get '.cwd')
 [[ -z "$LAUNCH_DIR" ]] && LAUNCH_DIR="$PWD"
 # The store slug is the launch path with every non-alphanumeric a dash, as the
 # CLI does it. A path over 200 characters also gets a hash suffix; not found, skipped.
-STORE_SLUG=$(printf '%s' "$LAUNCH_DIR" | sed 's/[^A-Za-z0-9]/-/g')
+STORE_SLUG=$(store_slug "$LAUNCH_DIR")
 MEM_DIR="$PROJECTS_DIR/$STORE_SLUG/memory"
-if [[ -f "$MEM_DIR/MEMORY.md" ]]; then
-  IDX_LINES=$(wc -l < "$MEM_DIR/MEMORY.md" | tr -d ' ')
-  IDX_BYTES=$(wc -c < "$MEM_DIR/MEMORY.md" | tr -d ' ')
+IDX_LINES=0 IDX_BYTES=0
+[[ -f "$MEM_DIR/MEMORY.md" ]] && read -r IDX_LINES IDX_BYTES < <(wc -lc < "$MEM_DIR/MEMORY.md")
+# The stamp and the lock are read only under pressure, the rare case.
+if { [[ "$IDX_LINES" -ge "${MEMORY_INDEX_PRESSURE_LINES:-180}" ]] || [[ "$IDX_BYTES" -ge "${MEMORY_INDEX_PRESSURE_CHARS:-20000}" ]]; }; then
   STAMP_FILE="$STATE_DIR/memory-index/$STORE_SLUG"
   STAMP="$(date -r "$MEM_DIR/MEMORY.md" +%s 2>/dev/null) $IDX_BYTES"
   LOCK_FRESH=""
   [[ -f "$MEM_DIR/.consolidate-lock" ]] && LOCK_FRESH=$(find "$MEM_DIR/.consolidate-lock" -mmin -60 2>/dev/null)
-  if { [[ "$IDX_LINES" -ge "${MEMORY_INDEX_PRESSURE_LINES:-180}" ]] || [[ "$IDX_BYTES" -ge "${MEMORY_INDEX_PRESSURE_CHARS:-20000}" ]]; } \
-     && [[ "$(head -1 "$STAMP_FILE" 2>/dev/null)" != "$STAMP" ]] && [[ -z "$LOCK_FRESH" ]]; then
+  if [[ "$(head -1 "$STAMP_FILE" 2>/dev/null)" != "$STAMP" ]] && [[ -z "$LOCK_FRESH" ]]; then
     INDEX_TOOL=""
     for cand in "$(dirname "$0")/../memory-index.sh" "$(dirname "$0")/../bin/memory-index.sh"; do
       [[ -f "$cand" ]] && INDEX_TOOL="$cand" && break
@@ -110,8 +113,8 @@ done
 # changes between sessions, and it fired in every session in every repo.
 PIN_FILE=$(expand_tilde "${CLAUDE_CONTRACT_PIN:-$HOME/.claude/harness-contract.version}")
 if [[ -f "$PIN_FILE" ]]; then
-  PIN=$(head -1 "$PIN_FILE")
-  CLI=${CLAUDE_CLI_VERSION:-$(claude --version 2>/dev/null | cut -d' ' -f1)}
+  PIN="" && { IFS= read -r PIN < "$PIN_FILE" || true; }
+  CLI=${CLAUDE_CLI_VERSION:-$(cli_version)}
   if [[ -n "$PIN" && -n "$CLI" && "$CLI" != "$PIN" ]]; then
     STAMP_FILE="$STATE_DIR/contract-nudge"
     STAMP="$CLI $(date +%Y-%m-%d)"
@@ -143,8 +146,11 @@ if ! host_binary_check; then echo ""; fi
 LATEST_FILE=$(expand_tilde "${CLAUDE_HARNESS_LATEST:-$HOME/.claude/state/harness-latest}")
 VERSION_FILE=$(expand_tilde "${CLAUDE_HARNESS_VERSION:-$HOME/.claude/harness.version}")
 if [[ -f "$LATEST_FILE" && -f "$VERSION_FILE" ]]; then
-  LATEST=$(head -1 "$LATEST_FILE" | cut -d' ' -f1)
-  INSTALLED=$(sed -n 's/^version=//p' "$VERSION_FILE" | head -1)
+  LATEST="" INSTALLED=""
+  read -r LATEST _ < "$LATEST_FILE" || true
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" == version=* ]] && { INSTALLED=${line#version=}; break; }
+  done < "$VERSION_FILE"
   SEMVER='^v[0-9]+\.[0-9]+\.[0-9]+$'
   if [[ "$LATEST" =~ $SEMVER && "$INSTALLED" =~ $SEMVER && "$LATEST" != "$INSTALLED" \
         && "$(printf '%s\n%s\n' "$LATEST" "$INSTALLED" | sort -V | tail -1)" == "$LATEST" ]]; then

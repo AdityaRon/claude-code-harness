@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Tests for bin/permission-friction.py: guard errors, case env, masking.
+# Tests for tools/permission-friction.py: guard errors, case env, masking.
 set -u
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
-PF="$PWD/bin/permission-friction.py"
+PF="$PWD/tools/permission-friction.py"
 PASS=0; FAIL=0
 pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; [[ -n "${2:-}" ]] && printf '    %s\n' "$2"; FAIL=$((FAIL+1)); }

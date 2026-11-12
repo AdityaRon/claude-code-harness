@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Tests for bin/hook-bench.py on a fixture repo with stub hooks: the gate goes
+# Tests for tools/hook-bench.py on a fixture repo with stub hooks: the gate goes
 # red on a slower hook and on a decision change nobody declared, stays green
 # A/A, and wait is the slowest hook of a call, not the sum.
 set -u
 PASS=0; FAIL=0
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
 fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
-BENCH="$PWD/bin/hook-bench.py"
+BENCH="$PWD/tools/hook-bench.py"
 CORPUS="$PWD/tests/bench-corpus.jsonl"
 command -v python3 >/dev/null || { echo "  SKIP: no python3"; echo "--- Results: 0 passed, 0 failed ---"; exit 0; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT

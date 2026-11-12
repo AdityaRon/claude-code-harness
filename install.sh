@@ -10,6 +10,19 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Installing Claude Code harness..."
 
+# Live sessions run or read these files while this runs: a hook on every tool
+# call, the status line, a skill's tick. cp rewrites a file in place, so a reader
+# can catch it half written (a Bash call was once denied with a hook's "syntax
+# error near unexpected token"). place copies beside the target and renames it
+# over, so a reader gets the old file or the new one. MODE, if given, is chmod's.
+place() {  # SRC DEST [MODE]
+  local tmp
+  tmp=$(mktemp "$(dirname "$2")/.$(basename "$2").XXXXXX")
+  if cp -p "$1" "$tmp" && { [[ -z "${3:-}" ]] || chmod "$3" "$tmp"; } && mv -f "$tmp" "$2"; then return 0; fi
+  rm -f "$tmp"
+  return 1
+}
+
 # ---- Directories ------------------------------------------------------
 mkdir -p ~/.claude/hooks ~/.claude/logs ~/.claude/transcripts ~/.claude/state/sessions ~/.claude/state/plans ~/.claude/state/workflows ~/.claude/plans-html ~/.claude/skills
 echo "  ✓ directories"
@@ -29,61 +42,22 @@ echo "  ✓ directories"
 # every hook settings.json names exists in hooks/, and so gets installed.
 for f in "$REPO"/hooks/*.sh; do
   b=$(basename "$f")
-  cp "$f" ~/.claude/hooks/"$b"
-  chmod +x ~/.claude/hooks/"$b"
+  place "$f" ~/.claude/hooks/"$b" 755
   echo "  ✓ hooks/$b"
 done
 
-# ---- Statusline -------------------------------------------------------
-cp "$REPO/bin/statusline.sh" ~/.claude/statusline.sh
-chmod +x ~/.claude/statusline.sh
-echo "  ✓ statusline.sh"
-
-# ---- Memory tools -----------------------------------------------------
-# Not a hook: checking memories against GitHub costs a network call, which has
-# no business running on every session start. Invoked on demand instead.
-# All three, together: memory-audit invokes them as a set, and installing only
-# some of them is what left the skill resolving one script from ~/.claude and
-# another from a hardcoded checkout path — so the ~/.claude copy went stale by a
-# day without anything noticing.
-for t in memory-verify memory-fix memory-index memory-provenance; do
-  cp "$REPO/bin/$t.sh" ~/.claude/"$t.sh"
-  chmod +x ~/.claude/"$t.sh"
-  echo "  ✓ $t.sh"
+# ---- Tools: every file in bin/, flat into ~/.claude -------------------
+# Globbed like hooks/, so a new tool installs the day it lands; clone-only
+# tools live in tools/ and never install. Flat, because settings.json's
+# statusLine, the launchd job and the skills name ~/.claude/<tool>. None is a
+# hook: memory-audit runs the memory tools on demand, comms-hub's tick runs
+# spend-report.py, and harness-update.sh updates from ~/.claude/harness-src.
+for f in "$REPO"/bin/*; do
+  [[ -f "$f" ]] || continue
+  b=$(basename "$f")
+  place "$f" ~/.claude/"$b" 755
+  echo "  ✓ $b"
 done
-
-# ---- Session routing --------------------------------------------------
-# Also not a hook, and for the same reason as the memory tools: it answers a
-# question you ask at a decision point ("which session owns this PR?"), not one
-# worth answering on every session start. Reads only local transcripts and job
-# records, so no network call and nothing to configure.
-cp "$REPO/bin/session-route.sh" ~/.claude/session-route.sh
-chmod +x ~/.claude/session-route.sh
-echo "  ✓ session-route.sh"
-
-# ---- Spend report -----------------------------------------------------
-# What sessions, subagents and loop ticks cost, read from local transcripts.
-# The comms-hub tick runs it once a day for its alerts.
-cp "$REPO/bin/spend-report.py" ~/.claude/spend-report.py
-chmod +x ~/.claude/spend-report.py
-echo "  ✓ spend-report.py"
-
-# Hosts network-guard allows on this machine only, read from local-settings at
-# every call; see docs/customization.md.
-for t in sandbox sandbox-trial; do
-  cp "$REPO/bin/$t.sh" ~/.claude/"$t.sh"; chmod +x ~/.claude/"$t.sh"; echo "  ✓ $t.sh"
-done
-cp "$REPO/bin/net-allowlist.sh" ~/.claude/net-allowlist.sh
-chmod +x ~/.claude/net-allowlist.sh
-echo "  ✓ net-allowlist.sh"
-
-# Updates from its own clone, ~/.claude/harness-src, cloned from origin= below:
-# launchd cannot read ~/Desktop or ~/Documents, where this clone may live.
-# Replaced by rename: it is the script running this install when it updates.
-cp "$REPO/bin/harness-update.sh" ~/.claude/harness-update.sh.new
-chmod +x ~/.claude/harness-update.sh.new
-mv -f ~/.claude/harness-update.sh.new ~/.claude/harness-update.sh
-echo "  ✓ harness-update.sh"
 
 # ---- Contract pin -----------------------------------------------------
 # session-start.sh compares this with `claude --version`, so a session says when
@@ -114,14 +88,14 @@ for skill in "$REPO"/skills/*/; do
   [[ -d "$skill" ]] || continue
   name=$(basename "$skill")
   mkdir -p ~/.claude/skills/"$name"
-  cp "$skill"SKILL.md ~/.claude/skills/"$name"/SKILL.md
+  place "$skill"SKILL.md ~/.claude/skills/"$name"/SKILL.md
   for f in "$skill"*.example.toml; do
-    if [[ -f "$f" ]]; then cp "$f" ~/.claude/skills/"$name"/; fi
+    if [[ -f "$f" ]]; then place "$f" ~/.claude/skills/"$name"/"$(basename "$f")"; fi
   done
   if [[ -d "$skill"bin ]]; then
     mkdir -p ~/.claude/skills/"$name"/bin
     for f in "$skill"bin/*; do
-      if [[ -f "$f" ]]; then cp "$f" ~/.claude/skills/"$name"/bin/; fi
+      if [[ -f "$f" ]]; then place "$f" ~/.claude/skills/"$name"/bin/"$(basename "$f")"; fi
     done
   fi
   # A skill's panel/ is a mod its own session loads (comms-hub's: hub.py launch
@@ -131,7 +105,7 @@ for skill in "$REPO"/skills/*/; do
       if [[ -f "$f" ]]; then
         rel=${f#"$skill"}
         mkdir -p ~/.claude/skills/"$name"/"$(dirname "$rel")"
-        cp "$f" ~/.claude/skills/"$name"/"$rel"
+        place "$f" ~/.claude/skills/"$name"/"$rel"
       fi
     done
   fi
@@ -174,7 +148,7 @@ fi
 mkdir -p ~/.claude/rules
 for rule in "$REPO"/rules/*.md; do
   [[ -f "$rule" ]] || continue
-  cp "$rule" ~/.claude/rules/"$(basename "$rule")"
+  place "$rule" ~/.claude/rules/"$(basename "$rule")"
   echo "  ✓ rules/$(basename "$rule")"
 done
 
@@ -214,11 +188,11 @@ fi
 EFFORT_MARK=~/.claude/state/effort-high.migrated
 
 if [[ ! -f "$TARGET" ]]; then
-  cp "$SOURCE" "$TARGET"
+  place "$SOURCE" "$TARGET"
   echo "  ✓ settings.json (installed fresh)"
 elif ! command -v jq &>/dev/null; then
   cp "$TARGET" "$TARGET.bak.$(date +%Y%m%d%H%M%S)"
-  cp "$SOURCE" "$TARGET"
+  place "$SOURCE" "$TARGET"
   echo "  ⚠ settings.json (jq not found — overwrote; backup saved with timestamp)"
 else
   # Merge: harness owns hooks + deny + the status line; existing user keys
@@ -275,7 +249,8 @@ else
     | while IFS= read -r rule; do echo "  ✓ retired rule removed: $rule"; done \
     || echo "  ⚠ could not list retired rules; the merge below still removes them."
 
-  TMP=$(mktemp)
+  # Beside the target, so the mv below is a rename on one filesystem, not a copy.
+  TMP=$(mktemp "$TARGET.XXXXXX")
   if ! jq -s --arg home "$HOME" --argjson owned "$OWNED" --argjson retired "$RETIRED" --arg effort_was "$EFFORT_WAS" \
           -f "$REPO/config/merge-settings.jq" "$TARGET" "$SOURCE" > "$TMP"; then
     rm -f "$TMP"
