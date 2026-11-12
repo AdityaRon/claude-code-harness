@@ -4,4 +4,4 @@ not_for = "changing anything through the API (it cannot send anything but GET), 
 guards = ["absent", "partial", "expired_auth", "wrong_target"]
 write_verbs = []
 sql = false
-vendor = []
+vendor = ["access.py"]

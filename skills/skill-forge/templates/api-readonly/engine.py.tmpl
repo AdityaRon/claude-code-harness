@@ -12,6 +12,12 @@ and URL-quoted. ${{env_prefix}}_API_TOKEN goes in a header, never the URL or arg
 ${{env_prefix}}_AUTH_HEADER names it (default "Authorization: Bearer"; write
 "X-Api-Key:" for a bare key). ${{env_prefix}}_RELOGIN is printed when auth fails,
 and ${{env_prefix}}_ID_PATTERN (or --id-pattern) is the shape an id must have.
+An API only the cluster reaches: set ${{env_prefix}}_ACCESS to "port-forward
+SVC[:PORT] in NS" or "pod SVC[:PORT] in NS" (a throwaway pod, created only with
+--apply; with it, a refused port-forward falls back to one) and ${{env_prefix}}_CONTEXT; access.py has the details. With
+${{env_prefix}}_API_PROBE set to a GET path that answers JSON, the path prefix is
+probed (${{env_prefix}}_PATH_PREFIXES, by default none); without it the header
+says the prefix was not probed. A next link must stay on the route's host.
 
 Guards: the one function that talks to the API sends GET and nothing else. An
 id of the wrong shape is refused before any request. A 404 is ABSENT, told
@@ -29,15 +35,17 @@ import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import access  # noqa: E402
 from mask import EXIT_ABSENT, EXIT_AUTH, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED, emit, header, iso  # noqa: E402
 
 ENV = "{{env_prefix}}"
+PREFIXES = [""]
+ROUTE = None   # the access.Route main() opens; every request goes through it
 LINK_NEXT = re.compile(r'<([^>]+)>\s*;\s*rel="?next"?')
 LIST_KEYS = ("items", "data", "results", "values", "records")
 
@@ -73,11 +81,8 @@ def auth_header() -> tuple[str, str] | None:
 
 
 def transport(req: urllib.request.Request) -> tuple[int, dict, str]:
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return r.status, dict(r.headers), r.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers or {}), e.read().decode("utf-8", "replace")
+    """Send REQ on the route main() opened."""
+    return ROUTE.get_url(req.full_url, dict(req.header_items()))
 
 
 def request(method: str, url: str) -> tuple[int, dict, str]:
@@ -98,13 +103,24 @@ def fetch_json(url: str):
     status, headers, body = request("GET", url)
     if status in (401, 403):
         raise AuthError(f"HTTP {status}")
+    if status == 404:   # before the HTML check: a wrong path's 404 page is HTML, and it is not a login
+        raise NotFound(url)
     if "html" in headers.get("content-type", "").lower() or body.lstrip()[:1] == "<":
         raise AuthError("an HTML page came back, most likely a login wall, not the API")
-    if status == 404:
-        raise NotFound(url)
     if status >= 400:
         raise Refused(f"HTTP {status}: {body.strip()[:200]}")
     return json.loads(body) if body.strip() else None, headers
+
+
+def probe() -> str | None:
+    """None when ${ENV}_API_PROBE answers JSON at the route's prefix, else what did."""
+    try:
+        fetch_json(ROUTE.root() + "/" + os.environ[f"{ENV}_API_PROBE"].lstrip("/"))
+    except NotFound:
+        return "HTTP 404"
+    except Refused as e:
+        return str(e)[:80]
+    return None
 
 
 def next_url(headers: dict, data, current: str) -> str | None:
@@ -149,12 +165,12 @@ def resolve(path: str, ident: str | None, pattern: str | None) -> str:
 
 
 def do_get(a) -> int:
-    base = base_url()
     pattern = a.id_pattern or os.environ.get(f"{ENV}_ID_PATTERN")
     path = resolve(a.path, a.id, pattern)
+    base = ROUTE.root()
     params = [tuple(p.split("=", 1)) for p in a.param]
     url = base + path + ("?" + urllib.parse.urlencode(params) if params else "")
-    target = f"{base}{path} (GET)"
+    target = f"GET {path} at {ROUTE.describe()}"
     window = f"n/a: the API's state as of {iso(datetime.now(timezone.utc))}"
     pages, items = 0, []
     try:
@@ -183,26 +199,31 @@ def do_get(a) -> int:
 
 
 def main(argv=None) -> int:
+    global ROUTE
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n", 1)[1])
     sub = p.add_subparsers(dest="cmd", required=True)
-    g = sub.add_parser("get", help="read one resource, following pages")
+    route_opts = argparse.ArgumentParser(add_help=False)
+    route_opts.add_argument("--apply", action="store_true", help="create the throwaway pod a pod route needs; nothing else here writes")
+    g = sub.add_parser("get", help="read one resource, following pages", parents=[route_opts])
     g.add_argument("path")
     g.add_argument("--id")
     g.add_argument("--param", action="append", default=[], metavar="K=V")
     g.add_argument("--max-pages", type=int, default=5)
     g.add_argument("--id-pattern")
     a = p.parse_args(argv)
+    probing = probe if os.environ.get(f"{ENV}_API_PROBE") else None
     try:
-        return do_get(a)
-    except AuthError as e:
+        with access.route(ENV, base_url, probing, PREFIXES, a.apply) as ROUTE:
+            return do_get(a)
+    except (AuthError, access.AccessAuth) as e:
         relogin = os.environ.get(f"{ENV}_RELOGIN", f"(set {ENV}_RELOGIN to the command that renews access)")
         emit(f"AUTH: {e}. This is an expired or missing login, not an empty answer. Re-login with: {relogin}", err=True)
         return EXIT_AUTH
-    except (Refused, ValueError) as e:
+    except (Refused, ValueError, access.AccessRefused) as e:
         emit(f"REFUSED: {e}", err=True)
         return EXIT_REFUSED
     except OSError as e:
-        emit(f"could not reach {os.environ.get(ENV + '_API_URL', '?')}: {e}", err=True)
+        emit(f"could not reach {ROUTE.describe() if ROUTE else os.environ.get(ENV + '_API_URL', '?')}: {e}", err=True)
         return 1
 
 

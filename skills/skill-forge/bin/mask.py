@@ -5,6 +5,7 @@ skill-forge copies this file into every skill it drafts, unchanged.
 
   mask.py --test TEXT     print TEXT as the configured masker leaves it
   mask.py --patterns      list the active patterns and the file each came from
+  mask.py --filter        mask stdin line by line: a shell engine's output path
 
 Patterns are regexes in the [mask] table of a TOML file:
 
@@ -184,7 +185,12 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--test", metavar="TEXT", help="print TEXT masked")
     p.add_argument("--patterns", action="store_true", help="list the active patterns")
+    p.add_argument("--filter", action="store_true", help="mask stdin to stdout, line by line")
     a = p.parse_args(argv)
+    if a.filter:
+        for line in sys.stdin:
+            emit(line.rstrip("\n"))
+        return EXIT_OK
     if a.patterns:
         for label, rx in masker().rules:
             # The pattern is config, not data; print it raw or a reader cannot fix it.

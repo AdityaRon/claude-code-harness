@@ -8,11 +8,11 @@ Mutations that must turn this file red:
   series-cap-ignored: {{module}}.py: `    if n > cap:` => `    if False:`
   series-api-warning-ignored: {{module}}.py: `partial = "; ".join(warn) if warn else (` => `partial = None if warn else (`
   auth-html-missed: {{module}}.py: `if "html" in ctype or body.lstrip()[:1] == "<":` => `if False:`
-  auth-401-missed: {{module}}.py: `if e.code in (401, 403):` => `if False:`
+  auth-401-missed: {{module}}.py: `if status in (401, 403):` => `if False:`
   lag-unsaid: {{module}}.py: `lag.append(` => `(lambda *a: None)(`
   points-cap-off: {{module}}.py: `if points > MAX_POINTS:` => `if False:`
   creds-in-url-ok: {{module}}.py: `if "@" in urllib.parse.urlsplit(url).netloc:` => `if False:`
-  token-in-url: {{module}}.py: `req.add_header("Authorization", "Bearer " + token)` => `req.full_url += "&token=" + token`
+  token-in-url: {{module}}.py: `headers["Authorization"] = "Bearer " + token` => `q += "&token=" + token`
   label-unescaped: {{module}}.py: `+ '="' + esc(value) + '"}'` => `+ '="' + value + '"}'`
   by-labels-as-metrics: {{module}}.py: `if word.lower() in GROUPING and k < n and expr[k] == "(":` => `if False:`
   aggregations-as-metrics: {{module}}.py: `KEYWORDS = GROUPING | AGGREGATIONS |` => `KEYWORDS = GROUPING |`
@@ -20,7 +20,13 @@ Mutations that must turn this file red:
   ab-pooled-only: {{module}}.py: `buckets = [("all", ordered)] if not sizes else [` => `buckets = [("all", ordered)] if True else [`
   ab-few-pairs-ok: {{module}}.py: `partial = None if len(pairs) >= a.min_pairs else` => `partial = None if True else`
   void-never: {{module}}.py: `void = abs(moved) > a.tolerance` => `void = False`
+  probe-skipped: {{module}}.py: `access.route(ENV, base_url, probe, PREFIXES, a.apply)` => `access.route(ENV, base_url, None, PREFIXES, a.apply)`
+  404-unnamed: {{module}}.py: `    if status == 404:` => `    if False:`
+  kube-auth-unmapped: {{module}}.py: `except (AuthError, access.AccessAuth) as e:` => `except AuthError as e:`
+  route-refusal-unmapped: {{module}}.py: `except (Refused, ValueError, access.AccessRefused) as e:` => `except (Refused, ValueError) as e:`
+  apply-ignored: {{module}}.py: `PREFIXES, a.apply) as ROUTE` => `PREFIXES, True) as ROUTE`
   unmasked-series: {{module}}.py: `emit(f"{labels(s['metric'])}  last=` => `sys.stdout.write(f"{labels(s['metric'])}  last=`
+  unopened-route-unnamed: {{module}}.py: `ROUTE.describe() if ROUTE else` => `ROUTE.describe() if ROUTE and ROUTE.base else`
 """
 from __future__ import annotations
 
@@ -31,6 +37,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+import urllib.parse
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
@@ -126,7 +133,7 @@ class QueryTest(unittest.TestCase):
         rc, out, _ = Run(fake)("query", "up", "--window", "2m", *AT)
         self.assertEqual(rc, 0)
         lines = out.splitlines()
-        self.assertEqual(lines[0], "# target:  prometheus-compatible http://prom.test:9090 v2.53.2")
+        self.assertEqual(lines[0], "# target:  prometheus-compatible v2.53.2 at http://prom.test:9090 (direct) · prefix / not probed")
         self.assertEqual(lines[1], "# window:  2026-11-10T05:58:00Z .. 2026-11-10T06:00:00Z (UTC, bounds [start, end], step 60s)")
         self.assertTrue(lines[2].startswith("# command: "))
         self.assertEqual(lines[3:], ["# rows:    1 series", "# partial: no", 'up{job="api"}  last=0 min=0 max=1 avg=0.666667 points=3'])
@@ -276,6 +283,85 @@ class AnalysisTest(unittest.TestCase):
         self.assertNotIn("VOID", out)
 
 
+def routed():
+    """A direct route with no probe, for a test that calls fetch() itself."""
+    class Routed:
+        def __enter__(self):
+            self.cm = eng.access.route(ENV, eng.base_url, None, [""])
+            eng.ROUTE = self.cm.__enter__()
+
+        def __exit__(self, *exc):
+            eng.ROUTE = None
+            return self.cm.__exit__(*exc)
+    return Routed()
+
+
+def answering(paths: dict, seen=None):
+    """A fake urlopen that answers by URL path; any other path is a 404, as a wrong prefix is."""
+    def urlopen(req, timeout):
+        if seen is not None:
+            seen.append(req)
+        path = urllib.parse.urlsplit(req.full_url).path
+        if path in paths:
+            return FakeResponse(json.dumps(paths[path]).encode(), "application/json")
+        if "*" in paths:
+            return FakeResponse(json.dumps(paths["*"]).encode(), "application/json")
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {"Content-Type": "text/plain"}, io.BytesIO(b"404 page not found"))
+    return urlopen
+
+
+class RouteTest(unittest.TestCase):
+    OK = {"status": "success", "data": {"resultType": "vector", "result": []}}
+
+    def test_guard_wrong_target_the_prefix_is_probed_and_echoed(self):
+        paths = {"/prometheus/api/v1/query": self.OK,
+                 "/prometheus/api/v1/status/buildinfo": {"status": "success", "data": {"version": "2.53.2"}},
+                 "/prometheus/api/v1/query_range": {"status": "success", "data": {"resultType": "matrix",
+                                                    "result": [series({"__name__": "up", "job": "api"}, [1, 1])]}}}
+        seen = []
+        with mock.patch("urllib.request.urlopen", answering(paths, seen)):
+            rc, out, err = Run()("query", "up", "--window", "2m", *AT)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out.splitlines()[0], "# target:  prometheus-compatible v2.53.2 at http://prom.test:9090 (direct) · "
+                                              "prefix /prometheus (probed; no API at /: HTTP 404 from /api/v1/query: no API there)")
+        self.assertEqual([urllib.parse.urlsplit(r.full_url).path for r in seen][:2], ["/api/v1/query", "/prometheus/api/v1/query"])
+
+    def test_guard_wrong_target_a_prefix_answering_200_is_not_an_empty_answer(self):
+        with mock.patch("urllib.request.urlopen", answering({"*": {}})):
+            rc, out, err = Run()("query", "up", *AT)
+        self.assertEqual(rc, 5)
+        self.assertEqual(out, "")
+        self.assertIn("no API answered at http://prom.test:9090 (direct) under any prefix tried", err)
+
+    def test_a_pod_route_without_apply_creates_nothing(self):
+        env = {f"{ENV}_ACCESS": "pod prom:9090 in monitoring", f"{ENV}_CONTEXT": "kind-test"}
+        with mock.patch.object(eng.access, "kubectl", return_value=(0, "kind-test\n", "")) as k:
+            rc, out, err = Run(env=env)("query", "up", *AT)
+        self.assertEqual(rc, 5)
+        self.assertIn("needs --apply", err)
+        self.assertFalse(any("run" in c.args[0] for c in k.call_args_list))
+
+    def test_a_route_that_fails_to_open_is_named(self):
+        env = {f"{ENV}_ACCESS": "pod prometheus:9090 in monitoring", f"{ENV}_CONTEXT": "kind-test"}
+
+        def no_pod(*a, **kw):
+            raise OSError("pod sf-access-0 never became ready")
+        with mock.patch.object(eng.access, "kubectl", return_value=(0, "kind-test\n", "")), \
+                mock.patch.object(eng.access, "pod", no_pod):
+            rc, out, err = Run(env=env)("query", "up", *AT, "--apply")
+        self.assertEqual(rc, 1)
+        self.assertIn("could not reach svc/prometheus:9090 in monitoring via pod, context kind-test (not opened)", err)
+
+    def test_guard_expired_auth_kube_login_is_auth_not_no_data(self):
+        env = {f"{ENV}_ACCESS": "port-forward prom:9090 in monitoring", f"{ENV}_CONTEXT": "kind-test", f"{ENV}_RELOGIN": "kube-login"}
+        gone = eng.access.AccessAuth("kubectl: error: You must be logged in to the server (Unauthorized)")
+        with mock.patch.object(eng.access, "kubectl", side_effect=gone):
+            rc, out, err = Run(env=env)("query", "up", *AT)
+        self.assertEqual(rc, 4)
+        self.assertEqual(out, "")
+        self.assertIn("Re-login with: kube-login", err)
+
+
 class FakeResponse:
     def __init__(self, body: bytes, ctype: str):
         self.body, self.headers = body, {"Content-Type": ctype}
@@ -304,7 +390,8 @@ class TransportTest(unittest.TestCase):
         body = json.dumps({"status": "success", "data": {"resultType": "matrix", "result": []}}).encode()
         with mock.patch("urllib.request.urlopen", FakeResponse.factory(body, "application/json", seen)), \
                 mock.patch.dict(os.environ, {f"{ENV}_PROM_URL": "http://prom.test", f"{ENV}_PROM_TOKEN": "tok-123456789"}):
-            eng.fetch("/api/v1/query_range", {"query": "up"})
+            with routed():
+                eng.fetch("/api/v1/query_range", {"query": "up"})
         self.assertEqual(seen[0].get_header("Authorization"), "Bearer tok-123456789")
         self.assertNotIn("tok-123456789", seen[0].full_url)
         self.assertEqual(seen[0].get_method(), "GET")

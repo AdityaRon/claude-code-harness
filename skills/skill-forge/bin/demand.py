@@ -4,20 +4,34 @@ transcripts and shell history, and rank them as candidates for a skill. Each
 comes with its evidence (counts, example sessions by date), never the content.
 
   demand.py [--top N] [--since DAYS] [--transcripts DIR ...] [--history FILE ...]
-            [--min-sessions 2] [--ignore PROG ...] [--json]
+            [--min-sessions 2] [--ignore PROG ...] [--skills DIR ...] [--include-undated] [--json]
 
 Three kinds of candidate:
   sequence   the same 2 to 5 command steps, in order, in several sessions
   question   a prompt asked again, in other words, in several sessions; its steps
              are the commands run before the next prompt, at most 10, since a
              longer run is a task, not an answer. A prompt over 400 characters
-             is a pasted brief, not a question, and is skipped
+             is a pasted brief, not a question, and is skipped. Prompts join one
+             question when they share two content words (by stem) with any
+             prompt already in it, and those are half the shorter one's words
   failing    one command that failed in several sessions
 A command is cut to its shape, the program and its subcommands (`kubectl logs`),
 so no argument, id, host or secret reaches the output. A subcommand counts only
 once it recurs: the first in 2 sessions, the second in 3, so a pod or branch
-name never becomes part of a shape. A prompt is cut to its content words,
-masked, at most 80 characters.
+name never becomes part of a shape. A script an interpreter runs stays in the
+shape by name (`python discover.py`, `python <skill>/tool.py` under skills/),
+since running a skill's engine is the clearest sign of a recurring question.
+A heredoc body is data the command reads, not commands, unless it feeds a
+shell; a newline inside quotes (`python -c "..."`) is part of the argument. A
+prompt is cut to its content words, masked, at most 80 characters.
+
+The window holds each command and prompt by its own timestamp, not its file's
+age; the header says how many fell outside it. Shell history lines with no
+timestamp cannot be placed, so they are left out and counted unless
+--include-undated. A sequence whose steps are mostly re-login or session
+checks (tsh, aws sso, gcloud auth, ...) is access friction: ranked apart, a
+session to fix rather than a skill to write. A candidate whose steps run an
+installed skill's engine says `covered by <skill>`.
 
 score = sessions x steps x failure rate, with the failure rate smoothed to
 (failures + 1) / (attempts + 2). Unsmoothed, a sequence that never failed
@@ -41,6 +55,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mask import EXIT_OK, Window, config_path, emit, header, masker, read_toml  # noqa: E402
+from skill_lint import VENDORED  # noqa: E402
 
 NOISE = {"cd", "echo", "printf", "sleep", "true", "false", "export", "set", "unset", "source", ".", "clear", "ls", "pwd",
          "exit", "date", "which", "command", "type", "history", "test", "[", "mkdir", "touch", "rm", "cp", "mv", "chmod", "open",
@@ -56,11 +71,28 @@ INTERPRETERS = re.compile(r"^(?:python[\d.]*|node|bash|sh|zsh|ruby|perl|deno|bun
 SUBCOMMANDS = set("""kubectl oc helm kustomize kind minikube istioctl linkerd argocd argo flux git gh glab docker podman
 nerdctl aws gcloud gsutil bq az doctl oci terraform tofu pulumi vault op bw tsh boundary cloudflared npm pnpm yarn cargo
 go make brew pip poetry uv systemctl launchctl temporal airflow dbt stripe heroku fly vercel ldcli flipt sentry-cli
-datadog-ci dagster prefect""".split())
+datadog-ci dagster prefect aws-vault saml2aws""".split())
 VALUE_FLAGS = {"-n", "--namespace", "--context", "--profile", "--region", "-o", "--output", "-f", "--file", "-l", "--selector",
                "--project", "-R", "--repo", "-C", "-p", "-u", "--user", "-d", "-h", "--host", "-U", "-H", "-X", "--since",
                "--tail", "-A", "-B", "-e", "--cluster", "--kubeconfig", "-w"}
 VERB = re.compile(r"[a-z][a-z0-9-]{1,24}")
+SCRIPT_RUNNERS = {"python", "node", "bash", "sh", "zsh", "ruby", "perl", "deno", "bun"}
+RUN_WRAPPERS = {"uv", "poetry", "pipenv", "pdm"}       # `uv run tool.py`
+INTERP_VALUE_FLAGS = {"-W", "-X", "-Q"}
+SCRIPT = re.compile(r"\.(?:py|sh|js|ts|rb|pl)$")
+SKILL_SCRIPT = re.compile(r"(?:^|/)skills/([\w.-]+)/(?:bin/)?([\w.-]+)$")
+MODULE = re.compile(r"[A-Za-z_][\w.]{0,40}")
+# Ported from hooks/config-guard.sh's drop_data_heredocs, not imported: this skill installs alone.
+HEREDOC = re.compile(r"(?<!<)<<(-?)[ \t]*([\"']?)([A-Za-z_][A-Za-z0-9_]*)\2")
+FEEDS_A_SHELL = re.compile(r"(?:^|[;&|(])[ \t]*(?:bash|sh|zsh|dash|ksh)(?:[ \t][^;&|]*)?$")
+# Re-login and session checks: None means every subcommand is one. A tool that also
+# does the work (tsh ssh, aws-vault exec) lists only its login subcommands, one or two words.
+ACCESS = {"kinit": None, "kubelogin": None, "okta": None, "gimme-aws-creds": None,
+          "tsh": {"login", "logout", "status", "kube login", "db login", "app login", "apps login"},
+          "aws-vault": {"login", "clear", "remove", "rotate"}, "saml2aws": {"login", "configure"},
+          "gcloud": {"auth"}, "aws": {"sso"}, "az": {"login", "account"},
+          "vault": {"login"}, "gh": {"auth"}, "docker": {"login"}, "op": {"signin"}, "bw": {"login", "unlock"}}
+VENDORED_HELPERS = set(VENDORED)
 MAX_PROMPT = 400          # characters; a longer prompt is a pasted brief, not a question
 MAX_QUESTION_STEPS = 10   # a longer run after a prompt is a task, not its answer
 STOP = set("""a an the and or but if so of to in on at by for with from as is are was were be been being do does did
@@ -90,15 +122,62 @@ class Session:
 REDIRECT = re.compile(r"\d*>&\d*-?|(?:&>>?|\d*>>?|<<-?|<)\s*[^\s;&|]+")
 
 
+def drop_heredocs(cmd: str) -> str:
+    """Heredoc bodies and their terminators out, unless the heredoc feeds a shell; an unterminated one runs to the end."""
+    if "<<" not in cmd:
+        return cmd
+    out, term, dash, keep = [], None, False, False
+    for line in cmd.split("\n"):
+        if term is not None:
+            if (line.lstrip("\t") if dash else line) == term:
+                term = None
+            elif keep:
+                out.append(line)
+            continue
+        out.append(line)
+        m = HEREDOC.search(line)
+        if m:
+            dash, term, keep = m.group(1) == "-", m.group(3), bool(FEEDS_A_SHELL.search(line[:m.start()]))
+    return "\n".join(out)
+
+
+def separate_lines(cmd: str) -> tuple[str, bool]:
+    """Unquoted newlines become `;`; a quoted one stays in its argument. Comments go. Also says whether the quotes balance."""
+    out, q, i, n = [], None, 0, len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if ch == "\\" and q != "'" and i + 1 < n:
+            out.append(" " if cmd[i + 1] == "\n" else cmd[i:i + 2])
+            i += 2
+            continue
+        if q:
+            q = None if ch == q else q
+            out.append(ch)
+        elif ch in "'\"":
+            q = ch
+            out.append(ch)
+        elif ch == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|("):
+            while i < n and cmd[i] != "\n":
+                i += 1
+            continue
+        else:
+            out.append(" ; " if ch == "\n" else ch)
+        i += 1
+    return "".join(out), q is None
+
+
 def tokens(cmd: str) -> list[str]:
+    flat, balanced = separate_lines(drop_heredocs(cmd))
+    if not balanced:   # a quote this does not model: the first line alone is the command
+        flat, _ = separate_lines(cmd.split("\n", 1)[0])
     # `2>&1` would split on its `&` and make `1` a command; a redirection is never a step.
-    cmd = REDIRECT.sub(" ", cmd.replace("\n", " ; "))
-    lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|")
+    flat = REDIRECT.sub(" ", flat)
+    lex = shlex.shlex(flat, posix=True, punctuation_chars=";&|")
     lex.whitespace_split = True
     try:
         return list(lex)
     except ValueError:
-        return cmd.split()
+        return flat.split()
 
 
 def pipelines(cmd: str) -> list[list[list[str]]]:
@@ -129,10 +208,13 @@ def raw_shape(simple: list[str]) -> tuple | None:
     if not re.fullmatch(r"[A-Za-z_.][A-Za-z0-9_.+-]{0,39}", prog) or prog in NOISE or prog.startswith("-"):
         return None
     rest = simple[i + 1:]
+    if prog in RUN_WRAPPERS and rest[:1] == ["run"]:
+        rest = rest[1:]
+        prog, rest = (os.path.basename(rest[0]), rest[1:]) if rest and INTERPRETERS.match(os.path.basename(rest[0])) else ("python", rest)
+    if SCRIPT.search(prog):   # a script run by its own path
+        return ("python" if prog.endswith(".py") else "bash" if prog.endswith(".sh") else "run", script_label(simple[i]), "")
     if INTERPRETERS.match(prog):
-        base = "python" if prog.startswith("python") else prog
-        script = next((t for t in rest if not t.startswith("-")), "")
-        return (base, os.path.basename(script), "") if re.search(r"\.(?:py|sh|js|ts|rb|pl)$", script) else (base, "", "")
+        return (("python" if prog.startswith("python") else prog), interpreted(rest), "")
     verbs, j = [], 0
     while prog in SUBCOMMANDS and j < len(rest) and len(verbs) < 2:
         t = rest[j]
@@ -145,6 +227,27 @@ def raw_shape(simple: list[str]) -> tuple | None:
         j += 1
     verbs += [""] * (2 - len(verbs))
     return (prog, verbs[0], verbs[1])
+
+
+def script_label(path: str) -> str:
+    m = SKILL_SCRIPT.search(path)
+    return f"{m.group(1)}/{m.group(2)}" if m else os.path.basename(path)
+
+
+def interpreted(rest: list[str]) -> str:
+    """What an interpreter runs: a script's name, `-m module`, or "" for -c, stdin or nothing named."""
+    j = 0
+    while j < len(rest):
+        t = rest[j]
+        if t == "-m":
+            return f"-m {rest[j + 1]}" if j + 1 < len(rest) and MODULE.fullmatch(rest[j + 1]) else ""
+        if t in ("-c", "-"):
+            return ""
+        if t.startswith("-"):
+            j += 2 if t in INTERP_VALUE_FLAGS else 1
+            continue
+        return script_label(t) if SCRIPT.search(t) else ""
+    return ""
 
 
 def step_of(pipe: list[list[str]]) -> tuple | None:
@@ -181,7 +284,19 @@ def project_label(dirname: str) -> str:
     return (dirname[len(home):] if dirname.startswith(home) else dirname).strip("-") or "home"
 
 
-def read_transcripts(dirs: list[str], since: datetime, ignore: set) -> tuple[list[Session], int]:
+def when(ts) -> datetime | None:
+    try:
+        t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else None
+
+
+def read_transcripts(dirs: list[str], since: datetime, ignore: set, counts: dict | None = None) -> tuple[list[Session], int]:
+    """Sessions from transcripts, each event kept only if its own timestamp is in the window.
+    A file's age only rules a whole file out: a session resumed today still holds last month."""
+    counts = counts if counts is not None else {}
+    counts.setdefault("before", 0)
     sessions, bad = [], 0
     for d in dirs:
         for f in sorted(Path(d).expanduser().glob("*/*.jsonl")):
@@ -202,7 +317,11 @@ def read_transcripts(dirs: list[str], since: datetime, ignore: set) -> tuple[lis
                     continue
                 if not isinstance(rec, dict) or rec.get("isSidechain"):
                     continue
-                if not s.date and isinstance(rec.get("timestamp"), str):
+                t = when(rec.get("timestamp"))
+                if t is not None and t < since:
+                    counts["before"] += rec.get("type") in ("user", "assistant")
+                    continue
+                if not s.date and t is not None:
                     s.date = rec["timestamp"][:10]
                 msg = rec.get("message") or {}
                 content = msg.get("content") if isinstance(msg, dict) else None
@@ -234,7 +353,12 @@ def read_transcripts(dirs: list[str], since: datetime, ignore: set) -> tuple[lis
     return sessions, bad
 
 
-def read_history(files: list[str], since: datetime, ignore: set) -> list[Session]:
+def read_history(files: list[str], since: datetime, ignore: set, include_undated: bool = False,
+                 counts: dict | None = None) -> list[Session]:
+    """Shell history in sessions: dated lines by their time, gaps over 30 minutes splitting them. A line
+    with no timestamp cannot be placed in the window; it is counted and left out unless include_undated."""
+    counts = counts if counts is not None else {}
+    counts.setdefault("undated", 0)
     sessions = []
     for name in files:
         path = Path(name).expanduser()
@@ -259,19 +383,21 @@ def read_history(files: list[str], since: datetime, ignore: set) -> list[Session
             entries.append((ts, buf))
             buf = ""
         dated = [e for e in entries if e[0] is not None]
+        undated = [e for e in entries if e[0] is None]
         groups, cur, last = [], [], None
-        if dated:
-            for t, cmd in dated:
-                if datetime.fromtimestamp(t, timezone.utc) < since:
-                    continue
-                if last is not None and t - last > 1800:
-                    groups.append(cur)
-                    cur = []
-                cur.append((t, cmd))
-                last = t
-            groups.append(cur)
+        for t, cmd in dated:
+            if datetime.fromtimestamp(t, timezone.utc) < since:
+                continue
+            if last is not None and t - last > 1800:
+                groups.append(cur)
+                cur = []
+            cur.append((t, cmd))
+            last = t
+        groups.append(cur)
+        if include_undated:
+            groups += [undated[i:i + 50] for i in range(0, len(undated), 50)]
         else:
-            groups = [entries[i:i + 50] for i in range(0, len(entries), 50)]
+            counts["undated"] += len(undated)
         for k, g in enumerate(groups):
             if not g:
                 continue
@@ -295,7 +421,7 @@ def assign_shapes(sessions: list[Session]) -> None:
         for st in s.steps:
             p, a, b = st.raw
             parts = [p]
-            if a and len(v1[(p, a)]) >= 2:
+            if a and (p in SCRIPT_RUNNERS or len(v1[(p, a)]) >= 2):   # a script's name is not an id
                 parts.append(a)
                 if b and len(v2[(p, a, b)]) >= 3:
                     parts.append(b)
@@ -314,7 +440,47 @@ def smoothed(fails: int, attempts: int) -> float:
     return (fails + 1) / (attempts + 2)
 
 
-def candidates(sessions: list[Session], min_sessions: int) -> list[dict]:
+def stem(w: str) -> str:
+    """Enough of an English stem that `slowly` meets `slow` and `nightly` meets `night`."""
+    for suffix in ("ingly", "edly", "ing", "ly", "ed", "es", "s"):
+        if w.endswith(suffix) and len(w) - len(suffix) >= 4:
+            return w[:-len(suffix)]
+    return w
+
+
+def similar(a: set, b: set) -> bool:
+    """Two prompts ask the same thing in other words: two content stems shared, half the shorter one's."""
+    shared = len(a & b)
+    return shared >= 2 and shared / min(len(a), len(b)) >= 0.5
+
+
+def is_access(shape: str) -> bool:
+    parts = shape.split()
+    rule = ACCESS.get(parts[0], False) if parts else False
+    return rule is None or (rule is not False and len(parts) > 1 and (parts[1] in rule or " ".join(parts[1:3]) in rule))
+
+
+def installed_engines(dirs: list[str]) -> dict:
+    """`skill/script` and, where only one skill has it, `script` -> the skill whose engine it is."""
+    qual, base = {}, defaultdict(set)
+    for d in dirs:
+        for md in sorted(Path(d).expanduser().glob("*/SKILL.md")):
+            root = md.parent
+            for p in [*root.glob("*.py"), *root.glob("*.sh"), *root.glob("bin/*.py"), *root.glob("bin/*.sh")]:
+                if p.name not in VENDORED_HELPERS and not p.name.startswith("test_"):
+                    qual[f"{root.name}/{p.name}"] = root.name
+                    base[p.name].add(root.name)
+    return {**{b: next(iter(s)) for b, s in base.items() if len(s) == 1}, **qual}
+
+
+def tag(c: dict, shapes: list[str], engines: dict) -> None:
+    """access when most steps are re-login or session checks; covered_by when a step runs a skill's engine."""
+    c["tag"] = "access" if c["kind"] != "question" and 2 * sum(map(is_access, shapes)) >= len(shapes) else ""
+    c["covered_by"] = next((engines[p[1]] for p in (s.split() for s in shapes)
+                            if len(p) == 2 and p[0] in SCRIPT_RUNNERS and p[1] in engines), "")
+
+
+def candidates(sessions: list[Session], min_sessions: int, engines: dict | None = None) -> list[dict]:
     out = []
     seq: dict = defaultdict(lambda: {"sids": set(), "attempts": 0, "fails": 0, "examples": {}})
     for s in sessions:
@@ -334,7 +500,7 @@ def candidates(sessions: list[Session], min_sessions: int) -> list[dict]:
                     c["examples"][s.sid] = (s.date, s.project)
     for key, c in seq.items():
         if len(c["sids"]) >= min_sessions:
-            out.append({"kind": "sequence", "label": " → ".join(key), "steps": len(key), **_stats(c)})
+            out.append({"kind": "sequence", "label": " → ".join(key), "steps": len(key), "_shapes": list(key), **_stats(c)})
     fail: dict = defaultdict(lambda: {"sids": set(), "attempts": 0, "fails": 0, "examples": {}})
     for s in sessions:
         for st in s.steps:
@@ -346,17 +512,20 @@ def candidates(sessions: list[Session], min_sessions: int) -> list[dict]:
                 c["examples"][s.sid] = (s.date, s.project)
     for shape, c in fail.items():
         if len(c["sids"]) >= min_sessions:
-            out.append({"kind": "failing", "label": shape, "steps": 1, **_stats(c)})
+            out.append({"kind": "failing", "label": shape, "steps": 1, "_shapes": [shape], **_stats(c)})
     clusters: list = []
     for s in sessions:
         for idx, (w, at) in enumerate(s.prompts):
             end = s.prompts[idx + 1][1] if idx + 1 < len(s.prompts) else len(s.steps)
             after = s.steps[at:end]
-            ws = set(w)
-            home = next((c for c in clusters if len(ws & c["words"]) >= 2 and len(ws & c["words"]) / len(ws | c["words"]) >= 0.5), None)
+            ws = {stem(x) for x in w}
+            home = next((c for c in clusters if any(similar(ws, m) for m in c["members"])), None)
             if home is None:
-                home = {"words": ws, "forms": Counter(), "sids": set(), "attempts": 0, "fails": 0, "examples": {}, "nsteps": []}
+                home = {"members": [], "forms": Counter(), "sids": set(), "attempts": 0, "fails": 0, "examples": {},
+                        "nsteps": [], "shapes": set()}
                 clusters.append(home)
+            home["members"].append(ws)
+            home["shapes"] |= {st.shape for st in after}
             home["forms"][w] += 1
             home["sids"].add(s.sid)
             home["examples"][s.sid] = (s.date, s.project)
@@ -367,9 +536,10 @@ def candidates(sessions: list[Session], min_sessions: int) -> list[dict]:
         steps = min(MAX_QUESTION_STEPS, round(sum(c["nsteps"]) / len(c["nsteps"])))
         if len(c["sids"]) >= min_sessions and steps >= 1:   # a question no command answered gives a skill nothing to run
             label = " ".join(c["forms"].most_common(1)[0][0])
-            out.append({"kind": "question", "label": label, "steps": steps, **_stats(c)})
+            out.append({"kind": "question", "label": label, "steps": steps, "_shapes": sorted(c["shapes"]), **_stats(c)})
     for c in out:
         c["score"] = round(c["sessions"] * c["steps"] * smoothed(c["failures"], c["attempts"]), 2)
+        tag(c, c.pop("_shapes"), engines or {})
     out.sort(key=lambda c: (-c["score"], -c["sessions"], c["label"]))
     return drop_subsumed(out)
 
@@ -398,13 +568,18 @@ def _contains(big: list, small: list) -> bool:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n", 1)[1])
-    cfg = read_toml(config_path()).get("demand", {})
+    whole = read_toml(config_path())
+    cfg = whole.get("demand", {})
+    # skill_dirs is set once, under [discover], and read by both; [demand] may override it.
+    skill_dirs = cfg.get("skill_dirs") or whole.get("discover", {}).get("skill_dirs", ["~/.claude/skills"])
     p.add_argument("--top", type=int, default=cfg.get("top", 10))
     p.add_argument("--since", type=int, default=cfg.get("since_days", 60), help="days back")
     p.add_argument("--transcripts", action="append")
     p.add_argument("--history", action="append")
     p.add_argument("--min-sessions", type=int, default=2)
     p.add_argument("--ignore", action="append", default=None, help="a program to leave out, e.g. git (repeatable)")
+    p.add_argument("--skills", action="append", metavar="DIR", help="where installed skills live (default ~/.claude/skills)")
+    p.add_argument("--include-undated", action="store_true", help="count shell history lines that carry no timestamp")
     p.add_argument("--json", action="store_true")
     a = p.parse_args(argv)
     now = datetime.now(timezone.utc)
@@ -412,29 +587,41 @@ def main(argv=None) -> int:
     ignore = set(a.ignore if a.ignore is not None else cfg.get("ignore_programs", []))
     tdirs = a.transcripts or cfg.get("transcript_dirs", ["~/.claude/projects"])
     hfiles = a.history if a.history is not None else cfg.get("history_files", ["~/.zsh_history", "~/.bash_history"])
-    sessions, bad = read_transcripts(tdirs, since, ignore)
-    hist = read_history(hfiles, since, ignore)
+    counts: dict = {}
+    sessions, bad = read_transcripts(tdirs, since, ignore, counts)
+    hist = read_history(hfiles, since, ignore, a.include_undated, counts)
     allsess = sessions + hist
     assign_shapes(allsess)
-    top = candidates(allsess, a.min_sessions)[:a.top]
+    ranked = candidates(allsess, a.min_sessions, installed_engines(a.skills or skill_dirs))
+    top = [c for c in ranked if c["tag"] != "access"][:a.top]
+    access = [c for c in ranked if c["tag"] == "access"][:max(3, a.top // 3)]
     m = masker()
-    for c in top:
+    for c in top + access:
         c.pop("_sids")
         c["label"] = m(c["label"])[:80]
         c["examples"] = [m(e) for e in c["examples"]]
     if a.json:
-        emit(json.dumps(top, indent=2))
+        emit(json.dumps(top + access, indent=2))
         return EXIT_OK
     projects = len({s.project for s in sessions})
+    left_out = [f"{bad} unreadable transcript lines or files skipped"] if bad else []
+    if counts["undated"]:
+        left_out.append(f"{counts['undated']} shell-history lines with no timestamp left out (--include-undated counts them)")
     emit(header(target=f"{len(sessions)} transcript sessions in {projects} projects; {len(hist)} shell-history sessions",
-                window=Window(since, now, bounds="sessions modified in [start, end]"), rows=len(top),
-                partial=f"{bad} unreadable transcript lines or files skipped" if bad else None))
+                window=Window(since, now, bounds="each command and prompt by its own timestamp in [start, end]"),
+                rows=len(top), partial="; ".join(left_out) or None))
+    emit(f"# outside the window: {counts['before']} transcript events from resumed sessions, left out")
     emit("# score = sessions x steps x (failures + 1) / (attempts + 2)")
     for i, c in enumerate(top, 1):
-        emit(f"{i:>2}. score {c['score']:<6} {c['kind']:<9} {c['label']}")
+        emit(f"{i:>2}. score {c['score']:<6} {c['kind']:<9} {c['label']}" + (f"  (covered by {c['covered_by']})" if c["covered_by"] else ""))
         emit(f"    {c['sessions']} sessions · {c['steps']} steps · {c['attempts']} attempts, {c['failures']} failed · e.g. {', '.join(c['examples'])}")
     if not top:
         emit(f"no candidate seen in {a.min_sessions}+ sessions; widen --since or lower --min-sessions")
+    if access:
+        emit("\n# access friction, ranked apart: re-login and session checks are a session to fix, not a skill to write")
+        for i, c in enumerate(access, 1):
+            emit(f"a{i}. score {c['score']:<6} {c['kind']:<9} {c['label']}")
+            emit(f"    {c['sessions']} sessions · {c['attempts']} attempts, {c['failures']} failed · e.g. {', '.join(c['examples'])}")
     return EXIT_OK
 
 
