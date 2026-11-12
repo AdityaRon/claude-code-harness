@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Run the comms-hub tests, or their mutations.
+"""Run this skill's tests, or their mutations. skill-forge copies this file
+into every skill it drafts, unchanged.
 
-  run.py            every test_*.py; ends with `--- Results: N passed, M failed ---`
+  run.py            every tests/test_*.py; ends with `--- Results: N passed, M failed ---`
   run.py --mutate   each mutation listed in a test file's docstring, applied to a
                     temp copy of the skill: the file must go red, or it cannot fail
 
 A docstring mutation line reads
   name: script.py: `old text` => `new text`
-and `name (may survive): ...` marks one a reason in the line allows to stay green.
-Either text may run on over the lines that follow, for code that spans lines.
-`old text` must occur exactly once in the script, so a mutation cannot go stale.
+where script.py is a file in bin/, or a path from the skill's root when it holds
+a slash. `name (may survive): ...` marks one a reason in the line allows to stay
+green. Either text may run on over the lines that follow. `old text` must occur
+exactly once in the file, so a mutation cannot go stale.
 Exit status is the failure count.
 """
 from __future__ import annotations
@@ -26,8 +28,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
-LINE = re.compile(r"^\s+([\w-]+)( \(may survive\))?: ([\w.]+): `(.+?)` => `(.*?)`\s*$", re.S)
-START = re.compile(r"^\s+([\w-]+)( \(may survive\))?: ([\w.]+): `")
+LINE = re.compile(r"^\s+([\w-]+)( \(may survive\))?: ([\w./-]+): `(.+?)` => `(.*?)`\s*$", re.S)
+START = re.compile(r"^\s+([\w-]+)( \(may survive\))?: ([\w./-]+): `")
 
 
 def run_tests() -> int:
@@ -35,14 +37,13 @@ def run_tests() -> int:
     suite = unittest.defaultTestLoader.discover(str(HERE), pattern="test_*.py", top_level_dir=str(HERE))
     result = unittest.TextTestRunner(verbosity=1, stream=sys.stdout).run(suite)
     failed = len(result.failures) + len(result.errors)
-    print(f"--- Results: {result.testsRun - failed} passed, {failed} failed ---")
+    sys.stdout.write(f"--- Results: {result.testsRun - failed} passed, {failed} failed ---\n")
     return failed
 
 
 def mutations(test_file: Path):
-    """Each (name, may survive, script, old, new); old is None for a line that
-    starts a mutation and never parses. Read a line at a time, the seven that
-    spanned lines were skipped without a word, and their rules went untested."""
+    """Each (name, may survive, target, old, new); old is None for a line that
+    starts a mutation and never parses."""
     doc = ast.get_docstring(ast.parse(test_file.read_text())) or ""
     raw = doc.splitlines()
     lines = [ln if ln.startswith(" ") else "  " + ln for ln in raw]
@@ -65,58 +66,59 @@ def mutations(test_file: Path):
 def run_file(root: Path, test_file: str) -> int:
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     p = subprocess.run([sys.executable, "-B", "-m", "unittest", test_file[:-3]], cwd=root / "tests",
-                       env=env, capture_output=True, text=True, timeout=300)
+                       env=env, capture_output=True, text=True, timeout=600)
     return p.returncode
 
 
-def run_mutations() -> int:
+def run_mutations(only: str | None = None) -> int:
     killed = survived = stale = 0
     for tf in sorted(HERE.glob("test_*.py")):
+        if only and tf.name != only:
+            continue
         listed = list(mutations(tf))
         if not listed:
-            print(f"NONE {tf.name}: no mutations listed")
+            sys.stdout.write(f"NONE {tf.name}: no mutations listed\n")
             stale += 1
             continue
         if run_file(SKILL, tf.name) != 0:
-            print(f"RED  {tf.name}: fails unmutated, so no mutation means anything")
+            sys.stdout.write(f"RED  {tf.name}: fails unmutated, so no mutation means anything\n")
             stale += 1
             continue
-        for name, may, script, old, new in listed:
+        for name, may, target, old, new in listed:
             if old is None:
-                print(f"STALE {tf.name} {name}: the line does not parse as `old` => `new`")
+                sys.stdout.write(f"STALE {tf.name} {name}: the line does not parse as `old` => `new`\n")
                 stale += 1
                 continue
-            work = Path(tempfile.mkdtemp(prefix="comms-hub-mutate."))
+            work = Path(tempfile.mkdtemp(prefix="skill-mutate."))
             try:
-                for sub in ("bin", "tests"):
-                    shutil.copytree(SKILL / sub, work / sub)
-                # test_hub.py reads the example config: without it every hub.py
-                # mutation went red on FileNotFoundError, not on the rule.
-                for f in SKILL.glob("*.example.toml"):
-                    shutil.copy(f, work / f.name)
-                target = work / "bin" / script
-                text = target.read_text()
+                shutil.copytree(SKILL, work / "s", ignore=shutil.ignore_patterns("__pycache__", ".git"))
+                path = work / "s" / (target if "/" in target else f"bin/{target}")
+                text = path.read_text() if path.is_file() else ""
                 n = text.count(old)
                 if n != 1:
-                    print(f"STALE {tf.name} {name}: `{old}` occurs {n}x in {script}")
+                    sys.stdout.write(f"STALE {tf.name} {name}: `{old}` occurs {n}x in {target}\n")
                     stale += 1
                     continue
-                target.write_text(text.replace(old, new))
-                rc = run_file(work, tf.name)
+                path.write_text(text.replace(old, new))
+                rc = run_file(work / "s", tf.name)
             finally:
                 shutil.rmtree(work, ignore_errors=True)
             if rc != 0:
                 killed += 1
-                print(f"red   {tf.name} {name}")
+                sys.stdout.write(f"red   {tf.name} {name}\n")
             elif may:
                 killed += 1
-                print(f"green {tf.name} {name} (allowed to survive)")
+                sys.stdout.write(f"green {tf.name} {name} (allowed to survive)\n")
             else:
                 survived += 1
-                print(f"GREEN {tf.name} {name}: SURVIVED, the tests cannot see this rule")
-    print(f"--- Results: {killed} passed, {survived + stale} failed ---")
+                sys.stdout.write(f"GREEN {tf.name} {name}: SURVIVED, the tests cannot see this rule\n")
+    sys.stdout.write(f"--- Results: {killed} passed, {survived + stale} failed ---\n")
     return survived + stale
 
 
 if __name__ == "__main__":
-    sys.exit(min(run_mutations() if "--mutate" in sys.argv[1:] else run_tests(), 255))
+    args = sys.argv[1:]
+    if "--mutate" in args:
+        rest = [a for a in args if a != "--mutate"]
+        sys.exit(min(run_mutations(rest[0] if rest else None), 255))
+    sys.exit(min(run_tests(), 255))
