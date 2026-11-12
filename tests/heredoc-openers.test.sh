@@ -55,6 +55,7 @@ CASES=(
   "a body piped to a shell"     $'cat <<EOF | bash\n'"$M"$'\nEOF'
   "a body to a shell by path"   $'/bin/bash <<EOF\n'"$M"$'\nEOF'
   "a body to a shell via env"   $'env bash <<EOF\n'"$M"$'\nEOF'
+  "(( that closes as ) ), two subshells" $'((cat <<EOF) )\nit\'s\nEOF\necho \'<<x \\\'\n'"$M"$'\nx'
 )
 
 echo "=== bash runs the marker: every stripper keeps it ==="
@@ -89,6 +90,15 @@ if runs_in_bash "$cmd"; then
   printf '%s\n' "$(separate_groups "$cmd")" | grep -qF ';echo HDMARK;' && pass "an escaped \$': separate_groups opens the group" \
     || fail "an escaped \$': separate_groups left a group bash runs" "[$(separate_groups "$cmd")]"
 else fail "an escaped \$', then a group" "(bash did not run the marker: the case is wrong)"; fi
+
+# The commit shape: the message sits inside "$( )", and a command follows the
+# closing `)"` on its line.
+COMMIT=$'git commit -m "$(cat <<\'EOF\'\na note\nEOF\n)"'
+cmd="$COMMIT && $G"
+if runs_in_bash "$cmd"; then
+  printf '%s\n' "$(separate_groups "$cmd")" | grep -qF ';echo HDMARK;' && pass "after a commit message: separate_groups opens the group" \
+    || fail "after a commit message: separate_groups left a group bash runs" "[$(separate_groups "$cmd")]"
+else fail "a commit message, then a group" "(bash did not run the marker: the case is wrong)"; fi
 
 echo ""
 echo "=== bash reads the marker as data: the stripper meant for it still drops it ==="
@@ -143,6 +153,10 @@ for g in "${!GUARDS[@]}"; do
   # $'...', the rest of the line was quoted text, and four guards allowed it.
   v=$(verdict "${GUARDS[$g]}" "echo \\\$'a\\' ; ${RISK[$g]} ; echo 'x'")
   [ "$v" = "$ctl" ] && pass "${GUARDS[$g]} after an escaped \$': $v" || fail "${GUARDS[$g]} after an escaped \$'" "$v, alone: $ctl"
+  for tail in "&& ${RISK[$g]}" "; ${RISK[$g]}" "&& (${RISK[$g]})"; do
+    v=$(verdict "${GUARDS[$g]}" "$COMMIT $tail")
+    [ "$v" = "$ctl" ] && pass "${GUARDS[$g]}, a commit message then '$tail': $v" || fail "${GUARDS[$g]}, a commit message then '$tail'" "$v, alone: $ctl"
+  done
 done
 
 GROUPED="(kubectl delete ns prod)"

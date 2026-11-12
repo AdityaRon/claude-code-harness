@@ -69,10 +69,10 @@ separate_groups() {
       # hd_scan cannot read, quotes are not tracked either: a quote in a body read
       # as commands could hide a group, while converting every ( only adds segments.
       for (k = 1; k <= NR; k++) {
-        if (body) { if (hd_end(line[k])) { body = 0; edge[k] = 1 } else data[k] = !shell; continue }
+        if (body) { if (hd_end(line[k])) { body = 0; shut[k] = 1 } else data[k] = !shell; continue }
         hd_scan(line[k])
         if (HD_BAD) { raw = 1; break }
-        if (HD_POS) { body = 1; shell = hd_shell(line[k]); edge[k] = 1 }
+        if (HD_POS) { body = 1; shell = hd_shell(line[k]); opens[k] = 1 }
       }
       q = ""
       for (k = 1; k <= NR; k++) {
@@ -91,7 +91,9 @@ separate_groups() {
           out = out c
         }
         print out
-        if (edge[k]) q = ""
+        # A body starts unquoted, and after it the state at the opener resumes:
+        # in `-m "$(cat <<EOF` this lexer sees a " left open, which `)"` shuts.
+        if (opens[k]) { oq = q; q = "" } else if (shut[k]) q = oq
       }
     }'
 }
@@ -163,9 +165,15 @@ normalize_command() {
 # a caller then keeps the command as typed. Call it only outside a body, and
 # hd_end only inside one. A missed real opener is as unsafe as a false one.
 HEREDOC_AWK='
-function hd_arith(s, i,    d, n, c) {
+# Where the (( at i closes, or 0. bash reads `((cmd) )` as two subshells, so
+# a (( that does not close as one `))` is not arithmetic and is not skipped.
+function hd_arith(s, i,    d, n, c, p) {
   d = 0; n = length(s)
-  for (; i <= n; i++) { c = substr(s, i, 1); if (c == "(") d++; else if (c == ")" && --d == 0) return i }
+  for (; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (c == "(") d++
+    else if (c == ")") { if (--d == 1) p = i; else if (d == 0) return (p == i - 1) ? i : 0 }
+  }
   return 0
 }
 function hd_word(s, i,    j, c, k, w) {
