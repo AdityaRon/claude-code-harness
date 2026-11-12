@@ -74,7 +74,8 @@ separate_groups() {
     { line[NR] = $0 }
     END {
       # From a line hd_scan cannot read, quotes are not tracked at all: a quote
-      # misread could hide a group, while converting every ( only adds segments.
+      # misread could hide a group. Converting every ( can split a span instead,
+      # so each guard asks there (unreadable_check).
       sh_classify(NR)
       for (k = 1; k <= NR; k++) {
         s = line[k]; out = ""; n = length(s)

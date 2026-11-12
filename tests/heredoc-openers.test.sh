@@ -160,6 +160,9 @@ for g in "${!GUARDS[@]}"; do
   # $'...', the rest of the line was quoted text, and four guards allowed it.
   v=$(verdict "${GUARDS[$g]}" "echo \\\$'a\\' ; ${RISK[$g]} ; echo 'x'")
   [ "$v" = "$ctl" ] && pass "${GUARDS[$g]} after an escaped \$': $v" || fail "${GUARDS[$g]} after an escaped \$'" "$v, alone: $ctl"
+  # After a command hd_scan cannot read, the line is read as before hd_scan.
+  v=$(verdict "${GUARDS[$g]}" "echo \"a(b)\" \"\${x:-\"y\"}\" ; ${RISK[$g]}")
+  [ "$v" = "$ctl" ] && pass "${GUARDS[$g]} after an unreadable command: $v" || fail "${GUARDS[$g]} after an unreadable command" "$v, alone: $ctl"
   for tail in "&& ${RISK[$g]}" "; ${RISK[$g]}" "&& (${RISK[$g]})"; do
     v=$(verdict "${GUARDS[$g]}" "$COMMIT $tail")
     [ "$v" = "$ctl" ] && pass "${GUARDS[$g]}, a commit message then '$tail': $v" || fail "${GUARDS[$g]}, a commit message then '$tail'" "$v, alone: $ctl"
