@@ -72,6 +72,9 @@ COMMIT = re.compile(r"(?<![\w/.:-])(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{
 TS = re.compile(r"\d{10}\.\d{6}")
 TOKEN = re.compile(r"(?<!\w)(?:xox[abposr]-[\w-]{10,}|gh[pousr]_\w{30,}|github_pat_\w{30,}|sk-[\w-]{30,}"
                    r"|(?:AKIA|ASIA)[0-9A-Z]{16}"  # an AWS key, temporary ones included
+                   r"|glpat-[\w-]{20,}|npm_\w{36}|xapp-\d+-[\w-]{10,}|AIza[\w-]{35}|sk_(?:live|test)_\w{24,}"
+                   r"|eyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]{10,}"  # a JWT
+                   r"|hooks\.slack\.com/services/[\w/+-]{20,}|[a-z][\w+.-]*://[^/\s:@]+:[^/\s@]{3,}@"  # a webhook, a URL's password
                    r"|(?:sdk|mob|api)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # a LaunchDarkly key
                    r"|-----BEGIN [A-Z ]*-----"  # a PEM block
                    r"|(?i:[a-z_]*(?:key|token|secret|password)\s*[=:]\s*[\"']?[\w./+-]{8,}))")  # key=..., token: ...

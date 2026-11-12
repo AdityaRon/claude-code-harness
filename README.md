@@ -251,9 +251,9 @@ skills/                  ← memory-audit/, memory-archive/, pr-review/, slack-d
                            forge.toml (its manifest for skill_lint, not installed)
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
-                           heredoc-openers, repo-layout and workflow-gates cut across files; comms-hub,
-                           comms-hub-prereqs, skill-forge and skill-lint run the skills' own suites;
-                           bench-corpus.jsonl feeds hook-bench
+                           heredoc-openers, repo-layout, token-shapes and workflow-gates cut across
+                           files; comms-hub, comms-hub-prereqs, skill-forge and skill-lint run the
+                           skills' own suites; bench-corpus.jsonl feeds hook-bench
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
   permissions.md  auto-mode.md  customization.md  known-limitations.md

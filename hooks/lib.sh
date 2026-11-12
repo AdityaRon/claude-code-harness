@@ -689,7 +689,9 @@ emit_ask() {
 redact_secrets() {
   sed -E \
     -e 's#(://[^/@[:space:]:]+):[^/@[:space:]]+@#\1:***@#g' \
-    -e 's/((ghp|gho|ghu|ghs|ghr)_|github_pat_|glpat-|xox[abprs]-|sk-(ant-)?|AKIA)[A-Za-z0-9_-]{8,}/\1***/g' \
+    -e 's/((ghp|gho|ghu|ghs|ghr)_|github_pat_|glpat-|npm_|xox[abprs]-|xapp-|sk-(ant-|proj-)?|sk_(live|test)_|AKIA|ASIA|AIza)[A-Za-z0-9_-]{8,}/\1***/g' \
+    -e 's/eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/eyJ***/g' \
+    -e 's#(hooks\.slack\.com/services/)[A-Za-z0-9/_+-]{20,}#\1***#g' \
     -e "s/([Aa]uthorization|[Bb]earer|[Tt]oken|TOKEN|[Ss]ecret|SECRET|[Pp]assword|PASSWORD|[Pp]asswd|[Aa]pi[_-]?[Kk]ey|API[_-]?KEY)([\"']?[=:[:space:]]+[\"']?)([Bb]earer[[:space:]]+)?[^[:space:]\"'&]+/\1\2\3***/g"
 }
 
