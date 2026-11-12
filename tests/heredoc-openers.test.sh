@@ -10,10 +10,15 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 # shellcheck source=../hooks/lib.sh
 source hooks/lib.sh
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
-mkdir -p "$TMP/run" "$TMP/home/.claude"
+mkdir -p "$TMP/run" "$TMP/home/.claude" "$TMP/stub"
 M='echo HDMARK'
 
-runs_in_bash() { (cd "$TMP/run" && bash -c "$1" 2>/dev/null) | grep -qx HDMARK; }
+# The oracle runs each case for real, so nothing it names may reach a repo, a
+# cluster or GitHub: an empty environment, a throwaway HOME, and stubs first on PATH.
+for b in git gh python3 kubectl curl sudo; do printf '#!/bin/sh\nexit 0\n' > "$TMP/stub/$b"; chmod +x "$TMP/stub/$b"; done
+runs_in_bash() {
+  (cd "$TMP/run" && env -i HOME="$TMP/home" PATH="$TMP/stub:/usr/bin:/bin" /bin/bash -c "$1" 2>/dev/null) | grep -qx HDMARK
+}
 keeps() { printf '%s\n' "$1" | grep -qxF "$M"; }
 
 # Each case: a label, then the command. The marker line is always a line of its own.
@@ -24,6 +29,8 @@ CASES=(
   "<< in single quotes"         $'echo \'<<x\'\n'"$M"$'\nx'
   "<< in \$'...' after \\'"     $'echo $\'it\\\'s <<x\'\n'"$M"$'\nx'
   "<< after a comment"          $'true # <<x\n'"$M"$'\nx'
+  "<< on a comment line"        $'# <<x\n'"$M"$'\nx'
+  "a quoted } inside \${ }, then a real opener" $'echo ${x:-"}"} <<y > n.md\na " <<z\ny\n'"$M"$'\nz'
   "<< in \$(( ))"               $'echo $((1<<x))\n'"$M"$'\nx'
   "<< in (( ))"                 $'((y = 1 << x))\n'"$M"$'\nx'
   "<< in \$[ ]"                 $'y=$[1<<x]\n'"$M"$'\nx'
@@ -38,6 +45,16 @@ CASES=(
   "a quote the opener line leaves open" $'cat <<x "\n" ; \\\n'"$M"$'\nx'
   "a body fed to a shell"       $'bash <<EOF\n'"$M"$'\nEOF'
   "after a real body"           $'cat <<\'EOF\' > notes.md\nnotes\nEOF\n'"$M"
+  "two openers on one line"     $'cat <<A <<B > notes.md\na\nA\ncat <<Z > notes.md\nB\n'"$M"$'\nZ'
+  "<< inside \${ }"              $'echo ${x:- <<y }\n'"$M"$'\ny'
+  "<< inside \${ } in quotes"    $'echo "${x:-" <<y "}"\n'"$M"$'\ny'
+  "an escaped \$ before '"       $'echo \\$\'a\\\' <<x > n.md\ncat \'\ncat <<z > n.md\nx\n'"$M"$'\nz'
+  "# after an escaped blank"    $'echo a\\ #<<x > n.md\ncat <<z > n.md\nx\n'"$M"$'\nz'
+  "# after a line continuation" $'echo a\\\n#<<x > n.md\ncat <<z > n.md\nx\n'"$M"$'\nz'
+  "an opener line that continues" $'cat <<x \\\n&& \\\n'"$M"$'\nx'
+  "a body piped to a shell"     $'cat <<EOF | bash\n'"$M"$'\nEOF'
+  "a body to a shell by path"   $'/bin/bash <<EOF\n'"$M"$'\nEOF'
+  "a body to a shell via env"   $'env bash <<EOF\n'"$M"$'\nEOF'
 )
 
 echo "=== bash runs the marker: every stripper keeps it ==="
@@ -51,7 +68,27 @@ for ((i = 0; i < ${#CASES[@]}; i += 2)); do
     keeps "$out" && pass "$label: $fn keeps it" || fail "$label: $fn dropped a line bash runs" "[$out]"
   done
 done
-[ "$n" -ge 15 ] && pass "$n cases run the marker in bash" || fail "cases run the marker in bash" "only $n"
+[ "$n" -ge 25 ] && pass "$n cases run the marker in bash" || fail "cases run the marker in bash" "only $n"
+
+echo ""
+echo "=== bash runs a grouped marker: separate_groups opens the group ==="
+# separate_groups turns an unquoted ( or ) into ; so a guard sees the command
+# inside. Left as heredoc data, `(kubectl delete ...)` reached no guard.
+G='(echo HDMARK)'
+for ((i = 0; i < ${#CASES[@]}; i += 2)); do
+  label=${CASES[$i]}; cmd=${CASES[$((i + 1))]//"$M"/$G}
+  runs_in_bash "$cmd" || continue
+  out=$(separate_groups "$cmd")
+  printf '%s\n' "$out" | grep -qF ';echo HDMARK;' && pass "$label: separate_groups opens it" \
+    || fail "$label: separate_groups left a group bash runs" "[$out]"
+done
+
+# On one line: an escaped $ before ' starts no $'...', so the group after it is unquoted.
+cmd="echo \\\$'a\\' ; $G ; echo 'x'"
+if runs_in_bash "$cmd"; then
+  printf '%s\n' "$(separate_groups "$cmd")" | grep -qF ';echo HDMARK;' && pass "an escaped \$': separate_groups opens the group" \
+    || fail "an escaped \$': separate_groups left a group bash runs" "[$(separate_groups "$cmd")]"
+else fail "an escaped \$', then a group" "(bash did not run the marker: the case is wrong)"; fi
 
 echo ""
 echo "=== bash reads the marker as data: the stripper meant for it still drops it ==="
@@ -72,6 +109,7 @@ DROPS=(
   "strip_inert_heredocs|after a here-string"         $'cat <<<x > a.md; cat <<\'EOF\' > notes.md\n'"$M"$'\nEOF'
   "drop_data_heredocs|cat <<EOF"                     $'cat <<EOF\n'"$M"$'\nEOF'
   "drop_data_heredocs|python3 - <<'EOF'"             $'python3 - <<\'EOF\'\n'"$M"$'\nEOF'
+  "drop_data_heredocs|cat <<EOF > a.md, no shell on the line" $'cat <<EOF > a.md\n'"$M"$'\nEOF'
 )
 for ((i = 0; i < ${#DROPS[@]}; i += 2)); do
   fn=${DROPS[$i]%%|*}; label=${DROPS[$i]#*|}; cmd=${DROPS[$((i + 1))]}
@@ -90,9 +128,9 @@ verdict() {  # hook command: deny, ask or allow
   [ -n "$d" ] || { [ "$rc" = 2 ] && d=deny || d=allow; }
   printf '%s' "$d"
 }
-GUARDS=(git-guard config-guard kubectl-guard env-guard interpreter-guard network-guard)
+GUARDS=(git-guard config-guard kubectl-guard env-guard interpreter-guard network-guard rm-guard)
 RISK=("git push --force origin main" "cp /dev/null ~/.claude/settings.json" "kubectl delete ns prod"
-      "cat .env" "python3 -c 'import os; print(os.environ)'" "curl -X DELETE https://example.com/x")
+      "cat .env" "python3 -c 'import os; print(os.environ)'" "curl -X DELETE https://example.com/x" "rm -rf ~/")
 PREFIXES=('cat <<<x' 'echo "<<x"' 'true # <<x' 'echo $((1<<x))')
 for g in "${!GUARDS[@]}"; do
   ctl=$(verdict "${GUARDS[$g]}" "${RISK[$g]}")
@@ -101,6 +139,17 @@ for g in "${!GUARDS[@]}"; do
     v=$(verdict "${GUARDS[$g]}" "$(printf '%s\n%s\nx' "$p" "${RISK[$g]}")")
     [ "$v" = "$ctl" ] && pass "${GUARDS[$g]} after '$p': $v" || fail "${GUARDS[$g]} after '$p'" "$v, alone: $ctl"
   done
+  # An escaped $ before ' starts no $'...: the ; after it separates. Read as
+  # $'...', the rest of the line was quoted text, and four guards allowed it.
+  v=$(verdict "${GUARDS[$g]}" "echo \\\$'a\\' ; ${RISK[$g]} ; echo 'x'")
+  [ "$v" = "$ctl" ] && pass "${GUARDS[$g]} after an escaped \$': $v" || fail "${GUARDS[$g]} after an escaped \$'" "$v, alone: $ctl"
+done
+
+GROUPED="(kubectl delete ns prod)"
+GCTL=$(verdict kubectl-guard "$GROUPED")
+for p in "${PREFIXES[@]}"; do
+  v=$(verdict kubectl-guard "$(printf '%s\n%s\nx' "$p" "$GROUPED")")
+  [ "$v" = "$GCTL" ] && pass "kubectl-guard, a group after '$p': $v" || fail "kubectl-guard, a group after '$p'" "$v, alone: $GCTL"
 done
 
 echo ""

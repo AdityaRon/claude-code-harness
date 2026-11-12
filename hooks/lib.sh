@@ -62,31 +62,38 @@ normalize_wrappers() {
 # shell reads it.
 separate_groups() {
   case "$1" in *'('*|*')'*|*'{'*|*'}'*) ;; *) printf '%s' "$1"; return ;; esac
-  printf '%s\n' "$1" | awk '
-    BEGIN { q = ""; body = 0 }
-    body { t = $0; if (dash) sub(/^\t+/, "", t)
-           if (t == term) { body = 0; q = ""; print; next }
-           if (!shell) { print; next } }
-    { out = ""; n = length($0); hd = ""
-      for (i = 1; i <= n; i++) {
-        c = substr($0, i, 1); p = (i > 1) ? substr($0, i - 1, 1) : ""; x = substr($0, i + 1, 1)
-        if (c == "\\" && q != "\047") { out = out c x; i++; continue }
-        if (q == "" && c == "<" && x == "<" && p != "<" && hd == "" \
-            && match(substr($0, i + 2), /^-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/)) {
-          hd = substr($0, i + 2, RLENGTH); hdash = (hd ~ /^-/); sub(/^-?[ \t]*["\047]?/, "", hd)
-          hshell = (substr($0, 1, i - 1) ~ /(^|[;&|])[ \t]*(bash|sh|zsh|dash|ksh)([ \t][^;&|]*)?$/)
-        }
-        if (q == "") {
-          if (c == "\047") q = (p == "$") ? "A" : "\047"
-          else if (c == "\"") q = "\""
-          else if ((c == "(" && p != "$") || c == ")") c = ";"
-          else if ((c == "{" || c == "}") && (p == "" || p ~ /[ \t;&|]/) && (x == "" || x ~ /[ \t;&|]/)) c = ";"
-        } else if (c == "\047" && (q == "\047" || q == "A")) q = ""
-        else if (c == "\"" && q == "\"") q = ""
-        out = out c
+  printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+    { line[NR] = $0 }
+    END {
+      # Which lines are heredoc data, left as typed. From a line holding a << that
+      # hd_scan cannot read, quotes are not tracked either: a quote in a body read
+      # as commands could hide a group, while converting every ( only adds segments.
+      for (k = 1; k <= NR; k++) {
+        if (body) { if (hd_end(line[k])) { body = 0; edge[k] = 1 } else data[k] = !shell; continue }
+        hd_scan(line[k])
+        if (HD_BAD) { raw = 1; break }
+        if (HD_POS) { body = 1; shell = hd_shell(line[k]); edge[k] = 1 }
       }
-      print out
-      if (hd != "") { body = 1; term = hd; dash = hdash; shell = hshell; q = "" } }'
+      q = ""
+      for (k = 1; k <= NR; k++) {
+        if (data[k]) { print line[k]; continue }
+        s = line[k]; out = ""; n = length(s); esc = 0
+        for (i = 1; i <= n; i++) {
+          c = substr(s, i, 1); p = (i > 1) ? substr(s, i - 1, 1) : ""; x = substr(s, i + 1, 1)
+          if (c == "\\" && q != "\047") { esc = i + 1; out = out c x; i++; continue }
+          if (q == "") {
+            if (c == "\047" && !raw) q = (p == "$" && esc != i - 1) ? "A" : "\047"
+            else if (c == "\"" && !raw) q = "\""
+            else if ((c == "(" && p != "$") || c == ")") c = ";"
+            else if ((c == "{" || c == "}") && (p == "" || p ~ /[ \t;&|]/) && (x == "" || x ~ /[ \t;&|]/)) c = ";"
+          } else if (c == "\047" && (q == "\047" || q == "A")) q = ""
+          else if (c == "\"" && q == "\"") q = ""
+          out = out c
+        }
+        print out
+        if (edge[k]) q = ""
+      }
+    }'
 }
 
 # A function that runs "$@" makes its arguments a command: after
@@ -150,11 +157,11 @@ normalize_command() {
 }
 
 # Where a heredoc really starts, as bash reads the line. Not inside quotes (a
-# quoted string may span lines), a # comment, (( )), $(( )), $[ ], backticks or
-# a <<< here-string, each of which once hid the commands after it. hd_scan sets
-# HD_POS (0: none), HD_LEN (through the delimiter), HD_TERM, HD_DASH, HD_LIT;
-# HD_BAD when a << it cannot read for certain may open one: the caller then keeps
-# the command as typed. Call it only on lines outside a body: bodies are data.
+# quoted string may span lines), ${ }, a # comment, (( )), $(( )), $[ ],
+# backticks or a <<< here-string. hd_scan sets HD_POS (0: none), HD_LEN, HD_TERM,
+# HD_DASH, HD_LIT; HD_BAD when the line holds a << it cannot read for certain:
+# a caller then keeps the command as typed. Call it only outside a body, and
+# hd_end only inside one. A missed real opener is as unsafe as a false one.
 HEREDOC_AWK='
 function hd_arith(s, i,    d, n, c) {
   d = 0; n = length(s)
@@ -180,13 +187,18 @@ function hd_word(s, i,    j, c, k, w) {
   HD_POS = i; HD_LEN = j - i; HD_TERM = w
   return 1
 }
-function hd_scan(s,    i, n, c, j) {
-  HD_POS = 0; HD_LEN = 0; HD_BAD = 0; n = length(s)
+function hd_scan(s,    i, n, c, j, w) {
+  HD_POS = 0; HD_LEN = 0; HD_BAD = 0; n = length(s); hesc = -1
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
     if (hq == "\047") { if (c == "\047") hq = ""; continue }
     if (hq == "A") { if (c == "\\") i++; else if (c == "\047") hq = ""; continue }
-    if (c == "\\") { i++; continue }
+    if (c == "\\") { hesc = i + 1; i++; continue }
+    if (c == "$" && substr(s, i + 1, 1) == "{") {
+      j = index(substr(s, i + 2), "}"); if (!j) { HD_BAD = 1; return }
+      w = substr(s, i + 2, j - 1); if (w ~ /[\047"`{]|<<|\$\(/) { HD_BAD = 1; return }
+      i += j + 1; continue
+    }
     if (hq == "\"") {
       if (c == "\"") hq = ""
       else if (c == "`") hbt = !hbt
@@ -194,24 +206,26 @@ function hd_scan(s,    i, n, c, j) {
       else if (c == "$" && substr(s, i + 1, 1) == "(") { hup[++hsp] = "\""; hdep[hsp] = 1; hq = ""; i++ }
       continue
     }
-    if (c == "\047") { hq = (i > 1 && substr(s, i - 1, 1) == "$") ? "A" : "\047"; continue }
+    if (c == "\047") { hq = (i > 1 && substr(s, i - 1, 1) == "$" && hesc != i - 1) ? "A" : "\047"; continue }
     if (c == "\"") { hq = "\""; continue }
     if (c == "`") { hbt = !hbt; continue }
-    if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;&|()]/)) break
+    if (c == "#" && hesc != i - 1 && (i == 1 ? !hcont : substr(s, i - 1, 1) ~ /[ \t;&|()]/)) break
     if (c == "(" && substr(s, i + 1, 1) == "(") { j = hd_arith(s, i); if (!j) { HD_BAD = 1; return } i = j; continue }
     if (c == "$" && substr(s, i + 1, 1) == "[") { j = index(substr(s, i), "]"); if (!j) { HD_BAD = 1; return } i += j - 1; continue }
     if (hsp > 0 && c == "(") hdep[hsp]++
     if (hsp > 0 && c == ")" && --hdep[hsp] == 0) { hq = hup[hsp--]; continue }
     if (c == "<" && substr(s, i + 1, 1) == "<") {
       if (substr(s, i + 2, 1) == "<") { i += 2; continue }
-      if (hbt) { HD_BAD = 1; return }
-      if (HD_POS) { i++; continue }
+      if (hbt || HD_POS) { HD_BAD = 1; return }
       if (!hd_word(s, i)) { HD_BAD = 1; return }
       i += HD_LEN - 1
     }
   }
-  if (HD_POS && hq != "") HD_BAD = 1
+  hcont = (hesc == n + 1)
+  if (HD_POS && (hq != "" || hcont)) HD_BAD = 1
 }
+function hd_end(s) { if (HD_DASH) sub(/^\t+/, "", s); return s == HD_TERM }
+function hd_shell(s) { return s ~ /(^|[^A-Za-z0-9_.-])(ba|z|da|k|fi|s)?sh([^A-Za-z0-9_.-]|$)/ }
 '
 
 # A heredoc fed to `git commit -F -` or `gh pr|issue … --body-file -` is a
@@ -225,8 +239,7 @@ strip_message_heredocs() {
   local out
   case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
   out=$(printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
-    body { t = $0; if (dash) sub(/^\t+/, "", t)
-           if (t == term) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = ""; print; next }
+    body { if (hd_end($0)) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = ""; print; next }
            if (keep) print; else if (!lit) buf = buf $0 "\n"
            next }
     { print; hd_scan($0)
@@ -238,7 +251,7 @@ strip_message_heredocs() {
             && (last ~ /(^|[ \t])(-F|--file|--body-file)[ \t]*=?[ \t]*-([ \t]|$)/ \
                 || (last ~ /(^|[ \t])(-[A-Za-z]*m|--message|-[tb]|--title|--body)[ \t]*=?[ \t]*"\$\([ \t]*cat[ \t]*$/ \
                     && post ~ /^[ \t]*$/)))
-        term = HD_TERM; dash = HD_DASH; lit = HD_LIT; buf = ""; body = 1 } }
+        lit = HD_LIT; buf = ""; body = 1 } }
     END { if (bad) exit 3; if (body && !keep && buf ~ /[$`]/) printf "%s", buf }') || { printf '%s' "$1"; return; }
   printf '%s' "$out"
 }
@@ -305,12 +318,11 @@ strip_inert_heredocs() {
   s=$(strip_message_heredocs "$s")
   # An unquoted body holding $ or ` is expanded by the shell, so it stays (lib.sh above).
   rest=$(printf '%s\n' "$s" | awk "$HEREDOC_AWK"'
-    body { t = $0; if (dash) sub(/^\t+/, "", t)
-           if (t == term) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = "" }
+    body { if (hd_end($0)) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = "" }
            else if (!lit) buf = buf $0 "\n"
            next }
     { hd_scan($0); if (HD_BAD) { bad = 1; exit }
-      if (HD_POS) { term = HD_TERM; dash = HD_DASH; lit = HD_LIT; buf = ""; body = 1 } }
+      if (HD_POS) { lit = HD_LIT; buf = ""; body = 1 } }
     { print }
     END { if (bad) exit 3; if (body && buf ~ /[$`]/) printf "%s", buf }') || { printf '%s' "$s"; return; }
   if printf '%s\n' "$rest" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g' | sed -E 's/^[[:space:]]+//' \
@@ -336,21 +348,19 @@ strip_inert_heredocs() {
 }
 
 
-# A heredoc body is the data a command reads, unless that command is a shell
-# (config-guard). Unterminated, or an opener hd_scan cannot read, it is all kept.
+# A heredoc body is the data a command reads, unless its line names a shell
+# anywhere (`| bash`, `sudo bash`, `/bin/sh`): config-guard. Unterminated, or
+# an opener hd_scan cannot read, it is all kept.
 drop_data_heredocs() {
   local out
   case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
   out=$(printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
-    body { t = $0; if (dash) sub(/^\t+/, "", t)
-           if (t == term) { body = 0; print; next }
+    body { if (hd_end($0)) { body = 0; print; next }
            if (shell) print
            next }
     { print; hd_scan($0)
       if (HD_BAD) { bad = 1; exit }
-      if (HD_POS) {
-        shell = (substr($0, 1, HD_POS - 1) ~ /(^|[;&|(])[ \t]*(bash|sh|zsh|dash|ksh)([ \t][^;&|]*)?$/)
-        term = HD_TERM; dash = HD_DASH; body = 1 } }
+      if (HD_POS) { shell = hd_shell($0); body = 1 } }
     END { if (bad || body) exit 3 }') || { printf '%s' "$1"; return; }
   printf '%s' "$out"
 }
@@ -363,15 +373,15 @@ neutralize_quoted_separators() {
   printf '%s\n' "$1" | awk '
     function hide(ch) { return ch == "&" ? "%26" : ch == ";" ? "%3B" : ch == "|" ? "%7C" : ch }
     BEGIN { q = ""; sp = 0 }
-    { out = ""; n = length($0)
+    { out = ""; n = length($0); esc = 0
       for (i = 1; i <= n; i++) {
         c = substr($0, i, 1)
-        if (c == "\\" && q != "\047") { out = out c hide(substr($0, i + 1, 1)); i++; continue }
+        if (c == "\\" && q != "\047") { esc = i + 1; out = out c hide(substr($0, i + 1, 1)); i++; continue }
         if (q == "\"" && c == "$" && substr($0, i + 1, 1) == "(") { up[++sp] = q; depth[sp] = 1; q = ""; out = out "$("; i++; continue }
         if (q == "" && sp > 0 && c == "(") depth[sp]++
         if (q == "" && sp > 0 && c == ")" && --depth[sp] == 0) { q = up[sp--]; out = out c; continue }
         if (q == "") {
-          if (c == "\047") q = (i > 1 && substr($0, i - 1, 1) == "$") ? "A" : "\047"
+          if (c == "\047") q = (i > 1 && substr($0, i - 1, 1) == "$" && esc != i - 1) ? "A" : "\047"
           else if (c == "\"") q = "\""
         } else if (c == "\047" && (q == "\047" || q == "A")) q = ""
         else if (c == "\"" && q == "\"") q = ""
