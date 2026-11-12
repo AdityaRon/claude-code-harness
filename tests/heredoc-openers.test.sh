@@ -56,6 +56,7 @@ CASES=(
   "a body to a shell by path"   $'/bin/bash <<EOF\n'"$M"$'\nEOF'
   "a body to a shell via env"   $'env bash <<EOF\n'"$M"$'\nEOF'
   "(( that closes as ) ), two subshells" $'((cat <<EOF) )\nit\'s\nEOF\necho \'<<x \\\'\n'"$M"$'\nx'
+  "a comment's apostrophe, then a body" $'true # it\'s\ncat <<\'EOF\' > n.md\nx\nEOF\n'"$M"
 )
 
 echo "=== bash runs the marker: every stripper keeps it ==="
@@ -181,6 +182,12 @@ done
 v=$(verdict git-guard 'git push origin "a(b)" --force "${x:-"y"}"')
 [ "$v" = deny ] && pass "git-guard, a quoted ( before --force in an unreadable command: deny" \
   || fail "git-guard, a quoted ( before --force in an unreadable command" "$v"
+# bash 3.2 ends a "$( )" at a ) in its heredoc body and runs what follows: such
+# a body is read as before hd_scan, plain or grouped.
+for r in 'rm -rf ~/' '(rm -rf ~/)'; do
+  v=$(verdict rm-guard "git commit -m \"\$(cat <<'EOF'"$'\n'"a )\" ; $r ; echo \""$'\n'"EOF"$'\n'")\"")
+  [ "$v" = deny ] && pass "rm-guard, '$r' after a ) in a \"\$( )\" message: deny" || fail "rm-guard, '$r' after a ) in a \"\$( )\" message" "$v"
+done
 
 GROUPED="(kubectl delete ns prod)"
 GCTL=$(verdict kubectl-guard "$GROUPED")

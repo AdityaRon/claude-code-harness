@@ -67,11 +67,13 @@ separate_groups() {
     END {
       # Which lines are heredoc data, left as typed. A line holding a << that
       # hd_scan cannot read leaves the whole command to separate_groups_typed.
+      # A body opened inside "$( )" stays code, read as before hd_scan: bash 3.2
+      # ends the $( ) at a ) in the body, and runs what follows.
       for (k = 1; k <= NR; k++) {
-        if (body) { if (hd_end(line[k])) { body = 0; shut[k] = 1 } else data[k] = !shell; continue }
+        if (body) { if (hd_end(line[k])) { body = 0; if (!asis) shut[k] = 1 } else if (!asis) data[k] = !shell; continue }
         hd_scan(line[k])
         if (HD_BAD) exit 3
-        if (HD_POS) { body = 1; shell = hd_shell(line[k]); opens[k] = 1 }
+        if (HD_POS) { body = 1; shell = hd_shell(line[k]); asis = HD_INSUB; if (!asis) opens[k] = 1 }
       }
       q = ""
       for (k = 1; k <= NR; k++) {
@@ -90,9 +92,9 @@ separate_groups() {
           out = out c
         }
         print out
-        # A body starts unquoted, and after it the state at the opener resumes:
-        # in `-m "$(cat <<EOF` this lexer sees a " left open, which `)"` shuts.
-        if (opens[k]) { oq = q; q = "" } else if (shut[k]) q = oq
+        # Around a body the quote state starts fresh, as before hd_scan: a quote
+        # this lexer carried out of a comment does not outlast the body.
+        if (opens[k] || shut[k]) q = ""
       }
     }' || separate_groups_typed "$1"
 }
@@ -255,6 +257,7 @@ function hd_scan(s,    i, n, c, j, w) {
       if (substr(s, i + 2, 1) == "<") { i += 2; continue }
       if (hbt || HD_POS) { HD_BAD = 1; return }
       if (!hd_word(s, i)) { HD_BAD = 1; return }
+      HD_INSUB = (hsp > 0)
       i += HD_LEN - 1
     }
   }
