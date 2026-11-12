@@ -24,11 +24,11 @@ Mutations that must turn this file red (deleting any check must be seen):
   graphql-write-unseen: skill_lint.py: `\\s*mutation\\b` => `\\s*NEVERmutation\\b`
   requests-write-unseen: skill_lint.py: `\\b(?:requests|httpx)` => `\\bNEVER(?:requests|httpx)`
   flat-root-unread: skill_lint.py: `for d in (root, root / "bin", root / "tests"):` => `for d in (root / "bin", root / "tests"):`
-  shell-verbs-unseen: skill_lint.py: `(?:apply|create|delete|patch|replace|scale|annotate|label|taint|cordon|uncordon|drain|edit)` => `(?:NEVER)`
+  shell-verbs-unseen: skill_lint.py: `(?:apply|create|delete|patch|replace|scale|annotate|label|taint|cordon|uncordon"` => `(?:NEVER"`
   shell-apply-unchecked: skill_lint.py: `return "--apply" in shell_code(src)` => `return True`
   shell-mask-unchecked: skill_lint.py: `if not SH_MASKED.search(shell_code(src)):` => `if False:`
   shell-header-unchecked: skill_lint.py: `return "# target:" in shell_code(src)` => `return True`
-  shell-comments-read: skill_lint.py: `"" if line.lstrip().startswith("#") else line for line` => `line for line`
+  shell-comments-read: skill_lint.py: `            out.append("")` => `            out.append(line)`
   shell-test-names-unseen: skill_lint.py: `({f"test_{stem}.sh", f"{stem}.test.sh"} if is_shell(n) else set())` => `set()`
   declared-test-unchecked: skill_lint.py: `return bool(declared) and (sk.root / declared).is_file()` => `return bool(declared)`
   python-sh-not-vendored: skill_lint.py: `"python.sh": None}` => `}`
