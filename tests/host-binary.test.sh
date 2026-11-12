@@ -98,10 +98,12 @@ rm -f "$BIN"
 
 echo ""
 echo "=== tcc-check: an 'Operation not permitted' error under a TCC folder names the cause ==="
-hook() {   # hook EVENT CWD STDOUT STDERR [TOOL]: one payload; a failure carries both in .error
-  jq -nc --arg ev "$1" --arg d "$2" --arg o "$3" --arg e "$4" --arg t "${5:-Bash}" \
-    '{tool_name:$t, hook_event_name:$ev, tool_input:{command:"x"}, cwd:$d, session_id:"sess-host"}
-     + if $ev == "PostToolUseFailure" then {error:("Exit code 1\n" + $o + $e)}
+hook() {   # hook EVENT CWD STDOUT STDERR [TOOL] [COMMAND]: one payload, shaped as Claude Code sends it
+  # (captured from a headless run): a failure's output follows "Exit code N" in
+  # .error, stdout then stderr, one line each.
+  jq -nc --arg ev "$1" --arg d "$2" --arg o "$3" --arg e "$4" --arg t "${5:-Bash}" --arg c "${6:-x}" \
+    '{tool_name:$t, hook_event_name:$ev, tool_input:{command:$c}, cwd:$d, session_id:"sess-host"}
+     + if $ev == "PostToolUseFailure" then {error:([("Exit code 1"), $o, $e] | map(select(. != "")) | join("\n"))}
        else {tool_response:{stdout:$o, stderr:$e, interrupted:false}} end' \
     | CLAUDE_HOST_START=400 bash hooks/tcc-check.sh 2>&1 >/dev/null; echo "rc=$?"
 }
@@ -126,6 +128,23 @@ fires "python's error names a Downloads path" "$(failed "$TMP/repo" "PermissionE
 fires "getcwd in a TCC cwd" "$(failed "$D" "$GETCWD")"
 fires "iCloud Drive" "$(post "$TMP/repo" "cp: $HOME/Library/Mobile Documents/com~apple~CloudDocs/a: $P")"
 fires "from the home folder, a relative Desktop path" "$(post "$HOME" "ls: Desktop: $P")"
+fires "node's EPERM" "$(failed "$TMP/repo" "Error: EPERM: operation not permitted, open '$HOME/Desktop/a.txt'")"
+fires "Go's lower-case error" "$(failed "$TMP/repo" "open $HOME/Desktop/a: operation not permitted")"
+fires "Rust's (os error 1)" "$(failed "$TMP/repo" "rg: $HOME/Desktop/a: Operation not permitted (os error 1)")"
+fires "zsh's error with a zsh:1: prefix" "$(failed "$D" "zsh:1: operation not permitted: notes.txt")"
+fires "a ~/ path, from elsewhere" "$(post "$TMP/repo" "cp: ~/Desktop/a: Operation not permitted")"
+fires "a relative ../Desktop from a home subfolder" "$(post "$HOME/code" "ls: ../Desktop: Operation not permitted")"
+fires "a relative protected path beside an absolute one" "$(post "$HOME" "mv: rename Desktop/a to /tmp/a: Operation not permitted")"
+fires "a relative name after the command's own cd" \
+  "$(hook PostToolUseFailure "$TMP/repo" "" "rm: f: $P" Bash "cd ~/Desktop/repo && rm f")"
+fires "both streams of a failure, stdout first" "$(hook PostToolUseFailure "$TMP/repo" "partial" "ls: $HOME/Desktop: $P")"
+silent "a relative name after a cd elsewhere" \
+  "$(hook PostToolUseFailure "$TMP/repo" "" "rm: f: $P" Bash "cd /opt && rm f")"
+silent "grep -n output holding zsh's shape" "$(hook PostToolUse "$D" "notes.md:3:(eval):1: operation not permitted: f" "")"
+silent "grep -n output of a log line" "$(hook PostToolUse "$D" "app.log:12:open failed: $P" "")"
+silent "prose quoting zsh's error in backticks" "$(hook PostToolUse "$D" "\`(eval):1: operation not permitted: f\` is zsh's form" "")"
+silent "a PR body quoting python's error" "$(hook PostToolUse "$D" "  - \`PermissionError: [Errno 1] $P: 'f'\` (python)" "")"
+silent "a PR body quoting node's error" "$(hook PostToolUse "$D" "- node's \`EPERM: operation not permitted, open 'f'\`" "")"
 silent "getcwd elsewhere" "$(failed "$TMP/repo" "$GETCWD")"
 silent "not a TCC folder" "$(post "$TMP/repo" "ls: /opt/x: $P")"
 silent "a TCC cwd, but the line names a path outside it" "$(post "$D" "rm: /opt/x: $P")"
@@ -151,6 +170,15 @@ REG=$(jq -r '.hooks | to_entries[] | .key as $e | .value[] | select(.matcher == 
 OUT=$(post "$D" "$ERR")
 has "binary present: TCC named, the grant itself pointed at" "host binary exists" "$OUT"
 has "and the installed relocate tool" "~/.claude/relocate-clones.sh" "$OUT"
+# The quoted line is cut at 300 bytes, whole characters only, whatever the locale.
+# Two lines a byte apart, so one of them puts byte 300 inside a two-byte é.
+for tool in ls lsx; do
+  LONG="$tool: $HOME/Desktop/$(printf 'é%.0s' $(seq 1 200)): $P"
+  OUT=$(jq -nc --arg d "$D" --arg e "$LONG" '{tool_name:"Bash", hook_event_name:"PostToolUse", tool_input:{command:"x"}, tool_response:{stdout:$e, stderr:""}, cwd:$d}' \
+    | LC_ALL=C CLAUDE_HOST_START=400 bash hooks/tcc-check.sh 2>&1 >/dev/null)
+  printf '%s' "$OUT" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 && pass "the quoted line stays valid UTF-8 in the C locale ($tool)" \
+    || fail "the quoted line in the C locale ($tool)" "cut mid-character"
+done
 lacks "and no deleted-binary line" "binary is gone" "$OUT"
 rm -f "$BIN"
 
