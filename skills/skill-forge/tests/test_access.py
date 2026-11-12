@@ -27,6 +27,9 @@ Mutations that must turn this file red:
   pod-ttl-ignored: access.py: `"--command", "--", "sleep", str(ttl)]` => `"--command", "--", "sleep", str(POD_TTL)]`
   stopped-pod-unexplained: access.py: `hint = f"; its {self.ttl}s lifetime may have run out, so raise {self.env}_POD_TTL" if gone else ""` => `hint = ""`
   unopened-route-unnamed: access.py: `        self.via = f"svc/{svc}:{port} in {ns} via {mode}, context {ctx} (not opened)"` => `        pass`
+  no-fallback: access.py: `            except (AccessRefused, OSError) as e:   # refused` => `            except ZeroDivisionError as e:   # refused`
+  fallback-on-auth: access.py: `            except (AccessRefused, OSError) as e:   # refused` => `            except (AccessRefused, OSError, AccessAuth) as e:   # refused`
+  fallback-without-apply: access.py: `                if not self.apply:` => `                if False:`
 """
 from __future__ import annotations
 
@@ -328,10 +331,60 @@ class PortForwardTest(unittest.TestCase):
         cm, h = opened(fx)
         with mock.patch.object(access, "FORWARD_WAIT", 1.0), cm as r:
             h["r"] = r
-            with self.assertRaises(OSError) as e:
+            with self.assertRaises(access.AccessRefused) as e:   # no --apply: no pod to fall back to
                 r.get("/x")
         self.assertIn("no 'Forwarding from' line", str(e.exception))
         self.assertFalse(fx.stub_alive())
+
+
+class FallbackTest(unittest.TestCase):
+    def test_a_refused_forward_falls_back_to_a_pod_with_apply(self):
+        fx = Fixture(self, "forbidden", T_ACCESS="port-forward prometheus:9090 in monitoring")
+        cm, h = opened(fx, apply=True)
+        with cm as r:
+            h["r"] = r
+            self.assertEqual(r.get("/api/v1/query", "query=up")[0], 200)
+            self.assertRegex(r.describe(), r"via throwaway pod sf-access-[0-9a-f]{8}, context kind-test "
+                                           r"\(port-forward failed: kubectl port-forward: error: pods \"p\" is forbidden")
+        verbs = [c[4] for c in fx.calls() if c[:1] == ["--context"]]
+        self.assertEqual([verbs[0], verbs[1], verbs[-1]], ["port-forward", "run", "delete"])
+
+    def test_without_apply_it_names_the_pod_and_creates_nothing(self):
+        fx = Fixture(self, "forbidden", T_ACCESS="port-forward prometheus:9090 in monitoring")
+        cm, h = opened(fx)
+        with cm as r:
+            h["r"] = r
+            with self.assertRaises(access.AccessRefused) as e:
+                r.get("/x")
+        self.assertIn('"pods/portforward". The fallback is a throwaway pod: the pod route creates a pod, so it needs --apply',
+                      str(e.exception))
+        self.assertIn("kubectl --context kind-test --namespace monitoring run sf-access-", str(e.exception))
+        self.assertFalse(any("run" in c for c in fx.calls()))
+
+    def test_an_expired_login_does_not_fall_back(self):
+        fx = Fixture(self, "auth", T_ACCESS="port-forward prometheus:9090 in monitoring")
+        cm, h = opened(fx, apply=True)
+        with cm as r:
+            h["r"] = r
+            with self.assertRaises(access.AccessAuth):
+                r.get("/x")
+        self.assertFalse(any("run" in c for c in fx.calls()))
+
+    def test_a_forward_that_never_comes_up_falls_back_too(self):
+        fx = Fixture(self, "silent", T_ACCESS="port-forward prometheus:9090 in monitoring")
+        cm, h = opened(fx, apply=True)
+        with mock.patch.object(access, "FORWARD_WAIT", 1.0), cm as r:
+            h["r"] = r
+            self.assertEqual(r.get("/api/v1/query", "query=up")[0], 200)
+            self.assertIn("(port-forward failed: kubectl port-forward printed no 'Forwarding from' line", r.describe())
+        self.assertFalse(fx.stub_alive())
+
+    def test_a_bad_pod_ttl_never_stops_a_working_forward(self):
+        fx = Fixture(self, T_ACCESS="port-forward prometheus:9090 in monitoring", T_POD_TTL="soon")
+        cm, h = opened(fx)
+        with cm as r:
+            h["r"] = r
+            self.assertEqual(r.get("/api/v1/query", "query=up")[0], 200)
 
 
 class ContextTest(unittest.TestCase):
@@ -470,7 +523,7 @@ class PodTest(unittest.TestCase):
         cm, h = opened(fx)
         with mock.patch.object(access, "FORWARD_WAIT", 1.0), cm as r:
             h["r"] = r
-            with self.assertRaises(OSError):
+            with self.assertRaises(access.AccessRefused):
                 r.get("/x")
             self.assertTrue(r.describe().startswith("svc/prometheus:9090 in monitoring via port-forward, context kind-test (not opened)"), r.describe())
 

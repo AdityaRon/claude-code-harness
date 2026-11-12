@@ -168,15 +168,15 @@ class RouteTest(unittest.TestCase):
         self.assertFalse(any("run" in c.args[0] for c in k.call_args_list))
 
     def test_a_route_that_fails_to_open_is_named(self):
-        env = {f"{ENV}_ACCESS": "port-forward flags-api:8080 in tools", f"{ENV}_CONTEXT": "kind-test"}
+        env = {f"{ENV}_ACCESS": "pod flags-api:8080 in tools", f"{ENV}_CONTEXT": "kind-test"}
 
-        def no_forward(*a, **kw):
-            raise OSError("kubectl port-forward printed no 'Forwarding from' line in 20s")
+        def no_pod(*a, **kw):
+            raise OSError("pod sf-access-0 never became ready")
         with mock.patch.object(eng.access, "kubectl", return_value=(0, "kind-test\n", "")), \
-                mock.patch.object(eng.access, "port_forward", no_forward):
-            rc, out, err = Run(env=env)("get", "/flags")
+                mock.patch.object(eng.access, "pod", no_pod):
+            rc, out, err = Run(env=env)("get", "/flags", "--apply")
         self.assertEqual(rc, 1)
-        self.assertIn("could not reach svc/flags-api:8080 in tools via port-forward, context kind-test (not opened)", err)
+        self.assertIn("could not reach svc/flags-api:8080 in tools via pod, context kind-test (not opened)", err)
 
     def test_guard_expired_auth_kube_login_is_auth_not_no_data(self):
         env = {f"{ENV}_ACCESS": "port-forward flags-api:8080 in tools", f"{ENV}_CONTEXT": "kind-test", f"{ENV}_RELOGIN": "kube-login"}

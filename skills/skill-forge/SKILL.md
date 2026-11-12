@@ -77,7 +77,8 @@ included, is in `~/.local/state/skill-forge/`.
 
 metrics-query, logs-fetch and api-readonly reach their API through `access.py`:
 `<ENV>_ACCESS` is `direct` (the URL variable), `port-forward SVC[:PORT] in NS`,
-or `pod SVC[:PORT] in NS` (it creates a pod, so it needs `--apply`), with
+or `pod SVC[:PORT] in NS` (it creates a pod, so it needs `--apply`; with
+`--apply`, a refused port-forward falls back to the pod), with
 `<ENV>_CONTEXT` named. metrics-query and logs-fetch probe the path prefix;
 api-readonly does when `<ENV>_API_PROBE` names a path. The header names the route.
 

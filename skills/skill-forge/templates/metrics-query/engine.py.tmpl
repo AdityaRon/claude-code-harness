@@ -15,7 +15,8 @@ ${{env_prefix}}_PROM_URL is the API's base URL. A bearer token, when the API nee
 one, comes from ${{env_prefix}}_PROM_TOKEN and goes in a header, never a URL or
 argv. ${{env_prefix}}_RELOGIN is printed when auth fails. A backend only the
 cluster reaches: set ${{env_prefix}}_ACCESS to "port-forward SVC[:PORT] in NS" or
-"pod SVC[:PORT] in NS" (a throwaway pod, created only with --apply) and
+"pod SVC[:PORT] in NS" (a throwaway pod, created only with --apply; with it, a
+refused port-forward falls back to one) and
 ${{env_prefix}}_CONTEXT; access.py has the details. The API's path prefix is
 probed with a vector(1) query, never guessed (${{env_prefix}}_PATH_PREFIXES, by
 default "", /prometheus and /select/0/prometheus), and the route that answered

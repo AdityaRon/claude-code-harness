@@ -139,7 +139,7 @@ class RenderTest(unittest.TestCase):
             self.assertTrue((tmp / "mine" / "notes.txt").exists())
 
     def test_the_shared_copies_match_the_skills_own(self):
-        for name in ("run.py", "test_mask.py", "test_sqlguard.py"):
+        for name in ("run.py", "test_mask.py", "test_sqlguard.py", "test_access.py"):
             self.assertEqual((SKILL / "templates" / "_shared" / "tests" / name).read_text(), (HERE / name).read_text(), name)
 
 

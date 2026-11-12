@@ -14,7 +14,8 @@ ${{env_prefix}}_LOKI_URL is the Loki API's base URL. A bearer token, when it
 needs one, comes from ${{env_prefix}}_LOKI_TOKEN and goes in a header, never a
 URL or argv. ${{env_prefix}}_RELOGIN is printed when auth fails. A store only the
 cluster reaches: set ${{env_prefix}}_ACCESS to "port-forward SVC[:PORT] in NS" or
-"pod SVC[:PORT] in NS" (a throwaway pod, created only with --apply) and
+"pod SVC[:PORT] in NS" (a throwaway pod, created only with --apply; with it, a
+refused port-forward falls back to one) and
 ${{env_prefix}}_CONTEXT; access.py has the details. The path prefix in front of
 /loki/api/v1 is probed with the labels API, never guessed
 (${{env_prefix}}_PATH_PREFIXES, by default none), and the route that answered

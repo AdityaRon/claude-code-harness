@@ -14,7 +14,7 @@ ${{env_prefix}}_AUTH_HEADER names it (default "Authorization: Bearer"; write
 and ${{env_prefix}}_ID_PATTERN (or --id-pattern) is the shape an id must have.
 An API only the cluster reaches: set ${{env_prefix}}_ACCESS to "port-forward
 SVC[:PORT] in NS" or "pod SVC[:PORT] in NS" (a throwaway pod, created only with
---apply) and ${{env_prefix}}_CONTEXT; access.py has the details. With
+--apply; with it, a refused port-forward falls back to one) and ${{env_prefix}}_CONTEXT; access.py has the details. With
 ${{env_prefix}}_API_PROBE set to a GET path that answers JSON, the path prefix is
 probed (${{env_prefix}}_PATH_PREFIXES, by default none); without it the header
 says the prefix was not probed. A next link must stay on the route's host.

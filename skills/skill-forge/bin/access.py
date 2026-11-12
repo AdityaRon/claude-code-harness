@@ -4,7 +4,9 @@ or from a throwaway pod. skill-forge copies this file, unchanged, into every
 metrics-query, logs-fetch and api-readonly skill it drafts.
 
   <ENV>_ACCESS          unset or "direct": the engine's own URL variable, as before
-                        "port-forward SVC[:PORT] in NS": kubectl port-forward to the service
+                        "port-forward SVC[:PORT] in NS": kubectl port-forward to the service;
+                        with --apply, one that is refused or never comes up falls back to
+                        a throwaway pod (an expired login does not fall back)
                         "pod SVC[:PORT] in NS": curl from a throwaway pod; needs --apply
   <ENV>_CONTEXT         the kube context both cluster routes use; the current context
                         is never assumed
@@ -170,16 +172,29 @@ class Route:
         self.kube = ["kubectl", "--context", ctx, "--namespace", ns]
         port = port or self._service_port(svc)
         self.via = f"svc/{svc}:{port} in {ns} via {mode}, context {ctx} (not opened)"
+        image, why = os.environ.get(f"{self.env}_POD_IMAGE", POD_IMAGE), ""
         if mode == "port-forward":
-            local = self.stack.enter_context(port_forward(self.kube, svc, port))
-            self.base, self.via = f"http://127.0.0.1:{local}", f"svc/{svc}:{port} in {ns} via port-forward, context {ctx}"
-        else:
-            ttl = os.environ.get(f"{self.env}_POD_TTL", str(POD_TTL)).strip()
-            if not ttl.isdigit() or int(ttl) < 60:
-                raise AccessRefused(f"{self.env}_POD_TTL={ttl!r}: seconds, at least 60")
-            self.ttl = int(ttl)
-            self.pod = self.stack.enter_context(pod(self.kube, os.environ.get(f"{self.env}_POD_IMAGE", POD_IMAGE), self.apply, self.ttl))
-            self.base, self.via = f"http://{svc}.{ns}.svc:{port}", f"svc/{svc}:{port} in {ns} via throwaway pod {self.pod}, context {ctx}"
+            try:
+                local = self.stack.enter_context(port_forward(self.kube, svc, port))
+                self.base, self.via = f"http://127.0.0.1:{local}", f"svc/{svc}:{port} in {ns} via port-forward, context {ctx}"
+                return
+            except (AccessRefused, OSError) as e:   # refused, or never came up; an expired login raises AccessAuth
+                if not self.apply:
+                    try:   # pod() refuses without --apply and names the pod it would create
+                        self.stack.enter_context(pod(self.kube, image, False, self._ttl()))
+                    except AccessRefused as plan:
+                        raise AccessRefused(f"{e}. The fallback is a throwaway pod: {plan}") from None
+                why = f" (port-forward failed: {str(e)[:120]})"
+        self.pod = self.stack.enter_context(pod(self.kube, image, self.apply, self._ttl()))
+        self.base = f"http://{svc}.{ns}.svc:{port}"
+        self.via = f"svc/{svc}:{port} in {ns} via throwaway pod {self.pod}, context {ctx}{why}"
+
+    def _ttl(self) -> int:
+        ttl = os.environ.get(f"{self.env}_POD_TTL", str(POD_TTL)).strip()
+        if not ttl.isdigit() or int(ttl) < 60:
+            raise AccessRefused(f"{self.env}_POD_TTL={ttl!r}: seconds, at least 60")
+        self.ttl = int(ttl)
+        return self.ttl
 
     def _context(self) -> str:
         ctx = os.environ.get(f"{self.env}_CONTEXT", "").strip()
