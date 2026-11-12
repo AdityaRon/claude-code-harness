@@ -228,7 +228,7 @@ neutralize_quoted_separators $'cat <<EOF > x.sh\n${FOO:-"bar"}\nEOF\nls ; ls' >/
 # Heredoc data is read a line at a time: its apostrophe does not reach the next line.
 [[ "$(neutralize_quoted_separators $'cat <<EOF > n.md\nit\'s\na; b\nEOF\nls')" == *$'\na; b\n'* ]] \
   && pass "a body line's quote ends with the line" || fail "a body line's quote" "[$(neutralize_quoted_separators $'cat <<EOF > n.md\nit\'s\na; b\nEOF\nls')]"
-neutralize_quoted_separators $'echo "`cat <<EOF`" ; ls\nhi\nEOF' >/dev/null; rc=$?
+neutralize_quoted_separators $'echo "`cat <<EOF `" ; ls\nhi\nEOF' >/dev/null; rc=$?
 [ "$rc" = 3 ] && pass "a heredoc opened inside backticks in quotes is unreadable" || fail "a heredoc in a quoted backtick" "rc=$rc"
 
 echo ""
@@ -242,6 +242,14 @@ for g in "${!GUARDS[@]}"; do
   v=$(verdict "${GUARDS[$g]}" "$UNREAD ; ${RISK[$g]}")
   [ "$v" != allow ] && pass "${GUARDS[$g]} after an unreadable prefix: $v" || fail "${GUARDS[$g]} after an unreadable prefix" "allow"
 done
+[ "$(verdict network-guard "$UNREAD ; curl -s http://127.0.0.1:8080/x")" = ask ] && pass "network-guard asks where it would allow" \
+  || fail "network-guard on an unreadable command" "$(verdict network-guard "$UNREAD ; curl -s http://127.0.0.1:8080/x")"
+[ "$(verdict network-guard "curl -s http://127.0.0.1:8080/x")" = allow ] && pass "network-guard's control allows" \
+  || fail "network-guard's control" "$(verdict network-guard "curl -s http://127.0.0.1:8080/x")"
+# A deny stands, alone: the floor adds no second decision after it.
+out=$(jq -nc --arg c "printenv ; $UNREAD" --arg d "$TMP/run" '{tool_name:"Bash", hook_event_name:"PreToolUse", tool_input:{command:$c}, cwd:$d, session_id:"hd"}' \
+      | HOME="$TMP/home" bash hooks/env-guard.sh 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null)
+[ "$out" = deny ] && pass "env-guard denies once after an unreadable command" || fail "env-guard's decisions after an unreadable command" "[$out]"
 [ "$(verdict env-guard 'echo "it'"'"'s" ; ls')" = allow ] && pass "a readable command still allows" \
   || fail "a readable command" "$(verdict env-guard 'echo "it'"'"'s" ; ls')"
 
