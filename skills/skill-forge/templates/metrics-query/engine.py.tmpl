@@ -13,7 +13,14 @@ only together with its test.
 
 ${{env_prefix}}_PROM_URL is the API's base URL. A bearer token, when the API needs
 one, comes from ${{env_prefix}}_PROM_TOKEN and goes in a header, never a URL or
-argv. ${{env_prefix}}_RELOGIN is printed when auth fails.
+argv. ${{env_prefix}}_RELOGIN is printed when auth fails. A backend only the
+cluster reaches: set ${{env_prefix}}_ACCESS to "port-forward SVC[:PORT] in NS" or
+"pod SVC[:PORT] in NS" (a throwaway pod, created only with --apply; with it, a
+refused port-forward falls back to one) and
+${{env_prefix}}_CONTEXT; access.py has the details. The API's path prefix is
+probed with a vector(1) query, never guessed (${{env_prefix}}_PATH_PREFIXES, by
+default "", /prometheus and /select/0/prometheus), and the route that answered
+opens the header.
 
 Guards: an empty result is checked against the series API and reported ABSENT
 (no such metric, or no series with that label value; the closest names
@@ -38,16 +45,17 @@ import os
 import re
 import statistics
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import access  # noqa: E402
 from mask import (EXIT_ABSENT, EXIT_AUTH, EXIT_OK, EXIT_PARTIAL, EXIT_REFUSED,  # noqa: E402
                   Window, emit, header, iso, parse_duration, parse_time)
 
 ENV = "{{env_prefix}}"
+PREFIXES = ["", "/prometheus", "/select/0/prometheus"]
+ROUTE = None   # the access.Route main() opens; every request goes through it
 MAX_POINTS = 11000
 GROUPING = {"by", "without", "on", "ignoring", "group_left", "group_right"}
 AGGREGATIONS = {"sum", "avg", "min", "max", "count", "stddev", "stdvar", "topk", "bottomk", "quantile",
@@ -74,19 +82,18 @@ def base_url() -> str:
 
 
 def fetch(path: str, params: dict) -> dict:
-    """GET one API path. Raises AuthError on a login wall, returns the JSON."""
+    """GET one API path through the route. Raises AuthError on a login wall, returns the JSON."""
     q = urllib.parse.urlencode([(k, v) for k, vs in params.items() for v in (vs if isinstance(vs, list) else [vs])])
-    req = urllib.request.Request(f"{base_url()}{path}?{q}", method="GET")
+    headers = {}
     token = os.environ.get(f"{ENV}_PROM_TOKEN")
     if token:
-        req.add_header("Authorization", "Bearer " + token)
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            body, ctype = r.read().decode("utf-8", "replace"), r.headers.get("Content-Type", "")
-    except urllib.error.HTTPError as e:
-        if e.code in (401, 403):
-            raise AuthError(f"HTTP {e.code} from {path}")
-        body, ctype = e.read().decode("utf-8", "replace"), e.headers.get("Content-Type", "")
+        headers["Authorization"] = "Bearer " + token
+    status, got, body = ROUTE.get(path, q, headers)
+    ctype = got.get("content-type", "")
+    if status in (401, 403):
+        raise AuthError(f"HTTP {status} from {path}")
+    if status == 404:
+        raise ValueError(f"HTTP 404 from {path}: no API there")
     if "html" in ctype or body.lstrip()[:1] == "<":
         raise AuthError(f"{path} answered with an HTML page, most likely a login wall, not the API")
     return json.loads(body)
@@ -99,12 +106,19 @@ def api(path: str, params: dict) -> dict:
     return d
 
 
+def probe() -> str | None:
+    """None when a Prometheus-compatible API answers at the route's prefix, else what did."""
+    d = fetch("/api/v1/query", {"query": "vector(1)"})
+    ok = d.get("status") == "success" and (d.get("data") or {}).get("resultType") == "vector"
+    return None if ok else f"not a query answer: {json.dumps(d)[:60]}"
+
+
 def target() -> str:
     try:
         v = fetch("/api/v1/status/buildinfo", {}).get("data", {}).get("version")
     except (AuthError, ValueError, OSError):
         v = None
-    return f"prometheus-compatible {base_url()}" + (f" v{v}" if v else " (no buildinfo)")
+    return f"prometheus-compatible{f' v{v}' if v else ' (no buildinfo)'} at {ROUTE.describe()}"
 
 
 def selectors(expr: str) -> list:
@@ -358,27 +372,30 @@ def do_volume_step(a) -> int:
 
 
 def main(argv=None) -> int:
+    global ROUTE
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n", 1)[1])
     sub = p.add_subparsers(dest="cmd", required=True)
+    route_opts = argparse.ArgumentParser(add_help=False)
+    route_opts.add_argument("--apply", action="store_true", help="create the throwaway pod a pod route needs; nothing else here writes")
 
     def windowed(sp, window="1h"):
         sp.add_argument("--window", default=window)
         sp.add_argument("--end", default="now")
         sp.add_argument("--step", default="60s")
 
-    q = sub.add_parser("query")
+    q = sub.add_parser("query", parents=[route_opts])
     q.add_argument("expr")
     windowed(q)
     q.add_argument("--max-series", type=int, default=50)
-    i = sub.add_parser("instant")
+    i = sub.add_parser("instant", parents=[route_opts])
     i.add_argument("expr")
     i.add_argument("--at", default="now")
     i.add_argument("--max-series", type=int, default=50)
-    s = sub.add_parser("series")
+    s = sub.add_parser("series", parents=[route_opts])
     s.add_argument("selector")
     windowed(s)
     s.add_argument("--limit", type=int, default=100)
-    ab = sub.add_parser("ab")
+    ab = sub.add_parser("ab", parents=[route_opts])
     ab.add_argument("expr")
     windowed(ab, "24h")
     ab.add_argument("--version-label", required=True)
@@ -387,7 +404,7 @@ def main(argv=None) -> int:
     ab.add_argument("--by", required=True)
     ab.add_argument("--size")
     ab.add_argument("--min-pairs", type=int, default=3)
-    vs = sub.add_parser("volume-step")
+    vs = sub.add_parser("volume-step", parents=[route_opts])
     vs.add_argument("expr")
     vs.add_argument("--input", required=True)
     vs.add_argument("--at", required=True)
@@ -397,16 +414,17 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     run = {"query": do_query, "instant": do_instant, "series": do_series, "ab": do_ab, "volume-step": do_volume_step}[a.cmd]
     try:
-        return run(a)
-    except AuthError as e:
+        with access.route(ENV, base_url, probe, PREFIXES, a.apply) as ROUTE:
+            return run(a)
+    except (AuthError, access.AccessAuth) as e:
         relogin = os.environ.get(f"{ENV}_RELOGIN", f"(set {ENV}_RELOGIN to the command that renews access)")
         emit(f"AUTH: {e}. This is an expired or missing login, not an empty answer. Re-login with: {relogin}", err=True)
         return EXIT_AUTH
-    except (Refused, ValueError) as e:
+    except (Refused, ValueError, access.AccessRefused) as e:
         emit(f"REFUSED: {e}", err=True)
         return EXIT_REFUSED
     except OSError as e:
-        emit(f"could not reach {os.environ.get(ENV + '_PROM_URL', '?')}: {e}", err=True)
+        emit(f"could not reach {ROUTE.describe() if ROUTE else os.environ.get(ENV + '_PROM_URL', '?')}: {e}", err=True)
         return 1
 
 
