@@ -157,6 +157,34 @@ done
 
 
 echo ""
+echo "=== skill-forge's demand.py reads heredocs as bash does ==="
+# demand.py counts the commands a session runs; a body read as commands, or a
+# command read as a body, miscounts them. Same cases, same oracle.
+DPY=$(bash skills/comms-hub/bin/python.sh 2>/dev/null)
+if [ -z "$DPY" ]; then echo "  SKIP: no Python 3.10+ with a TOML reader"
+else
+  demand_keeps() {   # each command, NUL-ended, on stdin: 1 if drop_heredocs keeps the marker line
+    "$DPY" -c '
+import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
+for c in sys.stdin.read().split("\0")[:-1]:
+    print(int("echo HDMARK" in demand.drop_heredocs(c).split("\n")))'
+  }
+  RUNS=(); KEEP=()
+  for ((i = 0; i < ${#CASES[@]}; i += 2)); do runs_in_bash "${CASES[$((i + 1))]}" && RUNS+=("$i"); done
+  while IFS= read -r k; do KEEP+=("$k"); done < <(for i in "${RUNS[@]}"; do printf '%s\0' "${CASES[$((i + 1))]}"; done | demand_keeps)
+  for j in "${!RUNS[@]}"; do
+    label=${CASES[${RUNS[$j]}]}
+    [ "${KEEP[$j]}" = 1 ] && pass "$label: demand.py keeps it" || fail "$label: demand.py dropped a line bash runs" ""
+  done
+  DKEEP=()
+  while IFS= read -r k; do DKEEP+=("$k"); done < <(for ((i = 1; i < ${#DROPS[@]}; i += 2)); do printf '%s\0' "${DROPS[$i]}"; done | demand_keeps)
+  for ((i = 0; i < ${#DROPS[@]}; i += 2)); do
+    label=${DROPS[$i]#*|}
+    [ "${DKEEP[$((i / 2))]}" = 0 ] && pass "$label: demand.py drops the body" || fail "$label: demand.py kept a body bash does not run" ""
+  done
+fi
+
+echo ""
 echo "=== a command after a prefix bash reads whole: neutralize keeps its separator, separate_groups its group ==="
 # The marker follows `P ; `. Each prefix ends outside any quote, as bash reads it.
 LEX=(

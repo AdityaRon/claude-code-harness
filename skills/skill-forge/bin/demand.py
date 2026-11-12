@@ -83,8 +83,8 @@ SCRIPT = re.compile(r"\.(?:py|sh|js|ts|rb|pl)$")
 SKILL_SCRIPT = re.compile(r"(?:^|/)skills/([\w.-]+)/(?:bin/)?([\w.-]+)$")
 MODULE = re.compile(r"[A-Za-z_][\w.]{0,40}")
 # Ported from hooks/config-guard.sh's drop_data_heredocs, not imported: this skill installs alone.
-HEREDOC = re.compile(r"(?<!<)<<(-?)[ \t]*([\"']?)([A-Za-z_][A-Za-z0-9_]*)\2")
-FEEDS_A_SHELL = re.compile(r"(?:^|[;&|(])[ \t]*(?:bash|sh|zsh|dash|ksh)(?:[ \t][^;&|]*)?$")
+HD_WORD = re.compile(r"[A-Za-z0-9_.-]+")
+HD_SHELL = re.compile(r"(?:^|[^A-Za-z0-9_.-])(?:ba|z|da|k|fi|s)?sh(?:[^A-Za-z0-9_.-]|$)")
 # Re-login and session checks: None means every subcommand is one. A tool that also
 # does the work (tsh ssh, aws-vault exec) lists only its login subcommands, one or two words.
 ACCESS = {"kinit": None, "kubelogin": None, "okta": None, "gimme-aws-creds": None,
@@ -122,11 +122,140 @@ class Session:
 REDIRECT = re.compile(r"\d*>&\d*-?|(?:&>>?|\d*>>?|<<-?|<)\s*[^\s;&|]+")
 
 
+def _arith(s: str, i: int) -> int:
+    """Where the (( at i closes, or -1."""
+    d = 0
+    for j in range(i, len(s)):
+        if s[j] == "(":
+            d += 1
+        elif s[j] == ")":
+            d -= 1
+            if d == 0:
+                return j
+    return -1
+
+
+def _word(s: str, i: int):
+    """The delimiter after the << at i: (length from i, word, dash, quoted), or None."""
+    j, dash, lit = i + 2, False, False
+    if s[j:j + 1] == "-":
+        dash, j = True, j + 1
+    while s[j:j + 1] in (" ", "\t") and j < len(s):
+        j += 1
+    c = s[j:j + 1]
+    if c in ("'", '"'):
+        k = s.find(c, j + 1)
+        if k < 0:
+            return None
+        w, j, lit = s[j + 1:k], k + 1, True
+        if not w or (c == '"' and re.search(r"[\\$`]", w)):
+            return None
+    else:
+        if c == "\\":
+            lit, j = True, j + 1
+        m = HD_WORD.match(s, j)
+        if not m:
+            return None
+        w, j = m.group(), m.end()
+    if s[j:j + 1] not in ("", " ", "\t", ";", "&", "|", "(", ")", "<", ">"):
+        return None
+    return j - i, w, dash, lit
+
+
+class Heredocs:
+    """Where a heredoc starts, as bash reads a line: a port of hooks/lib.sh's
+    hd_scan, held to bash by tests/heredoc-openers.test.sh. Quote state carries
+    over lines; scan() raises ValueError on a << it cannot read for certain."""
+
+    def __init__(self):
+        self.q, self.frames, self.bt, self.cont = "", [], False, False
+
+    def scan(self, s: str):
+        found, n, esc, i = None, len(s), -2, 0
+        while i < n:
+            c = s[i]
+            if self.q == "'":
+                self.q = "" if c == "'" else self.q
+                i += 1
+                continue
+            if self.q == "A":
+                if c == "\\":
+                    i += 1
+                elif c == "'":
+                    self.q = ""
+                i += 1
+                continue
+            if c == "\\":
+                esc, i = i + 1, i + 2
+                continue
+            if c == "$" and s[i + 1:i + 2] == "{":
+                j = s.find("}", i + 2)
+                if j < 0 or re.search(r"['\"`{]|<<|\$\(", s[i + 2:j]):
+                    raise ValueError(s)
+                i = j + 1
+                continue
+            if self.q == '"':
+                if c == '"':
+                    self.q = ""
+                elif c == "`":
+                    self.frames.append(['"', 0, True])
+                    self.q = ""
+                elif c == "$" and s[i + 1:i + 3] == "((":
+                    i = _arith(s, i + 1)
+                    if i < 0:
+                        raise ValueError(s)
+                elif c == "$" and s[i + 1:i + 2] == "(":
+                    self.frames.append(['"', 1, False])
+                    self.q, i = "", i + 1
+                i += 1
+                continue
+            if self.frames and self.frames[-1][2] and c == "`":
+                self.q = self.frames.pop()[0]
+                i += 1
+                continue
+            if c == "'":
+                self.q = "A" if i > 0 and s[i - 1] == "$" and esc != i - 1 else "'"
+            elif c == '"':
+                self.q = '"'
+            elif c == "`":
+                self.bt = not self.bt
+            elif c == "#" and esc != i - 1 and (not self.cont if i == 0 else s[i - 1] in " \t;&|()"):
+                break
+            elif c == "(" and s[i + 1:i + 2] == "(":
+                i = _arith(s, i)
+                if i < 0:
+                    raise ValueError(s)
+            elif c == "$" and s[i + 1:i + 2] == "[":
+                i = s.find("]", i)
+                if i < 0:
+                    raise ValueError(s)
+            elif self.frames and not self.frames[-1][2] and c in "()":
+                self.frames[-1][1] += 1 if c == "(" else -1
+                if self.frames[-1][1] == 0:
+                    self.q = self.frames.pop()[0]
+            elif c == "<" and s[i + 1:i + 2] == "<":
+                if s[i + 2:i + 3] == "<":
+                    i += 2
+                else:
+                    w = None if self.bt or found or (self.frames and self.frames[-1][2]) else _word(s, i)
+                    if not w:
+                        raise ValueError(s)
+                    found = w
+                    i += w[0] - 1
+            i += 1
+        self.cont = esc == n
+        if found and (self.q or self.cont):
+            raise ValueError(s)
+        return found
+
+
 def drop_heredocs(cmd: str) -> str:
-    """Heredoc bodies and their terminators out, unless the heredoc feeds a shell; an unterminated one runs to the end."""
+    """Heredoc bodies and their terminators out, unless the line feeds a shell;
+    an unterminated one runs to the end. A << bash's reading of which is unsure
+    leaves the command as typed."""
     if "<<" not in cmd:
         return cmd
-    out, term, dash, keep = [], None, False, False
+    hd, out, term, dash, keep = Heredocs(), [], None, False, False
     for line in cmd.split("\n"):
         if term is not None:
             if (line.lstrip("\t") if dash else line) == term:
@@ -135,9 +264,13 @@ def drop_heredocs(cmd: str) -> str:
                 out.append(line)
             continue
         out.append(line)
-        m = HEREDOC.search(line)
-        if m:
-            dash, term, keep = m.group(1) == "-", m.group(3), bool(FEEDS_A_SHELL.search(line[:m.start()]))
+        try:
+            found = hd.scan(line)
+        except ValueError:
+            return cmd
+        if found:
+            _, term, dash, _ = found
+            keep = bool(HD_SHELL.search(line))
     return "\n".join(out)
 
 
