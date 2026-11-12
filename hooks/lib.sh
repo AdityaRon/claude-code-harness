@@ -4,6 +4,12 @@
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
+# Bytes, not characters: macOS awk's substr cut a "⏎" in half, its regex match
+# then failed (towc), and a lexer that died there returned half the command, so
+# git-guard never read a force push after one in a commit message. The shell
+# splits on ASCII bytes, so nothing here needs a character view.
+awk() { LC_ALL=C command awk "$@"; }
+
 # Expand leading ~ in a path; needed because the hook runtime passes env
 # values verbatim without shell expansion.
 expand_tilde() {
@@ -57,41 +63,31 @@ normalize_wrappers() {
 # command after a character or word no boundary pattern admitted, and four
 # guards went silent. Outside quotes, `(` (not `$(`), `)`, and a `{` or `}`
 # standing alone become `;`; normalize_wrappers strips the reserved words.
-# Run it on text whose quotes are intact. A heredoc body is another program's
-# input (python parens, a comment's apostrophe), so it is left alone unless a
-# shell reads it.
+# Run it on text whose quotes are intact; hd_scan says which brackets are code
+# (sh_classify). A heredoc body is another program's input (python parens, a
+# comment's apostrophe), so it is left alone, except what a shell reads: the
+# whole body under `| bash`, and $( ) or backticks in an unquoted one.
 separate_groups() {
   case "$1" in *'('*|*')'*|*'{'*|*'}'*) ;; *) printf '%s' "$1"; return ;; esac
   printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
     { line[NR] = $0 }
     END {
-      # Which lines are heredoc data, left as typed. From a line holding a << that
-      # hd_scan cannot read, quotes are not tracked either: a quote in a body read
-      # as commands could hide a group, while converting every ( only adds segments.
+      # From a line hd_scan cannot read, quotes are not tracked at all: a quote
+      # misread could hide a group, while converting every ( only adds segments.
+      sh_classify(NR)
       for (k = 1; k <= NR; k++) {
-        if (body) { if (hd_end(line[k])) { body = 0; edge[k] = 1 } else data[k] = !shell; continue }
-        hd_scan(line[k])
-        if (HD_BAD) { raw = 1; break }
-        if (HD_POS) { body = 1; shell = hd_shell(line[k]); edge[k] = 1 }
-      }
-      q = ""
-      for (k = 1; k <= NR; k++) {
-        if (data[k]) { print line[k]; continue }
-        s = line[k]; out = ""; n = length(s); esc = 0
+        s = line[k]; out = ""; n = length(s)
         for (i = 1; i <= n; i++) {
           c = substr(s, i, 1); p = (i > 1) ? substr(s, i - 1, 1) : ""; x = substr(s, i + 1, 1)
-          if (c == "\\" && q != "\047") { esc = i + 1; out = out c x; i++; continue }
-          if (q == "") {
-            if (c == "\047" && !raw) q = (p == "$" && esc != i - 1) ? "A" : "\047"
-            else if (c == "\"" && !raw) q = "\""
-            else if ((c == "(" && p != "$") || c == ")") c = ";"
+          if (SH_BAD) { if (c == "\\") { out = out c x; i++; continue } t = "c" }
+          else t = ((k, i) in CLS) ? CLS[k, i] : (DATA[k] ? "d" : "c")
+          if (t == "c") {
+            if ((c == "(" && p != "$") || c == ")") c = ";"
             else if ((c == "{" || c == "}") && (p == "" || p ~ /[ \t;&|]/) && (x == "" || x ~ /[ \t;&|]/)) c = ";"
-          } else if (c == "\047" && (q == "\047" || q == "A")) q = ""
-          else if (c == "\"" && q == "\"") q = ""
+          }
           out = out c
         }
         print out
-        if (edge[k]) q = ""
       }
     }'
 }
@@ -187,42 +183,83 @@ function hd_word(s, i,    j, c, k, w) {
   HD_POS = i; HD_LEN = j - i; HD_TERM = w
   return 1
 }
+# With HD_CLS set, hd_scan also records in HCLS the class of each ( ) { } ; & |
+# on the line: c code, q quoted or escaped, d heredoc data. One it skips (in
+# arithmetic or a comment) has none and reads as code, or as data in a body.
+# hq "H" is an unquoted heredoc body: its quotes are text, but $( ) and
+# backticks run.
+function hd_cls(i, cls,    ch) { ch = substr(HDS, i, 1); if (ch != "" && index("();&|{}", ch)) HCLS[i] = cls }
+function hd_span(a, b, cls,    k) { if (HD_CLS) for (k = a; k <= b; k++) hd_cls(k, cls) }
+function hd_ctx(q) { return q == "" ? "c" : q == "H" ? "d" : "q" }
 function hd_scan(s,    i, n, c, j, w) {
   HD_POS = 0; HD_LEN = 0; HD_BAD = 0; n = length(s); hesc = -1
+  if (HD_CLS) { split("", HCLS); HDS = s }
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
+    if (HD_CLS) hd_cls(i, hd_ctx(hq))
     if (hq == "\047") { if (c == "\047") hq = ""; continue }
-    if (hq == "A") { if (c == "\\") i++; else if (c == "\047") hq = ""; continue }
-    if (c == "\\") { hesc = i + 1; i++; continue }
+    if (hq == "A") { if (c == "\\") { i++; hd_span(i, i, "q") } else if (c == "\047") hq = ""; continue }
+    if (c == "\\") { hesc = i + 1; i++; hd_span(i, i, hq == "H" ? "d" : "q"); continue }
     if (c == "$" && substr(s, i + 1, 1) == "{") {
       j = index(substr(s, i + 2), "}"); if (!j) { HD_BAD = 1; return }
-      w = substr(s, i + 2, j - 1); if (w ~ /[\047"`{]|<<|\$\(/) { HD_BAD = 1; return }
-      i += j + 1; continue
+      w = substr(s, i + 2, j - 1)
+      if (hq == "H" ? (w ~ /`|\$\(/) : (w ~ /[\047"`{]|<<|\$\(/)) { HD_BAD = 1; return }
+      hd_span(i, i + j + 1, hd_ctx(hq)); i += j + 1; continue
     }
-    if (hq == "\"") {
-      if (c == "\"") hq = ""
-      else if (c == "`") hbt = !hbt
+    # In double quotes or a heredoc body, $( ) and backticks start code again.
+    if (hq == "\"" || hq == "H") {
+      if (c == "\"" && hq == "\"") hq = ""
+      else if (c == "`") { hup[++hsp] = hq; hdep[hsp] = 0; hbtf[hsp] = 1; hq = "" }
       else if (c == "$" && substr(s, i + 1, 2) == "((") { j = hd_arith(s, i + 1); if (!j) { HD_BAD = 1; return } i = j }
-      else if (c == "$" && substr(s, i + 1, 1) == "(") { hup[++hsp] = "\""; hdep[hsp] = 1; hq = ""; i++ }
+      else if (c == "$" && substr(s, i + 1, 1) == "(") { hup[++hsp] = hq; hdep[hsp] = 1; hbtf[hsp] = 0; hq = ""; i++ }
       continue
     }
+    if (hsp > 0 && hbtf[hsp] && c == "`") { hq = hup[hsp--]; continue }
     if (c == "\047") { hq = (i > 1 && substr(s, i - 1, 1) == "$" && hesc != i - 1) ? "A" : "\047"; continue }
     if (c == "\"") { hq = "\""; continue }
     if (c == "`") { hbt = !hbt; continue }
     if (c == "#" && hesc != i - 1 && (i == 1 ? !hcont : substr(s, i - 1, 1) ~ /[ \t;&|()]/)) break
     if (c == "(" && substr(s, i + 1, 1) == "(") { j = hd_arith(s, i); if (!j) { HD_BAD = 1; return } i = j; continue }
     if (c == "$" && substr(s, i + 1, 1) == "[") { j = index(substr(s, i), "]"); if (!j) { HD_BAD = 1; return } i += j - 1; continue }
-    if (hsp > 0 && c == "(") hdep[hsp]++
-    if (hsp > 0 && c == ")" && --hdep[hsp] == 0) { hq = hup[hsp--]; continue }
+    if (hsp > 0 && !hbtf[hsp] && c == "(") hdep[hsp]++
+    if (hsp > 0 && !hbtf[hsp] && c == ")" && --hdep[hsp] == 0) { hd_span(i, i, hd_ctx(hup[hsp])); hq = hup[hsp--]; continue }
     if (c == "<" && substr(s, i + 1, 1) == "<") {
       if (substr(s, i + 2, 1) == "<") { i += 2; continue }
-      if (hbt || HD_POS) { HD_BAD = 1; return }
+      if (hbt || HD_POS || (hsp > 0 && hbtf[hsp])) { HD_BAD = 1; return }
       if (!hd_word(s, i)) { HD_BAD = 1; return }
-      i += HD_LEN - 1
+      hd_span(i, i + HD_LEN - 1, "q"); i += HD_LEN - 1
     }
   }
   hcont = (hesc == n + 1)
   if (HD_POS && (hq != "" || hcont)) HD_BAD = 1
+}
+# The classes of a whole command held in line[1..nl]: CLS[k, i] for line k, and
+# DATA[k] for a line of a heredoc body no shell reads. SH_BAD: a line hd_scan
+# cannot read. The quote state around a body is kept for the line after it
+# (`-m "$(cat <<EOF` ... `)"`); a body fed to a shell starts fresh. An opener with
+# no terminator line (a caller dropped the body) leaves the lines after it code.
+function sh_save(   k) { sq = hq; ssp = hsp; sbt = hbt; scont = hcont; for (k = 1; k <= hsp; k++) { sup[k] = hup[k]; sdep[k] = hdep[k]; sbtf[k] = hbtf[k] } }
+function sh_restore(   k) { hq = sq; hsp = ssp; hbt = sbt; hcont = scont; for (k = 1; k <= ssp; k++) { hup[k] = sup[k]; hdep[k] = sdep[k]; hbtf[k] = sbtf[k] } }
+function sh_classify(nl,    k, t, i, body, lit, shell, found) {
+  SH_BAD = 0; split("", CLS); split("", DATA); HD_CLS = 1
+  hq = ""; hsp = 0; hbt = 0; hcont = 0
+  for (k = 1; k <= nl; k++) {
+    if (body) {
+      if (hd_end(line[k])) { body = 0; sh_restore(); continue }
+      if (!shell) DATA[k] = 1
+      if (lit && !shell) continue
+      hd_scan(line[k]); for (i in HCLS) CLS[k, i] = HCLS[i]
+      if (HD_BAD || HD_POS) { SH_BAD = 1; return }
+      continue
+    }
+    hd_scan(line[k]); for (i in HCLS) CLS[k, i] = HCLS[i]
+    if (HD_BAD) { SH_BAD = 1; return }
+    if (!HD_POS) continue
+    found = 0; for (t = k + 1; t <= nl; t++) if (hd_end(line[t])) { found = 1; break }
+    if (!found) continue
+    body = 1; lit = HD_LIT; shell = hd_shell(line[k]); sh_save()
+    hq = (shell || lit) ? "" : "H"; hsp = 0; hbt = 0; hcont = 0
+  }
 }
 function hd_end(s) { if (HD_DASH) sub(/^\t+/, "", s); return s == HD_TERM }
 function hd_shell(s) { return s ~ /(^|[^A-Za-z0-9_.-])(ba|z|da|k|fi|s)?sh([^A-Za-z0-9_.-]|$)/ }
@@ -367,28 +404,50 @@ drop_data_heredocs() {
 # A quoted or backslash-escaped `&`, `;` or `|` is text, not a separator, but the
 # guards' [^|;&] spans stop at it and hid the flags after it. Rewritten to %26,
 # %3B, %7C for matching only. An unquoted one, URL or not, still separates.
-# A $( inside double quotes starts unquoted text again, until its own ).
+# The classes are hd_scan's (sh_classify), so a quote in a comment, in heredoc
+# data or in ${ } inside quotes no longer runs on over the lines after it. On a
+# command hd_scan cannot read it prints the old reading and returns 3: a guard
+# asks, since neither hiding nor keeping a separator is safe there.
 neutralize_quoted_separators() {
   case "$1" in *'&'*|*';'*|*'|'*) ;; *) printf '%s' "$1"; return ;; esac
-  printf '%s\n' "$1" | awk '
+  printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
     function hide(ch) { return ch == "&" ? "%26" : ch == ";" ? "%3B" : ch == "|" ? "%7C" : ch }
-    BEGIN { q = ""; sp = 0 }
-    { out = ""; n = length($0); esc = 0
+    # The reading before hd_scan: quotes and $( only. Kept for heredoc data and
+    # for a command hd_scan cannot read.
+    function naive(s,    out, n, i, c, esc) {
+      out = ""; n = length(s); esc = 0
       for (i = 1; i <= n; i++) {
-        c = substr($0, i, 1)
-        if (c == "\\" && q != "\047") { esc = i + 1; out = out c hide(substr($0, i + 1, 1)); i++; continue }
-        if (q == "\"" && c == "$" && substr($0, i + 1, 1) == "(") { up[++sp] = q; depth[sp] = 1; q = ""; out = out "$("; i++; continue }
-        if (q == "" && sp > 0 && c == "(") depth[sp]++
-        if (q == "" && sp > 0 && c == ")" && --depth[sp] == 0) { q = up[sp--]; out = out c; continue }
-        if (q == "") {
-          if (c == "\047") q = (i > 1 && substr($0, i - 1, 1) == "$" && esc != i - 1) ? "A" : "\047"
-          else if (c == "\"") q = "\""
-        } else if (c == "\047" && (q == "\047" || q == "A")) q = ""
-        else if (c == "\"" && q == "\"") q = ""
+        c = substr(s, i, 1)
+        if (c == "\\" && oq != "\047") { esc = i + 1; out = out c hide(substr(s, i + 1, 1)); i++; continue }
+        if (oq == "\"" && c == "$" && substr(s, i + 1, 1) == "(") { oup[++osp] = oq; odep[osp] = 1; oq = ""; out = out "$("; i++; continue }
+        if (oq == "" && osp > 0 && c == "(") odep[osp]++
+        if (oq == "" && osp > 0 && c == ")" && --odep[osp] == 0) { oq = oup[osp--]; out = out c; continue }
+        if (oq == "") {
+          if (c == "\047") oq = (i > 1 && substr(s, i - 1, 1) == "$" && esc != i - 1) ? "A" : "\047"
+          else if (c == "\"") oq = "\""
+        } else if (c == "\047" && (oq == "\047" || oq == "A")) oq = ""
+        else if (c == "\"" && oq == "\"") oq = ""
         else c = hide(c)
         out = out c
       }
-      print out }'
+      return out
+    }
+    { line[NR] = $0 }
+    END {
+      sh_classify(NR)
+      for (k = 1; k <= NR; k++) {
+        if (SH_BAD) { print naive(line[k]); continue }
+        if (DATA[k]) { oq = ""; osp = 0; print naive(line[k]); continue }
+        s = line[k]; out = ""; n = length(s)
+        for (i = 1; i <= n; i++) {
+          c = substr(s, i, 1)
+          if (index(";&|", c) && CLS[k, i] == "q") c = hide(c)
+          out = out c
+        }
+        print out
+      }
+      if (SH_BAD) exit 3
+    }'
 }
 
 # This session's scratch folder. A background session gets ~/.claude/jobs/<the
@@ -522,6 +581,7 @@ log_decision() {
 # Emit a PreToolUse deny decision with a reason. Safe against quotes/backslashes.
 emit_deny() {
   local reason="$1"
+  HOOK_DECIDED=deny
   log_decision deny
   if command -v jq &>/dev/null; then
     jq -nc --arg r "$reason" \
@@ -768,6 +828,7 @@ check_inline_shellouts() {
 # Emit a PreToolUse ask decision (prompt the user) with a reason.
 emit_ask() {
   local reason="$1"
+  HOOK_DECIDED=ask
   log_decision ask
   if command -v jq &>/dev/null; then
     jq -nc --arg r "$reason" \
@@ -776,6 +837,15 @@ emit_ask() {
     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}\n' \
       "$(printf '%s' "$reason" | sed 's/\\/\\\\/g; s/"/\\"/g')"
   fi
+}
+
+# neutralize_quoted_separators returns 3, with its old reading, on a command
+# hd_scan cannot read. The guard goes on with that reading, so a deny or ask
+# stands, and an allow becomes an ask: which ; & | run there is unknown.
+unreadable_floor() { UNREADABLE_GUARD=$1; trap unreadable_exit EXIT; }
+unreadable_exit() {
+  [[ $? -eq 0 && -z "${HOOK_DECIDED:-}" ]] || return 0
+  emit_ask "$UNREADABLE_GUARD: this command's quoting is more than the guard can read for certain (a \${ } holding quotes, or a heredoc opener it cannot parse), so it cannot tell which ; & | separate commands. Check what it runs."
 }
 
 # Secret-shaped values out of an audit line: URL credentials, well-known token

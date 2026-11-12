@@ -480,7 +480,8 @@ name_kind() {
 # the line. kubectl as an argument (`xargs grep -l kubectl`) is not that command,
 # and neither is `| xargs kubectl` inside a quoted commit message.
 if [[ "$CMD" == *xargs* || "$CMD" == *parallel* ]]; then
-  read -ra TOKENS <<<"$(neutralize_quoted_separators "$CMD" | tr '\n' ';' | sed -E 's/\|\||&&|\|&|[|;]/ & /g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g')"
+  NQS=$(neutralize_quoted_separators "$CMD") || unreadable_floor kubectl-guard
+  read -ra TOKENS <<<"$(printf '%s\n' "$NQS" | tr '\n' ';' | sed -E 's/\|\||&&|\|&|[|;]/ & /g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g')"
   n=${#TOKENS[@]}
   for (( j = 0; j < n; j++ )); do
     [[ "${TOKENS[$j]##*/}" == xargs || "${TOKENS[$j]##*/}" == parallel ]] || continue
@@ -572,7 +573,7 @@ done < <(printf '%s\n' "$CMD" | tr '\n' ';' | sed -E "s/'[^']*'//g; s/\"[^\"]*\"
 # Not with a substitution: the `;` in "$(a; b)" is real.
 SRC=$CMD
 if [[ $TEXT_ONLY -eq 1 && "$CMD" == *[\"\']* && "$CMD" != *'$('* && "$CMD" != *'`'* ]]; then
-  SRC=$(neutralize_quoted_separators "$CMD")
+  SRC=$(neutralize_quoted_separators "$CMD") || unreadable_floor kubectl-guard
 fi
 
 # Normalise BEFORE the bail-out, not after. The bail-out's own pattern requires

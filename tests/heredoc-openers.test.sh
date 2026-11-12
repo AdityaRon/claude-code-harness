@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# The heredoc opener lib.sh's strippers share (hd_scan), with bash as the oracle:
-# whenever bash runs a case's marker line, every stripper must keep that line in
-# what the guards scan. A << in quotes, a comment, (( )) or a <<< here-string
-# once made all six heredoc-aware guards drop the commands after it.
+# lib.sh's lexers against bash as the oracle. hd_scan finds where a heredoc
+# starts and, for separate_groups and neutralize_quoted_separators, which ( ) ;
+# & | are code: whenever bash runs a case's marker, every stripper keeps its line,
+# neutralize keeps the separator before it, and separate_groups opens its group.
+# A << in quotes, or a quote in a comment, a heredoc body or "$( )", once made
+# guards drop or merge the commands after it.
 PASS=0; FAIL=0
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
 fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
@@ -131,7 +133,8 @@ verdict() {  # hook command: deny, ask or allow
 GUARDS=(git-guard config-guard kubectl-guard env-guard interpreter-guard network-guard rm-guard)
 RISK=("git push --force origin main" "cp /dev/null ~/.claude/settings.json" "kubectl delete ns prod"
       "cat .env" "python3 -c 'import os; print(os.environ)'" "curl -X DELETE https://example.com/x" "rm -rf ~/")
-PREFIXES=('cat <<<x' 'echo "<<x"' 'true # <<x' 'echo $((1<<x))')
+PREFIXES=('cat <<<x' 'echo "<<x"' 'true # <<x' 'echo $((1<<x))'
+          "true # it's" 'true # a "b' "echo \"\$(echo \"it's\")\"" $'cat <<EOF > notes.md\nit\'s\nEOF')
 for g in "${!GUARDS[@]}"; do
   ctl=$(verdict "${GUARDS[$g]}" "${RISK[$g]}")
   [ "$ctl" != allow ] || { fail "${GUARDS[$g]} control" "allows '${RISK[$g]}' alone: pick another line"; continue; }
@@ -151,6 +154,109 @@ for p in "${PREFIXES[@]}"; do
   v=$(verdict kubectl-guard "$(printf '%s\n%s\nx' "$p" "$GROUPED")")
   [ "$v" = "$GCTL" ] && pass "kubectl-guard, a group after '$p': $v" || fail "kubectl-guard, a group after '$p'" "$v, alone: $GCTL"
 done
+
+
+echo ""
+echo "=== a command after a prefix bash reads whole: neutralize keeps its separator, separate_groups its group ==="
+# The marker follows `P ; `. Each prefix ends outside any quote, as bash reads it.
+LEX=(
+  "double quotes holding '"        $'echo "it\'s"'
+  "single quotes holding \""       $'echo \'a"b\''
+  "an escaped \" in double quotes"  $'echo "a\\"b"'
+  "an escaped '"                   $'echo a\\\'b'
+  "\$'...' with an escaped '"      $'echo $\'it\\\'s\''
+  "an escaped \$ before '"         $'echo \\$\'a\\\''
+  "\"\$( )\" holding \"'\""        $'echo "$(echo "it\'s")"'
+  "\"\$( )\" holding ')'"          $'echo "$(echo \')\')"'
+  "a backtick in double quotes"    $'echo "`echo it`\'"'
+  "\${ } holding \"'\" unquoted"   $'echo ${x:-"it\'s"}'
+  "backticks holding \"'\""        $'echo `echo "it\'s"`'
+  "a comment holding '"            $'true # it\'s\ntrue'
+  "a comment holding one \""       $'true # a "b\ntrue'
+  "a heredoc body holding '"       $'cat <<EOF > /dev/null\nit\'s\nEOF\ntrue'
+  "a commit message heredoc in \"\$( )\"" $'git commit -m "$(cat <<\'EOF\'\na note (b); c\nEOF\n)"'
+)
+for ((i = 0; i < ${#LEX[@]}; i += 2)); do
+  label=${LEX[$i]}; p=${LEX[$((i + 1))]}
+  n="$p ; echo HDMARK"; g="$p ; (echo HDMARK)"
+  if ! runs_in_bash "$n" || ! runs_in_bash "$g"; then fail "$label" "(bash did not run the marker: the case is wrong)"; continue; fi
+  out=$(neutralize_quoted_separators "$n")
+  [[ "$out" == *"; echo HDMARK"* ]] && pass "$label: neutralize keeps the ;" || fail "$label: neutralize hid a ; bash runs" "[$out]"
+  out=$(separate_groups "$g")
+  [[ "$out" == *";echo HDMARK;"* ]] && pass "$label: separate_groups opens the group" || fail "$label: separate_groups left a group bash runs" "[$out]"
+done
+
+echo ""
+echo "=== a command inside a substitution or a heredoc body that bash runs ==="
+# Inside \$( ) its output is captured, so the marker goes to fd 3, a copy of stdout.
+INNER=(
+  "neutralize|; echo HDMARK|a ; in \"\$( )\""             $'exec 3>&1; echo "$(true; echo HDMARK >&3)"'
+  "neutralize|; echo HDMARK|a ; in a backtick in double quotes" $'exec 3>&1; echo "`true; echo HDMARK >&3`"'
+  "neutralize|; echo HDMARK|a ; in \$( ) in \"\$(( ))\"" $'exec 3>&1; echo "$(( $(true; echo HDMARK >&3; echo 1) ))"'
+  "groups|;echo HDMARK >&3;|a group in \"\$( )\""          $'exec 3>&1; echo "$( (echo HDMARK >&3) )"'
+  "groups|;echo HDMARK;|a group in \$( ) in an unquoted heredoc body" $'cat <<EOF\n$( (echo HDMARK) )\nEOF'
+)
+for ((i = 0; i < ${#INNER[@]}; i += 2)); do
+  IFS='|' read -r fn want label <<<"${INNER[$i]}"; cmd=${INNER[$((i + 1))]}
+  runs_in_bash "$cmd" || { fail "$label" "(bash did not run the marker: the case is wrong)"; continue; }
+  if [ "$fn" = neutralize ]; then out=$(neutralize_quoted_separators "$cmd"); else out=$(separate_groups "$cmd"); fi
+  [[ "$out" == *"$want"* ]] && pass "$label: $fn sees it" || fail "$label: $fn hid what bash runs" "[$out]"
+done
+# A quoted delimiter: bash prints the body as text, and it stays as typed.
+cmd=$'cat <<\'EOF\'\n$( (echo HDMARK) )\nEOF'
+if runs_in_bash "$cmd"; then fail "a quoted heredoc body" "(bash ran the marker: the case is wrong)"
+else [ "$(separate_groups "$cmd")" = "$cmd" ] && pass "a quoted heredoc body: separate_groups leaves it as typed" \
+       || fail "a quoted heredoc body: separate_groups changed data" "[$(separate_groups "$cmd")]"; fi
+
+# A caller may pass a body already dropped (strip_inert_heredocs keeps the opener,
+# not the terminator): with no terminator line, the lines after an opener are code.
+out=$(separate_groups $'cat <<\'EOF\' > notes.md\n(echo HDMARK)')
+[[ "$out" == *";echo HDMARK;"* ]] && pass "an opener with no terminator: the next line's group opens" \
+  || fail "an opener with no terminator" "[$out]"
+# The ) that closes "$( )" is not a group: it stays, as it did before the classes.
+[ "$(separate_groups 'echo "$(date)" ; (x)')" = 'echo "$(date)" ; ;x;' ] && pass "a quoted \$( )'s ) stays" \
+  || fail "a quoted \$( )'s )" "[$(separate_groups 'echo "$(date)" ; (x)')]"
+
+# What stays text: an escaped ;, a ; inside "${ }", and "${ }" with quotes in an
+# unquoted heredoc body, where quotes are text.
+[[ "$(neutralize_quoted_separators 'echo a\;b ; ls')" == 'echo a\%3Bb ; ls' ]] && pass "an escaped ; stays hidden" \
+  || fail "an escaped ;" "[$(neutralize_quoted_separators 'echo a\;b ; ls')]"
+[[ "$(neutralize_quoted_separators 'echo "${x:-a;b}" ; ls')" == 'echo "${x:-a%3Bb}" ; ls' ]] && pass 'a ; in "${ }" stays hidden' \
+  || fail 'a ; in "${ }"' "[$(neutralize_quoted_separators 'echo "${x:-a;b}" ; ls')]"
+neutralize_quoted_separators $'cat <<EOF > x.sh\n${FOO:-"bar"}\nEOF\nls ; ls' >/dev/null \
+  && pass 'a heredoc body holding "${ }" with quotes is readable' || fail 'a heredoc body holding "${ }" with quotes' "rc=$?"
+# Heredoc data is read a line at a time: its apostrophe does not reach the next line.
+[[ "$(neutralize_quoted_separators $'cat <<EOF > n.md\nit\'s\na; b\nEOF\nls')" == *$'\na; b\n'* ]] \
+  && pass "a body line's quote ends with the line" || fail "a body line's quote" "[$(neutralize_quoted_separators $'cat <<EOF > n.md\nit\'s\na; b\nEOF\nls')]"
+neutralize_quoted_separators $'echo "`cat <<EOF`" ; ls\nhi\nEOF' >/dev/null; rc=$?
+[ "$rc" = 3 ] && pass "a heredoc opened inside backticks in quotes is unreadable" || fail "a heredoc in a quoted backtick" "rc=$rc"
+
+echo ""
+echo "=== a command hd_scan cannot read: neutralize says so, and a guard asks rather than allows ==="
+UNREAD=$'echo "${x:-"it\'s"}"'
+neutralize_quoted_separators "$UNREAD ; ls" >/dev/null; rc=$?
+[ "$rc" = 3 ] && pass "neutralize returns 3" || fail "neutralize on an unreadable command" "rc=$rc"
+[ "$(verdict rm-guard "$UNREAD ; rm -f notes.txt")" = ask ] && pass "rm-guard asks where it would allow" \
+  || fail "rm-guard on an unreadable command" "$(verdict rm-guard "$UNREAD ; rm -f notes.txt")"
+for g in "${!GUARDS[@]}"; do
+  v=$(verdict "${GUARDS[$g]}" "$UNREAD ; ${RISK[$g]}")
+  [ "$v" != allow ] && pass "${GUARDS[$g]} after an unreadable prefix: $v" || fail "${GUARDS[$g]} after an unreadable prefix" "allow"
+done
+[ "$(verdict env-guard 'echo "it'"'"'s" ; ls')" = allow ] && pass "a readable command still allows" \
+  || fail "a readable command" "$(verdict env-guard 'echo "it'"'"'s" ; ls')"
+
+echo ""
+echo "=== a multibyte character: the lexers read bytes, and the command after it is seen ==="
+# macOS awk cut "⏎" (e2 8f 8e) mid-sequence and died on the regex after it,
+# returning half the command: git-guard read no force push past the message.
+MB=$'\xe2\x8f\x8e'
+FP="git push --for""ce origin main"
+for c in "git commit -m \"$MB note\" ; $FP" "git commit -m \"a $MB\" && ($FP)"; do
+  v=$(verdict git-guard "$c")
+  [ "$v" = deny ] && pass "git-guard denies a force push after a $MB in a message" || fail "git-guard after a multibyte message" "$v"
+done
+out=$(strip_message_args "git commit -m \"$MB a\" ; ls"); rc=$?
+[ "$rc" = 0 ] && [[ "$out" == *"; ls" ]] && pass "strip_message_args reads past it" || fail "strip_message_args on multibyte" "rc=$rc [$out]"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
