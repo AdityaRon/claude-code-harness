@@ -1,5 +1,5 @@
 name: Mutations
-# Each skill's tests/run.py --mutate applies the mutations its test files list
+# Each skill's run.py --mutate applies the mutations its test files list
 # and expects every one to fail a test. They take minutes, so they run weekly
 # and on demand, not on every push.
 on:
