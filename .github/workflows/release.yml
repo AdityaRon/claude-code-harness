@@ -72,7 +72,7 @@ jobs:
           LAST=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)
           echo "last=$LAST" >> "$GITHUB_OUTPUT"
           # The loop guard: the CHANGELOG PR this workflow merges is no release.
-          RC=0; bash bin/release-notes.sh --since "$LAST" --changed > changed.txt || RC=$?
+          RC=0; bash tools/release-notes.sh --since "$LAST" --changed > changed.txt || RC=$?
           if [ "$RC" = 1 ]; then
             echo "::notice::nothing but CHANGELOG.md changed since $LAST; nothing to release."
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
@@ -80,19 +80,19 @@ jobs:
           [ "$RC" = 0 ] || { echo "::error::release-notes.sh --changed exited $RC"; exit 1; }
           gh pr list --state merged --base main --limit 300 --json number,title,labels,body > prs.json
           # Only the changelog PR, or no PR at all, landed since the tag.
-          if ! bash bin/release-notes.sh --since "$LAST" --prs prs.json >/dev/null; then
+          if ! bash tools/release-notes.sh --since "$LAST" --prs prs.json >/dev/null; then
             echo "::notice::no PR merged since $LAST; nothing to release."
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          VERSION=${IN_VERSION:-$(bash bin/release-notes.sh --since "$LAST" --prs prs.json --next-version --bump "${IN_BUMP:-auto}")}
+          VERSION=${IN_VERSION:-$(bash tools/release-notes.sh --since "$LAST" --prs prs.json --next-version --bump "${IN_BUMP:-auto}")}
           echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::not a version: $VERSION"; exit 1; }
           if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
             echo "::error::$VERSION already exists"; exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "intended=$(bash bin/release-notes.sh --since "$LAST" --prs prs.json --intended)" >> "$GITHUB_OUTPUT"
+          echo "intended=$(bash tools/release-notes.sh --since "$LAST" --prs prs.json --intended)" >> "$GITHUB_OUTPUT"
           # Fails closed: only exit 1 (nothing changed) skips the benchmark.
-          RC=0; bash bin/release-notes.sh --since "$LAST" --hooks-changed >/dev/null || RC=$?
+          RC=0; bash tools/release-notes.sh --since "$LAST" --hooks-changed >/dev/null || RC=$?
           if [ "$RC" = 1 ]; then echo "hooks_changed=false"; else echo "hooks_changed=true"; fi >> "$GITHUB_OUTPUT"
 
       # Always, whatever changed: a merge by github.token fires no push CI, so
@@ -121,7 +121,7 @@ jobs:
             cat bench.md >> "$GITHUB_STEP_SUMMARY"; exit 0
           fi
           set +e
-          python3 bin/hook-bench.py --base "$LAST" --head HEAD --gate --intended "$INTENDED" --md bench.md --json bench.json >/dev/null
+          python3 tools/hook-bench.py --base "$LAST" --head HEAD --gate --intended "$INTENDED" --md bench.md --json bench.json >/dev/null
           RC=$?
           cat bench.md >> "$GITHUB_STEP_SUMMARY"
           [ "$RC" = 0 ] || echo "::error::the benchmark gate failed; the release is not made. See the job summary."
@@ -136,11 +136,11 @@ jobs:
           LAST: ${{ steps.plan.outputs.last }}
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
-          if bash bin/release-notes.sh --entry "$VERSION" > entry.md 2>/dev/null; then
+          if bash tools/release-notes.sh --entry "$VERSION" > entry.md 2>/dev/null; then
             { cat entry.md; echo; cat bench.md; } > notes.md
             echo "in_changelog=true" >> "$GITHUB_OUTPUT"
           else
-            bash bin/release-notes.sh --since "$LAST" --prs prs.json --bench bench.md --version "$VERSION" > notes.md
+            bash tools/release-notes.sh --since "$LAST" --prs prs.json --bench bench.md --version "$VERSION" > notes.md
           fi
           cat notes.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -174,11 +174,11 @@ jobs:
           # --tags: the tag above was made on GitHub, not in this clone.
           git fetch -q --tags origin main
           git switch -q --detach origin/main
-          MISSING=$(bash bin/release-notes.sh --missing)
+          MISSING=$(bash tools/release-notes.sh --missing)
           if [ -z "$MISSING" ]; then echo "CHANGELOG.md has every tag."; exit 0; fi
           for T in $MISSING; do
             gh release view "$T" --json body -q .body | tr -d '\r' | sed '/^CHANGELOG.md entry:/,$d' > entry.md
-            bash bin/release-notes.sh --changelog entry.md
+            bash tools/release-notes.sh --changelog entry.md
           done
           NEWEST=$(printf '%s\n' "$MISSING" | tail -1)
           git switch -q -C changelog

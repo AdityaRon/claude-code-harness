@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Same-run A/B benchmark of two refs' PreToolUse hooks, with a release gate.
 
-  bin/hook-bench.py                         # latest tag vs the working tree
-  bin/hook-bench.py --base edbd1fa --head HEAD
-  bin/hook-bench.py --gate --intended id1,id2 --md bench.md --json bench.json
-  bin/hook-bench.py --corpus audit          # this machine's audit log; never publish
+  tools/hook-bench.py                         # latest tag vs the working tree
+  tools/hook-bench.py --base edbd1fa --head HEAD
+  tools/hook-bench.py --gate --intended id1,id2 --md bench.md --json bench.json
+  tools/hook-bench.py --corpus audit          # this machine's audit log; never publish
 
 Every payload in the corpus is fed to each hook that would fire for it under
 that side's config/settings.json (PreToolUse, command hooks, not async), one
@@ -17,7 +17,7 @@ limit AND the floor (both, so a 2 ms wobble on a 5 ms hook is not a failure).
 
 Python, not bash: getrusage(RUSAGE_CHILDREN) is the only portable way to read a
 child's CPU to the millisecond; bash and perl `times` round to clock ticks.
-python3 is already required by bin/permission-friction.py.
+python3 is already required by tools/permission-friction.py.
 
 Absolute numbers depend on the machine (process start cost varies 3x between
 laptops), which is why both sides run in the same process on the same corpus

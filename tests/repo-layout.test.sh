@@ -42,7 +42,7 @@ BADMODE=""
 # let a bare `chmod +x` pass unnoticed.
 while read -r mode _ _ path; do
   case "$path" in
-    hooks/*.sh|bin/*.sh|install.sh|doctor.sh|.github/*.sh)
+    hooks/*.sh|bin/*.sh|tools/*.sh|install.sh|doctor.sh|.github/*.sh)
       [ "$mode" = "100755" ] || BADMODE="$BADMODE $path(index=$mode,want 755)"
       [ -x "$path" ]         || BADMODE="$BADMODE $path(on disk: not executable)" ;;
     tests/*.test.sh)
@@ -126,7 +126,7 @@ echo "=== Shipped scripts write no fixed /tmp path ==="
 # ships that rule, so its own installer and hooks follow it. mktemp is fine, and
 # so is /tmp/claude-$UID: Claude Code's own per-user folder, which lib.sh only
 # compares paths against.
-HITS=$(grep -nE '/tmp/[A-Za-z]' install.sh doctor.sh hooks/*.sh bin/*.sh 2>/dev/null | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' \
+HITS=$(grep -nE '/tmp/[A-Za-z]' install.sh doctor.sh hooks/*.sh bin/*.sh tools/*.sh 2>/dev/null | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' \
   | grep -v '/tmp/claude-\$UID/')
 [[ -z "$HITS" ]] && pass "no fixed /tmp file names" || fail "no fixed /tmp file names" "$HITS"
 
@@ -135,7 +135,7 @@ echo "=== mktemp gets a template under \$TMPDIR ==="
 # Without one, macOS mktemp uses /var/folders/…/T, not $TMPDIR, and the sandbox
 # refuses that ("mkdtemp failed … Operation not permitted"). Hooks and install.sh
 # run outside the sandbox; sandbox-trial.sh's bare call is the probe for this.
-HITS=$(grep -nE '\$\([[:space:]]*mktemp' doctor.sh bin/*.sh tests/*.sh 2>/dev/null | grep -v 'XXX' \
+HITS=$(grep -nE '\$\([[:space:]]*mktemp' doctor.sh bin/*.sh tools/*.sh tests/*.sh 2>/dev/null | grep -v 'XXX' \
   | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' | grep -v '^bin/sandbox-trial\.sh:')
 [[ -z "$HITS" ]] && pass "every mktemp in tests, doctor and bin has a template" \
   || fail "every mktemp in tests, doctor and bin has a template" "$HITS"
@@ -157,17 +157,17 @@ done
   || fail "every wired hook has a README row" "missing:$NOROW"
 
 echo ""
-echo "=== The README layout block names every bin/ tool and each skill's folders ==="
+echo "=== The README layout block names every bin/ and tools/ file and each skill's folders ==="
 # comms-hub's panel/ shipped with no mention in the map, beside the bin/ and
 # tests/ the line did name.
 MISSING_BIN=""
-for f in bin/*; do
+for f in bin/* tools/*; do
   b=$(basename "$f")
-  printf '%s' "$BLOCK" | grep -qF "$b" || MISSING_BIN="$MISSING_BIN $b"
+  printf '%s' "$BLOCK" | grep -qF "$b" || MISSING_BIN="$MISSING_BIN $f"
 done
 [ -z "$MISSING_BIN" ] \
-  && pass "every bin/ file appears in the layout block" \
-  || fail "every bin/ file appears in the layout block" "missing:$MISSING_BIN"
+  && pass "every bin/ and tools/ file appears in the layout block" \
+  || fail "every bin/ and tools/ file appears in the layout block" "missing:$MISSING_BIN"
 MISSING_SKILL=""
 for s in skills/*/; do
   n=$(basename "$s")
@@ -189,17 +189,17 @@ done
   || fail "every skill and its folders appear on its layout line" "missing:$MISSING_SKILL"
 
 echo ""
-echo "=== Every hook and bin/ tool is named by at least one suite ==="
+echo "=== Every hook, bin/ and tools/ file is named by at least one suite ==="
 # A tool can share a suite (host-binary.test.sh covers tcc-check.sh), but one
 # no suite names at all is one nothing exercises.
 UNNAMED=""
-for f in hooks/*.sh bin/*; do
+for f in hooks/*.sh bin/* tools/*; do
   b=$(basename "$f")
   grep -qF "$b" tests/*.test.sh || UNNAMED="$UNNAMED $f"
 done
 [ -z "$UNNAMED" ] \
-  && pass "every hook and bin/ tool is named by a suite" \
-  || fail "every hook and bin/ tool is named by a suite" "unnamed:$UNNAMED"
+  && pass "every hook, bin/ and tools/ file is named by a suite" \
+  || fail "every hook, bin/ and tools/ file is named by a suite" "unnamed:$UNNAMED"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
