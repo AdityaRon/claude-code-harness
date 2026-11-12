@@ -91,14 +91,16 @@ echo "=== Every repo-relative path referenced in prose actually exists ==="
 # they are not repo paths — and placeholders (<hook>, *) are skipped.
 BROKEN=""
 CHECKED=0
-for src in README.md docs/*.md skills/*/SKILL.md config/upstream-contract.json; do
+# Workflows too: release.yml and upstream-drift.yml run tools/ by path, and no
+# PR's CI runs them, so a moved tool would surface only at release or drift time.
+for src in README.md docs/*.md docs/history/*.md skills/*/SKILL.md config/upstream-contract.json .github/workflows/*.yml; do
   [ -f "$src" ] || continue
   while read -r ref; do
     case "$ref" in *'<'*|*'*'*|*'$'*) continue ;; esac
     CHECKED=$((CHECKED+1))
     [ -e "$ref" ] || BROKEN="$BROKEN $src->$ref"
   done < <(sed 's|~/\.claude/[A-Za-z0-9._/-]*||g' "$src" \
-           | grep -oE '(^|[^A-Za-z0-9._/-])(docs|bin|hooks|tests|config|skills|rules)/[A-Za-z0-9._/-]+' \
+           | grep -oE '(^|[^A-Za-z0-9._/-])(docs|bin|tools|hooks|tests|config|skills|rules)/[A-Za-z0-9._/-]+' \
            | sed -E 's|^[^A-Za-z0-9._/-]||; s|[.,;:)]+$||' | sort -u)
 done
 [ "$CHECKED" -ge 15 ] \

@@ -224,7 +224,7 @@ everything else is grouped by what it is.
 install.sh  doctor.sh    ← install once per machine; run every suite in tests/
 CHANGELOG.md             ← one entry per release
 LICENSE                  ← MIT
-bin/                     ← installed to ~/.claude, or run from the clone
+bin/                     ← every file installed flat to ~/.claude by install.sh
   statusline.sh  harness-update.sh  net-allowlist.sh  sandbox.sh  sandbox-trial.sh
   memory-verify.sh  memory-fix.sh  memory-index.sh  memory-provenance.sh
   session-route.sh       ← which session owns this PR (docs/session-routing.md)

@@ -30,7 +30,7 @@ tcc_folder "$CWD" "$CMD" || exit 0
   echo "tcc-check: 'Operation not permitted' under ~/Desktop, ~/Documents or ~/Downloads is macOS privacy control (TCC), not file modes and not the harness sandbox."
   if ! host_binary_check; then :
   else
-    echo "This session's host binary exists, so the folder was never granted to it, or the grant was revoked: System Settings > Privacy & Security > Files and Folders, or run the command from a terminal session. A clone outside those folders is unaffected: bin/relocate-clones.sh moves one."
+    echo "This session's host binary exists, so the folder was never granted to it, or the grant was revoked: System Settings > Privacy & Security > Files and Folders, or run the command from a terminal session. A clone outside those folders is unaffected: ~/.claude/relocate-clones.sh moves one."
   fi
 } >&2
 exit 2

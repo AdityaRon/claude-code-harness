@@ -295,11 +295,11 @@ if [ -f "$DIR/MEMORY.md" ]; then
     case "$SECTION" in
       *"ACTIVE WORK"*|"") ;;                       # hand-curated, or unsorted index
       *FEEDBACK*)  [ "$TYPE" = "feedback" ] || [ "$TYPE" = "user" ] \
-                     || add "its index line sits in the FEEDBACK section but the memory is \`type: $TYPE\`. Run: bash bin/memory-index.sh --store <slug> --write" ;;
+                     || add "its index line sits in the FEEDBACK section but the memory is \`type: $TYPE\`. Run: bash ~/.claude/memory-index.sh --store <slug> --write" ;;
       *REFERENCE*) [ "$TYPE" = "reference" ] \
-                     || add "its index line sits in the REFERENCE section but the memory is \`type: $TYPE\`. Run: bash bin/memory-index.sh --store <slug> --write" ;;
+                     || add "its index line sits in the REFERENCE section but the memory is \`type: $TYPE\`. Run: bash ~/.claude/memory-index.sh --store <slug> --write" ;;
       *PROJECT*)   [ "$TYPE" = "project" ] \
-                     || add "its index line sits in the PROJECT section but the memory is \`type: $TYPE\`. Run: bash bin/memory-index.sh --store <slug> --write" ;;
+                     || add "its index line sits in the PROJECT section but the memory is \`type: $TYPE\`. Run: bash ~/.claude/memory-index.sh --store <slug> --write" ;;
     esac
   fi
 fi

@@ -54,7 +54,7 @@ has "heads the diagnosis" "## This session's Claude Code binary is gone" "$OUT"
 has "names the host pid and the path" "pid 100, runs from $BIN, which no longer exists" "$OUT"
 has "names the symptom" "'Operation not permitted'" "$OUT"
 has "and the fix" "restart this session" "$OUT"
-has "and the way out" "bin/relocate-clones.sh" "$OUT"
+has "and the way out, at the installed path" "~/.claude/relocate-clones.sh" "$OUT"
 lacks "no marker: no updater line" "harness-update.sh's last CLI upgrade" "$OUT"
 printf 'claude-code@latest 2.1.306 -> 2.1.307 at 2026-10-22T21:27:26Z; pids running the old binary: 100\n' > "$CLAUDE_CLI_UPGRADED"
 OUT=$(CLAUDE_HOST_START=400 lib 'host_binary_check')
@@ -120,6 +120,7 @@ OUT=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"tool_respo
 : > "$BIN"
 OUT=$(post "$HOME/Desktop/repo" "git status" "$ERR")
 has "binary present: TCC named, the grant itself pointed at" "host binary exists" "$OUT"
+has "and the installed relocate tool" "~/.claude/relocate-clones.sh" "$OUT"
 lacks "and no deleted-binary line" "binary is gone" "$OUT"
 rm -f "$BIN"
 

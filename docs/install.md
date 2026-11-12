@@ -23,8 +23,9 @@ holds your work skills. A machine that already has its rules in
 
 As written by `install.sh` at a6197da, plus what the hooks and
 `harness-update.sh` write as they run.
-Paths inside `~/.claude` are flat: the grouping in the README's repo layout is
-for reading the repo, not for the installed tree.
+Paths inside `~/.claude` are flat: every file in the repo's `bin/` lands at
+`~/.claude/<name>`, and `tools/` stays in the clone. The grouping in the README's
+repo layout is for reading the repo, not for the installed tree.
 
 ```
 ~/.claude/
@@ -36,6 +37,8 @@ for reading the repo, not for the installed tree.
   memory-fix.sh  memory-index.sh  memory-provenance.sh
   session-route.sh         ← which session owns this PR
   net-allowlist.sh  sandbox.sh  sandbox-trial.sh
+  spend-report.py          ← what sessions, subagents and loop ticks cost; comms-hub's tick runs it daily
+  relocate-clones.sh       ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads
   harness-update.sh        ← moves this machine to the newest release
   harness-update.conf      ← with_cli=1 or 0, from --with-cli or --no-cli
   harness-src/             ← harness-update.sh's own clone, made on its first run
@@ -43,6 +46,7 @@ for reading the repo, not for the installed tree.
   harness-contract.version ← last_verified_version from config/upstream-contract.json
   skills/<name>/SKILL.md   ← memory-audit, memory-archive, pr-review, comms-hub, skill-forge
   skills/comms-hub/bin/    ← its scripts; config.example.toml sits beside its SKILL.md
+  skills/comms-hub/panel/  ← the comms panel mod: plugin.json, hooks/, types/; its tests stay in the clone
   skills/skill-forge/bin/  ← its scripts; config.example.toml beside it; its templates go to
                              ~/.local/share/skill-forge/templates/ ($XDG_DATA_HOME), not here
   rules/*.md               ← copied from rules/; local-*.md and other files left alone

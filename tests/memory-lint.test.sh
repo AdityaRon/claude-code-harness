@@ -204,7 +204,7 @@ mk_index PROJECT refmem.md
 OUT=$(lint "$STORE/refmem.md")
 check_contains "wrong section flagged"   "sits in the PROJECT section" "$OUT"
 check_contains "names the actual type"   "type: reference"             "$OUT"
-check_contains "says how to fix it"      "memory-index.sh"             "$OUT"
+check_contains "says how to fix it, at the installed path" "bash ~/.claude/memory-index.sh --store" "$OUT"
 
 mk_index REFERENCE refmem.md
 check_absent "right section is silent" "sits in the" "$(lint "$STORE/refmem.md")"
