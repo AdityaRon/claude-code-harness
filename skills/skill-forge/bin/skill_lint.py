@@ -43,6 +43,7 @@ import argparse
 import ast
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -487,34 +488,51 @@ def check_tests(sk: Skill, opts) -> Result:
 
 CLIMB = re.compile(r"(?:^|/)\.\./\.\.(?:/|$)")
 CLAUDE_SKILL = re.compile(r"\.claude/skills/([\w-]+)")
-INSTALLED_REF = re.compile(r"(?<![\w.$/-])(~/\.claude/[\w./-]+\.(?:py|sh))\b")
+SIBLING = re.compile(r"^(?:\.\./)+skills/([\w-]+)")
+PARENTS = re.compile(r"Path\(__file__\)(?:\.resolve\(\))?((?:\.parent)+)|\.parents\[(\d+)\]|((?:os\.path\.dirname\(){3,})")
+# ~/.claude/<path>.sh|.py in any spelling of home: ~, $HOME, ${HOME}, /Users/<u>, /home/<u>.
+INSTALLED_REF = re.compile(r"(?<![\w.$/-])(?:~|\$HOME|\$\{HOME\}|/(?:Users|home)/[\w.-]+)(/\.claude/[\w./-]+\.(?:py|sh))(?![\w.-])")
+
+
+def installed_ref(text: str) -> str | None:
+    """TEXT as ~/.claude/<path>, with // and ./ collapsed, when it is one whole; else None."""
+    m = INSTALLED_REF.fullmatch(text.strip())
+    return "~" + posixpath.normpath(m.group(1)) if m else None
 
 
 def installed_refs(sk: Skill) -> set[str]:
     """The ~/.claude/ scripts SKILL.md names, less the skill's own folder."""
-    own = {f"~/.claude/skills/{n}/" for n in (sk.name, sk.root.name)}
-    return {r for r in INSTALLED_REF.findall(sk.md or "") if not any(r.startswith(o) for o in own)}
+    own = tuple(f"~/.claude/skills/{n}/" for n in (sk.name, sk.root.name))
+    refs = {"~" + posixpath.normpath(m.group(1)) for m in INSTALLED_REF.finditer(sk.md or "")}
+    return {r for r in refs if not r.startswith(own)}
 
 
-def harness_repo(sk: Skill) -> Path | None:
-    """The harness clone the skill sits in (skills/<name>/ beside install.sh and hooks/lib.sh)."""
-    root = sk.root.resolve()
-    repo = root.parent.parent
-    if root.parent.name == "skills" and (repo / "install.sh").is_file() and (repo / "hooks" / "lib.sh").is_file():
-        return repo
-    return None
+def find_harness(path: Path) -> Path | None:
+    """The public harness clone that holds PATH, if any."""
+    p = path
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if top.returncode != 0:
+        return None
+    root = Path(top.stdout.strip())
+    if (root / "skills" / "skill-forge" / "SKILL.md").is_file():
+        return root
+    url = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"], capture_output=True, text=True).stdout
+    return root if "claude-code-harness" in url else None
 
 
 def installed_from(repo: Path, ref: str) -> Path | None:
-    """Where in the clone install.sh copies ~/.claude/<rest> from: bin/ flat, hooks/, rules/, skills/."""
-    rest = ref[len("~/.claude/"):]
-    if "/" not in rest:
-        return repo / "bin" / rest
-    if rest.split("/", 1)[0] in ("hooks", "rules", "skills"):
-        return repo / rest
+    """Where in the clone install.sh copies ~/.claude/<path> from; None where it copies
+    nothing: bin/ whole and flat, hooks/*.sh, hooks/lib/*.sh, and a skill's bin/."""
+    parts = ref[len("~/.claude/"):].split("/")
+    if len(parts) == 1:
+        return repo / "bin" / parts[0]
+    if parts[0] == "hooks" and parts[-1].endswith(".sh") and (len(parts) == 2 or (len(parts) == 3 and parts[1] == "lib")):
+        return repo.joinpath(*parts)
+    if parts[0] == "skills" and len(parts) == 4 and parts[2] == "bin":
+        return repo.joinpath(*parts)
     return None
-SIBLING = re.compile(r"^(?:\.\./)+skills/([\w-]+)")
-PARENTS = re.compile(r"Path\(__file__\)(?:\.resolve\(\))?((?:\.parent)+)|\.parents\[(\d+)\]|((?:os\.path\.dirname\(){3,})")
 
 
 def code_strings(src: str):
@@ -559,17 +577,28 @@ def check_self_contained(sk: Skill, opts) -> Result:
     if bad:
         bad[:] = bad[:6] + (["declare it in forge.toml [deps] and read it from the environment"] if deps == set() else [])
     mine, outside = skill_md_refs(sk)
-    uses, named = set(sk.manifest.get("uses") or []), installed_refs(sk)
+    raw, named = sk.manifest.get("uses", []), installed_refs(sk)
+    if not (isinstance(raw, list) and all(isinstance(u, str) for u in raw)):
+        bad.append('forge.toml uses must be a list of strings, as uses = ["~/.claude/tool.sh"]')
+        raw = []
+    uses = {installed_ref(u) or u for u in raw}
     for ref in sorted(named - uses):
         bad.append(f"SKILL.md runs {ref}, outside the folder; declare it in forge.toml uses")
     for ref in sorted(uses - named):
         bad.append(f"forge.toml uses {ref}, which SKILL.md does not name")
-    repo = harness_repo(sk)
-    for ref in sorted(uses & named) if repo else ():
-        src = installed_from(repo, ref)
-        if not (src and src.is_file()):
-            bad.append(f"SKILL.md runs {ref}, which install.sh in this clone does not install")
-    outside = [r for r in outside if r not in named]
+    if uses & named:
+        repo = find_harness(sk.root)
+        repo = repo if repo and sk.root.resolve().parent == (repo / "skills").resolve() else None
+        for ref in sorted(uses & named):
+            if repo:
+                src = installed_from(repo, ref)
+                if not (src and src.is_file()):
+                    bad.append(f"SKILL.md runs {ref}, which install.sh in this clone does not install")
+            elif not Path(os.path.expanduser(ref)).is_file():
+                bad.append(f"SKILL.md runs {ref}, which is not on this machine")
+    outside = [r for r in outside if installed_ref(r) not in named]
+    if len(bad) > 8:
+        bad[:] = bad[:8] + [f"and {len(bad) - 8} more"]
     for ref in mine:
         where = next((u for u in sk.unread if Path(u).name == ref.rsplit("/", 1)[-1]), "")
         bad.append(f"SKILL.md runs {ref}; lint found no engine" + (f" (it is at {where}, which the lint does not read)" if where else ""))
@@ -607,7 +636,8 @@ def report(root: Path, budget: int | None = None, no_exec: bool = False) -> dict
     verdict, note = ("FAIL" if "FAIL" in statuses.values() else "PASS"), ""
     if verdict == "PASS" and all(statuses.get(c) == "N/A" for c in ENGINE_CHECKS):
         verdict = "WARN"
-        _, outside = skill_md_refs(sk)
+        named = installed_refs(sk)   # C10 judges these
+        outside = [r for r in skill_md_refs(sk)[1] if installed_ref(r) not in named]
         note = f"every engine check is N/A: the lint read {len(sk.scripts)} scripts and {len(sk.tests) + len(sk.shell_tests)} test files"
         if outside:
             note += f"; SKILL.md names {', '.join(outside[:5])} outside the folder, which the lint does not judge"

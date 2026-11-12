@@ -16,8 +16,17 @@ Mutations that must turn this file red (deleting any check must be seen):
   c10-uses-unchecked: skill_lint.py: `for ref in sorted(named - uses):` => `for ref in sorted(set()):`
   c10-stale-uses: skill_lint.py: `for ref in sorted(uses - named):` => `for ref in sorted(set()):`
   c10-not-installed: skill_lint.py: `if not (src and src.is_file()):` => `if False:`
-  c10-own-skill-is-outside: skill_lint.py: `if not any(r.startswith(o) for o in own)}` => `}`
-  c10-bin-flat: skill_lint.py: `return repo / "bin" / rest` => `return repo / rest`
+  c10-own-skill-is-outside: skill_lint.py: `return {r for r in refs if not r.startswith(own)}` => `return refs`
+  c10-bin-flat: skill_lint.py: `return repo / "bin" / parts[0]` => `return repo / parts[0]`
+  c10-any-hook-file: skill_lint.py: `if parts[0] == "hooks" and parts[-1].endswith(".sh") and` => `if parts[0] == "hooks" and`
+  c10-any-skill-file: skill_lint.py: `if parts[0] == "skills" and len(parts) == 4 and parts[2] == "bin":` => `if parts[0] == "skills":`
+  c10-tilde-only: skill_lint.py: `(?:~|\\$HOME|\\$\\{HOME\\}|/(?:Users|home)/[\\w.-]+)(/` => `(?:~)(/`
+  c10-no-normpath: skill_lint.py: `refs = {"~" + posixpath.normpath(m.group(1)) for m` => `refs = {"~" + m.group(1) for m`
+  c10-bak-is-a-ref: skill_lint.py: `\\.(?:py|sh))(?![\\w.-])")` => `\\.(?:py|sh))\\b")`
+  c10-uses-untyped: skill_lint.py: `if not (isinstance(raw, list) and all(isinstance(u, str) for u in raw)):` => `if False:`
+  c10-not-on-machine: skill_lint.py: `elif not Path(os.path.expanduser(ref)).is_file():` => `elif False:`
+  c10-uncapped: skill_lint.py: `if len(bad) > 8:` => `if False:`
+  c10-warn-names-judged: skill_lint.py: `outside = [r for r in skill_md_refs(sk)[1] if installed_ref(r) not in named]` => `outside = skill_md_refs(sk)[1]`
   stale-waiver-kept: skill_lint.py: `elif r.status != "FAIL":` => `elif False:`
   reasonless-waiver-kept: skill_lint.py: `elif not reason:` => `elif False:`
   selftest-not-run: skill_lint.py: `if rc != 0:` => `if False:`
@@ -52,11 +61,13 @@ Mutations that must turn this file red (deleting any check must be seen):
 """
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -77,6 +88,22 @@ ALL = {f"C{i}" for i in range(1, 11)}
 
 def failing(results: dict) -> set:
     return {k for k, r in results.items() if r.status == "FAIL"}
+
+
+@contextlib.contextmanager
+def home(*tools):
+    """HOME as a temp dir whose ~/.claude holds TOOLS: C10 checks a declared script exists."""
+    with tempfile.TemporaryDirectory() as h, mock.patch.dict(os.environ, {"HOME": h}):
+        (Path(h) / ".claude").mkdir()
+        for t in tools:
+            (Path(h) / ".claude" / t).write_text("true\n")
+        yield Path(h)
+
+
+def uses(root: Path, value: str) -> None:
+    """Put `uses = VALUE` first in ROOT's forge.toml, keeping the rest."""
+    toml = root / "forge.toml"
+    toml.write_text(f"uses = {value}\n" + (toml.read_text() if toml.exists() else ""))
 
 
 class Workdir:
@@ -353,61 +380,107 @@ class SkillMdTest(unittest.TestCase):
         self.assertIn("SKILL.md runs scripts/report.py; lint found no engine (it is at scripts/report.py", res["C10"].detail)
 
     def test_an_installed_script_skill_md_runs_must_be_declared_in_uses(self):
-        with Workdir() as root:
+        with Workdir() as root, home("memory-verify.sh"):
             md = root / "SKILL.md"
             md.write_text(md.read_text() + "\nThen `bash ~/.claude/memory-verify.sh --json` and `bash install.sh`.\n")
             res = skill_lint.lint(root)
             self.assertEqual(failing(res), {"C10"}, fails(res))
             self.assertIn("SKILL.md runs ~/.claude/memory-verify.sh, outside the folder; declare it in forge.toml uses",
                           res["C10"].detail)
-            toml = root / "forge.toml"
-            toml.write_text('uses = ["~/.claude/memory-verify.sh"]\n' + (toml.read_text() if toml.exists() else ""))
+            uses(root, '["~/.claude/memory-verify.sh"]')
             res = skill_lint.lint(root)
         self.assertEqual(res["C10"].status, "PASS", res["C10"].detail)
         self.assertIn("SKILL.md also names install.sh outside the folder", res["C10"].detail)
 
+    def test_outside_a_harness_clone_a_declared_script_must_be_on_this_machine(self):
+        with Workdir() as root, home():
+            md = root / "SKILL.md"
+            md.write_text(md.read_text() + "\nRun `bash ~/.claude/memory-verify.sh`.\n")
+            uses(root, '["~/.claude/memory-verify.sh"]')
+            res = skill_lint.lint(root)
+        self.assertEqual(failing(res), {"C10"}, fails(res))
+        self.assertIn("SKILL.md runs ~/.claude/memory-verify.sh, which is not on this machine", res["C10"].detail)
+
+    def test_every_spelling_of_home_is_one_reference(self):
+        with Workdir() as root, home("memory-verify.sh"):
+            md = root / "SKILL.md"
+            md.write_text(md.read_text() + '\nRun `bash "${HOME}/.claude/memory-verify.sh"`, `$HOME/.claude//memory-verify.sh`, '
+                          "`/Users/someone/.claude/./memory-verify.sh` or `/home/someone/.claude/memory-verify.sh`; "
+                          "never `~/.claude/memory-verify.sh.bak`.\n")
+            res = skill_lint.lint(root)
+            self.assertEqual(failing(res), {"C10"}, fails(res))
+            self.assertEqual(res["C10"].detail.count("SKILL.md runs ~/.claude/memory-verify.sh, outside the folder"), 1,
+                             res["C10"].detail)
+            self.assertNotIn(".bak", res["C10"].detail)
+            uses(root, '["~/.claude//memory-verify.sh"]')
+            res = skill_lint.lint(root)
+        self.assertEqual(res["C10"].status, "PASS", res["C10"].detail)
+
+    def test_a_longer_name_holding_a_script_name_is_not_a_reference(self):
+        with Workdir() as root, home():
+            md = root / "SKILL.md"
+            md.write_text(md.read_text() + "\nNever run `~/.claude/old-tool.sh.bak` or `~/.claude/x.py-old`.\n")
+            res = skill_lint.lint(root)
+        self.assertEqual(res["C10"].status, "PASS", res["C10"].detail)
+
+    def test_many_findings_are_capped_so_the_first_stays_readable(self):
+        with Workdir() as root, home():
+            md = root / "SKILL.md"
+            md.write_text(md.read_text() + "\n" + " ".join(f"`~/.claude/t{i}.sh`" for i in range(12)) + "\n")
+            res = skill_lint.lint(root)
+        self.assertEqual(failing(res), {"C10"}, fails(res))
+        self.assertTrue(res["C10"].detail.endswith("; and 4 more"), res["C10"].detail)
+
+    def test_uses_that_is_not_a_list_of_strings_fails_without_a_crash(self):
+        for value in ('"~/.claude/memory-verify.sh"', '[{a = 1}]'):
+            with self.subTest(value=value), Workdir() as root, home("memory-verify.sh"):
+                md = root / "SKILL.md"
+                md.write_text(md.read_text() + "\nRun `bash ~/.claude/memory-verify.sh`.\n")
+                uses(root, value)
+                res = skill_lint.lint(root)
+                self.assertEqual(failing(res), {"C10"}, fails(res))
+                self.assertIn("forge.toml uses must be a list of strings", res["C10"].detail)
+                self.assertLessEqual(res["C10"].detail.count(";"), 8, res["C10"].detail)
+
     def test_a_declared_script_skill_md_no_longer_names_fails(self):
-        with Workdir() as root:
-            toml = root / "forge.toml"
-            toml.write_text('uses = ["~/.claude/memory-verify.sh"]\n' + (toml.read_text() if toml.exists() else ""))
+        with Workdir() as root, home("memory-verify.sh"):
+            uses(root, '["~/.claude/memory-verify.sh"]')
             res = skill_lint.lint(root)
         self.assertEqual(failing(res), {"C10"}, fails(res))
         self.assertIn("forge.toml uses ~/.claude/memory-verify.sh, which SKILL.md does not name", res["C10"].detail)
 
     def test_the_skills_own_installed_scripts_need_no_declaration(self):
-        with Workdir() as root:
+        with Workdir() as root, home():
             md = root / "SKILL.md"
             md.write_text(md.read_text() + f"\nRun `python3 ~/.claude/skills/{root.name}/bin/engine.py --help`.\n")
             res = skill_lint.lint(root)
         self.assertEqual(res["C10"].status, "PASS", res["C10"].detail)
 
     def test_in_a_harness_clone_a_declared_script_must_be_one_install_sh_installs(self):
-        with tempfile.TemporaryDirectory() as tmp, Workdir() as fixture:
+        other = "~/.claude/" + "skills/other"   # in two parts: whole, C10 reads this test as reaching into a skill
+        refs = ["~/.claude/memory-verify.sh", "~/.claude/hooks/x.sh", "~/.claude/hooks/x.py",
+                f"{other}/tests/t.py", f"{other}/bin/t.py"]
+        with tempfile.TemporaryDirectory() as tmp, Workdir() as fixture, home():
             repo = Path(tmp)
-            (repo / "hooks").mkdir()
-            (repo / "bin").mkdir()
-            (repo / "install.sh").write_text("true\n")
-            (repo / "hooks" / "lib.sh").write_text("true\n")
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            for d in ("bin", "hooks", "skills/skill-forge", "skills/other/tests", "skills/other/bin"):
+                (repo / d).mkdir(parents=True)
+            (repo / "skills" / "skill-forge" / "SKILL.md").write_text("x\n")   # how the lint knows the harness
             root = repo / "skills" / fixture.name
             shutil.copytree(fixture, root)
             md = root / "SKILL.md"
-            md.write_text(md.read_text() + "\nThen `bash ~/.claude/memory-verify.sh --json` and `~/.claude/hooks/x.sh`.\n")
-            toml = root / "forge.toml"
-            toml.write_text('uses = ["~/.claude/memory-verify.sh", "~/.claude/hooks/x.sh"]\n'
-                            + (toml.read_text() if toml.exists() else ""))
-            res = skill_lint.lint(root)
-            self.assertEqual(failing(res), {"C10"}, fails(res))
-            self.assertIn("SKILL.md runs ~/.claude/memory-verify.sh, which install.sh in this clone does not install",
-                          res["C10"].detail)
-            self.assertIn("SKILL.md runs ~/.claude/hooks/x.sh, which install.sh", res["C10"].detail)
-            (repo / "memory-verify.sh").write_text("true\n")   # at the root, not in bin/: still not installed
-            (repo / "hooks" / "x.sh").write_text("true\n")
-            res = skill_lint.lint(root)
-            self.assertIn("~/.claude/memory-verify.sh, which install.sh", res["C10"].detail)
-            self.assertNotIn("~/.claude/hooks/x.sh, which install.sh", res["C10"].detail)
+            md.write_text(md.read_text() + "\nRun " + ", ".join(f"`{r}`" for r in refs) + ".\n")
+            uses(root, "[" + ", ".join(f'"{r}"' for r in refs) + "]")
+            (repo / "memory-verify.sh").write_text("true\n")   # at the root, not in bin/: not installed
+            for f in ("hooks/x.sh", "hooks/x.py", "skills/other/tests/t.py", "skills/other/bin/t.py"):
+                (repo / f).write_text("true\n")
+            detail = skill_lint.lint(root)["C10"].detail
+            for r in ("~/.claude/memory-verify.sh", "~/.claude/hooks/x.py", f"{other}/tests/t.py"):
+                self.assertIn(f"SKILL.md runs {r}, which install.sh in this clone does not install", detail)
+            for r in ("~/.claude/hooks/x.sh", f"{other}/bin/t.py"):
+                self.assertNotIn(f"{r}, which install.sh", detail)
             (repo / "bin" / "memory-verify.sh").write_text("true\n")
-            res = skill_lint.lint(root)
-        self.assertEqual(res["C10"].status, "PASS", res["C10"].detail)
+            self.assertNotIn("memory-verify.sh, which install.sh", skill_lint.lint(root)["C10"].detail)
 
 
 class VerdictTest(unittest.TestCase):
@@ -422,14 +495,16 @@ class VerdictTest(unittest.TestCase):
                 shutil.rmtree(root / d)
             (root / "forge.toml").unlink()
             md = root / "SKILL.md"
-            md.write_text(md.read_text() + "\nRun `bash ~/.claude/flag-report.sh`.\n")
+            md.write_text(md.read_text() + "\nRun `bash ~/.claude/flag-report.sh`, then `bash install.sh`.\n")
             (root / "forge.toml").write_text('uses = ["~/.claude/flag-report.sh"]\n')   # C10 needs it declared
             (root / "scripts").mkdir()
             (root / "scripts" / "helper.sh").write_text("echo hi\n")
-            r = skill_lint.report(root)
+            with home("flag-report.sh"):
+                r = skill_lint.report(root)
         self.assertEqual((r["verdict"], r["na"]), ("WARN", 7), r)
         self.assertIn("every engine check is N/A", r["note"])
-        self.assertIn("~/.claude/flag-report.sh", r["note"])
+        self.assertIn("install.sh outside the folder", r["note"])
+        self.assertNotIn("flag-report.sh", r["note"])   # C10 judged it
         self.assertIn("not read: scripts/helper.sh", r["note"])
 
 

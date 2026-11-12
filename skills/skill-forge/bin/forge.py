@@ -118,8 +118,9 @@ def draft(arch: str, name: str, question: str, out: Path | None = None, not_for:
     if out.exists():
         if not force:
             raise ValueError(f"{out} exists; pass --force to replace an earlier draft")
-        if not (out / "forge.toml").is_file():
-            raise ValueError(f"{out} exists and holds no forge.toml, so it is not a draft; refusing to replace it")
+        # forge.py writes archetype into every draft; a hand-written skill's forge.toml has none.
+        if "archetype" not in (read_toml(out / "forge.toml") if (out / "forge.toml").is_file() else {}):
+            raise ValueError(f"{out} exists and is not a draft (its forge.toml names no archetype); refusing to replace it")
         shutil.rmtree(out)
     module = name.replace("-", "_")
     not_for = not_for or spec.get("not_for", "changing anything")
@@ -170,19 +171,7 @@ def draft(arch: str, name: str, question: str, out: Path | None = None, not_for:
     return out
 
 
-def find_harness(path: Path) -> Path | None:
-    """The public harness clone that holds PATH, if any."""
-    p = path
-    while not p.exists() and p != p.parent:
-        p = p.parent
-    top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    if top.returncode != 0:
-        return None
-    root = Path(top.stdout.strip())
-    if (root / "skills" / "skill-forge" / "SKILL.md").is_file():
-        return root
-    url = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"], capture_output=True, text=True).stdout
-    return root if "claude-code-harness" in url else None
+find_harness = skill_lint.find_harness   # one definition; the lint needs it too
 
 
 def record(name: str, question: str, arch: str, dest: Path) -> Path:
