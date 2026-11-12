@@ -6,6 +6,21 @@ the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
 installed machine to the newest tag.
 
+## v1.2.0 (2026-11-12)
+
+Merged since v1.1.19: 3 PRs.
+
+### Compatibility
+- contract: say what asks at write time for a mod Claude writes (#188)
+
+### Other
+- feat: skill-forge, one skill per recurring question, with skill_lint (#189)
+- comms panel: read the listed PRs again every fifth minute (#187)
+
+### Benchmark vs v1.1.19
+
+hooks/ and config/settings.json are unchanged since v1.1.19; benchmark skipped (both sides would run the same files).
+
 ## v1.1.19 (2026-11-11)
 
 Merged since v1.1.18: 4 PRs.
