@@ -141,5 +141,66 @@ HITS=$(grep -nE '\$\([[:space:]]*mktemp' doctor.sh bin/*.sh tests/*.sh 2>/dev/nu
   || fail "every mktemp in tests, doctor and bin has a template" "$HITS"
 
 echo ""
+echo "=== Every hook settings.json wires has a row in the README hook table ==="
+# subagent-cache-guard and tcc-check were wired and shipped with no row, so the
+# table a reader checks before installing undercounted what runs on their machine.
+WIRED=$(jq -r '.hooks[][]?.hooks[]?.command // empty' config/settings.json 2>/dev/null \
+  | grep -oE 'hooks/[a-z0-9-]+\.sh' | sed -e 's|^hooks/||' -e 's|\.sh$||' | sort -u)
+TABLE=$(awk '/^## What it blocks, asks and logs$/{f=1; next} f&&/^## /{exit} f' README.md)
+NOROW=""
+for h in $WIRED; do
+  printf '%s' "$TABLE" | grep -qF "| \`$h\` |" || NOROW="$NOROW $h"
+done
+[ -n "$WIRED" ] && pass "settings.json wires hooks" || fail "settings.json wires hooks" "(none found)"
+[ -z "$NOROW" ] \
+  && pass "every wired hook has a README row" \
+  || fail "every wired hook has a README row" "missing:$NOROW"
+
+echo ""
+echo "=== The README layout block names every bin/ tool and each skill's folders ==="
+# comms-hub's panel/ shipped with no mention in the map, beside the bin/ and
+# tests/ the line did name.
+MISSING_BIN=""
+for f in bin/*; do
+  b=$(basename "$f")
+  printf '%s' "$BLOCK" | grep -qF "$b" || MISSING_BIN="$MISSING_BIN $b"
+done
+[ -z "$MISSING_BIN" ] \
+  && pass "every bin/ file appears in the layout block" \
+  || fail "every bin/ file appears in the layout block" "missing:$MISSING_BIN"
+MISSING_SKILL=""
+for s in skills/*/; do
+  n=$(basename "$s")
+  # The skill's entry is its first line plus continuation lines, which sit 20 or
+  # more spaces deep; a listing line such as "  statusline.sh ..." sits 2 deep.
+  line=$(printf '%s\n' "$BLOCK" | awk -v n="$n/" '
+    f && /^                    / {print; next}
+    f {exit}
+    index($0, n) {f=1; print}')
+  if [ -z "$line" ]; then MISSING_SKILL="$MISSING_SKILL $n/"; continue; fi
+  for d in "$s"*/; do
+    [ -d "$d" ] || continue
+    sub=$(basename "$d")
+    printf '%s' "$line" | grep -qF "$sub/" || MISSING_SKILL="$MISSING_SKILL $n/$sub/"
+  done
+done
+[ -z "$MISSING_SKILL" ] \
+  && pass "every skill and its folders appear on its layout line" \
+  || fail "every skill and its folders appear on its layout line" "missing:$MISSING_SKILL"
+
+echo ""
+echo "=== Every hook and bin/ tool is named by at least one suite ==="
+# A tool can share a suite (host-binary.test.sh covers tcc-check.sh), but one
+# no suite names at all is one nothing exercises.
+UNNAMED=""
+for f in hooks/*.sh bin/*; do
+  b=$(basename "$f")
+  grep -qF "$b" tests/*.test.sh || UNNAMED="$UNNAMED $f"
+done
+[ -z "$UNNAMED" ] \
+  && pass "every hook and bin/ tool is named by a suite" \
+  || fail "every hook and bin/ tool is named by a suite" "unnamed:$UNNAMED"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
