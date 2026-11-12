@@ -42,7 +42,7 @@ BADMODE=""
 # let a bare `chmod +x` pass unnoticed.
 while read -r mode _ _ path; do
   case "$path" in
-    hooks/*.sh|bin/*.sh|install.sh|doctor.sh|.github/*.sh)
+    hooks/*.sh|bin/*|install.sh|doctor.sh|.github/*.sh)
       [ "$mode" = "100755" ] || BADMODE="$BADMODE $path(index=$mode,want 755)"
       [ -x "$path" ]         || BADMODE="$BADMODE $path(on disk: not executable)" ;;
     tests/*.test.sh)
@@ -59,11 +59,27 @@ echo "=== The README layout block names every file in docs/ ==="
 # The block listed session-routing.md only, while docs/ held a second file — so
 # the one document a reader most needed was invisible in the map.
 BLOCK=$(awk '/^## Repo layout$/{f=1} f&&/^```$/{n++; if(n==2) exit} f' README.md)
-MISSING=""
-for d in docs/*.md; do
-  b=$(basename "$d")
-  printf '%s' "$BLOCK" | grep -qF "$b" || MISSING="$MISSING $b"
-done
+# Tracked files only: an untracked backup or a test's __pycache__/ is not the repo.
+tracked() { git ls-files -- "$@"; }
+# A name counts only as a whole word of the block: index.sh is not memory-index.sh.
+BLOCK_WORDS=$(printf '%s\n' "$BLOCK" | tr -s ' \t' '\n\n')
+missing_in() {  # WORDS PATH...: the basenames WORDS does not hold
+  local words=$1 f b out=""; shift
+  for f in "$@"; do
+    b=$(basename "$f"); printf '%s\n' "$words" | grep -qxF "$b" || out="$out $b"
+  done
+  printf '%s' "$out"
+}
+# An entry is its first line plus continuation lines, 20 or more spaces deep; a
+# listing line such as "  statusline.sh ..." sits 2 deep.
+entry() {  # awk regex for the entry's first line
+  printf '%s\n' "$BLOCK" | awk -v re="$1" '
+    f && /^                    / {print; next}
+    f {exit}
+    $0 ~ re {f=1; print}'
+}
+# shellcheck disable=SC2046  # file names here never hold spaces
+MISSING=$(missing_in "$BLOCK_WORDS" $(tracked ':(glob)docs/*.md'))
 [ -n "$BLOCK" ] \
   && pass "the layout block was found" || fail "the layout block was found" "(empty)"
 [ -z "$MISSING" ] \
@@ -74,12 +90,8 @@ echo ""
 echo "=== The README layout block names every file in rules/ ==="
 # Same reason as docs/: a rule that ships to every session on the machine but is
 # invisible in the map is one nobody reviews before it starts shaping behaviour.
-MISSING_RULES=""
-for r in rules/*.md; do
-  [ -e "$r" ] || continue
-  b=$(basename "$r")
-  printf '%s' "$BLOCK" | grep -qF "$b" || MISSING_RULES="$MISSING_RULES $b"
-done
+# shellcheck disable=SC2046
+MISSING_RULES=$(missing_in "$BLOCK_WORDS" $(tracked ':(glob)rules/*.md'))
 [ -z "$MISSING_RULES" ] \
   && pass "every rules/ file appears in the layout block" \
   || fail "every rules/ file appears in the layout block" "missing:$MISSING_RULES"
@@ -141,48 +153,38 @@ HITS=$(grep -nE '\$\([[:space:]]*mktemp' doctor.sh bin/*.sh tests/*.sh 2>/dev/nu
   || fail "every mktemp in tests, doctor and bin has a template" "$HITS"
 
 echo ""
-echo "=== Every hook settings.json wires has a row in the README hook table ==="
+echo "=== The README hook table and settings.json name the same hooks ==="
 # subagent-cache-guard and tcc-check were wired and shipped with no row, so the
 # table a reader checks before installing undercounted what runs on their machine.
 WIRED=$(jq -r '.hooks[][]?.hooks[]?.command // empty' config/settings.json 2>/dev/null \
-  | grep -oE 'hooks/[a-z0-9-]+\.sh' | sed -e 's|^hooks/||' -e 's|\.sh$||' | sort -u)
+  | grep -oE "hooks/[^[:space:]\"']+" | sed -E 's|^hooks/||; s/\.[A-Za-z0-9]+$//' | sort -u)
 TABLE=$(awk '/^## What it blocks, asks and logs$/{f=1; next} f&&/^## /{exit} f' README.md)
-NOROW=""
-for h in $WIRED; do
-  printf '%s' "$TABLE" | grep -qF "| \`$h\` |" || NOROW="$NOROW $h"
-done
+ROWS=$(printf '%s\n' "$TABLE" | sed -nE 's/^\| `([^`]+)` \|.*/\1/p' | sort -u)
+NOROW=$(comm -23 <(printf '%s\n' "$WIRED") <(printf '%s\n' "$ROWS") | tr '\n' ' ')
+UNWIRED=$(comm -13 <(printf '%s\n' "$WIRED") <(printf '%s\n' "$ROWS") | tr '\n' ' ')
 [ -n "$WIRED" ] && pass "settings.json wires hooks" || fail "settings.json wires hooks" "(none found)"
-[ -z "$NOROW" ] \
+[ -z "${NOROW// /}" ] \
   && pass "every wired hook has a README row" \
-  || fail "every wired hook has a README row" "missing:$NOROW"
+  || fail "every wired hook has a README row" "missing: $NOROW"
+[ -z "${UNWIRED// /}" ] \
+  && pass "every README row is a wired hook" \
+  || fail "every README row is a wired hook" "not wired: $UNWIRED"
 
 echo ""
 echo "=== The README layout block names every bin/ tool and each skill's folders ==="
 # comms-hub's panel/ shipped with no mention in the map, beside the bin/ and
 # tests/ the line did name.
-MISSING_BIN=""
-for f in bin/*; do
-  [ -f "$f" ] || continue   # a test's __pycache__/ is not a tool; install.sh skips it too
-  b=$(basename "$f")
-  printf '%s' "$BLOCK" | grep -qF "$b" || MISSING_BIN="$MISSING_BIN $b"
-done
+# shellcheck disable=SC2046
+MISSING_BIN=$(missing_in "$BLOCK_WORDS" $(tracked ':(glob)bin/*'))
 [ -z "$MISSING_BIN" ] \
   && pass "every bin/ file appears in the layout block" \
   || fail "every bin/ file appears in the layout block" "missing:$MISSING_BIN"
 MISSING_SKILL=""
-for s in skills/*/; do
-  n=$(basename "$s")
-  # The skill's entry is its first line plus continuation lines, which sit 20 or
-  # more spaces deep; a listing line such as "  statusline.sh ..." sits 2 deep.
-  line=$(printf '%s\n' "$BLOCK" | awk -v n="$n/" '
-    f && /^                    / {print; next}
-    f {exit}
-    index($0, n) {f=1; print}')
+for n in $(tracked ':(glob)skills/*/*' ':(glob)skills/*/**' | cut -d/ -f2 | sort -u); do
+  line=$(entry "(^|[ ,])$n/")
   if [ -z "$line" ]; then MISSING_SKILL="$MISSING_SKILL $n/"; continue; fi
-  for d in "$s"*/; do
-    [ -d "$d" ] || continue
-    sub=$(basename "$d")
-    printf '%s' "$line" | grep -qF "$sub/" || MISSING_SKILL="$MISSING_SKILL $n/$sub/"
+  for sub in $(tracked "skills/$n" | awk -F/ 'NF > 3 {print $3}' | sort -u); do
+    printf '%s' "$line" | grep -qE "(^|[ ,(])$sub/" || MISSING_SKILL="$MISSING_SKILL $n/$sub/"
   done
 done
 [ -z "$MISSING_SKILL" ] \
@@ -190,18 +192,40 @@ done
   || fail "every skill and its folders appear on its layout line" "missing:$MISSING_SKILL"
 
 echo ""
-echo "=== Every hook and bin/ tool is named by at least one suite ==="
-# A tool can share a suite (host-binary.test.sh covers tcc-check.sh), but one
-# no suite names at all is one nothing exercises.
+echo "=== Every hook, bin/ tool and .github script is named by another suite ==="
+# A tool can share a suite (host-binary.test.sh covers tcc-check.sh), but one no
+# suite names is one nothing exercises. This file names many of them, so it is
+# left out; the suites are read once.
+SUITES=$(for t in tests/*.test.sh; do [ "$t" = tests/repo-layout.test.sh ] || cat "$t"; done)
 UNNAMED=""
-for f in hooks/*.sh bin/*; do
-  [ -f "$f" ] || continue
+for f in $(tracked ':(glob)hooks/*.sh' ':(glob)bin/*' ':(glob).github/*.sh'); do
   b=$(basename "$f")
-  grep -qF "$b" tests/*.test.sh || UNNAMED="$UNNAMED $f"
+  # apt-get as the first step of every CI job: CI runs it, nothing local can.
+  [ "$b" = install-apt-deps.sh ] && continue
+  printf '%s' "$SUITES" | grep -qE "(^|[^A-Za-z0-9_.-])${b//./\\.}([^A-Za-z0-9_.-]|$)" || UNNAMED="$UNNAMED $f"
 done
 [ -z "$UNNAMED" ] \
-  && pass "every hook and bin/ tool is named by a suite" \
-  || fail "every hook and bin/ tool is named by a suite" "unnamed:$UNNAMED"
+  && pass "every hook, bin/ tool and .github script is named by a suite" \
+  || fail "every hook, bin/ tool and .github script is named by a suite" "unnamed:$UNNAMED"
+
+echo ""
+echo "=== Every suite is named after what it tests, or listed on the README tests/ line ==="
+# Twelve suites cover no single file of their own name; the tests/ line is where
+# a reader learns what each is for.
+TESTS_WORDS=$(entry '^tests/' | tr -cs 'A-Za-z0-9*-' '\n')
+UNLISTED=""
+for t in $(tracked ':(glob)tests/*.test.sh'); do
+  n=$(basename "$t" .test.sh)
+  [ -n "$(tracked "hooks/$n.sh" ":(glob)bin/$n.*" ".github/$n.sh")" ] && continue
+  printf '%s\n' "$TESTS_WORDS" | grep -qxF "$n" && continue
+  for w in $TESTS_WORDS; do
+    case "$w" in *'*') case "$n" in "${w%\*}"*) continue 2 ;; esac ;; esac
+  done
+  UNLISTED="$UNLISTED $n"
+done
+[ -z "$UNLISTED" ] \
+  && pass "every suite is named after its file or on the tests/ line" \
+  || fail "every suite is named after its file or on the tests/ line" "unlisted:$UNLISTED"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
