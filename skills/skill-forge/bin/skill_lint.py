@@ -22,6 +22,9 @@ forge.toml keys it reads (a hand-written skill needs none of them):
                Python, SHELL_WRITE_VERBS for shell
   sql          true or false; default: look for a SQL client in the scripts
   audit_table  the table a write's audit row goes to
+  uses         the ~/.claude/ scripts SKILL.md runs that are not the skill's own;
+               each must be declared, and in a harness clone install.sh must
+               install it
   [deps]       other-skill = "ENV_VAR" for anything outside the folder
   [tests]      "bin/x.sh" = "path/to/its.test.sh", for a test kept outside the
                skill's own test locations; the path must exist
@@ -484,6 +487,32 @@ def check_tests(sk: Skill, opts) -> Result:
 
 CLIMB = re.compile(r"(?:^|/)\.\./\.\.(?:/|$)")
 CLAUDE_SKILL = re.compile(r"\.claude/skills/([\w-]+)")
+INSTALLED_REF = re.compile(r"(?<![\w.$/-])(~/\.claude/[\w./-]+\.(?:py|sh))\b")
+
+
+def installed_refs(sk: Skill) -> set[str]:
+    """The ~/.claude/ scripts SKILL.md names, less the skill's own folder."""
+    own = {f"~/.claude/skills/{n}/" for n in (sk.name, sk.root.name)}
+    return {r for r in INSTALLED_REF.findall(sk.md or "") if not any(r.startswith(o) for o in own)}
+
+
+def harness_repo(sk: Skill) -> Path | None:
+    """The harness clone the skill sits in (skills/<name>/ beside install.sh and hooks/lib.sh)."""
+    root = sk.root.resolve()
+    repo = root.parent.parent
+    if root.parent.name == "skills" and (repo / "install.sh").is_file() and (repo / "hooks" / "lib.sh").is_file():
+        return repo
+    return None
+
+
+def installed_from(repo: Path, ref: str) -> Path | None:
+    """Where in the clone install.sh copies ~/.claude/<rest> from: bin/ flat, hooks/, rules/, skills/."""
+    rest = ref[len("~/.claude/"):]
+    if "/" not in rest:
+        return repo / "bin" / rest
+    if rest.split("/", 1)[0] in ("hooks", "rules", "skills"):
+        return repo / rest
+    return None
 SIBLING = re.compile(r"^(?:\.\./)+skills/([\w-]+)")
 PARENTS = re.compile(r"Path\(__file__\)(?:\.resolve\(\))?((?:\.parent)+)|\.parents\[(\d+)\]|((?:os\.path\.dirname\(){3,})")
 
@@ -530,6 +559,17 @@ def check_self_contained(sk: Skill, opts) -> Result:
     if bad:
         bad[:] = bad[:6] + (["declare it in forge.toml [deps] and read it from the environment"] if deps == set() else [])
     mine, outside = skill_md_refs(sk)
+    uses, named = set(sk.manifest.get("uses") or []), installed_refs(sk)
+    for ref in sorted(named - uses):
+        bad.append(f"SKILL.md runs {ref}, outside the folder; declare it in forge.toml uses")
+    for ref in sorted(uses - named):
+        bad.append(f"forge.toml uses {ref}, which SKILL.md does not name")
+    repo = harness_repo(sk)
+    for ref in sorted(uses & named) if repo else ():
+        src = installed_from(repo, ref)
+        if not (src and src.is_file()):
+            bad.append(f"SKILL.md runs {ref}, which install.sh in this clone does not install")
+    outside = [r for r in outside if r not in named]
     for ref in mine:
         where = next((u for u in sk.unread if Path(u).name == ref.rsplit("/", 1)[-1]), "")
         bad.append(f"SKILL.md runs {ref}; lint found no engine" + (f" (it is at {where}, which the lint does not read)" if where else ""))
