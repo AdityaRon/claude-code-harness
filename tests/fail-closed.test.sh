@@ -21,6 +21,7 @@ done
 
 # Copy lib.sh with the fixed PATH rewritten to our jq-free toolbox.
 sed "s#^export PATH=.*#export PATH=\"$TMP/bin\"#" hooks/lib.sh > "$TMP/hooks/lib.sh"
+cp -R hooks/lib "$TMP/hooks/lib"   # the parts lib.sh sources
 
 check_deny_no_jq() {
   local label="$1" hook="$2" payload="$3"

@@ -40,6 +40,15 @@ echo "  ✓ directories"
 # note below. Naming files by hand is the shape of the bug, so the shape is gone.
 # tests/install-merge.test.sh now asserts the invariant that actually matters:
 # every hook settings.json names exists in hooks/, and so gets installed.
+#
+# lib.sh sources hooks/lib/*.sh, so the parts land first: a hook that starts
+# mid-install reads either the old lib.sh, whole, or the new one with its parts.
+mkdir -p ~/.claude/hooks/lib
+for f in "$REPO"/hooks/lib/*.sh; do
+  b=$(basename "$f")
+  place "$f" ~/.claude/hooks/lib/"$b" 755
+  echo "  ✓ hooks/lib/$b"
+done
 for f in "$REPO"/hooks/*.sh; do
   b=$(basename "$f")
   place "$f" ~/.claude/hooks/"$b" 755

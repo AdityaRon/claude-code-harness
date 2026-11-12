@@ -236,7 +236,8 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json
-hooks/                   ← one file per hook, plus shared lib.sh
+hooks/                   ← one file per hook, plus lib.sh, which sources lib/: command, paths,
+                           scratch, io, inline, net and host
 rules/                   ← installed to ~/.claude/rules, loaded in every session
   prose-and-comments.md  collaboration.md  working-agreement.md  environment.md
   python-tests.md        ← path-scoped: loads only when Claude opens Python
