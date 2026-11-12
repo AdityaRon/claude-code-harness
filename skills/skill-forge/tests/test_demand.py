@@ -11,18 +11,32 @@ Mutations that must turn this file red:
   sidechains-counted: demand.py: `if not isinstance(rec, dict) or rec.get("isSidechain"):` => `if not isinstance(rec, dict):`
   exit-code-text-ignored: demand.py: ` or bool(re.match(r"Exit code [1-9]", body or ""))` => ``
   subsumed-kept: demand.py: `if any(k["kind"] == "sequence" and c["_sids"] <= k["_sids"]` => `if False and any(k["kind"] == "sequence" and c["_sids"] <= k["_sids"]`
-  partial-hidden: demand.py: `partial=f"{bad} unreadable transcript lines or files skipped" if bad else None` => `partial=None`
+  partial-hidden: demand.py: `rows=len(top), partial="; ".join(left_out) or None))` => `rows=len(top), partial=None))`
   label-unmasked: demand.py: `c["label"] = m(c["label"])[:80]` => `c["label"] = c["label"][:80]`
-  history-ignored: demand.py: `hist = read_history(hfiles, since, ignore)` => `hist = []`
+  history-ignored: demand.py: `hist = read_history(hfiles, since, ignore, a.include_undated, counts)` => `hist = []`
   questions-dropped: demand.py: `out.append({"kind": "question"` => `(lambda d: None)({"kind": "question"`
   filters-as-steps: demand.py: `if r and r[0] not in FILTERS:` => `if r:`
   arguments-as-verbs: demand.py: `while prog in SUBCOMMANDS and j < len(rest)` => `while j < len(rest)`
-  redirections-as-steps: demand.py: `cmd = REDIRECT.sub(" ", cmd.replace("\\n", " ; "))` => `cmd = cmd.replace("\\n", " ; ")`
+  redirections-as-steps: demand.py: `flat = REDIRECT.sub(" ", flat)` => `flat = flat`
+  heredoc-bodies-read: demand.py: `flat, balanced = separate_lines(drop_heredocs(cmd))` => `flat, balanced = separate_lines(cmd)`
+  shell-heredoc-dropped: demand.py: `            elif keep:` => `            elif False:`
+  quotes-untracked: demand.py: `q = None if ch == q else q` => `q = None`
+  script-name-dropped: demand.py: `if a and (p in SCRIPT_RUNNERS or len(v1[(p, a)]) >= 2):` => `if a and len(v1[(p, a)]) >= 2:`
+  skill-script-unqualified: demand.py: `return f"{m.group(1)}/{m.group(2)}" if m else os.path.basename(path)` => `return os.path.basename(path)`
+  window-by-file-age: demand.py: `if t is not None and t < since:` => `if False:`
+  undated-history-trusted: demand.py: `        if include_undated:` => `        if True:`
+  other-words-split: demand.py: `shared / min(len(a), len(b)) >= 0.5` => `shared / len(a | b) >= 0.5`
+  unstemmed: demand.py: `ws = {stem(x) for x in w}` => `ws = set(w)`
+  access-ranked-in: demand.py: `top = [c for c in ranked if c["tag"] != "access"][:a.top]` => `top = ranked[:a.top]`
+  access-untagged: demand.py: `return rule is None or (` => `return False and (`
+  covered-unmarked: demand.py: `if len(p) == 2 and p[0] in SCRIPT_RUNNERS and p[1] in engines), "")` => `if False), "")`
   numbers-as-programs: demand.py: `r"[A-Za-z_.][A-Za-z0-9_.+-]{0,39}"` => `r"[A-Za-z0-9_.+-]{1,40}"`
   briefs-as-questions: demand.py: `if len(w) >= 2 and len(t) <= MAX_PROMPT:` => `if len(w) >= 2:`
   question-steps-uncapped: demand.py: `min(MAX_QUESTION_STEPS, round(` => `min(10**6, round(`
   shell-keywords-as-steps: demand.py: `"do", "then", "else", "elif", "if", "while", "until", "!", "{"}` => `}`
   unanswered-questions-kept: demand.py: `if len(c["sids"]) >= min_sessions and steps >= 1:` => `if len(c["sids"]) >= min_sessions:`
+  access-two-words-ignored: demand.py: `(parts[1] in rule or " ".join(parts[1:3]) in rule)` => `parts[1] in rule`
+  discover-skill-dirs-ignored: demand.py: `skill_dirs = cfg.get("skill_dirs") or whole.get("discover", {})` => `skill_dirs = cfg.get("skill_dirs") or {}`
 """
 from __future__ import annotations
 
@@ -180,11 +194,12 @@ class RankTest(unittest.TestCase):
         _, out, _ = self.t.run()
         lines = out.splitlines()
         self.assertEqual(lines[0], "# target:  18 transcript sessions in 5 projects; 0 shell-history sessions")
-        self.assertRegex(lines[1], r"^# window:  \S+Z \.\. \S+Z \(UTC, bounds sessions modified in \[start, end\]\)$")
+        self.assertRegex(lines[1], r"^# window:  \S+Z \.\. \S+Z \(UTC, bounds each command and prompt by its own timestamp in \[start, end\]\)$")
         self.assertEqual(lines[3], "# rows:    7")
         self.assertEqual(lines[4], "# partial: no")
-        self.assertTrue(lines[6].startswith(" 1. score 3.33   sequence  " + PLANTED), lines[6])
-        self.assertRegex(lines[7], r"4 sessions · 3 steps · 16 attempts, 4 failed · e\.g\. \d{4}-\d\d-\d\d \(code-ops, 00000001\)")
+        self.assertEqual(lines[5], "# outside the window: 0 transcript events from resumed sessions, left out")
+        self.assertTrue(lines[7].startswith(" 1. score 3.33   sequence  " + PLANTED), lines[7])
+        self.assertRegex(lines[8], r"4 sessions · 3 steps · 16 attempts, 4 failed · e\.g\. \d{4}-\d\d-\d\d \(code-ops, 00000001\)")
 
 
 class InputTest(unittest.TestCase):
@@ -276,6 +291,131 @@ class InputTest(unittest.TestCase):
         self.assertEqual(demand.step_of([["grep", "x"], ["psql", "-c", "select"]]), ("psql", "", ""))
         self.assertEqual(demand.step_of([["pg_dump", "--schema-only", "app"]]), ("pg_dump", "", ""))
         self.assertEqual(demand.step_of([["python3.11", "bin/query.py", "--x"]]), ("python", "query.py", ""))
+
+
+HEREDOC_WORDS = {"EOF", "PY", "The", "import", "def", "from", "or", "show", "fix:", "print"}
+
+
+class NoiseTest(unittest.TestCase):
+    def setUp(self):
+        self.t = Transcripts()
+
+    def tearDown(self):
+        self.t.close()
+
+    def test_heredoc_bodies_rank_no_heredoc_word(self):
+        for i in range(3):
+            self.t.session([
+                B("cat > notes.md <<'EOF'\nThe plan, or show it\nimport this\nEOF"),
+                B("python3 - <<'PY'\nimport json\nfrom os import path\ndef f():\n    print(1)\nPY"),
+                B('git commit -q -F - <<EOF\nfix: or show the thing\nEOF'),
+                B("kubectl get pods"),
+            ], days_ago=i + 1)
+        labels = [c["label"] for c in self.t.ranked()]
+        self.assertTrue(labels, "the fixture should still rank its real steps")
+        steps = {w for lb in labels for step in lb.split(" → ") for w in step.split()[:1]}
+        self.assertEqual(steps & HEREDOC_WORDS, set(), labels)
+
+    def test_a_heredoc_that_feeds_a_shell_is_commands(self):
+        steps = [demand.step_of(p) for p in demand.pipelines("bash <<'EOF'\nkubectl get pods\nEOF\ncat <<EOF\nhelm list\nEOF")]
+        self.assertEqual([s for s in steps if s], [("bash", "", ""), ("kubectl", "get", "pods")])
+
+    def test_a_newline_inside_quotes_is_part_of_the_argument(self):
+        steps = [demand.step_of(p) for p in demand.pipelines('python3 -c "import x\nprint(1)"\nkubectl get pods')]
+        self.assertEqual([s for s in steps if s], [("python", "", ""), ("kubectl", "get", "pods")])
+        steps = [demand.step_of(p) for p in demand.pipelines("# don't run this twice\nkubectl get pods")]
+        self.assertEqual([s for s in steps if s], [("kubectl", "get", "pods")])
+
+    def test_a_script_an_interpreter_runs_keeps_its_name(self):
+        cases = {"python3 -W ignore ~/code/ops/skills/hand-metrics/tool.py query x": ("python", "hand-metrics/tool.py", ""),
+                 "uv run discover.py --probe-local": ("python", "discover.py", ""),
+                 "python -m pytest -q": ("python", "-m pytest", ""),
+                 "~/code/ops/skills/flags/bin/flag.sh show x": ("bash", "flags/flag.sh", "")}
+        for cmd, want in cases.items():
+            self.assertEqual(demand.step_of(demand.pipelines(cmd)[0]), want, cmd)
+        for i in range(2):   # a script run in one session only still keeps its name: it is not an id
+            self.t.session([B(f"python3 step{i}.py"), B("kubectl get pods"), B("python3 report.py")], days_ago=i + 1)
+        labels = [c["label"] for c in self.t.ranked()]
+        self.assertIn("kubectl get → python report.py", labels)
+
+    def test_a_30_day_window_lists_no_older_session(self):
+        self.t.standard()
+        for i in range(3):   # files written today, events from 45 days ago: a resumed session's old half
+            self.t.session([B("helm list"), B("helm status", True), B("helm history")], days_ago=45 + i)
+        ranked = self.t.ranked("--since", "30")
+        self.assertFalse(any("helm" in c["label"] for c in ranked))
+        since = (NOW - timedelta(days=30)).strftime("%Y-%m-%d")
+        for c in ranked:
+            for ex in c["examples"]:
+                self.assertGreaterEqual(ex[:10], since, ex)
+        _, out, _ = self.t.run("--since", "30")
+        self.assertIn("# outside the window: 18 transcript events from resumed sessions, left out", out)
+
+    def test_undated_history_is_counted_not_trusted(self):
+        hist = self.t.tmp / "bash_history"
+        hist.write_text("psql -c 'select 1'\npg_dump --schema-only app\n" * 3)
+        self.t.dir.mkdir(parents=True)
+        rc, out, _ = self.t.run("--history", str(hist))
+        self.assertIn("# partial: YES: 6 shell-history lines with no timestamp left out (--include-undated counts them)", out)
+        self.assertNotIn("psql", out.split("# score")[1])
+        _, kept, _ = self.t.run("--history", str(hist), "--include-undated", "--min-sessions", "1")
+        self.assertIn("psql → pg_dump", kept)
+
+    def test_a_question_asked_in_other_words_is_one_candidate(self):
+        for i, q in enumerate(["why is the nightly export so slow",
+                               "the export job ran slowly again last night",
+                               "nightly job export is crawling, what happened"]):
+            self.t.session([P(q), B("aws logs tail /export"), B("aws batch describe-jobs")], days_ago=i + 1)
+        qs = [c for c in self.t.ranked() if c["kind"] == "question"]
+        self.assertEqual([q["sessions"] for q in qs], [3], qs)
+
+    def test_access_friction_is_ranked_apart(self):
+        self.t.standard()
+        for i in range(4):
+            self.t.session([B("python3 deploy_check.py"), B("tsh status", True), B("python3 deploy_check.py"), B("tsh status")], days_ago=i + 1)
+        ranked = self.t.ranked()
+        access = [c for c in ranked if c["tag"] == "access"]
+        self.assertTrue(any("tsh status" in c["label"] for c in access), access)
+        _, out, _ = self.t.run()
+        main, _, apart = out.partition("# access friction")
+        self.assertNotIn("tsh", main)
+        self.assertIn("tsh status", apart)
+
+    def test_only_a_login_subcommand_is_access(self):
+        for cmd, access in (("tsh login --proxy=p", True), ("tsh status", True), ("tsh ssh host", False),
+                            ("tsh db connect orders", False), ("tsh kube login prod", True), ("tsh scp a b:", False),
+                            ("aws-vault exec prof -- aws s3 ls", False), ("aws-vault login prof", True),
+                            ("kinit me", True), ("gcloud auth login", True), ("gcloud compute instances list", False)):
+            shape = " ".join(x for x in demand.step_of(demand.pipelines(cmd)[0]) if x)
+            self.assertEqual(demand.is_access(shape), access, (cmd, shape))
+
+    def test_skill_dirs_set_under_discover_reach_covered_by(self):
+        skills = self.t.tmp / "repo-skills" / "hand-metrics"
+        skills.mkdir(parents=True)
+        (skills / "SKILL.md").write_text("---\nname: hand-metrics\n---\n")
+        (skills / "tool.py").write_text("")
+        (skills / "access.py").write_text("")
+        for i in range(2):
+            self.t.session([B("python3 ~/code/ops/skills/hand-metrics/tool.py query x"), B("kubectl get pods")], days_ago=i + 1)
+        rc, out, _ = self.t.run("--json", "--top", "50", config=f'[discover]\nskill_dirs = ["{self.t.tmp / "repo-skills"}"]\n')
+        self.assertEqual(rc, 0)
+        ranked = json.loads(out)
+        hit = [c for c in ranked if "hand-metrics/tool.py" in c["label"]]
+        self.assertTrue(hit, out[:400])
+        self.assertEqual({c["covered_by"] for c in hit}, {"hand-metrics"})
+        self.assertNotIn("hand-metrics/access.py", demand.installed_engines([str(self.t.tmp / "repo-skills")]))
+
+    def test_a_candidate_running_a_skills_engine_says_covered_by(self):
+        skills = self.t.tmp / "skills" / "hand-metrics"
+        skills.mkdir(parents=True)
+        (skills / "SKILL.md").write_text("---\nname: hand-metrics\n---\n")
+        (skills / "tool.py").write_text("")
+        for i in range(2):
+            self.t.session([B("python3 ~/code/ops/skills/hand-metrics/tool.py query x"), B("kubectl get pods")], days_ago=i + 1)
+        ranked = self.t.ranked("--skills", str(self.t.tmp / "skills"))
+        hit = [c for c in ranked if "hand-metrics/tool.py" in c["label"]]
+        self.assertTrue(hit)
+        self.assertEqual({c["covered_by"] for c in hit}, {"hand-metrics"})
 
 
 if __name__ == "__main__":

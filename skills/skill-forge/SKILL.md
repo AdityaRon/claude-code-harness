@@ -22,14 +22,19 @@ included, is in `~/.local/state/skill-forge/`.
 
 1. **Discover, read-only.** `PY F/discover.py` writes `inventory.md`: access
    (contexts, profiles, SSO and secret CLIs, each with its re-login command and
-   what an expired session looks like), observability, data stores, control
-   planes and repos, each line with the command that found it. Names only.
+   what an expired session looks like), services (MCP and API names),
+   observability, data stores, control planes, the skills already here with an
+   archetype guess, and repos by origin, each line with the command that found
+   it. Names only. A bastion's databases and apps are listed only when its
+   session is already live.
    `--probe-local` reads local containers. `--probe-context CTX` lists one
    cluster's cronjobs and services; ask the user before `--yes-prod`, and never
    port-forward or connect to production without that yes.
 2. **Find demand.** `PY F/demand.py --top 10` ranks repeated command
    sequences, repeated questions and repeated failures from transcripts and
    shell history. Evidence is counts and sessions by date, never content.
+   Re-login loops rank apart as access friction (fix the session, not a
+   skill), and `covered by <skill>` means an installed skill already runs there.
 3. **Choose.** Show the ranked list; the user picks one. One skill per run.
 4. **Draft.** `PY F/forge.py list`, then
    `PY F/forge.py draft ARCHETYPE NAME --question "..."` renders into
@@ -42,7 +47,13 @@ included, is in `~/.local/state/skill-forge/`.
    a real instance of the question, and inject each required guard's fault on
    the real system: a misspelled metric for ABSENT, a tiny cap for PARTIAL, an
    expired login for AUTH, a wrong context for the target check. A skill that
-   only passed against fakes is not done.
+   only passed against fakes is not done. When a skill already answers the
+   question, `PY F/forge.py compare DIR EXISTING --run 'ARGS'` lints both side
+   by side, lists the guards and subcommands each has, and runs both engines on
+   the same question: the same numbers are the real pass. A required guard the
+   existing skill lacks is that skill's finding; one only it has is the
+   template's. `compare --archetype ARCH EXISTING` back-tests a template
+   against an existing skill without keeping the draft.
 6. **Install.** `PY F/forge.py install DIR` prints the copy; `--apply` copies
    to `~/.claude/skills/NAME` (or `--dest`, a work repo the user names) and
    records the question in `inventory.md`. It refuses the public harness clone
@@ -64,11 +75,22 @@ included, is in `~/.local/state/skill-forge/`.
 | runbook | an alert payload to deep links and the next skill | absent, wrong target, window |
 | local-repro | Docker on production's exact image tag, synthetic seed data | wrong target, absent, incomplete capture |
 
+metrics-query, logs-fetch and api-readonly reach their API through `access.py`:
+`<ENV>_ACCESS` is `direct` (the URL variable), `port-forward SVC[:PORT] in NS`,
+or `pod SVC[:PORT] in NS` (it creates a pod, so it needs `--apply`; with
+`--apply`, a refused port-forward falls back to the pod), with
+`<ENV>_CONTEXT` named. metrics-query and logs-fetch probe the path prefix;
+api-readonly does when `<ENV>_API_PROBE` names a path. The header names the route.
+
 ## The conventions skill_lint checks
 
-`PY F/skill_lint.py SKILL_DIR` lints any skill, drafted or hand-written.
-Fix a finding, or waive it in the skill's `lint-waivers.toml` with a reason. A
-waiver without a reason fails, and so does one for a check that now passes.
+`PY F/skill_lint.py SKILL_DIR` lints any skill, drafted or hand-written, with
+its scripts in `bin/` or at the skill root (`*.py`, `*.sh`) and its tests in
+`tests/` or at the root. Fix a finding, or waive it in the skill's
+`lint-waivers.toml` with a reason. A waiver without a reason fails, and so does
+one for a check that now passes. WARN means every engine check was N/A: the
+lint saw nothing to judge, and its note says what SKILL.md runs that it did not
+read. That is not a pass.
 
 | # | convention | the check |
 |---|---|---|
@@ -77,11 +99,11 @@ waiver without a reason fails, and so does one for a check that now passes.
 | C3 | no stored credentials; borrowed identity; secrets by env or stdin | no secret-named flag, argv secret or secret shape |
 | C4 | a write and its audit row in one transaction | a test says so |
 | C5 | guards against confident wrong answers | each required guard has a `test_guard_<id>` |
-| C6 | a provenance header opens every output | the engine calls `header()`; a golden test |
-| C7 | every print goes through the masker | no `print` in an engine; a planted-pattern test |
+| C6 | a provenance header opens every output | the engine calls `header()` (shell: prints `# target:`); a golden test |
+| C7 | every print goes through the masker | no `print` in an engine (shell: pipes through `mask.py --filter`); a planted-pattern test |
 | C8 | thin SKILL.md, thick engine, literal trigger phrasings | `Use when` in the description; line budget; `--help` |
 | C9 | a test file per script; mutations listed; no real clients in tests | the files, the lists, a quoting test where shell or SQL is built |
-| C10 | a self-contained folder | anything outside goes through a declared env var |
+| C10 | a self-contained folder | anything outside goes through a declared env var; every script of its own SKILL.md runs is one the lint read |
 
 ## Reading the output
 
