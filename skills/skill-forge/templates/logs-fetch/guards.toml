@@ -4,4 +4,4 @@ not_for = "metrics (use the metrics-query skill), or anything that writes"
 guards = ["absent", "partial", "expired_auth", "window", "wrong_target"]
 write_verbs = []
 sql = false
-vendor = []
+vendor = ["access.py"]

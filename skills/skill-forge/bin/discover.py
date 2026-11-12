@@ -11,15 +11,25 @@ What it reads, names only:
                  that selects each user's exec plugin), AWS profile names (the CLI, or
                  the [section] headers and key names of ~/.aws/config; it never opens
                  the credentials file), gcloud configurations, SSO, bastion and secret
-                 manager CLIs on PATH; with each, the re-login command and what an
-                 expired session looks like
+                 manager CLIs on PATH; with each, the re-login command (Teleport's proxy
+                 from its profile names in ~/.tsh) and what an expired session looks like
+  services       MCP server names in ~/.claude.json, and env var names ending _API_KEY
+                 or _URL; never a value, command or URL
   observability  metrics, log, trace and dashboard backends in `docker ps` and in env
-                 var names, with the URL pattern for deep links
-  data           database containers and env vars; with --probe-local, Postgres roles
-                 and whether the server is a replica
-  control        feature-flag services, schedulers, CI and deploy CLIs
-  repos          git clones under the repo roots, and the charts, manifests, queries,
-                 dashboards and CI they hold
+                 var names (matched by whole words, so PROMPT is not PROM), with the URL
+                 pattern for deep links
+  data           database containers and env vars; the connection names in warehouse
+                 and database CLI configs (snowsql, Snowflake CLI, dbt, Databricks,
+                 pg_service); a live Teleport session's databases (`tsh db ls`, run only
+                 after `tsh status` succeeds, stdin closed, so no session means no login);
+                 with --probe-local, Postgres roles and whether the server is a replica
+  control        feature-flag services, schedulers, CI and deploy CLIs; a live
+                 Teleport session's apps (`tsh apps ls`)
+  skills         ~/.claude/skills/* and any skills/*/SKILL.md in a repo: the name,
+                 the description's first clause, and a guess at its archetype
+  repos          git clones under the repo roots, one line per origin with its
+                 worktree count, and the charts, manifests, queries, dashboards, CI
+                 and skills they hold
 
 It never reads a secret value: no `docker inspect` (it prints env), no `kubectl
 config view --raw`, no value of an env var whose name looks secret, and a URL
@@ -49,6 +59,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sqlguard  # noqa: E402
 from mask import EXIT_OK, EXIT_REFUSED, config_path, emit, header, iso, masker, read_toml, state_dir  # noqa: E402
+from skill_lint import VENDORED, frontmatter  # noqa: E402
 
 KUBE_AUTH = {
     "aws": ("aws sso login --profile <profile>", '"ExpiredToken" or "The SSO session associated with this profile has expired"'),
@@ -111,10 +122,33 @@ DEEP_LINK = {
     "tracing": "{base}/trace/<trace id>",
     "alertmanager": "{base}/#/alerts?filter=<matchers>",
 }
-ENV_KINDS = [
-    ("observability", re.compile(r"PROM|GRAFANA|LOKI|TEMPO|JAEGER|OTEL|DATADOG|^DD_|NEW_?RELIC|SENTRY|ELASTIC|OPENSEARCH|SPLUNK|HONEYCOMB|SIGNOZ|VICTORIA|THANOS|MIMIR|ALERTMANAGER")),
-    ("data", re.compile(r"DATABASE|^PG[A-Z]+$|POSTGRES|MYSQL|REDIS|MONGO|CLICKHOUSE|SNOWFLAKE|BIGQUERY|KAFKA")),
-    ("control", re.compile(r"LAUNCHDARKLY|^LD_|UNLEASH|FLAGSMITH|SPLIT_?IO|GROWTHBOOK|FLIPT|STATSIG|CONFIGCAT|ARGOCD|AIRFLOW|TEMPORAL")),
+# Whole words of a variable's name, split on _: PROM_URL and X_PROM_URL are Prometheus, PROMPT is not.
+ENV_WORDS = [
+    ("observability", "PROM PROMETHEUS GRAFANA LOKI TEMPO JAEGER OTEL OTLP DATADOG DD NEW_RELIC NEWRELIC SENTRY ELASTIC "
+                      "ELASTICSEARCH OPENSEARCH KIBANA SPLUNK HONEYCOMB SIGNOZ VICTORIA VICTORIAMETRICS THANOS MIMIR ALERTMANAGER"),
+    ("data", "DATABASE DB POSTGRES POSTGRESQL PG MYSQL REDIS MONGO MONGODB CLICKHOUSE SNOWFLAKE BIGQUERY KAFKA TRINO "
+             "PRESTO DATABRICKS REDSHIFT WAREHOUSE"),
+    ("control", "LAUNCHDARKLY UNLEASH FLAGSMITH SPLITIO GROWTHBOOK FLIPT STATSIG CONFIGCAT ARGOCD AIRFLOW TEMPORAL"),
+]
+ENV_NAMES = [("data", re.compile(r"^PG[A-Z]+$")), ("control", re.compile(r"^LD_(?:SDK|API|CLIENT|PROJECT|ACCESS|BASE|ENV)"))]
+API_NAME = re.compile(r"_(?:API_KEY|URL)$")
+WAREHOUSE_CONFIGS = [
+    ("Snowflake (snowsql)", "~/.snowsql/config", r"^\[connections\.([^\]]+)\]"),
+    ("Snowflake CLI", "~/.snowflake/connections.toml", r"^\[([^\].]+)\]"),
+    ("Snowflake CLI", "~/.snowflake/config.toml", r"^\[connections\.([^\]]+)\]"),
+    ("dbt", "~/.dbt/profiles.yml", r"^(?!config:)([A-Za-z0-9_-]+):\s*$"),
+    ("Databricks", "~/.databrickscfg", r"^\[([^\]]+)\]"),
+    ("Postgres services", "~/.pg_service.conf", r"^\[([^\]]+)\]"),
+]
+ARCH_HINTS = [
+    ("sql-readonly", r"(?i)\bpsql\b|\bselect\b|postgres|mysql|snowflake|bigquery|warehouse|\bsql\b"),
+    ("metrics-query", r"(?i)prometheus|promql|\bmetrics?\b|grafana|_PROM_"),
+    ("logs-fetch", r"(?i)\bloki\b|\blogs?\b|elasticsearch|opensearch|kibana|splunk"),
+    ("cluster-probe", r"(?i)kubectl|\bpods?\b|cronjob|namespace"),
+    ("job-run", r"(?i)\bjobs?\b|\bre-?run\b|airflow|temporal|backfill"),
+    ("api-readonly", r"(?i)\bapi\b|\bcurl\b|feature.?flags?|launchdarkly|endpoint"),
+    ("runbook", r"(?i)\balerts?\b|runbook|on-?call|incident|pager"),
+    ("local-repro", r"(?i)docker run|\brepro\b|compose"),
 ]
 SECRET_NAME = re.compile(r"PASS|SECRET|TOKEN|KEY|CRED|AUTH|COOKIE|SESSION|PRIVATE|DSN|CERT", re.I)
 MARKERS = [
@@ -128,7 +162,9 @@ MARKERS = [
     ("GitHub Actions", ["workflows"]),
     ("GitLab CI", [".gitlab-ci.yml"]),
     ("Jenkinsfile", ["Jenkinsfile"]),
+    ("skills", ["SKILL.md"]),
 ]
+KINDS = ("access", "services", "observability", "data", "control", "skills", "repos")
 SKIP_DIRS = {".git", "node_modules", "vendor", ".venv", "venv", "__pycache__", "dist", "build", "target", ".terraform"}
 ROLES_SQL = ("SELECT r.rolname, r.rolcanlogin, r.rolsuper,"
              " coalesce((SELECT bool_or(c = 'default_transaction_read_only=on') FROM pg_db_role_setting s"
@@ -211,6 +247,7 @@ def kube(cfg: dict) -> list[Finding]:
         plugin = auth_of.get(user_of.get(ctx, ""), "")
         relogin, expired = KUBE_AUTH.get(plugin, (f"re-run {plugin}" if plugin else "ask for a fresh kubeconfig",
                                                   '"You must be logged in to the server (Unauthorized)"'))
+        relogin = with_proxy(relogin)
         auth = f"exec {plugin}" if plugin else "static token or certificate in the kubeconfig (not read)"
         flag = " · PRODUCTION: ask before connecting" if any(fnmatch.fnmatch(ctx, g) for g in prod) else ""
         out.append(Finding("access", f"kube context `{ctx}` · auth: {auth} · re-login: `{relogin}` · expired looks like: {expired}{flag}",
@@ -261,12 +298,51 @@ def gcloud() -> list[Finding]:
                     ' · expired looks like: "Reauthentication failed" or "invalid_grant"', how) for n in out.split()]
 
 
+def tsh_proxies() -> list[str]:
+    """Teleport keeps one profile per proxy, named for it: ~/.tsh/<proxy>.yaml."""
+    return sorted(p.stem for p in Path("~/.tsh").expanduser().glob("*.yaml"))
+
+
+def with_proxy(relogin: str) -> str:
+    proxies = tsh_proxies()
+    named = proxies[0] if len(proxies) == 1 else f"<one of {', '.join(proxies)}>"
+    return relogin.replace("<proxy>", named) if proxies else relogin
+
+
 def tools() -> list[Finding]:
     out = []
     for tool, (kind, what, relogin, expired) in TOOLS.items():
         if shutil.which(tool):
-            out.append(Finding(kind, f"`{tool}` on PATH: {what} · re-login: `{relogin}` · expired looks like: {expired}", f"command -v {tool}"))
+            how = f"command -v {tool}" + (" (proxy: the profile names in ~/.tsh)" if tool == "tsh" and tsh_proxies() else "")
+            out.append(Finding(kind, f"`{tool}` on PATH: {what} · re-login: `{with_proxy(relogin)}` · expired looks like: {expired}", how))
     return out
+
+
+def bastion() -> list[Finding]:
+    """A live Teleport session's databases and apps, names only. `tsh status` first, stdin closed:
+    with no session this lists nothing and starts no login. tsh documents --no-relogin only for
+    ssh, proxy ssh and scp, so a session that lapses in the seconds between the calls could
+    still prompt one."""
+    if not shutil.which("tsh"):
+        return []
+    live, _, _ = run(["tsh", "status"], stdin="", timeout=10)
+    if live != 0:
+        return [Finding("access", "tsh: no live session, so its databases and apps were not listed (no login was started)", "tsh status")]
+    found = []
+    for what, kind in (("db", "data"), ("apps", "control")):
+        argv = ["tsh", what, "ls", "--format=json"]
+        rc, out, err = run(argv, stdin="", timeout=20)
+        if rc != 0:
+            found.append(Finding(kind, f"tsh {what} ls failed: {first_line(err)}", " ".join(argv)))
+            continue
+        try:
+            items = json.loads(out or "[]")
+        except ValueError:
+            items = []
+        names = sorted({(i.get("metadata") or {}).get("name") or i.get("name") for i in items if isinstance(i, dict)} - {None, ""})
+        label = "databases" if what == "db" else "apps"
+        found.append(Finding(kind, f"Teleport {label}: {', '.join(f'`{n}`' for n in names) or 'none'}", " ".join(argv) + " (names only)"))
+    return found
 
 
 # ---- containers, env, repos ----------------------------------------------------
@@ -344,11 +420,21 @@ def pg_roles(container: str) -> list[Finding]:
                     f"{', '.join(ro_roles) or 'none, so create one before a sql-readonly skill'}", how)]
 
 
+def env_kind(name: str) -> str | None:
+    for kind, rx in ENV_NAMES:
+        if rx.search(name):
+            return kind
+    words = f"_{name.upper()}_"
+    return next((kind for kind, ws in ENV_WORDS if any(f"_{w}_" in words for w in ws.split())), None)
+
+
 def env_vars() -> list[Finding]:
-    found = []
+    found, apis = [], []
     for name in sorted(os.environ):
-        kind = next((k for k, rx in ENV_KINDS if rx.search(name)), None)
+        kind = env_kind(name)
         if not kind:
+            if API_NAME.search(name):
+                apis.append(name)
             continue
         if SECRET_NAME.search(name):
             shown = "set (a secret by its name; value not read)"
@@ -356,6 +442,64 @@ def env_vars() -> list[Finding]:
             value = os.environ[name]
             shown = sanitize_url(value) if re.match(r"[a-z][a-z0-9+.-]*://", value) else value[:80]
         found.append(Finding(kind, f"env `{name}` = {shown}", "the environment's variable names"))
+    if apis:
+        found.append(Finding("services", f"APIs named in env: {', '.join(f'`{n}`' for n in apis)} (names only; values not read)",
+                             "env names ending _API_KEY or _URL"))
+    return found
+
+
+def mcp_servers() -> list[Finding]:
+    """The names of the MCP servers ~/.claude.json configures; never their commands, URLs or env."""
+    path = Path("~/.claude.json").expanduser()
+    try:
+        cfg = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    scopes = [("user scope", cfg.get("mcpServers"))]
+    scopes += [(f"project `{tilde(p)}`", v.get("mcpServers")) for p, v in sorted((cfg.get("projects") or {}).items()) if isinstance(v, dict)]
+    found = []
+    for scope, servers in scopes:
+        if isinstance(servers, dict) and servers:
+            found.append(Finding("services", f"MCP servers ({scope}): {', '.join(f'`{n}`' for n in sorted(servers))}",
+                                 "the mcpServers keys of ~/.claude.json (commands, URLs and env not read)"))
+    return found
+
+
+def warehouse_configs() -> list[Finding]:
+    found = []
+    for label, name, rx in WAREHOUSE_CONFIGS:
+        path = Path(name).expanduser()
+        if not path.is_file():
+            continue
+        names = [m.group(1).strip() for ln in path.read_text(errors="replace").splitlines() if (m := re.match(rx, ln))]
+        found.append(Finding("data", f"{label} connections: {', '.join(f'`{n}`' for n in names) or 'none named'} in `{tilde(path)}`",
+                             f"the section names of {tilde(path)}; values not read"))
+    return found
+
+
+def guess_archetype(root: Path, desc: str) -> str:
+    declared = read_toml(root / "forge.toml").get("archetype")
+    if declared:
+        return f"{declared} (forge.toml)"
+    text = desc
+    for p in [*root.glob("*.py"), *root.glob("*.sh"), *root.glob("bin/*.py"), *root.glob("bin/*.sh")]:
+        if p.name not in VENDORED:
+            text += "\n" + p.read_text(errors="replace")[:20000]
+    hits, arch = max((len(re.findall(rx, text)), a) for a, rx in ARCH_HINTS)
+    return f"{arch}?" if hits else "none"
+
+
+def skills(roots: list[str], repo_dirs: list[Path]) -> list[Finding]:
+    """Skills already here: installed ones and those kept in a repo, each a question someone already answers."""
+    homes = [Path(r).expanduser() for r in roots] + [d / sub for d in repo_dirs for sub in ("skills", ".claude/skills")]
+    found = []
+    for home in homes:
+        for md in sorted(home.glob("*/SKILL.md")):
+            front = frontmatter(md.read_text(errors="replace"))
+            desc = front.get("description", "")
+            clause = re.split(r"(?<=[a-z0-9)])[.;] ", desc, maxsplit=1)[0].rstrip(".;")[:120] or "(no description)"
+            found.append(Finding("skills", f"skill `{front.get('name') or md.parent.name}` in `{tilde(home)}`: {clause} · "
+                                 f"archetype guess: {guess_archetype(md.parent, desc)}", f"the frontmatter of {tilde(md)}"))
     return found
 
 
@@ -377,24 +521,41 @@ def markers(repo: Path, budget: int = 3000) -> dict:
     return counts
 
 
-def repos(roots: list[str]) -> list[Finding]:
-    found = []
+def clones(roots: list[str]) -> list[Path]:
+    out = []
     for r in roots:
         root = Path(r).expanduser()
         if not root.is_dir():
             continue
         cands = [p for p in sorted(root.iterdir()) if p.is_dir()] + [q for p in sorted(root.iterdir()) if p.is_dir() and not (p / ".git").exists()
                                                                    for q in sorted(p.iterdir()) if q.is_dir()]
-        for repo in [c for c in cands if (c / ".git").exists()][:200]:
-            m = markers(repo)
-            if not m:
-                continue
-            _, origin, _ = run(["git", "-C", str(repo), "remote", "get-url", "origin"])
-            o = origin.strip()
-            o = sanitize_url(o) if "://" in o else o
-            held = ", ".join(f"{k} ({v})" for k, v in sorted(m.items()))
-            found.append(Finding("repos", f"`{tilde(repo)}`{' (origin ' + o + ')' if o else ''} holds {held}",
-                                 f"find {tilde(repo)} -maxdepth 4 for Chart.yaml, *.tf, *.sql, dashboards, rules, CI"))
+        out += [c for c in cands if (c / ".git").exists()][:200]
+    return out
+
+
+def by_origin(found_clones: list[Path]) -> list[tuple[str, Path, list[Path]]]:
+    """(origin, the checkout to read, every checkout): a clone and its worktrees hold the same files."""
+    groups: dict = {}
+    for repo in found_clones:
+        _, origin, _ = run(["git", "-C", str(repo), "remote", "get-url", "origin"])
+        o = origin.strip()
+        o = sanitize_url(o) if "://" in o else o
+        groups.setdefault(o or str(repo), (o, []))[1].append(repo)
+    return [(o, next((r for r in members if (r / ".git").is_dir()), members[0]), members) for o, members in groups.values()]
+
+
+def repos(origins: list[tuple[str, Path, list[Path]]]) -> list[Finding]:
+    found = []
+    for o, main, members in origins:
+        m = markers(main)
+        if not m:
+            continue
+        worktrees = sum((r / ".git").is_file() for r in members)
+        more = f" · {len(members)} checkouts of this origin, {worktrees} of them worktrees" if len(members) > 1 else ""
+        held = ", ".join(f"{k} ({v})" for k, v in sorted(m.items()))
+        found.append(Finding("repos", f"`{tilde(main)}`{' (origin ' + o + ')' if o else ''} holds {held}{more}",
+                             f"find {tilde(main)} -maxdepth 4 for Chart.yaml, *.tf, *.sql, dashboards, rules, CI, SKILL.md; "
+                             "git remote get-url origin to group checkouts"))
     return found
 
 
@@ -442,7 +603,7 @@ def write_inventory(findings: list[Finding], path: Path) -> None:
     now = iso(datetime.now(timezone.utc))
     lines = ["# skill-forge inventory", "",
              f"Written by discover.py at {now}. Findings are rewritten each run; the Skills section is kept.", "", "## Findings", ""]
-    for kind in ("access", "observability", "data", "control", "repos"):
+    for kind in KINDS:
         lines += [f.line() for f in findings if f.kind == kind]
     text = "\n".join(lines) + "\n\n" + (kept or "## Skills\n\n")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -470,7 +631,10 @@ def main(argv=None) -> int:
         return self_test()
     cfg = read_toml(config_path()).get("discover", {})
     roots = a.repo_root or cfg.get("repo_roots", ["~/code", "~/src", "~/work"])
-    findings = kube(cfg) + aws_profiles() + gcloud() + tools() + containers(a.probe_local) + env_vars() + repos(roots)
+    origins = by_origin(clones(roots))
+    findings = (kube(cfg) + aws_profiles() + gcloud() + tools() + bastion() + mcp_servers() + containers(a.probe_local)
+                + env_vars() + warehouse_configs() + skills(cfg.get("skill_dirs", ["~/.claude/skills"]), [m for _, m, _ in origins])
+                + repos(origins))
     if a.probe_context:
         try:
             findings += probe_context(a.probe_context, cfg, a.yes_prod)
@@ -482,7 +646,7 @@ def main(argv=None) -> int:
     probes = "docker exec and buildinfo on local containers" if a.probe_local else "none (passive)"
     emit(header(target=f"this machine; probes: {probes}" + (f"; kube context {a.probe_context}" if a.probe_context else ""),
                 window=f"n/a: the machine as of {iso(datetime.now(timezone.utc))}", rows=len(findings)))
-    for kind in ("access", "observability", "data", "control", "repos"):
+    for kind in KINDS:
         emit(f"{kind:<14} {sum(f.kind == kind for f in findings)}")
     emit(f"wrote {inv}")
     return EXIT_OK

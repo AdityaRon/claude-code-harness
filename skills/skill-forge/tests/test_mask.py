@@ -1,14 +1,15 @@
-"""Tests for mask.py, the output path. skill-forge copies this file into every
+r"""Tests for mask.py, the output path. skill-forge copies this file into every
 skill it drafts, unchanged.
 
 Mutations that must turn this file red:
-  no-userinfo: mask.py: `("url userinfo", r"(?<=://)[^/\\s@]+(?=@)"),` => ``
+  no-userinfo: mask.py: `("url userinfo", r"(?<=://)[^/\s@]+(?=@)"),` => ``
   no-email: mask.py: `[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+` => `[A-Za-z0-9._%+-]+@NEVER[A-Za-z0-9-]+`
   versions-as-email: mask.py: `*\.[A-Za-z]{2,}(?![\w.:-])` => `*\.[A-Za-z0-9]{2,}(?![\w.:-])`
   config-ignored: mask.py: `for src in (config_path(), skill / "forge.toml"):` => `for src in (skill / "forge.toml",):`
   skill-manifest-ignored: mask.py: `for src in (config_path(), skill / "forge.toml"):` => `for src in (config_path(),):`
   bad-pattern-tolerated: mask.py: `raise SystemExit(f"mask: pattern` => `print(f"mask: pattern`
-  stderr-unmasked: mask.py: `stream.write(masker()(str(text)) + "\\n")` => `stream.write(str(text) + "\\n")`
+  stderr-unmasked: mask.py: `stream.write(masker()(str(text)) + "\n")` => `stream.write(str(text) + "\n")`
+  filter-unmasked: mask.py: `emit(line.rstrip("\n"))` => `sys.stdout.write(line)`
   ids-renumbered: mask.py: `if key not in self.seen:` => `if True:`
   partial-hidden: mask.py: `f"# partial: {'YES: ' + partial if partial else 'no'}",` => `"# partial: no",`
   window-optional: mask.py: `if not str(window).strip():` => `if False:`
@@ -107,6 +108,11 @@ class MaskerTest(unittest.TestCase):
         with Config(patterns=[r"\bcust-[a-z]+"]):
             _, err = printed(mask.emit, "no rows for cust-acme", err=True)
         self.assertEqual(err, "no rows for <masked-1>\n")
+
+    def test_filter_masks_stdin_for_a_shell_engine(self):
+        with Config(patterns=[r"\bcust-[a-z]+"]), mock.patch("sys.stdin", io.StringIO("rows for cust-acme\ncust-acme again\n")):
+            out, _ = printed(mask.main, ["--filter"])
+        self.assertEqual(out, "rows for <masked-1>\n<masked-1> again\n")
 
     def test_a_pattern_that_does_not_compile_stops_the_program(self):
         with Config(patterns=["(unclosed"]):
