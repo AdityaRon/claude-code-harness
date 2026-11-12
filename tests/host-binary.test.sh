@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the deleted-host-binary diagnosis: lib.sh's claude_host,
 # host_binary_check and stale_claude_hosts on a ps snapshot file
-# (CLAUDE_HOST_PS), the session-start call, hooks/tcc-check.sh on Bash results,
+# (CLAUDE_HOST_PS), the session-start call, hooks/tcc-check.sh on Bash output,
 # and doctor.sh --hosts. No real TCC denial is needed: the check tests whether
 # the host's binary path exists, which is the measured cause.
 set -u
@@ -97,29 +97,58 @@ lacks "binary present: nothing" "binary is gone" "$(ss startup)"
 rm -f "$BIN"
 
 echo ""
-echo "=== tcc-check: 'Operation not permitted' under a TCC folder names the cause ==="
-post() {   # post CWD COMMAND STDERR [TOOL]
-  jq -nc --arg d "$1" --arg c "$2" --arg e "$3" --arg t "${4:-Bash}" \
-    '{tool_name:$t, hook_event_name:"PostToolUse", tool_input:{command:$c}, tool_response:{stdout:"", stderr:$e, interrupted:false}, cwd:$d, session_id:"sess-host"}' \
+echo "=== tcc-check: an 'Operation not permitted' error under a TCC folder names the cause ==="
+hook() {   # hook EVENT CWD STDOUT STDERR [TOOL]: one payload; a failure carries both in .error
+  jq -nc --arg ev "$1" --arg d "$2" --arg o "$3" --arg e "$4" --arg t "${5:-Bash}" \
+    '{tool_name:$t, hook_event_name:$ev, tool_input:{command:"x"}, cwd:$d, session_id:"sess-host"}
+     + if $ev == "PostToolUseFailure" then {error:("Exit code 1\n" + $o + $e)}
+       else {tool_response:{stdout:$o, stderr:$e, interrupted:false}} end' \
     | CLAUDE_HOST_START=400 bash hooks/tcc-check.sh 2>&1 >/dev/null; echo "rc=$?"
 }
-ERR="fatal: couldn't read $HOME/Desktop/repo/.git/packed-refs: Operation not permitted"
-OUT=$(post "$HOME/Desktop/repo" "git status" "$ERR")
+post() { hook PostToolUse "$1" "" "$2" "${3:-Bash}"; }   # post CWD STDERR [TOOL]
+failed() { hook PostToolUseFailure "$1" "" "$2"; }      # failed CWD ERROR
+fires() { if [[ "$2" == *rc=2* ]]; then pass "$1"; else fail "$1" "[$2]"; fi; }
+silent() { if [ "$2" = "rc=0" ]; then pass "$1"; else fail "$1" "[$2]"; fi; }
+P="Operation not permitted"
+D="$HOME/Desktop/repo"
+GETCWD="shell-init: error retrieving current directory: getcwd: cannot access parent directories: $P"
+ERR="fatal: couldn't read $D/.git/packed-refs: $P"
+OUT=$(post "$D" "$ERR")
 has "exit 2, so the text reaches the model" "rc=2" "$OUT"
 has "says it is TCC" "macOS privacy control (TCC)" "$OUT"
+has "quotes the line it read" "From: $ERR" "$OUT"
 has "names the host" "pid 100, runs from $BIN" "$OUT"
-OUT=$(post "$TMP/repo" "ls ~/Desktop" "ls: $HOME/Desktop: Operation not permitted")
-has "cwd elsewhere, but the command names ~/Desktop: still named" "rc=2" "$OUT"
-OUT=$(post "$TMP/repo" "ls /opt/x" "ls: /opt/x: Operation not permitted")
-[ "$OUT" = "rc=0" ] && pass "not a TCC folder: silent" || fail "elsewhere" "[$OUT]"
-OUT=$(post "$HOME/Desktop/repo" "echo 'Operation not permitted'" "")
-[ "$OUT" = "rc=0" ] && pass "the words only in the command, not the result: silent" || fail "command text" "[$OUT]"
-OUT=$(post "$HOME/Desktop/repo" "x" "$ERR" Read)
-[ "$OUT" = "rc=0" ] && pass "not a Bash call: silent" || fail "other tool" "[$OUT]"
+fires "a failed call (PostToolUseFailure), read from .error" "$(failed "$D" "$ERR")"
+fires "a call that exited 0, the denial in stdout" "$(hook PostToolUse "$TMP/repo" "ls: $HOME/Documents/x: $P" "")"
+fires "cwd elsewhere, the line names a Desktop path" "$(post "$TMP/repo" "ls: $HOME/Desktop: $P")"
+fires "zsh's own error, a relative path in a TCC cwd" "$(failed "$D" "(eval):1: operation not permitted: notes.txt")"
+fires "python's error names a Downloads path" "$(failed "$TMP/repo" "PermissionError: [Errno 1] $P: '$HOME/Downloads/a.csv'")"
+fires "getcwd in a TCC cwd" "$(failed "$D" "$GETCWD")"
+fires "iCloud Drive" "$(post "$TMP/repo" "cp: $HOME/Library/Mobile Documents/com~apple~CloudDocs/a: $P")"
+fires "from the home folder, a relative Desktop path" "$(post "$HOME" "ls: Desktop: $P")"
+silent "getcwd elsewhere" "$(failed "$TMP/repo" "$GETCWD")"
+silent "not a TCC folder" "$(post "$TMP/repo" "ls: /opt/x: $P")"
+silent "a TCC cwd, but the line names a path outside it" "$(post "$D" "rm: /opt/x: $P")"
+silent "a folder that only starts like one" "$(post "$TMP/repo" "ls: $HOME/Desktop2/x: $P")"
+silent "grep output quoting the phrase, in a TCC cwd" \
+  "$(hook PostToolUse "$D" "hooks/tcc-check.sh:13:case \"\$INPUT\" in *\"$P\"*) ;;" "")"
+silent "a test file's quoted error naming a Desktop path" \
+  "$(hook PostToolUse "$D" "tests/host-binary.test.sh:118:ERR=\"fatal: couldn't read $D/.git/packed-refs: $P\"" "")"
+silent "prose quoting it, in a TCC cwd" "$(hook PostToolUse "$D" "when a Bash result holds \"$P\" and the cwd" "")"
+silent "a failure whose output only quotes it" "$(failed "$D" "grep: \"$P\" is quoted here")"
+silent "not a Bash call" "$(post "$D" "$ERR" Read)"
+OUT=$(jq -nc --arg d "$D" --arg c "true # ls: $D: $P" \
+  '{tool_name:"Bash", hook_event_name:"PostToolUse", tool_input:{command:$c}, tool_response:{stdout:"ok", stderr:""}, cwd:$d}' \
+  | bash hooks/tcc-check.sh 2>&1; echo "rc=$?")
+silent "the words only in the command, not the result" "$OUT"
 OUT=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"tool_response":{"stdout":"ok"},"cwd":"/x"}' | bash hooks/tcc-check.sh 2>&1; echo "rc=$?")
-[ "$OUT" = "rc=0" ] && pass "an ordinary result: silent" || fail "ordinary" "[$OUT]"
+silent "an ordinary result" "$OUT"
+REG=$(jq -r '.hooks | to_entries[] | .key as $e | .value[] | select(.matcher == "Bash")
+             | .hooks[] | select(.command | endswith("/tcc-check.sh")) | $e' config/settings.json | sort | tr '\n' ' ')
+[ "$REG" = "PostToolUse PostToolUseFailure " ] && pass "settings.json runs it after Bash calls that pass and that fail" \
+  || fail "settings.json runs it after Bash calls that pass and that fail" "[$REG]"
 : > "$BIN"
-OUT=$(post "$HOME/Desktop/repo" "git status" "$ERR")
+OUT=$(post "$D" "$ERR")
 has "binary present: TCC named, the grant itself pointed at" "host binary exists" "$OUT"
 has "and the installed relocate tool" "~/.claude/relocate-clones.sh" "$OUT"
 lacks "and no deleted-binary line" "binary is gone" "$OUT"

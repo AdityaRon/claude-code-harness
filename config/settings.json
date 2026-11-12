@@ -223,6 +223,10 @@
       {
         "matcher": "",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "async": true }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/tcc-check.sh" }]
       }
     ],
     "PermissionDenied": [

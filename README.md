@@ -85,7 +85,7 @@ against main.
 | `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
 | `memory-lint` | file writes | Advise: name, type, description, `verify:` block and index tier of a memory file |
 | `comment-budget` | file writes | Advise: a comment block an edit grew past 6 lines |
-| `tcc-check` | Bash results | Advise: names macOS privacy control (TCC) when a Bash result holds "Operation not permitted" and the cwd or the command is under `~/Desktop`, `~/Documents`, `~/Downloads` or iCloud Drive. It reads the text, not the exit code, so output that only quotes the phrase triggers it too |
+| `tcc-check` | Bash results and failures | Advise: names macOS privacy control (TCC) when a Bash call prints an "Operation not permitted" error (a tool's, zsh's or python's) for a path in `~/Desktop`, `~/Documents`, `~/Downloads` or iCloud Drive, or for no path while the cwd is in one. Output that only quotes the phrase, as grep or cat does, is not an error |
 | `session-start` | SessionStart | Inject: branch, status and recent commits; on resume, files that drifted since the last session |
 | `session-snapshot` | Stop, SessionEnd | Record: hashes of the files the session edited, for the resume drift check |
 | `pre-compact` | PreCompact | Back up: the transcript before compaction, newest 20 kept |
