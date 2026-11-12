@@ -28,6 +28,7 @@ CMD=$(jq_get '.tool_input.command')
 R=$(printf '%s' "$CMD" | tr -d '"'\''\\')
 [[ "$R" == *[Gg][Ii][Tt]* ]] || exit 0
 CMD=$(strip_inert_heredocs "$CMD")
+unreadable_check git-guard "$CMD"
 # A script's shell-outs are checked as commands (lib.sh). The .git/hooks check
 # still reads the script's text: open('.git/hooks/x', 'w') writes there too.
 INLINE_TEXT=$CMD

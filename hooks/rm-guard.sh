@@ -28,7 +28,8 @@ CWD=$(jq_get '.cwd')
 # normalize_command drops a leading `J=…;`, and the assignment is needed below.
 # neutralize first: it classifies the text bash reads, and separate_groups's
 # `;;y = 1 << x;;` from `((y = 1 << x))` would read as a heredoc.
-NQS=$(neutralize_quoted_separators "$CMD") || unreadable_floor rm-guard
+unreadable_check rm-guard "$CMD"
+NQS=$(neutralize_quoted_separators "$CMD")
 SEGS=$(separate_groups "$NQS" | tr '\n' ';' \
   | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;&]/\n/g'; echo; exec_fn_suffixes "$CMD")
 # A cd inside ( ) or $( ) does not outlast it, and the split above cannot see

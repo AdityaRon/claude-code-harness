@@ -82,9 +82,12 @@ INTERP_VALUE_FLAGS = {"-W", "-X", "-Q"}
 SCRIPT = re.compile(r"\.(?:py|sh|js|ts|rb|pl)$")
 SKILL_SCRIPT = re.compile(r"(?:^|/)skills/([\w.-]+)/(?:bin/)?([\w.-]+)$")
 MODULE = re.compile(r"[A-Za-z_][\w.]{0,40}")
-# Ported from hooks/config-guard.sh's drop_data_heredocs, not imported: this skill installs alone.
+# Ported from hooks/lib.sh's HEREDOC_AWK (hd_scan, hd_word, hd_shell, hd_bad_end), not
+# imported: this skill installs alone. tests/heredoc-openers.test.sh holds the two together.
 HD_WORD = re.compile(r"[A-Za-z0-9_.-]+")
-HD_SHELL = re.compile(r"(?:^|[^A-Za-z0-9_.-])(?:ba|z|da|k|fi|s)?sh(?:[^A-Za-z0-9_.-]|$)")
+HD_SHELL = re.compile(r"(?:^|[^A-Za-z0-9_.-])(?:ba|z|da|k|fi|s)?sh(?:[^A-Za-z0-9_.-]|$)"
+                      r"|\$\{?SHELL(?:[^A-Za-z0-9_]|$)|(?:^|[;&|(])[ \t]*(?:eval|source|\.)[ \t]")
+HD_SUB = re.compile(r"\$\(|`")
 # Re-login and session checks: None means every subcommand is one. A tool that also
 # does the work (tsh ssh, aws-vault exec) lists only its login subcommands, one or two words.
 ACCESS = {"kinit": None, "kubelogin": None, "okta": None, "gimme-aws-creds": None,
@@ -123,16 +126,33 @@ REDIRECT = re.compile(r"\d*>&\d*-?|(?:&>>?|\d*>>?|<<-?|<)\s*[^\s;&|]+")
 
 
 def _arith(s: str, i: int) -> int:
-    """Where the (( at i closes, or -1."""
-    d = 0
+    """Where the (( at i closes as one )), or -1: bash reads ((cmd) ) as two subshells."""
+    d, p = 0, -1
     for j in range(i, len(s)):
         if s[j] == "(":
             d += 1
         elif s[j] == ")":
             d -= 1
-            if d == 0:
-                return j
+            if d == 1:
+                p = j
+            elif d == 0:
+                return j if p == j - 1 else -1
     return -1
+
+
+def _btq(s: str, i: int, c: str) -> bool:
+    """Inside backticks: does the quote c at i hold a backtick, which ends the substitution?"""
+    j = i + 1
+    while j < len(s):
+        if s[j] == "\\" and c == '"':
+            j += 2
+            continue
+        if s[j] == c:
+            return False
+        if s[j] == "`":
+            return True
+        j += 1
+    return False
 
 
 def _word(s: str, i: int):
@@ -169,6 +189,7 @@ class Heredocs:
 
     def __init__(self):
         self.q, self.frames, self.bt, self.cont = "", [], False, False
+        self.subseen = self.insub = False
 
     def scan(self, s: str):
         found, n, esc, i = None, len(s), -2, 0
@@ -213,8 +234,13 @@ class Heredocs:
                 self.q = self.frames.pop()[0]
                 i += 1
                 continue
+            if (self.bt or (self.frames and self.frames[-1][2])) and c in "\"'" and _btq(s, i, c):
+                raise ValueError(s)
             if c == "'":
-                self.q = "A" if i > 0 and s[i - 1] == "$" and esc != i - 1 else "'"
+                j = i - 1
+                while j >= 0 and s[j] == "$" and esc != j:
+                    j -= 1
+                self.q = "A" if (i - 1 - j) % 2 else "'"
             elif c == '"':
                 self.q = '"'
             elif c == "`":
@@ -233,6 +259,9 @@ class Heredocs:
                 self.frames[-1][1] += 1 if c == "(" else -1
                 if self.frames[-1][1] == 0:
                     self.q = self.frames.pop()[0]
+            elif (self.frames and not self.frames[-1][2] and s.startswith("case", i) and s[i + 4:i + 5] in (" ", "\t")
+                  and (i == 0 or s[i - 1] in " \t;&|(")):
+                raise ValueError(s)
             elif c == "<" and s[i + 1:i + 2] == "<":
                 if s[i + 2:i + 3] == "<":
                     i += 2
@@ -241,9 +270,11 @@ class Heredocs:
                     if not w:
                         raise ValueError(s)
                     found = w
+                    self.insub = self.subseen or bool(HD_SUB.search(s, 0, i + 1))
                     i += w[0] - 1
             i += 1
         self.cont = esc == n
+        self.subseen = self.subseen or bool(HD_SUB.search(s))
         if found and (self.q or self.cont):
             raise ValueError(s)
         return found
@@ -258,8 +289,11 @@ def drop_heredocs(cmd: str) -> str:
     hd, out, term, dash, keep = Heredocs(), [], None, False, False
     for line in cmd.split("\n"):
         if term is not None:
-            if (line.lstrip("\t") if dash else line) == term:
+            t = line.lstrip("\t") if dash else line
+            if t == term:
                 term = None
+            elif hd.insub and t == term + ")":
+                return cmd
             elif keep:
                 out.append(line)
             continue

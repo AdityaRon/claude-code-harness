@@ -48,6 +48,7 @@ CMD=$(jq_get '.tool_input.command')
 # precise bail-out below still runs on the normalized text.
 printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qi 'kubectl' || exit 0
 CMD=$(strip_inert_heredocs "$CMD")
+unreadable_check kubectl-guard "$CMD"
 # A script's shell-outs are checked as commands of their own (lib.sh); "ask":
 # one built from a value it cannot read asks, as `kubectl $verb` does.
 check_inline_shellouts kubectl ask
@@ -480,7 +481,7 @@ name_kind() {
 # the line. kubectl as an argument (`xargs grep -l kubectl`) is not that command,
 # and neither is `| xargs kubectl` inside a quoted commit message.
 if [[ "$CMD" == *xargs* || "$CMD" == *parallel* ]]; then
-  NQS=$(neutralize_quoted_separators "$CMD") || unreadable_floor kubectl-guard
+  NQS=$(neutralize_quoted_separators "$CMD")
   read -ra TOKENS <<<"$(printf '%s\n' "$NQS" | tr '\n' ';' | sed -E 's/\|\||&&|\|&|[|;]/ & /g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g')"
   n=${#TOKENS[@]}
   for (( j = 0; j < n; j++ )); do
@@ -573,7 +574,7 @@ done < <(printf '%s\n' "$CMD" | tr '\n' ';' | sed -E "s/'[^']*'//g; s/\"[^\"]*\"
 # Not with a substitution: the `;` in "$(a; b)" is real.
 SRC=$CMD
 if [[ $TEXT_ONLY -eq 1 && "$CMD" == *[\"\']* && "$CMD" != *'$('* && "$CMD" != *'`'* ]]; then
-  SRC=$(neutralize_quoted_separators "$CMD") || unreadable_floor kubectl-guard
+  SRC=$(neutralize_quoted_separators "$CMD")
 fi
 
 # Normalise BEFORE the bail-out, not after. The bail-out's own pattern requires

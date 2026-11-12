@@ -57,6 +57,11 @@ CASES=(
   "a body piped to a shell"     $'cat <<EOF | bash\n'"$M"$'\nEOF'
   "a body to a shell by path"   $'/bin/bash <<EOF\n'"$M"$'\nEOF'
   "a body to a shell via env"   $'env bash <<EOF\n'"$M"$'\nEOF'
+  "(( that closes as ) ), two subshells" $'((cat <<EOF) )\nit\'s\nEOF\necho \'<<x \\\'\n'"$M"$'\nx'
+  "\$\$ before ', a plain quote" $'echo $$\'a\\\' <<x > n.md\ncat \'\ncat <<z > n.md\nx\n'"$M"$'\nz'
+  "a body run by eval"          $'eval "$(cat <<\'EOF\'\n'"$M"$'\nEOF\n)"'
+  "a body sourced from stdin"   $'source /dev/stdin <<\'EOF\'\n'"$M"$'\nEOF'
+  "EOF) ends a body in \$( ) (bash 3.2)" $'x=$(cat <<EOF\nhi\nEOF)\n'"$M"$'\nEOF'
 )
 
 echo "=== bash runs the marker: every stripper keeps it ==="
@@ -91,6 +96,15 @@ if runs_in_bash "$cmd"; then
   printf '%s\n' "$(separate_groups "$cmd")" | grep -qF ';echo HDMARK;' && pass "an escaped \$': separate_groups opens the group" \
     || fail "an escaped \$': separate_groups left a group bash runs" "[$(separate_groups "$cmd")]"
 else fail "an escaped \$', then a group" "(bash did not run the marker: the case is wrong)"; fi
+
+# The commit shape: the message sits inside "$( )", and a command follows the
+# closing `)"` on its line.
+COMMIT=$'git commit -m "$(cat <<\'EOF\'\na note\nEOF\n)"'
+cmd="$COMMIT && $G"
+if runs_in_bash "$cmd"; then
+  printf '%s\n' "$(separate_groups "$cmd")" | grep -qF ';echo HDMARK;' && pass "after a commit message: separate_groups opens the group" \
+    || fail "after a commit message: separate_groups left a group bash runs" "[$(separate_groups "$cmd")]"
+else fail "a commit message, then a group" "(bash did not run the marker: the case is wrong)"; fi
 
 echo ""
 echo "=== bash reads the marker as data: the stripper meant for it still drops it ==="
@@ -146,6 +160,13 @@ for g in "${!GUARDS[@]}"; do
   # $'...', the rest of the line was quoted text, and four guards allowed it.
   v=$(verdict "${GUARDS[$g]}" "echo \\\$'a\\' ; ${RISK[$g]} ; echo 'x'")
   [ "$v" = "$ctl" ] && pass "${GUARDS[$g]} after an escaped \$': $v" || fail "${GUARDS[$g]} after an escaped \$'" "$v, alone: $ctl"
+  # After a command hd_scan cannot read, the line is read as before hd_scan.
+  v=$(verdict "${GUARDS[$g]}" "echo \"a(b)\" \"\${x:-\"y\"}\" ; ${RISK[$g]}")
+  [ "$v" = "$ctl" ] && pass "${GUARDS[$g]} after an unreadable command: $v" || fail "${GUARDS[$g]} after an unreadable command" "$v, alone: $ctl"
+  for tail in "&& ${RISK[$g]}" "; ${RISK[$g]}" "&& (${RISK[$g]})"; do
+    v=$(verdict "${GUARDS[$g]}" "$COMMIT $tail")
+    [ "$v" = "$ctl" ] && pass "${GUARDS[$g]}, a commit message then '$tail': $v" || fail "${GUARDS[$g]}, a commit message then '$tail'" "$v, alone: $ctl"
+  done
 done
 
 GROUPED="(kubectl delete ns prod)"
@@ -182,6 +203,13 @@ for c in sys.stdin.read().split("\0")[:-1]:
     label=${DROPS[$i]#*|}
     [ "${DKEEP[$((i / 2))]}" = 0 ] && pass "$label: demand.py drops the body" || fail "$label: demand.py kept a body bash does not run" ""
   done
+  # Where hd_scan cannot read a line, lib.sh keeps the command as typed, and so
+  # does demand.py: a case pattern ) inside "$( )" would close it early, and the
+  # << after it would look real.
+  cmd=$'echo "$(case x in x) echo "a";; esac)" <<EOF\n'"$M"$'\nEOF'
+  keeps "$(drop_data_heredocs "$cmd")" && [ "$(printf '%s\0' "$cmd" | demand_keeps)" = 1 ] \
+    && pass "case inside \"\$( )\": lib.sh and demand.py keep it as typed" \
+    || fail "case inside \"\$( )\": a reader dropped it" "[$(drop_data_heredocs "$cmd")]"
 fi
 
 echo ""
@@ -223,6 +251,9 @@ INNER=(
   "neutralize|; echo HDMARK|a ; in \$( ) in \"\$(( ))\"" $'exec 3>&1; echo "$(( $(true; echo HDMARK >&3; echo 1) ))"'
   "groups|;echo HDMARK >&3;|a group in \"\$( )\""          $'exec 3>&1; echo "$( (echo HDMARK >&3) )"'
   "groups|;echo HDMARK;|a group in \$( ) in an unquoted heredoc body" $'cat <<EOF\n$( (echo HDMARK) )\nEOF'
+  "neutralize|; echo HDMARK|a ; in \$( ) after a body's apostrophe" $'exec 3>&1; cat <<EOF\nit\'s $(true; echo HDMARK >&3)\nEOF'
+  "neutralize|; echo HDMARK|a ; in backticks a body quotes" $'exec 3>&1; cat <<EOF\n"`true; echo HDMARK >&3`"\nEOF'
+  "neutralize|; echo HDMARK|a ; after \$\$'...'" $'echo $$\'a\\\' ; echo HDMARK ; echo \'x\''
 )
 for ((i = 0; i < ${#INNER[@]}; i += 2)); do
   IFS='|' read -r fn want label <<<"${INNER[$i]}"; cmd=${INNER[$((i + 1))]}
@@ -251,6 +282,8 @@ out=$(separate_groups $'cat <<\'EOF\' > notes.md\n(echo HDMARK)')
   || fail "an escaped ;" "[$(neutralize_quoted_separators 'echo a\;b ; ls')]"
 [[ "$(neutralize_quoted_separators 'echo "${x:-a;b}" ; ls')" == 'echo "${x:-a%3Bb}" ; ls' ]] && pass 'a ; in "${ }" stays hidden' \
   || fail 'a ; in "${ }"' "[$(neutralize_quoted_separators 'echo "${x:-a;b}" ; ls')]"
+[[ "$(neutralize_quoted_separators 'echo ${x:-a;b} ; ls')" == 'echo ${x:-a%3Bb} ; ls' ]] && pass 'a ; in an unquoted ${ } stays hidden' \
+  || fail 'a ; in an unquoted ${ }' "[$(neutralize_quoted_separators 'echo ${x:-a;b} ; ls')]"
 neutralize_quoted_separators $'cat <<EOF > x.sh\n${FOO:-"bar"}\nEOF\nls ; ls' >/dev/null \
   && pass 'a heredoc body holding "${ }" with quotes is readable' || fail 'a heredoc body holding "${ }" with quotes' "rc=$?"
 # Heredoc data is read a line at a time: its apostrophe does not reach the next line.
@@ -274,12 +307,69 @@ done
   || fail "network-guard on an unreadable command" "$(verdict network-guard "$UNREAD ; curl -s http://127.0.0.1:8080/x")"
 [ "$(verdict network-guard "curl -s http://127.0.0.1:8080/x")" = allow ] && pass "network-guard's control allows" \
   || fail "network-guard's control" "$(verdict network-guard "curl -s http://127.0.0.1:8080/x")"
+# The old reading, too, takes $$ as the pid: the rm after it is read, and denied.
+v=$(verdict rm-guard "echo \${x:-\"y\"} ; echo \$\$'a\\' ; rm -rf ~/ ; echo 'x'")
+[ "$v" = deny ] && pass "after an unreadable command, \$\$' quotes plainly: deny" || fail "\$\$' in the old reading" "$v"
+# Every guard: a command it allows alone asks after an unreadable one.
+SAFE=("git status" "ls ~/.claude/hooks" "kubectl get pods" "grep -c token notes.md" "python3 script.py" "" "")
+for g in 0 1 2 3 4; do
+  a=$(verdict "${GUARDS[$g]}" "${SAFE[$g]}"); v=$(verdict "${GUARDS[$g]}" "$UNREAD ; ${SAFE[$g]}")
+  [ "$a" = allow ] && [ "$v" = ask ] && pass "${GUARDS[$g]} asks where it would allow" \
+    || fail "${GUARDS[$g]} on an unreadable command" "alone: $a, after it: $v (${SAFE[$g]})"
+done
 # A deny stands, alone: the floor adds no second decision after it.
 out=$(jq -nc --arg c "printenv ; $UNREAD" --arg d "$TMP/run" '{tool_name:"Bash", hook_event_name:"PreToolUse", tool_input:{command:$c}, cwd:$d, session_id:"hd"}' \
       | HOME="$TMP/home" bash hooks/env-guard.sh 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null)
 [ "$out" = deny ] && pass "env-guard denies once after an unreadable command" || fail "env-guard's decisions after an unreadable command" "[$out]"
 [ "$(verdict env-guard 'echo "it'"'"'s" ; ls')" = allow ] && pass "a readable command still allows" \
   || fail "a readable command" "$(verdict env-guard 'echo "it'"'"'s" ; ls')"
+
+echo ""
+echo "=== review repros are not allowed, and their benign neighbours still are ==="
+# A fail-closed rule must not reach a commit message: case, quotes, backticks
+# and an EOF) line in one stay allowed, except the EOF) line in a -m "$( )"
+# message, which bash 3.2 ends there.
+NL=$'\n'; BT='`'; FP="git push --for""ce origin main"
+BLOCK=(
+  "rm-guard|rm \${x:-a;b} -rf ~/"
+  "env-guard|cat \${x:-a;b} .env"
+  "rm-guard|cat > f <<EOF${NL}it's \$(true; rm -rf /)${NL}EOF"
+  "rm-guard|cat > f <<EOF${NL}\"${BT}true; rm -rf ~/${BT}\"${NL}EOF"
+  "env-guard|cat > f <<EOF${NL}\"${BT}true; cat .env${BT}\"${NL}EOF"
+  "git-guard|git push origin \"a(b)\" --for""ce \"\${x:-\"y\"}\""
+  "git-guard|cat <<'EOF' | \$SHELL${NL}($FP)${NL}EOF"
+  "rm-guard|cat <<'EOF' | \$SHELL${NL}echo \"${BT}true; rm -rf ~/${BT}\"${NL}EOF"
+  "rm-guard|eval \"\$(cat <<'EOF'${NL}echo \"${BT}true; rm -rf ~/${BT}\"${NL}EOF${NL})\""
+  "config-guard|eval \"\$(cat <<'EOF'${NL}cp /dev/null ~/.claude/settings.json${NL}EOF${NL})\""
+  "config-guard|source /dev/stdin <<'EOF'${NL}cp /dev/null ~/.claude/settings.json${NL}EOF"
+  "rm-guard|echo \"${BT}echo \"x${BT}\"; rm -rf ~/"
+  "rm-guard|echo \"\$(case x in x) true; rm -rf ~/;; esac)\""
+  "env-guard|echo \"\$(case x in x) true; cat .env;; esac)\""
+  "git-guard|echo \"\$(case x in x) true; ($FP);; esac)\""
+  "rm-guard|echo \$\$'a\\' ; rm -rf ~/ ; echo 'x'"
+  "kubectl-guard|echo \$\$'a\\' ; kubectl delete ns prod ; echo 'x'"
+  "kubectl-guard|x=\$(cat <<EOF${NL}hi${NL}EOF)${NL}(kubectl delete ns prod)${NL}EOF"
+  "git-guard|git commit -m \"\$(cat <<'EOF'${NL}a note${NL}EOF)${NL}more${NL}EOF${NL})\""
+  "rm-guard|git commit -m \"\$(cat <<'EOF'${NL}a fix's note${NL}EOF${NL})\" && rm -rf ~/"
+)
+MSG="Fix it's \"quoted\" and ${BT}code${BT} in case x) we"
+ALLOW=(
+  "git-guard|git commit -m \"\$(cat <<'EOF'${NL}${MSG}${NL}EOF${NL})\""
+  "git-guard|git commit -F - <<'EOF'${NL}${MSG}${NL}EOF)${NL}EOF"
+  "git-guard|gh pr create --title t --body-file - <<'EOF'${NL}${MSG}${NL}EOF"
+  "git-guard|echo \"${BT}date${BT}\" && git status"
+  "git-guard|echo \"\$(git log --oneline -1)\" && git status"
+  "git-guard|for f in *; do case \$f in *.md) git add \"\$f\";; esac; done"
+  "git-guard|git stash push -m \"wip \$\$\" && git status"
+)
+for row in "${BLOCK[@]}"; do
+  g=${row%%|*}; c=${row#*|}; v=$(verdict "$g" "$c")
+  [ "$v" != allow ] && pass "$g: $v on [${c//$NL/\\n}]" || fail "$g allows" "[${c//$NL/\\n}]"
+done
+for row in "${ALLOW[@]}"; do
+  g=${row%%|*}; c=${row#*|}; v=$(verdict "$g" "$c")
+  [ "$v" = allow ] && pass "$g allows [${c//$NL/\\n}]" || fail "$g: $v on a benign command" "[${c//$NL/\\n}]"
+done
 
 echo ""
 echo "=== a multibyte character: the lexers read bytes, and the command after it is seen ==="
