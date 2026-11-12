@@ -10,8 +10,8 @@ HOOK="hooks/mod-gate.sh"
 PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"
-pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
-fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source=tests/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 decision(){ printf '%s' "$1" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null || echo allow; }
 
 echo "=== mod-gate.sh ==="

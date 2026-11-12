@@ -7,8 +7,8 @@
 # the target a new inode, and a reader holding the old file still reads it whole.
 set -u
 PASS=0; FAIL=0
-pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
-fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source=tests/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'kill "${READER:-0}" 2>/dev/null; rm -rf "$TMP"' EXIT

@@ -11,8 +11,8 @@ export CLAUDE_STATE_DIR="$TMP/state"
 WORK="$TMP/work"
 mkdir -p "$WORK"
 
-pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
-fail() { echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source=tests/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 check_eq() {
   local label="$1" expect="$2" got="$3"

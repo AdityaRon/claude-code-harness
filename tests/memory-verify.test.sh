@@ -13,8 +13,8 @@ export CLAUDE_MEMORY_PROJECTS_DIR="$TMP/projects"
 STORE="$CLAUDE_MEMORY_PROJECTS_DIR/teststore/memory"
 mkdir -p "$STORE"
 
-pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
-fail() { echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source=tests/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 check_contains() {
   local label="$1" needle="$2" hay="$3"

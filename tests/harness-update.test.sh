@@ -5,8 +5,8 @@
 # lacks alone, and schedules through stand-in launchctl and crontab binaries.
 set -u
 PASS=0; FAIL=0
-pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
-fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source=tests/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # chmod first: a case makes a directory unreadable, which rm cannot recurse into.
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'chmod -R u+rwx "$TMP"; rm -rf "$TMP"' EXIT
 TMP=$(cd "$TMP" && pwd)   # macOS TMPDIR ends in /; install.sh records repo= without the //

@@ -15,8 +15,8 @@ export CLAUDE_MEMORY_PROJECTS_DIR="$TMP/projects"
 STORE="$CLAUDE_MEMORY_PROJECTS_DIR/teststore/memory"
 mkdir -p "$STORE"
 
-pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
-fail() { echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source=tests/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 check_contains() { case "$3" in *"$2"*) pass "$1" ;; *) fail "$1" "expected: $2" ;; esac; }
 check_absent()   { case "$3" in *"$2"*) fail "$1" "unexpected: $2" ;; *) pass "$1" ;; esac; }
 check_eq()       { if [ "$3" = "$2" ]; then pass "$1"; else fail "$1" "expect=$2 got=$3"; fi; }

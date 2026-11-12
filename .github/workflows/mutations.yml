@@ -1,0 +1,28 @@
+name: Mutations
+# Each skill's tests/run.py --mutate applies the mutations its test files list
+# and expects every one to fail a test. They take minutes, so they run weekly
+# and on demand, not on every push.
+on:
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutate:
+    name: ${{ matrix.skill }} mutations
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        skill: [comms-hub, skill-forge]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run the mutations
+        run: python3 skills/${{ matrix.skill }}/tests/run.py --mutate

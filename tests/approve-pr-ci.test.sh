@@ -4,8 +4,8 @@ set -u
 SCRIPT=".github/approve-pr-ci.sh"
 PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
-pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
-fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source=tests/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 check_eq(){ if [ "$3" = "$2" ]; then pass "$1"; else fail "$1" "expect=[$2] got=[$3]"; fi; }
 check_contains(){ case "$3" in *"$2"*) pass "$1" ;; *) fail "$1" "expected [$2] in [$3]" ;; esac; }
 

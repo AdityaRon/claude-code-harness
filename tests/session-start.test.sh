@@ -22,8 +22,8 @@ export CLAUDE_CONTRACT_PIN="$TMP/no-pin"
 export CLAUDE_HARNESS_LATEST="$TMP/no-latest"
 export CLAUDE_HARNESS_VERSION="$TMP/no-version"
 
-pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
-fail() { echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source=tests/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 check_contains() {
   local label="$1" needle="$2" haystack="$3"

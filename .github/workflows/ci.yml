@@ -79,3 +79,10 @@ jobs:
         # is in the list because CI's own helpers are shell too, and a broken
         # one fails every job before anything else gets a chance to run.
         run: shellcheck -S warning hooks/*.sh bin/*.sh tools/*.sh ./*.sh .github/*.sh skills/*/bin/*.sh
+      - name: Lint the test suites
+        # Errors only: the suites carry warnings (SC2015's `a && b || c` as a
+        # pass/fail line) that are their idiom, while an error is a broken test.
+        run: shellcheck -x -S error tests/*.sh
+      - name: Compile every Python file
+        # A syntax error in a script no test imports fails nothing else.
+        run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile

@@ -5,7 +5,8 @@
 # Python that python.sh picks are real.
 set -u
 PASS=0; FAIL=0
-pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
+# shellcheck source=tests/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 fail() { echo "  FAIL: $1"; [[ -n "${2:-}" ]] && printf '    %s\n' "$2"; FAIL=$((FAIL+1)); }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 TMP=$(cd "$TMP" && pwd)   # macOS TMPDIR ends in /; hub.py prints the path without the //

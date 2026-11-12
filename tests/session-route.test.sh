@@ -20,8 +20,8 @@ export CLAUDE_SESSION_PROJECTS_DIR="$TMP/projects"
 export CLAUDE_SESSION_JOBS_DIR="$TMP/jobs"
 mkdir -p "$CLAUDE_SESSION_PROJECTS_DIR/store" "$CLAUDE_SESSION_JOBS_DIR"
 
-pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
-fail() { echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source=tests/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 check_contains() { case "$3" in *"$2"*) pass "$1" ;; *) fail "$1" "expected: $2  got: $3" ;; esac; }
 check_absent()   { case "$3" in *"$2"*) fail "$1" "unexpected: $2  in: $3" ;; *) pass "$1" ;; esac; }
 
