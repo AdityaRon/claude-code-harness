@@ -80,10 +80,12 @@ against main.
 | `network-guard` | Bash, WebFetch | Deny: file uploads and pipe-to-shell. Ask: request bodies, `DELETE`, hosts off the allowlist, `scp`/`rsync`, local servers |
 | `interpreter-guard` | Bash | Ask: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts |
 | `kubectl-guard` | Bash | Ask: every mutating verb wherever it sits, secret reads, and any subcommand it cannot classify |
+| `subagent-cache-guard` | a subagent's tool calls, SubagentStop | Deny: a subagent's tool calls once its prompt cache went cold 5 times in one run (`CLAUDE_SUBAGENT_MAX_COLD_STARTS`), until it replies with where it got to. Main sessions are left alone |
 | `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review, one that runs code outside the guards, or one hooking `settings.read` or `agent.spawn` |
 | `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
 | `memory-lint` | file writes | Advise: name, type, description, `verify:` block and index tier of a memory file |
 | `comment-budget` | file writes | Advise: a comment block an edit grew past 6 lines |
+| `tcc-check` | Bash results | Advise: names macOS privacy control (TCC) when a Bash result holds "Operation not permitted" and the cwd or the command is under `~/Desktop`, `~/Documents`, `~/Downloads` or iCloud Drive. It reads the text, not the exit code, so output that only quotes the phrase triggers it too |
 | `session-start` | SessionStart | Inject: branch, status and recent commits; on resume, files that drifted since the last session |
 | `session-snapshot` | Stop, SessionEnd | Record: hashes of the files the session edited, for the resume drift check |
 | `pre-compact` | PreCompact | Back up: the transcript before compaction, newest 20 kept |
@@ -240,9 +242,15 @@ rules/                   ← installed to ~/.claude/rules, loaded in every sessi
   prose-and-comments.md  collaboration.md  working-agreement.md  environment.md
   python-tests.md        ← path-scoped: loads only when Claude opens Python
 skills/                  ← memory-audit/, memory-archive/, pr-review/
-  comms-hub/             ← SKILL.md, config.example.toml, bin/ (its scripts), tests/ (Python)
-  skill-forge/           ← SKILL.md, config.example.toml, bin/, templates/ (installed to ~/.local/share), tests/
-tests/                   ← one <name>.test.sh per hook or script, plus bench-corpus.jsonl
+  comms-hub/             ← SKILL.md, config.example.toml, bin/ (its scripts), panel/ (the comms panel mod),
+                           tests/ (Python), lint-waivers.toml (skill_lint's waivers, not installed)
+  skill-forge/           ← SKILL.md, config.example.toml, bin/, templates/ (installed to ~/.local/share), tests/,
+                           forge.toml (its manifest for skill_lint, not installed)
+tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
+                           tcc-check and the host check; install-*, fail-closed, guard-latency,
+                           repo-layout and workflow-gates cut across files; comms-hub, comms-hub-prereqs,
+                           skill-forge and skill-lint run the skills' own suites; bench-corpus.jsonl
+                           feeds hook-bench
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
   permissions.md  auto-mode.md  customization.md  known-limitations.md
