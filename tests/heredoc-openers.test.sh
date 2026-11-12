@@ -75,14 +75,30 @@ echo ""
 echo "=== bash runs a grouped marker: separate_groups opens the group ==="
 # separate_groups turns an unquoted ( or ) into ; so a guard sees the command
 # inside. Left as heredoc data, `(kubectl delete ...)` reached no guard.
+# A command hd_scan cannot read is grouped as before hd_scan (separate_groups_typed),
+# never worse than that: converting every ( split git-guard's spans.
 G='(echo HDMARK)'
+unreadable() {
+  printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+    body { if (hd_end($0)) body = 0; next }
+    { hd_scan($0); if (HD_BAD) exit 3; if (HD_POS) body = 1 }'
+  [ $? = 3 ]
+}
+u=0
 for ((i = 0; i < ${#CASES[@]}; i += 2)); do
   label=${CASES[$i]}; cmd=${CASES[$((i + 1))]//"$M"/$G}
   runs_in_bash "$cmd" || continue
   out=$(separate_groups "$cmd")
+  if unreadable "$cmd"; then
+    u=$((u + 1))
+    [ "$out" = "$(separate_groups_typed "$cmd")" ] && pass "$label: unreadable, grouped as before hd_scan" \
+      || fail "$label: unreadable, but not grouped as before hd_scan" "[$out]"
+    continue
+  fi
   printf '%s\n' "$out" | grep -qF ';echo HDMARK;' && pass "$label: separate_groups opens it" \
     || fail "$label: separate_groups left a group bash runs" "[$out]"
 done
+[ "$u" -ge 5 ] && pass "$u unreadable cases" || fail "unreadable cases" "only $u: the check above may not run"
 
 # On one line: an escaped $ before ' starts no $'...', so the group after it is unquoted.
 cmd="echo \\\$'a\\' ; $G ; echo 'x'"
@@ -153,11 +169,18 @@ for g in "${!GUARDS[@]}"; do
   # $'...', the rest of the line was quoted text, and four guards allowed it.
   v=$(verdict "${GUARDS[$g]}" "echo \\\$'a\\' ; ${RISK[$g]} ; echo 'x'")
   [ "$v" = "$ctl" ] && pass "${GUARDS[$g]} after an escaped \$': $v" || fail "${GUARDS[$g]} after an escaped \$'" "$v, alone: $ctl"
+  # After a command hd_scan cannot read, the line is read as before hd_scan.
+  v=$(verdict "${GUARDS[$g]}" "echo \"a(b)\" \"\${x:-\"y\"}\" ; ${RISK[$g]}")
+  [ "$v" = "$ctl" ] && pass "${GUARDS[$g]} after an unreadable command: $v" || fail "${GUARDS[$g]} after an unreadable command" "$v, alone: $ctl"
   for tail in "&& ${RISK[$g]}" "; ${RISK[$g]}" "&& (${RISK[$g]})"; do
     v=$(verdict "${GUARDS[$g]}" "$COMMIT $tail")
     [ "$v" = "$ctl" ] && pass "${GUARDS[$g]}, a commit message then '$tail': $v" || fail "${GUARDS[$g]}, a commit message then '$tail'" "$v, alone: $ctl"
   done
 done
+
+v=$(verdict git-guard 'git push origin "a(b)" --force "${x:-"y"}"')
+[ "$v" = deny ] && pass "git-guard, a quoted ( before --force in an unreadable command: deny" \
+  || fail "git-guard, a quoted ( before --force in an unreadable command" "$v"
 
 GROUPED="(kubectl delete ns prod)"
 GCTL=$(verdict kubectl-guard "$GROUPED")

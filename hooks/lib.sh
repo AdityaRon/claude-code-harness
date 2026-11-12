@@ -65,13 +65,12 @@ separate_groups() {
   printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
     { line[NR] = $0 }
     END {
-      # Which lines are heredoc data, left as typed. From a line holding a << that
-      # hd_scan cannot read, quotes are not tracked either: a quote in a body read
-      # as commands could hide a group, while converting every ( only adds segments.
+      # Which lines are heredoc data, left as typed. A line holding a << that
+      # hd_scan cannot read leaves the whole command to separate_groups_typed.
       for (k = 1; k <= NR; k++) {
         if (body) { if (hd_end(line[k])) { body = 0; shut[k] = 1 } else data[k] = !shell; continue }
         hd_scan(line[k])
-        if (HD_BAD) { raw = 1; break }
+        if (HD_BAD) exit 3
         if (HD_POS) { body = 1; shell = hd_shell(line[k]); opens[k] = 1 }
       }
       q = ""
@@ -82,8 +81,8 @@ separate_groups() {
           c = substr(s, i, 1); p = (i > 1) ? substr(s, i - 1, 1) : ""; x = substr(s, i + 1, 1)
           if (c == "\\" && q != "\047") { esc = i + 1; out = out c x; i++; continue }
           if (q == "") {
-            if (c == "\047" && !raw) q = (p == "$" && esc != i - 1) ? "A" : "\047"
-            else if (c == "\"" && !raw) q = "\""
+            if (c == "\047") q = (p == "$" && esc != i - 1) ? "A" : "\047"
+            else if (c == "\"") q = "\""
             else if ((c == "(" && p != "$") || c == ")") c = ";"
             else if ((c == "{" || c == "}") && (p == "" || p ~ /[ \t;&|]/) && (x == "" || x ~ /[ \t;&|]/)) c = ";"
           } else if (c == "\047" && (q == "\047" || q == "A")) q = ""
@@ -95,7 +94,37 @@ separate_groups() {
         # in `-m "$(cat <<EOF` this lexer sees a " left open, which `)"` shuts.
         if (opens[k]) { oq = q; q = "" } else if (shut[k]) q = oq
       }
-    }'
+    }' || separate_groups_typed "$1"
+}
+
+# The reading before hd_scan, for a command hd_scan cannot read: such a command
+# is grouped as it was, since neither reading of its quotes is safe to prefer.
+separate_groups_typed() {
+  printf '%s\n' "$1" | awk '
+    BEGIN { q = ""; body = 0 }
+    body { t = $0; if (dash) sub(/^\t+/, "", t)
+           if (t == term) { body = 0; q = ""; print; next }
+           if (!shell) { print; next } }
+    { out = ""; n = length($0); hd = ""
+      for (i = 1; i <= n; i++) {
+        c = substr($0, i, 1); p = (i > 1) ? substr($0, i - 1, 1) : ""; x = substr($0, i + 1, 1)
+        if (c == "\\" && q != "\047") { out = out c x; i++; continue }
+        if (q == "" && c == "<" && x == "<" && p != "<" && hd == "" \
+            && match(substr($0, i + 2), /^-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/)) {
+          hd = substr($0, i + 2, RLENGTH); hdash = (hd ~ /^-/); sub(/^-?[ \t]*["\047]?/, "", hd)
+          hshell = (substr($0, 1, i - 1) ~ /(^|[;&|])[ \t]*(bash|sh|zsh|dash|ksh)([ \t][^;&|]*)?$/)
+        }
+        if (q == "") {
+          if (c == "\047") q = (p == "$") ? "A" : "\047"
+          else if (c == "\"") q = "\""
+          else if ((c == "(" && p != "$") || c == ")") c = ";"
+          else if ((c == "{" || c == "}") && (p == "" || p ~ /[ \t;&|]/) && (x == "" || x ~ /[ \t;&|]/)) c = ";"
+        } else if (c == "\047" && (q == "\047" || q == "A")) q = ""
+        else if (c == "\"" && q == "\"") q = ""
+        out = out c
+      }
+      print out
+      if (hd != "") { body = 1; term = hd; dash = hdash; shell = hshell; q = "" } }'
 }
 
 # A function that runs "$@" makes its arguments a command: after
