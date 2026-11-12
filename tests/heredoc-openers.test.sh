@@ -219,6 +219,8 @@ INNER=(
   "neutralize|; echo HDMARK|a ; in \$( ) after a body's apostrophe" $'exec 3>&1; cat <<EOF\nit\'s $(true; echo HDMARK >&3)\nEOF'
   "neutralize|; echo HDMARK|a ; in backticks a body quotes" $'exec 3>&1; cat <<EOF\n"`true; echo HDMARK >&3`"\nEOF'
   "neutralize|; echo HDMARK|a ; after \$\$'...'" $'echo $$\'a\\\' ; echo HDMARK ; echo \'x\''
+  "groups|;echo HDMARK >&3;|a <( ) in an unquoted \${ }" $'exec 3>&1; echo ${x:-<(echo HDMARK >&3)}'
+  "neutralize|; echo HDMARK|a # inside backticks ends at the backtick" $'x="`true #`"\nexec 3>&1; echo `true ; echo HDMARK >&3 ; true`'
 )
 for ((i = 0; i < ${#INNER[@]}; i += 2)); do
   IFS='|' read -r fn want label <<<"${INNER[$i]}"; cmd=${INNER[$((i + 1))]}
@@ -275,6 +277,16 @@ done
 # The old reading, too, takes $$ as the pid: the rm after it is read, and denied.
 v=$(verdict rm-guard "echo \${x:-\"y\"} ; echo \$\$'a\\' ; rm -rf ~/ ; echo 'x'")
 [ "$v" = deny ] && pass "after an unreadable command, \$\$' quotes plainly: deny" || fail "\$\$' in the old reading" "$v"
+# Each bash-oracle case hd_scan cannot read: every paren opens there, so the
+# group check above holds whatever the classes say. The floor is what holds it.
+u=0
+for ((i = 0; i < ${#CASES[@]}; i += 2)); do
+  cmd=${CASES[$((i + 1))]//"$M"/rm -f notes.txt}
+  printf '%s\n' "$cmd" | awk "$HEREDOC_AWK"'{ line[NR] = $0 } END { sh_classify(NR); exit SH_BAD ? 0 : 1 }' || continue
+  u=$((u + 1)); v=$(verdict rm-guard "$cmd")
+  [ "$v" = ask ] && pass "${CASES[$i]}: unreadable, rm-guard asks" || fail "${CASES[$i]}: unreadable" "rm-guard: $v"
+done
+[ "$u" -ge 5 ] && pass "$u bash-oracle cases are unreadable" || fail "unreadable bash-oracle cases" "only $u"
 # Every guard: a command it allows alone asks after an unreadable one.
 SAFE=("git status" "ls ~/.claude/hooks" "kubectl get pods" "grep -c token notes.md" "python3 script.py" "" "")
 for g in 0 1 2 3 4; do
@@ -316,6 +328,13 @@ BLOCK=(
   "kubectl-guard|x=\$(cat <<EOF${NL}hi${NL}EOF)${NL}(kubectl delete ns prod)${NL}EOF"
   "git-guard|git commit -m \"\$(cat <<'EOF'${NL}a note${NL}EOF)${NL}more${NL}EOF${NL})\""
   "rm-guard|git commit -m \"\$(cat <<'EOF'${NL}a fix's note${NL}EOF${NL})\" && rm -rf ~/"
+  "rm-guard|echo \${x:-<(rm -rf ~/)}"
+  "env-guard|echo \${x:-<(cat .env)}"
+  "config-guard|echo \${x:-<(cp /dev/null ~/.claude/settings.json)}"
+  "rm-guard|x=\"${BT}true #${BT}\"${NL}echo ${BT}true ; rm -rf ~/ ; true${BT}"
+  "env-guard|x=\"${BT}true #${BT}\"${NL}echo ${BT}true ; cat .env ; true${BT}"
+  "rm-guard|git commit -m \"\$(cat <<'EOF'${NL}a )\" ; rm -rf ~/ ; echo \"${NL}EOF${NL})\""
+  "rm-guard|git commit -m \"\$(cat <<'EOF'${NL}a )\" ; (rm -rf ~/) ; echo \"${NL}EOF${NL})\""
 )
 MSG="Fix it's \"quoted\" and ${BT}code${BT} in case x) we"
 ALLOW=(
