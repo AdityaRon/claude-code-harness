@@ -35,6 +35,8 @@ Mutations that must turn this file red:
   question-steps-uncapped: demand.py: `min(MAX_QUESTION_STEPS, round(` => `min(10**6, round(`
   shell-keywords-as-steps: demand.py: `"do", "then", "else", "elif", "if", "while", "until", "!", "{"}` => `}`
   unanswered-questions-kept: demand.py: `if len(c["sids"]) >= min_sessions and steps >= 1:` => `if len(c["sids"]) >= min_sessions:`
+  access-two-words-ignored: demand.py: `(parts[1] in rule or " ".join(parts[1:3]) in rule)` => `parts[1] in rule`
+  discover-skill-dirs-ignored: demand.py: `skill_dirs = cfg.get("skill_dirs") or whole.get("discover", {})` => `skill_dirs = cfg.get("skill_dirs") or {}`
 """
 from __future__ import annotations
 
@@ -378,6 +380,30 @@ class NoiseTest(unittest.TestCase):
         main, _, apart = out.partition("# access friction")
         self.assertNotIn("tsh", main)
         self.assertIn("tsh status", apart)
+
+    def test_only_a_login_subcommand_is_access(self):
+        for cmd, access in (("tsh login --proxy=p", True), ("tsh status", True), ("tsh ssh host", False),
+                            ("tsh db connect orders", False), ("tsh kube login prod", True), ("tsh scp a b:", False),
+                            ("aws-vault exec prof -- aws s3 ls", False), ("aws-vault login prof", True),
+                            ("kinit me", True), ("gcloud auth login", True), ("gcloud compute instances list", False)):
+            shape = " ".join(x for x in demand.step_of(demand.pipelines(cmd)[0]) if x)
+            self.assertEqual(demand.is_access(shape), access, (cmd, shape))
+
+    def test_skill_dirs_set_under_discover_reach_covered_by(self):
+        skills = self.t.tmp / "repo-skills" / "hand-metrics"
+        skills.mkdir(parents=True)
+        (skills / "SKILL.md").write_text("---\nname: hand-metrics\n---\n")
+        (skills / "tool.py").write_text("")
+        (skills / "access.py").write_text("")
+        for i in range(2):
+            self.t.session([B("python3 ~/code/ops/skills/hand-metrics/tool.py query x"), B("kubectl get pods")], days_ago=i + 1)
+        rc, out, _ = self.t.run("--json", "--top", "50", config=f'[discover]\nskill_dirs = ["{self.t.tmp / "repo-skills"}"]\n')
+        self.assertEqual(rc, 0)
+        ranked = json.loads(out)
+        hit = [c for c in ranked if "hand-metrics/tool.py" in c["label"]]
+        self.assertTrue(hit, out[:400])
+        self.assertEqual({c["covered_by"] for c in hit}, {"hand-metrics"})
+        self.assertNotIn("hand-metrics/access.py", demand.installed_engines([str(self.t.tmp / "repo-skills")]))
 
     def test_a_candidate_running_a_skills_engine_says_covered_by(self):
         skills = self.t.tmp / "skills" / "hand-metrics"

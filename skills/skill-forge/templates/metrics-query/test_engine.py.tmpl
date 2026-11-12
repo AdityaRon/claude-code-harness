@@ -26,6 +26,7 @@ Mutations that must turn this file red:
   route-refusal-unmapped: {{module}}.py: `except (Refused, ValueError, access.AccessRefused) as e:` => `except (Refused, ValueError) as e:`
   apply-ignored: {{module}}.py: `PREFIXES, a.apply) as ROUTE` => `PREFIXES, True) as ROUTE`
   unmasked-series: {{module}}.py: `emit(f"{labels(s['metric'])}  last=` => `sys.stdout.write(f"{labels(s['metric'])}  last=`
+  unopened-route-unnamed: {{module}}.py: `ROUTE.describe() if ROUTE else` => `ROUTE.describe() if ROUTE and ROUTE.base else`
 """
 from __future__ import annotations
 
@@ -339,6 +340,17 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(rc, 5)
         self.assertIn("needs --apply", err)
         self.assertFalse(any("run" in c.args[0] for c in k.call_args_list))
+
+    def test_a_route_that_fails_to_open_is_named(self):
+        env = {f"{ENV}_ACCESS": "port-forward prometheus:9090 in monitoring", f"{ENV}_CONTEXT": "kind-test"}
+
+        def no_forward(*a, **kw):
+            raise OSError("kubectl port-forward printed no 'Forwarding from' line in 20s")
+        with mock.patch.object(eng.access, "kubectl", return_value=(0, "kind-test\n", "")), \
+                mock.patch.object(eng.access, "port_forward", no_forward):
+            rc, out, err = Run(env=env)("query", "up", *AT)
+        self.assertEqual(rc, 1)
+        self.assertIn("could not reach svc/prometheus:9090 in monitoring via port-forward, context kind-test (not opened)", err)
 
     def test_guard_expired_auth_kube_login_is_auth_not_no_data(self):
         env = {f"{ENV}_ACCESS": "port-forward prom:9090 in monitoring", f"{ENV}_CONTEXT": "kind-test", f"{ENV}_RELOGIN": "kube-login"}

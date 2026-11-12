@@ -24,6 +24,9 @@ Mutations that must turn this file red:
   kube-auth-unseen: access.py: `    if p.returncode != 0 and KUBE_AUTH.search(p.stderr):` => `    if False:`
   forward-auth-unseen: access.py: `raise (AccessAuth if KUBE_AUTH.search(msg) else AccessRefused)` => `raise AccessRefused`
   forward-waits-forever: access.py: `                if time.monotonic() > deadline:` => `                if False:`
+  pod-ttl-ignored: access.py: `"--command", "--", "sleep", str(ttl)]` => `"--command", "--", "sleep", str(POD_TTL)]`
+  stopped-pod-unexplained: access.py: `hint = f"; its {self.ttl}s lifetime may have run out, so raise {self.env}_POD_TTL" if gone else ""` => `hint = ""`
+  unopened-route-unnamed: access.py: `        self.via = f"svc/{svc}:{port} in {ns} via {mode}, context {ctx} (not opened)"` => `        pass`
 """
 from __future__ import annotations
 
@@ -72,6 +75,8 @@ STUB = textwrap.dedent('''\
     if "service" in args:
         print("9090"); sys.exit(0)
     if "exec" in args:
+        if mode == "stopped":
+            print("error: cannot exec in a stopped container", file=sys.stderr); sys.exit(1)
         if mode == "auth-exec":
             print("error: You must be logged in to the server (Unauthorized)", file=sys.stderr); sys.exit(1)
         cfg = sys.stdin.read()
@@ -442,6 +447,32 @@ class PodTest(unittest.TestCase):
         self.assertEqual(p.wait(10), 128 + signal.SIGTERM, p.stderr.read())
         p.stderr.close()
         self.assertEqual([c[4] for c in fx.calls() if c[:1] == ["--context"]], ["run", "delete"])
+
+    def test_the_pod_lives_as_long_as_asked_and_says_when_it_ran_out(self):
+        fx = Fixture(self, "stopped", T_ACCESS="pod prometheus:9090 in monitoring", T_POD_TTL="3600")
+        cm, h = opened(fx, apply=True)
+        with cm as r:
+            h["r"] = r
+            with self.assertRaises(OSError) as e:
+                r.get("/x")
+        self.assertIn("sleep", fx.calls()[1])
+        self.assertEqual(fx.calls()[1][-1], "3600")
+        self.assertIn("its 3600s lifetime may have run out, so raise T_POD_TTL", str(e.exception))
+        fx2 = Fixture(self, T_ACCESS="pod prometheus:9090 in monitoring", T_POD_TTL="5")
+        cm, h = opened(fx2, apply=True)
+        with cm as r:
+            h["r"] = r
+            with self.assertRaises(access.AccessRefused):
+                r.get("/x")
+
+    def test_a_route_that_fails_to_open_still_names_itself(self):
+        fx = Fixture(self, "silent", T_ACCESS="port-forward prometheus in monitoring")
+        cm, h = opened(fx)
+        with mock.patch.object(access, "FORWARD_WAIT", 1.0), cm as r:
+            h["r"] = r
+            with self.assertRaises(OSError):
+                r.get("/x")
+            self.assertTrue(r.describe().startswith("svc/prometheus:9090 in monitoring via port-forward, context kind-test (not opened)"), r.describe())
 
     def test_an_expired_login_at_exec_is_auth(self):
         fx = Fixture(self, "auth-exec", T_ACCESS="pod prometheus:9090 in monitoring")

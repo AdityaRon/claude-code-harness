@@ -103,10 +103,10 @@ def fetch_json(url: str):
     status, headers, body = request("GET", url)
     if status in (401, 403):
         raise AuthError(f"HTTP {status}")
+    if status == 404:   # before the HTML check: a wrong path's 404 page is HTML, and it is not a login
+        raise NotFound(url)
     if "html" in headers.get("content-type", "").lower() or body.lstrip()[:1] == "<":
         raise AuthError("an HTML page came back, most likely a login wall, not the API")
-    if status == 404:
-        raise NotFound(url)
     if status >= 400:
         raise Refused(f"HTTP {status}: {body.strip()[:200]}")
     return json.loads(body) if body.strip() else None, headers
@@ -223,7 +223,7 @@ def main(argv=None) -> int:
         emit(f"REFUSED: {e}", err=True)
         return EXIT_REFUSED
     except OSError as e:
-        emit(f"could not reach {ROUTE.describe() if ROUTE and ROUTE.base else os.environ.get(ENV + '_API_URL', '?')}: {e}", err=True)
+        emit(f"could not reach {ROUTE.describe() if ROUTE else os.environ.get(ENV + '_API_URL', '?')}: {e}", err=True)
         return 1
 
 

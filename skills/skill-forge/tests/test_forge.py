@@ -26,6 +26,9 @@ Mutations that must turn this file red:
   compare-help-unguarded: forge.py: `    if not handles:` => `    if False:`
   compare-usage-subs-unread: forge.py: `subs |= named` => `pass`
   compare-flat-unread: forge.py: `draft_dir, existing = draft_dir.resolve(), existing.resolve()` => `pass`
+  units-dropped: forge.py: `(?:[a-zA-Z%]{1,3})?(?![\\w.])")` => `(?![\\w.])")`
+  precision-ignored: forge.py: `n = min(sig_digits(va), sig_digits(vb))` => `n = 6`
+  failed-runs-compared: forge.py: `if rc_d in NOT_AN_ANSWER or rc_e in NOT_AN_ANSWER:` => `if False:`
 """
 from __future__ import annotations
 
@@ -330,6 +333,20 @@ class CompareTest(unittest.TestCase):
     def test_numbers_leave_out_headers_quotes_times_and_masked_ids(self):
         out = '# rows:    5 series\n{instance="10.0.0.1:9090"}  41.5\nlast at 2026-11-11T10:00:00Z <masked-3> -7\n'
         self.assertEqual(forge.numbers(out), ["-7", "41.5"])
+
+    def test_numbers_keep_units_and_compare_to_the_printed_precision(self):
+        self.assertEqual(forge.numbers("latency 120ms\nrequests 1234567 v2 40%"), ["40%", "120ms", "1234567"])
+        self.assertFalse(forge.same_numbers(forge.numbers("latency 120ms"), forge.numbers("latency 450ms")))
+        self.assertFalse(forge.same_numbers(["1234567"], ["1234569"]))
+        self.assertFalse(forge.same_numbers(["120ms"], ["120s"]))
+        self.assertTrue(forge.same_numbers(["0.666667"], ["0.6666666667"]))
+
+    def test_run_where_neither_engine_answers_is_not_same(self):
+        with Tmp() as tmp, mock.patch.dict(os.environ, {"DEMO_METRICS_PROM_URL": "", "HAND_PROM_URL": ""}):
+            rc, out, err = self.compare(tmp, "--run", "instant x", "--run-existing", "query x")
+        self.assertEqual(rc, mask.EXIT_PARTIAL, out + err)
+        self.assertIn("NOT COMPARED: exit 5 | ", out)
+        self.assertNotIn("SAME", out)
 
     def test_a_shell_engines_subcommands_are_its_case_arms(self):
         with Tmp() as tmp:

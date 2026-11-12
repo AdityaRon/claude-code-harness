@@ -268,7 +268,10 @@ GUARD_EXIT = {"absent": (2, "ABSENT"), "partial": (3, "PARTIAL"), "expired_auth"
 SUBPARSER = re.compile(r"""add_parser\(\s*["']([\w-]+)["']""")
 USAGE_SUBS = re.compile(r"\{([\w-]+(?:,[\w-]+)*)\} \.\.\.")   # argparse's subcommand group; option choices have no "..."
 CASE_ARM = re.compile(r"^\s*([a-z][\w-]*(?:\s*\|\s*[a-z][\w-]*)*)\)", re.M)
-NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.])")
+# A number and a short unit after it (120ms, 5min, 3.2GiB, 40%): a unit changes what the number says.
+NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:[a-zA-Z%]{1,3})?(?![\w.])")
+NUMBER_PARTS = re.compile(r"(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(.*)")
+NOT_AN_ANSWER = {1, 4, 5, 124, 127, "timeout"}
 NOT_A_VALUE = re.compile(r'"[^"\n]*"|\'[^\'\n]*\'|<masked-\d+>|\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?')
 
 
@@ -326,9 +329,31 @@ def profile(root: Path, required: list[str]) -> dict:
 
 
 def numbers(out: str) -> list[str]:
-    """The numbers in an output's body: header lines, quoted strings, times and masked ids left out."""
+    """The numbers in an output's body, as printed, with any unit, by value: header lines,
+    quoted strings, times and masked ids left out."""
     body = "\n".join(ln for ln in out.splitlines() if not ln.lstrip().startswith("#"))
-    return sorted(f"{float(x):.6g}" for x in NUMBER.findall(NOT_A_VALUE.sub(" ", body)))
+    found = NUMBER.findall(NOT_A_VALUE.sub(" ", body))
+    return sorted(found, key=lambda x: (float(NUMBER_PARTS.match(x).group(1)), x))
+
+
+def sig_digits(num: str) -> int:
+    mant = num.lstrip("-").split("e")[0].split("E")[0]
+    digits = mant.replace(".", "").lstrip("0")
+    return max(1, len(digits))
+
+
+def same_number(a: str, b: str) -> bool:
+    """Equal to the precision the less precise of the two was printed at, in the same unit:
+    0.666667 and 0.6666666667 agree, 1234567 and 1234569 do not."""
+    (va, ua), (vb, ub) = NUMBER_PARTS.match(a).groups(), NUMBER_PARTS.match(b).groups()
+    if ua != ub:
+        return False
+    n = min(sig_digits(va), sig_digits(vb))
+    return f"{float(va):.{n}g}" == f"{float(vb):.{n}g}"
+
+
+def same_numbers(a: list[str], b: list[str]) -> bool:
+    return len(a) == len(b) and all(same_number(x, y) for x, y in zip(a, b))
 
 
 def pick_engine(prof: dict, wanted: str | None, which: str) -> str:
@@ -422,11 +447,15 @@ def compare(draft_dir: Path, existing: Path, run: str | None = None, run_existin
         got.append((rc, nums))
         emit(f"{side}: {shlex.join([eng, *args])} -> exit {rc}, {len(nums)} numbers in the body")
     (rc_d, n_d), (rc_e, n_e) = got
-    if rc_d == rc_e and n_d == n_e:
+    if rc_d in NOT_AN_ANSWER or rc_e in NOT_AN_ANSWER:
+        emit(f"NOT COMPARED: exit {rc_d} | {rc_e}; an engine that errs, needs a login or refuses gave no answer "
+             "to compare (its stderr says why)")
+        return EXIT_PARTIAL
+    if rc_d == rc_e and same_numbers(n_d, n_e):
         emit(f"SAME: exit {rc_d} and the same {len(n_d)} numbers")
         return EXIT_OK
-    only_d = [x for x in n_d if x not in n_e][:8]
-    only_e = [x for x in n_e if x not in n_d][:8]
+    only_d = [x for x in n_d if not any(same_number(x, y) for y in n_e)][:8]
+    only_e = [x for x in n_e if not any(same_number(x, y) for y in n_d)][:8]
     emit(f"DIFFERENT: exit {rc_d} | {rc_e}; only the draft: {', '.join(only_d) or '-'}; only the existing: {', '.join(only_e) or '-'}")
     return EXIT_PARTIAL
 

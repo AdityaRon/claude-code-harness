@@ -10,6 +10,7 @@ metrics-query, logs-fetch and api-readonly skill it drafts.
                         is never assumed
   <ENV>_PATH_PREFIXES   comma-separated API path prefixes to try in order ("" is none)
   <ENV>_POD_IMAGE       an image with curl, for the pod route
+  <ENV>_POD_TTL         seconds the pod lives (default 1800): longer than the run
 
 The setting and a direct URL are checked when the route is made; a cluster route
 opens on the engine's first request, so a refused command starts nothing and
@@ -23,7 +24,8 @@ goes out on a route that was never confirmed.
 The port-forward and the pod are torn down on every exit: a normal one, an
 exception, SIGINT, SIGTERM or SIGHUP, even one that lands while `kubectl run`
 is still creating the pod. SIGKILL cannot be caught: the pod's own `sleep` stops
-it within POD_TTL seconds (the stopped pod stays until deleted), and a
+it within <ENV>_POD_TTL seconds (default POD_TTL; the stopped pod stays until
+deleted), and a
 port-forward left behind is a local kubectl process to kill by hand. The token travels in a header; on the
 pod route the URL and headers reach curl as a config on stdin (`curl -K -`), so
 neither is in argv, the pod spec or the cluster's exec audit record.
@@ -47,7 +49,7 @@ from contextlib import ExitStack, contextmanager
 from mask import emit
 
 POD_IMAGE = "curlimages/curl:8.10.1"
-POD_TTL = 600
+POD_TTL = 1800
 FORWARD_WAIT = 20.0
 NAME = r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?"
 SPEC = re.compile(rf"^(port-forward|pod)\s+(?:svc/)?({NAME})(?::(\d{{1,5}}))?\s+in\s+({NAME})$")
@@ -105,7 +107,7 @@ class Route:
         self.state, self.error = "new", None
         self.base, self.prefix, self.via, self.probed = "", "", "", "not probed"
         self.kube: list[str] = []
-        self.pod = ""
+        self.pod, self.ttl = "", POD_TTL
         self._parse()
 
     # -- what the engine calls ------------------------------------------------
@@ -167,11 +169,16 @@ class Route:
         ctx = self._context()
         self.kube = ["kubectl", "--context", ctx, "--namespace", ns]
         port = port or self._service_port(svc)
+        self.via = f"svc/{svc}:{port} in {ns} via {mode}, context {ctx} (not opened)"
         if mode == "port-forward":
             local = self.stack.enter_context(port_forward(self.kube, svc, port))
             self.base, self.via = f"http://127.0.0.1:{local}", f"svc/{svc}:{port} in {ns} via port-forward, context {ctx}"
         else:
-            self.pod = self.stack.enter_context(pod(self.kube, os.environ.get(f"{self.env}_POD_IMAGE", POD_IMAGE), self.apply))
+            ttl = os.environ.get(f"{self.env}_POD_TTL", str(POD_TTL)).strip()
+            if not ttl.isdigit() or int(ttl) < 60:
+                raise AccessRefused(f"{self.env}_POD_TTL={ttl!r}: seconds, at least 60")
+            self.ttl = int(ttl)
+            self.pod = self.stack.enter_context(pod(self.kube, os.environ.get(f"{self.env}_POD_IMAGE", POD_IMAGE), self.apply, self.ttl))
             self.base, self.via = f"http://{svc}.{ns}.svc:{port}", f"svc/{svc}:{port} in {ns} via throwaway pod {self.pod}, context {ctx}"
 
     def _context(self) -> str:
@@ -221,7 +228,9 @@ class Route:
         rc, out, err = kubectl(self.kube + ["exec", "-i", self.pod, "--", "curl", "-K", "-"],
                                stdin=curl_config(url, headers), timeout=90)
         if rc != 0:
-            raise OSError(f"curl in pod {self.pod}: {first(err) or f'exit {rc}'}")
+            gone = re.search(r"container not found|not running|stopped container|completed pod", err, re.I)
+            hint = f"; its {self.ttl}s lifetime may have run out, so raise {self.env}_POD_TTL" if gone else ""
+            raise OSError(f"curl in pod {self.pod}: {first(err) or f'exit {rc}'}{hint}")
         body, mark, tail = out.rpartition("\n" + MARK)
         code, _, got = tail.partition(" ")
         if not mark or not code.isdigit():
@@ -276,14 +285,14 @@ def stop(p: subprocess.Popen) -> None:
 
 
 @contextmanager
-def pod(kube: list[str], image: str, apply: bool):
+def pod(kube: list[str], image: str, apply: bool, ttl: int = POD_TTL):
     """Yield a throwaway pod's name; it is deleted on the way out, however it goes."""
     name = "sf-access-" + secrets.token_hex(4)
     create = kube + ["run", name, f"--image={image}", "--restart=Never", "--labels=skill-forge/throwaway=access",
-                     "--command", "--", "sleep", str(POD_TTL)]
+                     "--command", "--", "sleep", str(ttl)]
     if not apply:
         raise AccessRefused("the pod route creates a pod, so it needs --apply. It would run\n  " + shlex.join(create)
-                            + f"\nand delete the pod when this run ends (its sleep stops it within {POD_TTL}s if this process is killed)")
+                            + f"\nand delete the pod when this run ends (its sleep stops it within {ttl}s if this process is killed)")
     created = None   # until kubectl run answers, the pod may exist, so it is deleted
     try:
         try:

@@ -23,6 +23,7 @@ Mutations that must turn this file red:
   route-refusal-unmapped: {{module}}.py: `except (Refused, ValueError, access.AccessRefused) as e:` => `except (Refused, ValueError) as e:`
   apply-ignored: {{module}}.py: `PREFIXES, a.apply) as ROUTE` => `PREFIXES, True) as ROUTE`
   unmasked-items: {{module}}.py: `emit(json.dumps(item, sort_keys=True))` => `sys.stdout.write(json.dumps(item, sort_keys=True))`
+  unopened-route-unnamed: {{module}}.py: `ROUTE.describe() if ROUTE else` => `ROUTE.describe() if ROUTE and ROUTE.base else`
 """
 from __future__ import annotations
 
@@ -140,6 +141,17 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertEqual(out.splitlines()[0], "# target:  GET /flags at https://api.test/v1 (direct) · prefix /api (probed; no API at /: HTTP 404)")
 
+    def test_guard_absent_an_html_404_is_absent_and_a_wrong_prefix_not_a_login(self):
+        page = (404, {"Content-Type": "text/html"}, "<html><body>404 Not Found</body></html>")
+        rc, out, err = Run({BASE + "/flags": page})("get", "/flags")
+        self.assertEqual(rc, 2, err)
+        self.assertIn("ABSENT", out)
+        run = Run({BASE + "/me": page, BASE + "/api/me": (200, JSON, {"id": "u1"}), BASE + "/api/flags": (200, JSON, [])},
+                  env={f"{ENV}_API_PROBE": "/me", f"{ENV}_PATH_PREFIXES": ",/api"})
+        rc, out, err = run("get", "/flags")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("prefix /api (probed; no API at /: HTTP 404)", out)
+
     def test_guard_wrong_target_a_probe_that_is_not_json_refuses(self):
         run = Run({BASE + "/me": (200, {"Content-Type": "text/plain"}, "ok")}, env={f"{ENV}_API_PROBE": "/me"})
         rc, out, err = run("get", "/flags")
@@ -154,6 +166,17 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(rc, 5)
         self.assertIn("needs --apply", err)
         self.assertFalse(any("run" in c.args[0] for c in k.call_args_list))
+
+    def test_a_route_that_fails_to_open_is_named(self):
+        env = {f"{ENV}_ACCESS": "port-forward flags-api:8080 in tools", f"{ENV}_CONTEXT": "kind-test"}
+
+        def no_forward(*a, **kw):
+            raise OSError("kubectl port-forward printed no 'Forwarding from' line in 20s")
+        with mock.patch.object(eng.access, "kubectl", return_value=(0, "kind-test\n", "")), \
+                mock.patch.object(eng.access, "port_forward", no_forward):
+            rc, out, err = Run(env=env)("get", "/flags")
+        self.assertEqual(rc, 1)
+        self.assertIn("could not reach svc/flags-api:8080 in tools via port-forward, context kind-test (not opened)", err)
 
     def test_guard_expired_auth_kube_login_is_auth_not_no_data(self):
         env = {f"{ENV}_ACCESS": "port-forward flags-api:8080 in tools", f"{ENV}_CONTEXT": "kind-test", f"{ENV}_RELOGIN": "kube-login"}

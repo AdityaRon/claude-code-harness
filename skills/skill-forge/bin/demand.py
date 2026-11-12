@@ -55,6 +55,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mask import EXIT_OK, Window, config_path, emit, header, masker, read_toml  # noqa: E402
+from skill_lint import VENDORED  # noqa: E402
 
 NOISE = {"cd", "echo", "printf", "sleep", "true", "false", "export", "set", "unset", "source", ".", "clear", "ls", "pwd",
          "exit", "date", "which", "command", "type", "history", "test", "[", "mkdir", "touch", "rm", "cp", "mv", "chmod", "open",
@@ -70,7 +71,7 @@ INTERPRETERS = re.compile(r"^(?:python[\d.]*|node|bash|sh|zsh|ruby|perl|deno|bun
 SUBCOMMANDS = set("""kubectl oc helm kustomize kind minikube istioctl linkerd argocd argo flux git gh glab docker podman
 nerdctl aws gcloud gsutil bq az doctl oci terraform tofu pulumi vault op bw tsh boundary cloudflared npm pnpm yarn cargo
 go make brew pip poetry uv systemctl launchctl temporal airflow dbt stripe heroku fly vercel ldcli flipt sentry-cli
-datadog-ci dagster prefect""".split())
+datadog-ci dagster prefect aws-vault saml2aws""".split())
 VALUE_FLAGS = {"-n", "--namespace", "--context", "--profile", "--region", "-o", "--output", "-f", "--file", "-l", "--selector",
                "--project", "-R", "--repo", "-C", "-p", "-u", "--user", "-d", "-h", "--host", "-U", "-H", "-X", "--since",
                "--tail", "-A", "-B", "-e", "--cluster", "--kubeconfig", "-w"}
@@ -84,11 +85,14 @@ MODULE = re.compile(r"[A-Za-z_][\w.]{0,40}")
 # Ported from hooks/config-guard.sh's drop_data_heredocs, not imported: this skill installs alone.
 HEREDOC = re.compile(r"(?<!<)<<(-?)[ \t]*([\"']?)([A-Za-z_][A-Za-z0-9_]*)\2")
 FEEDS_A_SHELL = re.compile(r"(?:^|[;&|(])[ \t]*(?:bash|sh|zsh|dash|ksh)(?:[ \t][^;&|]*)?$")
-# Re-login and session checks: None means every subcommand is one.
-ACCESS = {"tsh": None, "kinit": None, "kubelogin": None, "saml2aws": None, "aws-vault": None, "okta": None,
-          "gimme-aws-creds": None, "gcloud": {"auth"}, "aws": {"sso"}, "az": {"login", "account"},
+# Re-login and session checks: None means every subcommand is one. A tool that also
+# does the work (tsh ssh, aws-vault exec) lists only its login subcommands, one or two words.
+ACCESS = {"kinit": None, "kubelogin": None, "okta": None, "gimme-aws-creds": None,
+          "tsh": {"login", "logout", "status", "kube login", "db login", "app login", "apps login"},
+          "aws-vault": {"login", "clear", "remove", "rotate"}, "saml2aws": {"login", "configure"},
+          "gcloud": {"auth"}, "aws": {"sso"}, "az": {"login", "account"},
           "vault": {"login"}, "gh": {"auth"}, "docker": {"login"}, "op": {"signin"}, "bw": {"login", "unlock"}}
-VENDORED_HELPERS = {"mask.py", "sqlguard.py", "python.sh"}
+VENDORED_HELPERS = set(VENDORED)
 MAX_PROMPT = 400          # characters; a longer prompt is a pasted brief, not a question
 MAX_QUESTION_STEPS = 10   # a longer run after a prompt is a task, not its answer
 STOP = set("""a an the and or but if so of to in on at by for with from as is are was were be been being do does did
@@ -453,7 +457,7 @@ def similar(a: set, b: set) -> bool:
 def is_access(shape: str) -> bool:
     parts = shape.split()
     rule = ACCESS.get(parts[0], False) if parts else False
-    return rule is None or (rule is not False and len(parts) > 1 and parts[1] in rule)
+    return rule is None or (rule is not False and len(parts) > 1 and (parts[1] in rule or " ".join(parts[1:3]) in rule))
 
 
 def installed_engines(dirs: list[str]) -> dict:
@@ -564,7 +568,10 @@ def _contains(big: list, small: list) -> bool:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n", 1)[1])
-    cfg = read_toml(config_path()).get("demand", {})
+    whole = read_toml(config_path())
+    cfg = whole.get("demand", {})
+    # skill_dirs is set once, under [discover], and read by both; [demand] may override it.
+    skill_dirs = cfg.get("skill_dirs") or whole.get("discover", {}).get("skill_dirs", ["~/.claude/skills"])
     p.add_argument("--top", type=int, default=cfg.get("top", 10))
     p.add_argument("--since", type=int, default=cfg.get("since_days", 60), help="days back")
     p.add_argument("--transcripts", action="append")
@@ -585,7 +592,7 @@ def main(argv=None) -> int:
     hist = read_history(hfiles, since, ignore, a.include_undated, counts)
     allsess = sessions + hist
     assign_shapes(allsess)
-    ranked = candidates(allsess, a.min_sessions, installed_engines(a.skills or cfg.get("skill_dirs", ["~/.claude/skills"])))
+    ranked = candidates(allsess, a.min_sessions, installed_engines(a.skills or skill_dirs))
     top = [c for c in ranked if c["tag"] != "access"][:a.top]
     access = [c for c in ranked if c["tag"] == "access"][:max(3, a.top // 3)]
     m = masker()

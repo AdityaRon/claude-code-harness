@@ -423,7 +423,7 @@ def main(argv=None) -> int:
         emit(f"REFUSED: {e}", err=True)
         return EXIT_REFUSED
     except OSError as e:
-        emit(f"could not reach {ROUTE.describe() if ROUTE and ROUTE.base else os.environ.get(ENV + '_PROM_URL', '?')}: {e}", err=True)
+        emit(f"could not reach {ROUTE.describe() if ROUTE else os.environ.get(ENV + '_PROM_URL', '?')}: {e}", err=True)
         return 1
 
 

@@ -63,13 +63,23 @@ DEFAULT_WRITE_VERBS = [
     r"""["']\s*mutation\b""",   # a GraphQL write
     r"""\b(?:requests|httpx)\.(?:post|put|patch|delete)\(""",
 ]
-# Shell has no quotes around a verb, so these read the command line itself.
+# Shell has no quotes around a verb, so these read the command line itself. The
+# verb must be the subcommand, after any global flags: a flag that takes a value
+# consumes it, so `-n label-studio get pods` is a read.
+_VALUE_FLAGS = r"(?:n|namespace|context|kubeconfig|cluster|user|s|server|as|l|selector|o|output|kube-context)"
+_KFLAGS = (r"(?:\s+(?:--?" + _VALUE_FLAGS + r"(?:=|\s+)\S+|--?(?!" + _VALUE_FLAGS + r"\b)[\w-]+(?:=\S+)?))*")
 SHELL_WRITE_VERBS = [
-    r"""\bkubectl\b[^\n|;&]*?\s(?:apply|create|delete|patch|replace|scale|annotate|label|taint|cordon|uncordon|drain|edit)\b""",
-    r"""\bkubectl\b[^\n|;&]*?\srollout\s+(?:restart|undo|pause|resume)\b""",
-    r"""\bhelm\b[^\n|;&]*?\s(?:install|upgrade|uninstall|rollback)\b""",
+    r"\bkubectl" + _KFLAGS + r"\s+(?:apply|create|delete|patch|replace|scale|annotate|label|taint|cordon|uncordon"
+    r"|drain|edit|set|expose|run)(?![\w-])",
+    r"\bkubectl" + _KFLAGS + r"\s+rollout\s+(?:restart|undo|pause|resume)\b",
+    r"\bhelm" + _KFLAGS + r"\s+(?:install|upgrade|uninstall|rollback)(?![\w-])",
     r"""\b(?:curl|http|xh)\b[^\n|;&]*?(?:-X\s*|--request[ =])["']?(?:POST|PUT|PATCH|DELETE)\b""",
+    # curl sends a body, so POSTs (or PUTs, with -T), unless -G makes the body a query.
+    r"""\bcurl\b(?![^\n|;&]*\s(?:-G|--get)\b)[^\n|;&]*?\s(?:-d|-F|-T|--data(?:-raw|-binary|-urlencode|-ascii)?"""
+    r"""|--json|--form(?:-string)?|--upload-file)(?=[\s=@'"]|$)""",
     r"""\bgh\s+api\b[^\n|;&]*?(?:-X\s*|--method[ =])(?:POST|PUT|PATCH|DELETE)\b""",
+    # gh api sends fields as a POST unless the method is named GET.
+    r"""\bgh\s+api\b(?![^\n|;&]*(?:-X\s*|--method[ =])GET\b)[^\n|;&]*?\s(?:-f|-F|--field|--raw-field|--input)(?=[\s=]|$)""",
     r"""(?i)\b(?:insert\s+into|update\s+[\w."]+\s+set|delete\s+from|truncate\s+table|drop\s+(?:table|schema)|alter\s+table)\b""",
 ]
 SH_MASKED = re.compile(r"\bmask\.py\b[^\n]*--filter")
@@ -174,11 +184,15 @@ def load(root: Path) -> Skill:
     for p in sorted(root.glob("*.toml")):
         sk.tomls[p.name] = p.read_text()
     read = {*sk.scripts, *sk.tests, *sk.shell_tests}
-    for p in sorted(root.rglob("*")):
-        rel = p.relative_to(root)
-        if p.suffix in (".py", ".sh") and p.is_file() and rel.as_posix() not in read and p.name != "__init__.py" \
-                and not NOT_READ.intersection(rel.parts):
-            sk.unread.append(rel.as_posix())
+    # NOT_READ folders are pruned before the walk goes in: a skill that is its own
+    # clone, or holds a .venv, would otherwise cost a stat per file on every lint.
+    for top, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in NOT_READ)
+        for f in sorted(files):
+            rel = (Path(top) / f).relative_to(root)
+            if rel.suffix in (".py", ".sh") and rel.as_posix() not in read and f != "__init__.py":
+                sk.unread.append(rel.as_posix())
+    sk.unread.sort()
     return sk
 
 
@@ -189,9 +203,25 @@ def parse(src: str) -> ast.Module:
         return ast.parse(src)
 
 
+HEREDOC = re.compile(r"""(?<!<)<<(?!<)-?\s*(['"]?)([A-Za-z_]\w*)\1""")
+
+
 def shell_code(src: str) -> str:
-    """The script with comment lines blanked, so line numbers still hold."""
-    return "\n".join("" if line.lstrip().startswith("#") else line for line in src.splitlines())
+    """The script with comment lines blanked, so line numbers still hold. A heredoc's
+    body is data: a line in it that starts with # is printed, not a comment, so it stays."""
+    out, ends = [], []
+    for line in src.splitlines():
+        if ends:
+            out.append(line)
+            if line.strip() == ends[0]:
+                ends.pop(0)
+            continue
+        if line.lstrip().startswith("#"):
+            out.append("")
+            continue
+        out.append(line)
+        ends += [m.group(2) for m in HEREDOC.finditer(line)]
+    return "\n".join(out)
 
 
 def skill_md_refs(sk: Skill) -> tuple[list[str], list[str]]:

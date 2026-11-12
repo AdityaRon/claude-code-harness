@@ -38,6 +38,12 @@ Mutations that must turn this file red (deleting any check must be seen):
   warn-hidden: skill_lint.py: `if verdict == "PASS" and all(statuses.get(c) == "N/A" for c in ENGINE_CHECKS):` => `if False:`
   nondir-not-skipped: skill_lint.py: `if not root.is_dir():` => `if False:`
   parse-warnings-echoed: skill_lint.py: `warnings.filterwarnings("ignore", message=".*invalid escape sequence")` => `pass`
+  verb-anywhere: skill_lint.py: `_KFLAGS + r"\\s+(?:apply|` => `r"[^\\n|;&]*?\\s(?:apply|`
+  curl-body-unseen: skill_lint.py: `(?:-d|-F|-T|--data(?:-raw|-binary|-urlencode|-ascii)?` => `(?:--nodata(?:-x)?`
+  curl-get-body-a-write: skill_lint.py: `(?![^\\n|;&]*\\s(?:-G|--get)\\b)` => `(?!x\\by)`
+  gh-fields-unseen: skill_lint.py: `(?:-f|-F|--field|--raw-field|--input)` => `(?:--nofield)`
+  heredoc-comments-blanked: skill_lint.py: `        if ends:` => `        if False:`
+  walk-enters-skipped: skill_lint.py: `        dirs[:] = sorted(d for d in dirs if d not in NOT_READ)` => `        dirs[:] = sorted(dirs)`
 """
 from __future__ import annotations
 
@@ -52,6 +58,7 @@ import unittest
 import warnings
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "bin"))
@@ -266,11 +273,45 @@ class FlatLayoutTest(unittest.TestCase):
             res = skill_lint.lint(root)
         self.assertEqual(res["C1"].status, "N/A", res["C1"].detail)
 
+    def test_the_unread_walk_never_enters_a_skipped_folder(self):
+        with Workdir("flat", "flat") as root:
+            (root / "node_modules" / "pkg").mkdir(parents=True)
+            (root / "node_modules" / "pkg" / "x.py").write_text("print(1)\n")
+            (root / "extra").mkdir()
+            (root / "extra" / "more.py").write_text("print(1)\n")
+            entered = []
+            real_walk = skill_lint.os.walk
+
+            def walk(top, *a, **kw):
+                for t, d, f in real_walk(top, *a, **kw):
+                    entered.append(Path(t).name)
+                    yield t, d, f
+            with mock.patch.object(skill_lint.os, "walk", walk):
+                sk = skill_lint.load(root)
+        self.assertNotIn("node_modules", entered)
+        self.assertNotIn("pkg", entered)
+        self.assertIn("extra/more.py", sk.unread)
+
+    def test_a_shell_header_printed_from_a_heredoc_counts(self):
+        printed = 'cat <<EOF\n# target:  x\n# window:  n/a\nEOF\nkubectl get pods\n'
+        quoted = "cat <<-'END'\n\t# target:  x\n\tEND\n"
+        commented = '# target: is printed below, one day\nkubectl get pods\n'
+        self.assertTrue(skill_lint.has_header("tool.sh", printed))
+        self.assertTrue(skill_lint.has_header("tool.sh", quoted))
+        self.assertFalse(skill_lint.has_header("tool.sh", commented))
+        self.assertEqual(skill_lint.shell_code("x=$((1<<2))\n# c\ncat <<<'a'\n# d\n"), "x=$((1<<2))\n\ncat <<<'a'\n")
+
     def test_shell_write_verbs(self):
         writes = ["kubectl -n x apply -f a.yaml", "kubectl rollout restart deploy/x", "helm upgrade x ./chart",
-                  "curl -sf -X POST https://x/api", "gh api -X PATCH repos/o/r", "psql -c 'delete from t where id = 1'"]
+                  "curl -sf -X POST https://x/api", "gh api -X PATCH repos/o/r", "psql -c 'delete from t where id = 1'",
+                  "kubectl --context c --insecure-skip-tls-verify delete pod x", "kubectl -n label label pod x a=b",
+                  "helm --kube-context c -n ns upgrade x ./chart", "curl -d x=1 https://a/b", "curl --json '{}' https://x",
+                  "curl -sf -T file https://x/up", "gh api repos/o/r/issues -f title=x", "gh api graphql --input q.json"]
         reads = ["kubectl get pods -l app=x", "kubectl describe pod x | grep delete", "kubectl get pods --show-labels",
-                 "curl -sf https://x/api", "helm list -A", "gh api repos/o/r", "psql -c 'select 1'"]
+                 "curl -sf https://x/api", "helm list -A", "gh api repos/o/r", "psql -c 'select 1'",
+                 "kubectl get pods -n label-studio", "kubectl -n label get pods", "kubectl get pods -l create=yes",
+                 "helm list -n upgrade-tests", "curl -G -d q=1 https://x/search", "curl -sf https://x/api?d=1",
+                 "gh api -X GET search/issues -f q=x", "gh api repos/o/r --jq .full_name"]
         for line in writes:
             self.assertTrue(any(re.search(v, line) for v in skill_lint.SHELL_WRITE_VERBS), line)
         for line in reads:

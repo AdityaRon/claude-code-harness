@@ -59,7 +59,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sqlguard  # noqa: E402
 from mask import EXIT_OK, EXIT_REFUSED, config_path, emit, header, iso, masker, read_toml, state_dir  # noqa: E402
-from skill_lint import frontmatter  # noqa: E402
+from skill_lint import VENDORED, frontmatter  # noqa: E402
 
 KUBE_AUTH = {
     "aws": ("aws sso login --profile <profile>", '"ExpiredToken" or "The SSO session associated with this profile has expired"'),
@@ -483,7 +483,7 @@ def guess_archetype(root: Path, desc: str) -> str:
         return f"{declared} (forge.toml)"
     text = desc
     for p in [*root.glob("*.py"), *root.glob("*.sh"), *root.glob("bin/*.py"), *root.glob("bin/*.sh")]:
-        if p.name not in ("mask.py", "sqlguard.py", "python.sh"):
+        if p.name not in VENDORED:
             text += "\n" + p.read_text(errors="replace")[:20000]
     hits, arch = max((len(re.findall(rx, text)), a) for a, rx in ARCH_HINTS)
     return f"{arch}?" if hits else "none"
