@@ -20,48 +20,62 @@ const LONG = `an old free-text line ${'x'.repeat(280)}`
 
 const day = (d: string, reviewed: number, approved: number, merged: number) => ({ day: d, reviewed, approved, merged })
 
-// What `hub.py panel` prints; its sorting and naming are tested in tests/test_panel_data.py.
-const PANEL = {
-  state: '/home/me/.local/state/comms-hub',
-  day: 'Wed 21 Oct',
-  prs: {
-    as_of: '10:00',
-    age: '0m',
-    stale: false,
-    repos: [{ repo: 'app', needs: 3, total: 4 }, { repo: 'infra', needs: 0, total: 1 }],
-    rows: [
-      { key: 'pr:acme/app#31', group: 'reviewing', needs: true,
-        line: 'app #31  dana  commented@1111111 · new commits · CI green · approved by erin' },
-      { key: 'pr:acme/app#32', group: 'reviewing', needs: true, line: 'app #32  dana  commented@2222222 · approvable · CI pending' },
-      { key: 'pr:acme/app#40', group: 'authored', needs: true, line: 'app #40  approved, needs your merge · CI green' },
-      { key: 'pr:acme/app#41', group: 'authored', needs: false, line: 'app #41  review required · CI pending' },
-      { key: 'pr:acme/infra#9', group: 'reviewing', needs: false, line: 'infra #9  dana  commented@2222222 · CI red' },
+// What `hub.py panel` prints, with every key it carries. tests/test_panel_data.py
+// reads the JSON between the markers and checks its key shape against hub.panel's
+// output, so it stays strict JSON; the sorting and naming are tested there too.
+const FIXTURE = /* fixture:start */ {
+  "state": "/home/me/.local/state/comms-hub",
+  "day": "Wed 21 Oct",
+  "prs": {
+    "as_of": "10:00",
+    "age": "0m",
+    "stale": false,
+    "checked": "",
+    "parked": 0,
+    "repos": [{ "repo": "app", "needs": 3, "total": 4 }, { "repo": "infra", "needs": 0, "total": 1 }],
+    "rows": [
+      { "key": "pr:acme/app#31", "group": "reviewing", "needs": true,
+        "line": "app #31  dana  commented@1111111 · new commits · CI green · approved by erin" },
+      { "key": "pr:acme/app#32", "group": "reviewing", "needs": true, "line": "app #32  dana  commented@2222222 · approvable · CI pending" },
+      { "key": "pr:acme/app#40", "group": "authored", "needs": true, "line": "app #40  approved, needs your merge · CI green" },
+      { "key": "pr:acme/app#41", "group": "authored", "needs": false, "line": "app #41  review required · CI pending" },
+      { "key": "pr:acme/infra#9", "group": "reviewing", "needs": false, "line": "infra #9  dana  commented@2222222 · CI red" }
     ],
-    days: [day('Thu 15', 0, 0, 0), day('Fri 16', 1, 0, 1), day('Mon 19', 0, 0, 0), day('Tue 20', 3, 1, 0),
-           day('Wed 21', 2, 1, 12)],
+    "days": [
+      { "day": "Thu 15", "reviewed": 0, "approved": 0, "merged": 0 },
+      { "day": "Fri 16", "reviewed": 1, "approved": 0, "merged": 1 },
+      { "day": "Mon 19", "reviewed": 0, "approved": 0, "merged": 0 },
+      { "day": "Tue 20", "reviewed": 3, "approved": 1, "merged": 0 },
+      { "day": "Wed 21", "reviewed": 2, "approved": 1, "merged": 12 }
+    ]
   },
-  needs: [{ key: 'held:a', ref: 'app #14', target: '#team-reviews', text: 'Carol, could you review #14?',
-            note: 'needs your go', age: '2h' }],
-  going: [
-    { key: 'going:b', post: '08:30', target: 'Bob DM', ref: 'app #15', text: 'review ask', status: 'gated 09:50 ✓',
-      warn: false },
-    { key: 'going:c', post: '08:30', target: 'Bob DM', ref: 'app #16', text: 'a review ask not yet recorded',
-      status: 'claim moved ⚠', warn: true },
+  "needs": [{ "key": "held:a", "ref": "app #14", "target": "#team-reviews", "text": "Carol, could you review #14?",
+              "full": "Carol, could you review #14?", "note": "needs your go", "age": "2h" }],
+  "going": [
+    { "key": "going:b", "post": "08:30", "target": "Bob DM", "ref": "app #15", "text": "review ask", "full": "review ask",
+      "status": "gated 09:50 ✓", "warn": false },
+    { "key": "going:c", "post": "08:30", "target": "Bob DM", "ref": "app #16", "text": "a review ask not yet recorded",
+      "full": "a review ask not yet recorded", "status": "claim moved ⚠", "warn": true }
   ],
-  sessions: [{ key: 'row:1021.3', who: 'app-session', ref: 'app #16', text: 'conflicts', since: '09:20' }],
-  held: [],
-  events: [
-    { key: 'row:1021.7', ts: '2026-10-21T16:46:00+00:00', at: '09:46', kind: 'sent', ref: '', target: '#team-reviews',
-      text: 'reply to carol', corrected: false },
-    { key: 'row:1021.4', ts: '2026-10-21T16:40:00+00:00', at: '09:30', kind: 'note', ref: '', target: '',
-      text: 'the thread had 19 replies', corrected: true },
-    { key: 'row:1021.md2', ts: '2026-10-21T16:00:00+00:00', at: '09:00', kind: 'note', ref: '', target: '',
-      text: LONG, corrected: false },
+  "sessions": [{ "key": "row:1021.3", "who": "app-session", "ref": "app #16", "text": "conflicts", "since": "09:20" }],
+  "held": [{ "key": "held:d", "ref": "app #18", "target": "Bob DM", "text": "Merged.", "full": "Merged.",
+             "reason": "a fold-in is expected" }],
+  "events": [
+    { "key": "row:1021.7", "ts": "2026-10-21T16:46:00+00:00", "at": "09:46", "kind": "sent", "ref": "", "target": "#team-reviews",
+      "text": "reply to carol", "corrected": false },
+    { "key": "row:1021.4", "ts": "2026-10-21T16:40:00+00:00", "at": "09:30", "kind": "note", "ref": "", "target": "",
+      "text": "the thread had 19 replies", "corrected": true },
+    { "key": "row:1021.md2", "ts": "2026-10-21T16:00:00+00:00", "at": "09:00", "kind": "note", "ref": "", "target": "",
+      "text": "an old free-text line", "corrected": false }
   ],
-  next_tick: '10:07',
-  last_tick: '09:45, 1 event',
-  read: '10:00',
-}
+  "next_tick": "10:07",
+  "last_tick": "09:45, 1 event",
+  "read": "10:00",
+  "trigger": ""
+} /* fixture:end */
+
+// The pane as most tests draw it: nothing held, and a pre-JSONL line too long for a row.
+const PANEL = { ...FIXTURE, held: [], events: FIXTURE.events.map(e => (e.key === 'row:1021.md2' ? { ...e, text: LONG } : e)) }
 
 // Fifteen events, three past the compact cap, and drafts with more than their first line.
 const BUSY = {

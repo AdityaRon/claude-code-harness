@@ -1,6 +1,6 @@
 ---
 name: comms-hub
-description: The comms session's recurring tick, and how every other session sends Slack. Use when running a tick in the one long-lived comms session (GitHub queue, Slack replies, routing events to peer sessions, gating and sending their drafts, resolving answered-and-approved threads on my PRs), and when any other session is about to send, answer or schedule a Slack message, which hands the draft to the comms session instead.
+description: The comms session's recurring tick. Use when running a tick in the one long-lived comms session (GitHub queue, Slack replies, routing events to peer sessions, gating and sending their drafts, resolving answered-and-approved threads on my PRs).
 ---
 
 # comms-hub: one session speaks on Slack for all of them
@@ -14,32 +14,8 @@ human's.
 
 ## If you are a peer
 
-Do not send, schedule or edit a Slack message yourself. Send the comms session
-(find it with ListAgents; ask the user if none is clearly it) one message for
-all the drafts you hold:
-
-```
-comms-hub draft
-to: <channel id> reply <thread ts>      (or: to: <channel id> top-level)
-from: <your session's name, as ListAgents lists it>
-kind: reply | react
-claims:
-- <each fact the message states> | <its source: PR URL, ticket key, page URL and version>
-user-approved: <the user's words, quoted> | no
-fold-in: expected | none
----
-<the message, exactly as it should go out; nothing for react>
-```
-
-`kind: react` acknowledges a request GitHub already answers, such as a review
-request your posted review covers: no message, and `to:` names the request's
-ts as for a reply. The review on GitHub is the answer; Slack carries only what
-GitHub can't (a decision, merge order, a hold, a question not on the PR, a
-review not posted yet). `fold-in: expected` means more is coming for the same
-thread (a CI run, an answer you are waiting on). The comms session replies with
-the sent ts, the scheduled id, the reaction, or why it held the draft. Once it
-sends, you own that thread's replies for two weeks: the comms session routes
-each one back to you.
+Use the slack-draft skill: it holds the draft a peer sends and what comes back.
+The tick below reads drafts in that format.
 
 ## Setup, once per machine
 

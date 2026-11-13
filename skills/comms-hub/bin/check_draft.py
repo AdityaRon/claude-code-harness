@@ -70,8 +70,17 @@ CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 # "1234567" a number), not part of a word, a path, a version or a longer digest.
 COMMIT = re.compile(r"(?<![\w/.:-])(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w/-]|\.\w)")
 TS = re.compile(r"\d{10}\.\d{6}")
+# The samples vendors publish, which secret-scanner lets through too: an AWS key
+# ending EXAMPLE, jwt.io's signature, and a placeholder for a URL's password.
+AWS_SAMPLE = r"(?![0-9A-Z]{9}EXAMPLE)"
+JWT_SAMPLE = r"(?!SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c(?![\w-]))"
+URL_PLACEHOLDER = r"(?!(?:password|pass|passwd|secret|changeme|example|x{3,}|\*+|<[^>]*>|\\?\$\{?[A-Za-z_]\w*\}?)@)"
 TOKEN = re.compile(r"(?<!\w)(?:xox[abposr]-[\w-]{10,}|gh[pousr]_\w{30,}|github_pat_\w{30,}|sk-[\w-]{30,}"
-                   r"|(?:AKIA|ASIA)[0-9A-Z]{16}"  # an AWS key, temporary ones included
+                   r"|(?:AKIA|ASIA)" + AWS_SAMPLE + r"[0-9A-Z]{16}"  # an AWS key, temporary ones included
+                   r"|glpat-[\w-]{20,}|npm_[A-Za-z0-9]{36}|xapp-\d+-[\w-]{10,}|AIza[\w-]{35}|sk_(?:live|test)_\w{24,}"
+                   r"|eyJ[\w-]{10,}\.eyJ[\w-]{10,}\." + JWT_SAMPLE + r"[\w-]{10,}"  # a JWT
+                   r"|hooks\.slack\.com/services/[\w/+-]{20,}"  # a webhook
+                   r"|[a-z][\w+.-]*://[^/\s:@]+:" + URL_PLACEHOLDER + r"[^/\s@]{3,}@"  # a URL's password
                    r"|(?:sdk|mob|api)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # a LaunchDarkly key
                    r"|-----BEGIN [A-Z ]*-----"  # a PEM block
                    r"|(?i:[a-z_]*(?:key|token|secret|password)\s*[=:]\s*[\"']?[\w./+-]{8,}))")  # key=..., token: ...

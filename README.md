@@ -158,6 +158,8 @@ you as a comment only. It never approves a PR or merges someone else's.
   zone filled in; state in `~/.local/state/comms-hub/`. `install.sh` creates
   neither, and neither belongs in a repo ([docs/install.md](docs/install.md)).
 - The protocol the comms session follows: [skills/comms-hub/SKILL.md](skills/comms-hub/SKILL.md).
+  A peer's side, the draft it hands over, is the separate [slack-draft](skills/slack-draft/SKILL.md)
+  skill, so a session that only sends Slack does not load the tick.
   Each script's lessons are in its docstring; `tests/comms-hub.test.sh` runs the
   tests and `skills/comms-hub/tests/run.py --mutate` checks that each rule's
   mutation turns a test red.
@@ -242,16 +244,16 @@ hooks/                   ← one file per hook, plus shared lib.sh
 rules/                   ← installed to ~/.claude/rules, loaded in every session
   prose-and-comments.md  collaboration.md  working-agreement.md  environment.md
   python-tests.md        ← path-scoped: loads only when Claude opens Python
-skills/                  ← memory-audit/, memory-archive/, pr-review/
+skills/                  ← memory-audit/, memory-archive/, pr-review/, slack-draft/
   comms-hub/             ← SKILL.md, config.example.toml, bin/ (its scripts), panel/ (the comms panel mod),
                            tests/ (Python), lint-waivers.toml (skill_lint's waivers, not installed)
   skill-forge/           ← SKILL.md, config.example.toml, bin/, templates/ (installed to ~/.local/share), tests/,
                            forge.toml (its manifest for skill_lint, not installed)
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
-                           heredoc-openers, repo-layout and workflow-gates cut across files; comms-hub,
-                           comms-hub-prereqs, skill-forge and skill-lint run the skills' own suites;
-                           bench-corpus.jsonl feeds hook-bench
+                           heredoc-openers, repo-layout, token-shapes and workflow-gates cut across
+                           files; comms-hub, comms-hub-prereqs, skill-forge and skill-lint run the
+                           skills' own suites; bench-corpus.jsonl feeds hook-bench
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
   permissions.md  auto-mode.md  customization.md  known-limitations.md
