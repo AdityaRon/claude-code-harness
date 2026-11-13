@@ -241,5 +241,14 @@ done
   || fail "every suite is named after its file or on the tests/ line" "unlisted:$UNLISTED"
 
 echo ""
+echo "=== Every skill's tests/run.py is skill-forge's, byte for byte ==="
+# comms-hub's was an older copy (111 lines of diff): it copied only bin/ and
+# tests/, so a mutation could not name a file elsewhere in the skill.
+for f in skills/*/tests/run.py; do
+  [ "$f" = skills/skill-forge/tests/run.py ] && continue
+  cmp -s "$f" skills/skill-forge/tests/run.py && pass "$f is skill-forge's" || fail "$f differs from skill-forge's" "copy skills/skill-forge/tests/run.py over it"
+done
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
