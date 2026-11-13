@@ -259,11 +259,15 @@ function hd_scan(s,    i, n, c, j, w) {
       if (hbt || HD_POS || (hsp > 0 && hbtf[hsp])) { HD_BAD = 1; return }
       if (!hd_word(s, i)) { HD_BAD = 1; return }
       HD_INSUB = HD_SUBSEEN || substr(s, 1, i) ~ /\$\(|`|[<>]\(/
+      # In a substitution its scanner reads the delimiter and the rest of this line
+      # too: a paren, quote or backslash in either is read as the body lines are.
+      if (HD_INSUB && (HD_TERM ~ /[()\047"`\\]/ || hd_body(substr(s, i + HD_LEN)))) { HD_BAD = 1; return }
       hd_span(i, i + HD_LEN - 1, "q"); i += HD_LEN - 1
     }
   }
   hcont = (hesc == n + 1)
-  if (s ~ /\$\(|`|[<>]\(/) HD_SUBSEEN = 1
+  # $\ then ( on the next line is $( once bash joins them.
+  if (s ~ /\$\(|`|[<>]\(/ || (hcont && s ~ /[$<>]\\$/)) HD_SUBSEEN = 1
   if (HD_POS && (hq != "" || hcont)) HD_BAD = 1
 }
 # The classes of a whole command held in line[1..nl]: CLS[k, i] for line k, and

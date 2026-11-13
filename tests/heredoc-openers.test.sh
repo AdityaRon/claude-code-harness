@@ -92,6 +92,12 @@ INSUB=(
   "a comment in \"\$( )\""       $'x="$(cat <<\'EOF\'\n# c )"\n'"$M"$'\nEOF\n)"'
   "a body in <( )"               $'cat <(cat <<EOF\nhi\n)\n'"$M"$'\nEOF'
   "x=\$(cat <<EOF) on one line"  $'x=$(cat <<EOF)\n'"$M"$'\nEOF'
+  # The delimiter and the rest of the opener line go through the same scanner.
+  "a ) in a quoted delimiter"    $'x=$(cat <<\'E)F\'\nhi\nE)F\n'"$M"$'\n)'
+  "a comment with ) after it, in \"\$( )\"" $'echo "$(cat <<\'EOF\' # )"\n'"$M"$'\nEOF\n)"'
+  "\${ } holding ) after it"     $'x=$(cat <<\'EOF\' ${y)}\n'"$M"$'\nEOF\n)'
+  "a backtick opened after it"   $'x=$(cat <<\'EOF\' `\n`)\n'"$M"$'\n`\nEOF\n)'
+  "\$\\ then ( on the next line" $'x=$\\\n(cat <<\'EOF\'\nhi\n)\n'"$M"$'\nEOF'
 )
 n32=0
 for ((i = 0; i < ${#INSUB[@]}; i += 2)); do
@@ -112,6 +118,7 @@ ASIS=(
   "a \$' string"                       $'x=$(cat <<\'EOF\'\n$\'a\'\n'"$M"$'\nEOF\n)'
   "an escaped (, then )"               $'x=$(cat <<\'EOF\'\n\\(\n)\n'"$M"$'\nEOF\n)'
   "a second body after an open quote"  $'x=$(cat <<\'EOF\'\nit\'s\nEOF\n)\ny=$(cat <<EOF\n)\n'"$M"$'\nEOF\n)'
+  "a ) in the quoted delimiter"        $'x=$(cat <<\'E)F\'\n'"$M"$'\nE)F\n)'
 )
 for ((i = 0; i < ${#ASIS[@]}; i += 2)); do
   label=${ASIS[$i]}; cmd=${ASIS[$((i + 1))]}
@@ -263,8 +270,8 @@ for c in sys.stdin.read().split("\0")[:-1]:
   for ((i = 0; i < ${#DEMAND_DROPS[@]}; i += 2)); do
     [ "${DD[$((i / 2))]}" = 0 ] && pass "${DEMAND_DROPS[$i]}: demand.py drops the body" || fail "${DEMAND_DROPS[$i]}: demand.py counts a body no shell runs" ""
   done
-  # The bash-3.2-only rows above, on any bash: demand.py keeps each as typed.
-  for i in 0 12 14 16; do
+  # Every bash-3.2-only row above, on any bash: demand.py keeps each as typed.
+  for ((i = 0; i < ${#INSUB[@]}; i += 2)); do
     [ "$(printf '%s\0' "${INSUB[$((i + 1))]}" | demand_keeps)" = 1 ] \
       && pass "${INSUB[$i]}: demand.py keeps it" || fail "${INSUB[$i]}: demand.py dropped a line bash 3.2 runs" ""
   done
@@ -478,6 +485,15 @@ BLOCK=(
   # A quote the body leaves open flips the quoting of what follows the terminator.
   "config-guard|git commit -m \"\$(cat <<'EOF'${NL}it's${NL}EOF${NL}echo ' ) ; cp /dev/null ~/.claude/settings.json ; : ' )\"${NL}# '"
   "env-guard|git commit -m \"\$(cat <<'EOF'${NL}it's${NL}EOF${NL}echo ' ) ; cat .env ; : ' )\"${NL}# '"
+  # The delimiter and the rest of the opener line, and a $( split by a backslash-newline.
+  "config-guard|git commit -m \"\$(cat <<'E)F'${NL}hi${NL}E)F${NL}\" ; cp /dev/null ~/.claude/settings.json ; echo \"${NL})\""
+  "env-guard|git commit -m \"\$(cat <<'E)F'${NL}hi${NL}E)F${NL}\" ; cat .env ; echo \"${NL})\""
+  "config-guard|x=\$(cat <<'E\"F'${NL}hi${NL}E\"F${NL})${NL}echo \"${NL}) ; cp /dev/null ~/.claude/settings.json ; echo \" \"${NL}# \""
+  "config-guard|echo \"\$(cat <<'EOF' # )\"${NL}cp /dev/null ~/.claude/settings.json${NL}EOF${NL})\""
+  "config-guard|echo \"\$(cat <<'EOF' # it's${NL}')\"${NL}cp /dev/null ~/.claude/settings.json${NL}'${NL}EOF${NL})\""
+  "config-guard|x=\$(cat <<'EOF' \${y)}${NL}cp /dev/null ~/.claude/settings.json${NL}EOF${NL})"
+  "config-guard|x=\$(cat <<'EOF' ${BT}${NL}${BT})${NL}cp /dev/null ~/.claude/settings.json${NL}${BT}${NL}EOF${NL})"
+  "config-guard|x=\$\\${NL}(cat <<'EOF'${NL}hi${NL})${NL}cp /dev/null ~/.claude/settings.json${NL}EOF"
 )
 MSG="Fix it's \"quoted\" and ${BT}code${BT} in case x) we"
 ALLOW=(

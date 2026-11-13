@@ -330,10 +330,12 @@ class Heredocs:
                     found = w
                     self.hbq, self.hbdep = "", 0
                     self.insub = self.subseen or bool(HD_SUB.search(s, 0, i + 1))
+                    if self.insub and (re.search(r"[()'\"`\\]", w[1]) or self.body(s[i + w[0]:])):
+                        raise ValueError(s)
                     i += w[0] - 1
             i += 1
         self.cont = esc == n
-        self.subseen = self.subseen or bool(HD_SUB.search(s))
+        self.subseen = self.subseen or bool(HD_SUB.search(s)) or (self.cont and s[-2:-1] in ("$", "<", ">"))
         if found and (self.q or self.cont):
             raise ValueError(s)
         return found
