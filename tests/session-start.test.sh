@@ -254,6 +254,7 @@ check_eq "stamp lives in the state dir" "2.1.281 $(date +%Y-%m-%d)" "$(head -1 "
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.282 run_resume "sess-clean")
 check_contains "a newer CLI nudges again" "Installed 2.1.282; the harness was verified at 2.1.280" "$OUT"
 printf '2.1.282 2000-01-01\n' > "$CLAUDE_STATE_DIR/contract-nudge"
+rm -f "$CLAUDE_STATE_DIR"/contract-nudge.claim.*   # a new day has no claim yet
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.282 run_resume "sess-clean")
 check_contains "and so does a stale stamp from another day" "Installed 2.1.282" "$OUT"
 
@@ -337,6 +338,123 @@ check_eq "no version in the path: the binary is asked" "9.9.9" "$(CLAUDE_CLI_PAT
 printf '2.1.331\n' > "$TMP/pin"
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_PATH="$C/bin/claude" CLAUDE_STATE_DIR="$TMP/state-cli" run_resume "sess-clean")
 check_contains "the contract nudge uses it" "Installed 2.1.330; the harness was verified at 2.1.331" "$OUT"
+
+# A copy of the hook beside a stub memory-index.sh that records each run and takes
+# STUB_SLEEP seconds (lib.sh puts the system folders first on PATH, so a stub has
+# to be one the hook finds beside itself).
+TREE="$TMP/tree"; mkdir -p "$TREE/hooks" "$TREE/bin"
+cp hooks/session-start.sh hooks/lib.sh "$TREE/hooks/"
+export RUNS="$TMP/index-runs"
+printf '#!/usr/bin/env bash\necho run >> "$RUNS"\nsleep "${STUB_SLEEP:-1}"\n' > "$TREE/bin/memory-index.sh"
+printf '2.1.280\n' > "$TMP/pin"
+IDX="$CLAUDE_MEMORY_PROJECTS_DIR/$SLUG/memory/MEMORY.md"
+run_tree() {  # sid [VAR=value...]: the copied hook on a resume payload
+  local sid="$1"; shift
+  jq -nc --arg sid "$sid" '{source:"resume", session_id:$sid, hook_event_name:"SessionStart"}' \
+    | env "$@" bash "$TREE/hooks/session-start.sh" 2>/dev/null
+}
+due() {  # every optional section has work: the index changed, both nudges are due
+  mkdir -p "${IDX%/*}"; [ -f "$IDX" ] || printf -- '- [P](p.md) - h\n' > "$IDX"
+  touch -t "20260103$(printf '%02d' $((RANDOM % 60)))00" "$IDX"
+  rm -f "$CLAUDE_STATE_DIR/contract-nudge" "$CLAUDE_STATE_DIR/release-nudge" "$CLAUDE_STATE_DIR"/*.claim.* \
+    "$CLAUDE_STATE_DIR/memory-index/$SLUG" "$CLAUDE_STATE_DIR"/memory-index/*.claim.* "$RUNS"
+  printf 'v1.0.3\n' > "$LATEST"; printf 'version=v1.0.2\n' > "$VERSION"
+}
+NUDGES=(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.281 CLAUDE_HARNESS_LATEST="$LATEST"
+        CLAUDE_HARNESS_VERSION="$VERSION" MEMORY_INDEX_PRESSURE_LINES=1)
+
+echo ""
+echo "=== a slow section: the ones after it are not started, and are named ==="
+due
+S0=$SECONDS
+# Whole seconds: SECONDS can tick over just after the hook starts, so a budget
+# of 2 is between one and two seconds, and the section that takes 3 starts inside it.
+OUT=$(run_tree sess-clean "${NUDGES[@]}" STUB_SLEEP=3 CLAUDE_SESSION_START_BUDGET=2)
+EL=$((SECONDS - S0))
+check_contains "one line names each section it skipped" \
+  "session-start: past its 2 s budget, skipped: worktree-prune contract-nudge release-nudge resume-drift" "$OUT"
+check_not_contains "no nudge from a skipped section" "Harness v1.0.3 is available" "$OUT"
+check_eq "the slow section ran once, started in budget" "1" "$(cat "$RUNS" 2>/dev/null | wc -l | tr -d ' ')"
+[ "$EL" -le 5 ] && pass "back in ${EL}s, not hung" || fail "elapsed" "${EL}s"
+due
+mkdir -p "$TMP/mods/sess-clean/m1/.claude-plugin"; : > "$TMP/mods/sess-clean/m1/.claude-plugin/plugin.json"
+OUT=$(run_tree sess-clean "${NUDGES[@]}" CLAUDE_SESSION_START_BUDGET=0 CLAUDE_DEV_MODS_DIR="$TMP/mods")
+check_contains "a budget already spent names every section" \
+  "skipped: git-context memory-index worktree-prune contract-nudge release-nudge resume-drift" "$OUT"
+check_contains "and still names a mod loading from this session: no process, a safety notice" \
+  "Mod loading from this session: $TMP/mods/sess-clean/m1" "$OUT"
+due
+OUT=$(run_tree sess-clean "${NUDGES[@]}" SECONDS=100)
+check_not_contains "a SECONDS in the environment does not spend the budget" "past its" "$OUT"
+check_contains "and the sections run" "Harness v1.0.3 is available" "$OUT"
+due
+OUT=$(run_tree sess-clean "${NUDGES[@]}")
+check_not_contains "under budget nothing is named" "past its" "$OUT"
+check_contains "and the sections run" "Harness v1.0.3 is available" "$OUT"
+check_eq "settings.json stops it at 30 s, not Claude Code's default 10 minutes" "30" \
+  "$(jq '.hooks.SessionStart[0].hooks[0].timeout' config/settings.json)"
+
+echo ""
+echo "=== 14 sessions resuming together: the per-machine work runs once ==="
+due
+for i in $(seq 1 14); do run_tree "storm-$i" "${NUDGES[@]}" > "$TMP/storm-$i.out" & done
+wait
+check_eq "the index tool ran once" "1" "$(cat "$RUNS" 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "one session showed the contract nudge" "1" "$(cat "$TMP"/storm-*.out | grep -c 'past the harness contract')"
+check_eq "one session showed the release nudge" "1" "$(cat "$TMP"/storm-*.out | grep -c 'Harness v1.0.3 is available')"
+check_eq "one claim per stamp is left" "1 1" \
+  "$(ls "$CLAUDE_STATE_DIR"/contract-nudge.claim.* | wc -l | tr -d ' ') $(ls "$CLAUDE_STATE_DIR"/release-nudge.claim.* | wc -l | tr -d ' ')"
+
+echo ""
+echo "=== claims from an earlier day: a storm still does the work once, and clears them ==="
+# After a reboot, a session killed mid-claim leaves its claim; the next storm must
+# not run the work twice (the timed lock this replaced did, 6 of 8 trials).
+due
+for f in contract-nudge release-nudge; do : > "$CLAUDE_STATE_DIR/$f.claim.2.1.281_2000-01-01"; done
+for i in $(seq 1 14); do run_tree "storm2-$i" "${NUDGES[@]}" > "$TMP/storm2-$i.out" & done
+wait
+check_eq "the contract nudge once" "1" "$(cat "$TMP"/storm2-*.out | grep -c 'past the harness contract')"
+check_eq "the release nudge once" "1" "$(cat "$TMP"/storm2-*.out | grep -c 'Harness v1.0.3 is available')"
+check_eq "the old claims are gone" "" "$(ls "$CLAUDE_STATE_DIR"/*.claim.*2000-01-01 2>/dev/null)"
+due
+: > "$CLAUDE_STATE_DIR/contract-nudge.claim.2.1.281_$(date +%Y-%m-%d)"
+OUT=$(run_tree sess-clean "${NUDGES[@]}")
+check_not_contains "today's claim left by a killed run costs that day's nudge, no more" "past the harness contract" "$OUT"
+
+echo ""
+echo "=== an unwritable state folder: every session shows the nudge, as before ==="
+due
+chmod 555 "$CLAUDE_STATE_DIR"
+A=$(run_tree sess-clean "${NUDGES[@]}"); B=$(run_tree sess-clean "${NUDGES[@]}")
+chmod 755 "$CLAUDE_STATE_DIR"
+check_eq "both sessions" "2" "$(printf '%s\n%s\n' "$A" "$B" | grep -c 'Harness v1.0.3 is available')"
+
+echo ""
+echo "=== nothing new on stderr from a fresh state folder ==="
+due
+rm -rf "$TMP/fresh-state"
+ERR=$(jq -nc '{source:"resume", session_id:"sess-clean", hook_event_name:"SessionStart"}' \
+  | env "${NUDGES[@]}" CLAUDE_STATE_DIR="$TMP/fresh-state" bash "$TREE/hooks/session-start.sh" 2>&1 >/dev/null)
+check_eq "no 'No such file' from reading a stamp not yet written" "" "$ERR"
+rm -f "$LATEST" "$VERSION"
+
+echo ""
+echo "=== resume drift hashes every edited file in one process ==="
+SAME="$TMP/same.txt" MOVED="$TMP/with space.txt" SHUT="$TMP/shut.txt" LAST="$TMP/last.txt"
+printf 'a\n' > "$SAME"; printf 'b\n' > "$MOVED"; printf 'c\n' > "$SHUT"; printf 'd\n' > "$LAST"
+H_SAME=$(shasum -a 256 "$SAME" | awk '{print $1}'); H_SHUT=$(shasum -a 256 "$SHUT" | awk '{print $1}')
+H_LAST=$(shasum -a 256 "$LAST" | awk '{print $1}')
+# The unreadable file sits between two unchanged ones: hashes are matched by path, not by position.
+jq -n --arg a "$SAME" --arg ha "$H_SAME" --arg b "$MOVED" --arg c "$SHUT" --arg hc "$H_SHUT" --arg d "$LAST" --arg hd "$H_LAST" \
+  '{session_id:"sess-many", git_head:"", edited_files:[{path:$a, sha256:$ha, exists:true},
+    {path:$b, sha256:"0000", exists:true}, {path:$c, sha256:$hc, exists:true}, {path:$d, sha256:$hd, exists:true}]}' > "$CLAUDE_STATE_DIR/sess-many.json"
+chmod 000 "$SHUT"
+OUT=$(run_resume "sess-many")
+chmod 644 "$SHUT"
+check_contains "a changed file with a space in its name" "drifted: $MOVED" "$OUT"
+check_not_contains "an unchanged file is not named" "drifted: $SAME" "$OUT"
+check_contains "a file the hasher cannot read has drifted" "drifted: $SHUT" "$OUT"
+check_not_contains "an unchanged file after it is not named" "drifted: $LAST" "$OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

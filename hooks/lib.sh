@@ -992,6 +992,16 @@ log_audit() {
 
 # SHA-256 of a file's contents. Empty output if file is missing or unreadable.
 # Prefers shasum (macOS default), falls back to sha256sum (Linux default).
+# sha256_files PATH...: "HASH  PATH" for each readable file, from one process.
+sha256_files() {
+  if command -v shasum &>/dev/null; then
+    shasum -a 256 -- "$@" 2>/dev/null
+  elif command -v sha256sum &>/dev/null; then
+    sha256sum -- "$@" 2>/dev/null
+  fi
+  return 0
+}
+
 sha256_file() {
   local p="$1"
   [[ -z "$p" || ! -f "$p" ]] && return 0

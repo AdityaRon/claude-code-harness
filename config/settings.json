@@ -152,7 +152,7 @@
     "SessionStart": [
       {
         "matcher": "",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-start.sh" }]
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-start.sh", "timeout": 30 }]
       }
     ],
     "PreToolUse": [
