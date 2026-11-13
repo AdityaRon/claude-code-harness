@@ -75,25 +75,10 @@ sed -n 's/.*"last_verified_version": *"\([^ "]*\).*/\1/p' "$REPO/config/upstream
   > ~/.claude/harness-contract.version
 echo "  ✓ harness-contract.version"
 
-# The commit the last install recorded, read before this one is: the report at the end diffs from it,
-# and removes what it wrote that the clone has since deleted.
-# A first install has none, and a failed read must not end the install under set -e.
+# The commit the last install recorded: the report at the end diffs from it, and
+# removes what it wrote that the clone has since deleted. A first install has
+# none, and a failed read must not end the install under set -e.
 PREV_COMMIT=$(sed -n '/^commit=/{s///p;q;}' ~/.claude/harness.version 2>/dev/null) || PREV_COMMIT=""
-
-# ---- Installed version ------------------------------------------------
-# A plain tag only when the clone sits exactly on one, clean; session-start
-# nudges about a newer release only then. harness-update.sh reads version=,
-# commit= and origin=; repo= only when there is no origin=.
-VER=$(git -C "$REPO" describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo unknown)
-ORIGIN=$(git -C "$REPO" remote get-url origin 2>/dev/null || true)
-{
-  echo "version=$VER"
-  echo "commit=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
-  echo "repo=$REPO"
-  if [[ -n "$ORIGIN" ]]; then echo "origin=$ORIGIN"; fi
-  echo "installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-} > ~/.claude/harness.version
-echo "  ✓ harness.version ($VER)"
 
 # A skill's bin/ and *.example.toml go with its SKILL.md, by glob; its tests/
 # stay in the clone. comms-hub reads ~/.config/comms-hub/config.toml, which
@@ -326,6 +311,23 @@ fi
 
 echo ""
 bash "$REPO/tools/pickup-report.sh" --prune "$PREV_COMMIT" "$REPO" || true
+
+# ---- Installed version ------------------------------------------------
+# Written last, so an install that stops early leaves the old commit and the
+# next one reports and prunes from it again. A plain tag only when the clone
+# sits exactly on one, clean; session-start nudges about a newer release only
+# then. harness-update.sh reads version=, commit= and origin=; repo= only when
+# there is no origin=.
+VER=$(git -C "$REPO" describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo unknown)
+ORIGIN=$(git -C "$REPO" remote get-url origin 2>/dev/null || true)
+{
+  echo "version=$VER"
+  echo "commit=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "repo=$REPO"
+  if [[ -n "$ORIGIN" ]]; then echo "origin=$ORIGIN"; fi
+  echo "installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > ~/.claude/harness.version
+echo "  ✓ harness.version ($VER)"
 echo ""
 echo "Done. Open Claude Code and run /hooks to verify."
 echo "Audit log:   ~/.claude/logs/audit.log"

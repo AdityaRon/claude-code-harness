@@ -13,21 +13,70 @@ if ! git -C "$REPO" cat-file -e "$PREV^{commit}" 2>/dev/null; then
   echo "  ℹ the last install was at ${PREV:0:12}, which this clone does not have$([[ -n "$PRUNE" ]] && echo ", so nothing deleted from the clone was removed (previous install unknown)"); after a fetch: tools/pickup-report.sh ${PREV:0:12}"
   exit 0
 fi
+CLAUDE_DIR="$HOME/.claude"
+CLAUDE_REAL=$(cd "$CLAUDE_DIR" 2>/dev/null && pwd -P)
 
-# Why DEST, the installed copy of F, is kept; empty when it may go. Bytes equal
-# to F's blob at PREV mean install wrote it and nothing edited it since. Only a
-# clone that moved forward from PREV deleted F; a downgrade or older branch did not.
-SETTINGS="$HOME/.claude/settings.json"
+# Where install puts F under ~/.claude (REL), and how a session picks it up (G);
+# fails for a file install does not copy. In a case pattern * matches / too, so
+# each pattern is held to install's depth by the number of slashes.
+map() {  # F
+  local n=${1//[^\/]/}; n=${#n}
+  case "$n:$1" in
+    1:hooks/*.sh|2:hooks/lib/*.sh|1:config/settings.json|1:config/merge-settings.jq|1:config/retired-rules.json) G=LIVE ;;
+    1:rules/*.md) G=RULES ;;
+    1:bin/*) G=TOOLS ;;
+    4:skills/*/panel/.claude-plugin/plugin.json|4:skills/*/panel/hooks/*|4:skills/*/panel/types/*) G=PANEL ;;
+    2:skills/*/SKILL.md|2:skills/*/*.example.toml|3:skills/*/bin/*) G=SKILL ;;
+    *) [[ "$1" == skills/* && "${1#skills/*/}" == templates/* ]] || return 1; G=SKILL ;;
+  esac
+  REL=$1
+  if [[ "$G" == TOOLS ]]; then REL=${1#bin/}; fi
+  return 0
+}
+
+# What this install writes, matched without case: on a disk that ignores case,
+# the old name of a file renamed only in case is the copy just written.
+WRITES=$(git -C "$REPO" ls-files -co --exclude-standard 2>/dev/null \
+         | while IFS= read -r p; do [[ -f "$REPO/$p" ]] && map "$p" && printf '%s\n' "$REL"; done)
+# A harness inside another repo would read that repo's history as its own.
+TOP=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null) && TOP=$(cd "$TOP" && pwd -P)
+OWN=""; [[ -n "$TOP" && "$TOP" == "$(cd "$REPO" && pwd -P)" ]] && OWN=1
+COMMITTED=$(git -C "$REPO" diff --no-renames --name-only --diff-filter=D "$PREV" HEAD -- 2>/dev/null)
+
+refs() {  # BASE DEST: each place that names BASE, DEST aside
+  local s C=$CLAUDE_DIR
+  { for s in "$C/settings.json" "$C/settings.local.json" "$HOME/.claude.json" "$HOME"/Library/LaunchAgents/*.plist; do
+      if [[ -f "$s" ]] && grep -qF -- "$1" "$s"; then printf '%s\n' "$s"; fi
+    done
+    find -H "$C" \( -path "$C/projects" -o -path "$C/logs" -o -path "$C/jobs" -o -path "$C/state" -o -path "$C/todos" \
+                    -o -path "$C/shell-snapshots" \) -prune \
+         -o -type f \( -name '*.sh' -o -name '*.py' -o -name '*.md' -o -name '*.toml' \) -print0 2>/dev/null \
+      | xargs -0 grep -lF -- "$1" 2>/dev/null
+    if crontab -l 2>/dev/null | grep -qF -- "$1"; then echo crontab; fi
+  } | grep -vxF -- "$2" | sort -u
+}
+
+# Why DEST, the installed copy of F, is kept; empty when it may go.
 prune_why() {  # F REL DEST
+  local p
   if [[ -z "$PREV" || "$PREV" == unknown ]] || ! git -C "$REPO" cat-file -e "$PREV^{commit}" 2>/dev/null; then
     echo "previous install unknown"
+  elif [[ -z "$OWN" ]]; then
+    echo "the harness is not its own git repo"
   elif ! git -C "$REPO" merge-base --is-ancestor "$PREV" HEAD 2>/dev/null; then
     echo "the clone is not ahead of the last install"
-  elif [[ ! -f "$3" || -L "$3" ]] \
-       || [[ "$(git -C "$REPO" hash-object --no-filters -- "$3" 2>/dev/null)" != "$(git -C "$REPO" rev-parse -q --verify "$PREV:$1" 2>/dev/null)" ]]; then
+  elif ! grep -qxF -- "$1" <<< "$COMMITTED"; then
+    echo "deleted only in the working tree"
+  elif p=$(grep -ixF -- "$2" <<< "$WRITES" | head -1); [[ -n "$p" ]]; then
+    echo "this install writes $p"
+  elif p=$(cd "$(dirname "$3")" 2>/dev/null && pwd -P); [[ -z "$p" || -z "$CLAUDE_REAL" || ( "$p" != "$CLAUDE_REAL" && "$p" != "$CLAUDE_REAL"/* ) ]]; then
+    echo "outside ~/.claude through a symlink"
+  elif [[ ! -f "$3" || -L "$3" ]]; then
+    echo "not the plain file install wrote"
+  elif [[ "$(git -C "$REPO" hash-object --no-filters -- "$3" 2>/dev/null)" != "$(git -C "$REPO" rev-parse -q --verify "$PREV:$1" 2>/dev/null)" ]]; then
     echo "edited since install"
-  elif grep -qsF -- ".claude/$2" "$SETTINGS"; then
-    echo "settings.json refers to it"
+  elif p=$(refs "$(basename "$3")" "$3"); [[ -n "$p" ]]; then
+    printf 'named in %s\n' "$(awk 'NR<=3 { printf "%s%s", (NR>1 ? ", " : ""), $0 } END { if (NR>3) printf " and %d more", NR-3 }' <<< "$p")"
   fi
 }
 
@@ -41,36 +90,24 @@ CHANGES=$({ git -C "$REPO" diff --no-renames --name-status "$PREV" --
 LIVE="" RULES="" TOOLS="" PANEL="" SKILLS="" GONE="" REMOVED=""
 while IFS=$TAB read -r st f; do
   [[ -n "${f:-}" ]] || continue
-  # In a case pattern * matches / too, so each pattern is held to the depth
-  # install copies at by the number of slashes in the path.
-  n=${f//[^\/]/}; n=${#n}
-  case "$n:$f" in
-    1:hooks/*.sh|2:hooks/lib/*.sh|1:config/settings.json|1:config/merge-settings.jq|1:config/retired-rules.json) g=LIVE ;;
-    1:rules/*.md) g=RULES ;;
-    1:bin/*) g=TOOLS ;;
-    4:skills/*/panel/.claude-plugin/plugin.json|4:skills/*/panel/hooks/*|4:skills/*/panel/types/*) g=PANEL ;;
-    2:skills/*/SKILL.md|2:skills/*/*.example.toml|3:skills/*/bin/*) g=SKILL ;;
-    *) [[ "$f" == skills/* && "${f#skills/*/}" == templates/* ]] || continue; g=SKILL ;;
-  esac
+  map "$f" || continue
   # A file gone from the clone stays where an earlier install put it, unless
   # --prune removes it. templates/ is swapped whole; config/ is merged.
   if [[ "$st" == D && "$f" != skills/*/templates/* && "$f" != config/* ]]; then
-    rel=$f; [[ "$g" == TOOLS ]] && rel=${f#bin/}
-    dest="$HOME/.claude/$rel"
+    dest="$CLAUDE_DIR/$REL"
     # Nothing there to keep or remove: no install wrote it, or it is gone already.
     [[ -e "$dest" || -L "$dest" ]] || continue
-    # Still in the clone under that name: on a case-insensitive disk, a file
-    # renamed only in case, whose installed copy is the new one.
-    [[ -e "$REPO/$f" ]] && continue
+    w=$(grep -ixF -- "$REL" <<< "$WRITES" | head -1)
+    [[ -n "$w" && "$dest" -ef "$CLAUDE_DIR/$w" ]] && continue
     if [[ -z "$PRUNE" ]]; then
       GONE="$GONE  $dest"
     else
-      why=$(prune_why "$f" "$rel" "$dest")
+      why=$(prune_why "$f" "$REL" "$dest")
       if [[ -z "$why" ]] && rm -f -- "$dest"; then REMOVED="$REMOVED  $dest"; else GONE="$GONE  $dest (${why:-could not remove})"; fi
     fi
     continue
   fi
-  case "$g" in
+  case "$G" in
     LIVE) LIVE="$LIVE  $f" ;;
     RULES) RULES="$RULES  $f" ;;
     TOOLS) TOOLS="$TOOLS  $f" ;;
