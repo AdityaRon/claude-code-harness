@@ -249,11 +249,47 @@ def pct(xs, q):
 
 # ---- collection ---------------------------------------------------------------
 
+def read_timing():
+    """tool_use_id -> [(guard, decision)], from bash-guards' timing log and its rotated copy."""
+    path = os.path.expanduser(os.environ.get('CLAUDE_GUARD_TIMING_LOG') or '~/.claude/logs/guard-timing.log')
+    out = {}
+    for p in (path + '.1', path):
+        try:
+            f = open(p, errors='replace')
+        except OSError:
+            continue
+        with f:
+            for line in f:
+                cols = line.rstrip('\n').split('\t')
+                if len(cols) > 2 and cols[0] != '-':
+                    out[cols[0]] = [(g, v.rsplit(':', 1)[-1]) for g, _, v in (c.partition('=') for c in cols[2:])]
+    return out
+
+
 def collect(cut):
     uses, results, asks, hblocks, kind = {}, {}, collections.defaultdict(list), collections.defaultdict(list), {}
     # Claude Code 2.1.319 on names a hook only by its number; hooknames.py maps it back.
     hooks = settings_hooks(SETTINGS)
     guard = lambda c: re.sub(r'\.sh$', '', label(c, 'PreToolUse', hooks))
+    timing = None
+
+    def answers(uid, decision, reason, name):
+        """bash-guards runs the seven Bash guards in one hook. Its timing log keeps each
+        one's decision by tool_use_id, so an answer goes back to the guards that gave it,
+        one entry each, as when they were separate hooks. With no line, it stays its own."""
+        nonlocal timing
+        if name != 'bash-guards':
+            return [(decision, name, reason)]
+        if timing is None:
+            timing = read_timing()
+        per = [(g, d) for g, d in timing.get(uid, []) if d in ('ask', 'deny')]
+        if not per:
+            return [(decision, name, reason)]
+        top = [g for g, d in per if d == decision]
+        # Several reasons are joined with newlines in list order; split only if they count out.
+        parts = reason.split('\n') if len(top) > 1 else [reason]
+        why = dict(zip(top, parts if len(parts) == len(top) else [reason] * len(top)))
+        return [(d, g, why.get(g, '')) for g, d in per]
     files = [p for p in glob.glob(os.path.join(PROJECTS, '**', '*.jsonl'), recursive=True)
              if os.path.getmtime(p) >= cut.timestamp()]
     for p in files:
@@ -290,8 +326,8 @@ def collect(cut):
                     except Exception:
                         continue
                     if hs.get('permissionDecision') in ('ask', 'deny'):
-                        asks[at['toolUseID']].append((hs['permissionDecision'], guard(at.get('command')),
-                                                      hs.get('permissionDecisionReason', '')))
+                        asks[at['toolUseID']].extend(answers(at['toolUseID'], hs['permissionDecision'],
+                                                             hs.get('permissionDecisionReason', ''), guard(at.get('command'))))
                 elif at.get('type') == 'hook_blocking_error':
                     be = at.get('blockingError') or {}
                     hblocks[at['toolUseID']].append(guard(be.get('command')))

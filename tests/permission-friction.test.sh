@@ -130,6 +130,32 @@ OUT=$(HOME="$TMP/home" python3 "$PF" --days 1 --out "$TMP/o" >/dev/null 2>&1 && 
 [[ "$OUT" == "git-guard=1" ]] && pass "hook 2 on Bash is git-guard, not 'command ho'" || fail "numbered hook name" "$OUT"
 
 echo ""
+echo "=== an ask from bash-guards goes back to the guards that gave it, by its timing log ==="
+H3="$TMP/home3"; mkdir -p "$H3/.claude/projects/p"
+printf '%s\n' '{"hooks":{"PreToolUse":[{"matcher":"Bash|Monitor","hooks":[{"type":"command","command":"~/.claude/hooks/bash-guards.sh"}]}]}}' > "$H3/.claude/settings.json"
+bg_call() {  # id command reason: one Bash call bash-guards asked on, approved
+  jq -nc --arg t "$NOW" --arg id "$1" --arg c "$2" '{type:"assistant", timestamp:$t, sessionId:"s3", cwd:"/w/proj", message:{content:[{type:"tool_use", id:$id, name:"Bash", input:{command:$c}}]}}'
+  jq -nc --arg t "$NOW" --arg id "$1" --arg r "$3" '{type:"attachment", timestamp:$t, attachment:{type:"hook_success", hookEvent:"PreToolUse", hookName:"PreToolUse:Bash", toolUseID:$id, command:"command hook 1", durationMs:90,
+    stdout:({hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"ask", permissionDecisionReason:$r}} | tojson)}}'
+  jq -nc --arg t "$NOW" --arg id "$1" '{type:"user", timestamp:$t, sessionId:"s3", permissionDecision:{decision:"accept", source:"user_temporary"}, message:{content:[{type:"tool_result", tool_use_id:$id, content:"ok"}]}}'
+}
+{ bg_call b1 "git branch -D x" "This deletes a branch"
+  bg_call b2 "kubectl delete pod web && git branch -D y" $'This deletes a branch\nDeletes a pod'
+  bg_call b3 "git branch -D z" "This deletes a branch"
+} > "$H3/.claude/projects/p/s3.jsonl"
+A="0.01:0:allow"
+printf 'b1\tBash\tenv-guard=%s\tgit-guard=0.02:0:ask\tkubectl-guard=%s\n' "$A" "$A" > "$TMP/timing.log"
+printf 'b2\tBash\tenv-guard=%s\tgit-guard=0.02:0:ask\tkubectl-guard=0.03:0:ask\n' "$A" >> "$TMP/timing.log"
+OUT=$(HOME="$H3" CLAUDE_GUARD_TIMING_LOG="$TMP/timing.log" python3 "$PF" --days 1 --out "$TMP/o3" >/dev/null 2>&1 \
+  && jq -r '[.guard_asks[] | "\(.key)=\(.count)"] | sort | join(",")' "$TMP/o3/friction.json")
+# Two guards asking on one call read git-guard+kubectl-guard, as two separate hooks did.
+[[ "$OUT" == "bash-guards=1,git-guard+kubectl-guard=1,git-guard=1" ]] \
+  && pass "each guard that asked is named, as with separate hooks; no timing line stays bash-guards" || fail "bash-guards attribution" "$OUT"
+R=$(jq -r '[.ask_reasons[] | select(.guard == "git-guard+kubectl-guard") | .reason] | join("|")' "$TMP/o3/friction.json" 2>/dev/null)
+[[ "$R" == "This deletes a branch" ]] \
+  && pass "two guards' joined reasons are split back, each to its guard" || fail "joined reason" "$R"
+
+echo ""
 echo "=== every shipped case meets its want on this repo's hooks ==="
 OUT=$(HOME="$TMP/home" python3 "$PF" --cases --replay "$PWD/hooks" 2>&1); rc=$?
 case "$(cases_verdict "$rc" "$OUT")" in
