@@ -16,13 +16,22 @@ Mutations that must turn this file red (deleting any check must be seen):
   c10-uses-unchecked: skill_lint.py: `for ref in sorted(named - uses):` => `for ref in sorted(set()):`
   c10-stale-uses: skill_lint.py: `for ref in sorted(uses - named):` => `for ref in sorted(set()):`
   c10-not-installed: skill_lint.py: `if not (src and src.is_file()):` => `if False:`
-  c10-own-skill-is-outside: skill_lint.py: `return {r for r in refs if not r.startswith(own)}` => `return refs`
+  c10-own-skill-is-outside: skill_lint.py: `return {r for r in refs if not is_own(sk, r)}` => `return refs`
   c10-bin-flat: skill_lint.py: `return repo / "bin" / parts[0]` => `return repo / parts[0]`
   c10-any-hook-file: skill_lint.py: `if parts[0] == "hooks" and parts[-1].endswith(".sh") and` => `if parts[0] == "hooks" and`
-  c10-any-skill-file: skill_lint.py: `if parts[0] == "skills" and len(parts) == 4 and parts[2] == "bin":` => `if parts[0] == "skills":`
-  c10-tilde-only: skill_lint.py: `(?:~|\\$HOME|\\$\\{HOME\\}|/(?:Users|home)/[\\w.-]+)(/` => `(?:~)(/`
-  c10-no-normpath: skill_lint.py: `refs = {"~" + posixpath.normpath(m.group(1)) for m` => `refs = {"~" + m.group(1) for m`
-  c10-bak-is-a-ref: skill_lint.py: `\\.(?:py|sh))(?![\\w.-])")` => `\\.(?:py|sh))\\b")`
+  c10-any-skill-file: skill_lint.py: `(len(parts) == 4 and parts[2] == "bin" or` => `(True or`
+  c10-tilde-only: skill_lint.py: `(?:~|\\$HOME"?|\\$\\{HOME\\}"?|/(?:Users|home)/[\\w.-]+)(/` => `(?:~)(/`
+  c10-no-normpath: skill_lint.py: `n = posixpath.normpath(path)` => `n = path`
+  c10-bak-is-a-ref: skill_lint.py: `\\.(?:py|sh))(?![\\w-]|\\.\\w)')` => `\\.(?:py|sh))\\b')`
+  c10-period-ends-no-ref: skill_lint.py: `(?![\\w-]|\\.\\w)')` => `(?![\\w.-])')`
+  c10-quoted-home-unseen: skill_lint.py: `\\$HOME"?|\\$\\{HOME\\}"?|` => `\\$HOME|\\$\\{HOME\\}|`
+  c10-climb-unreported: skill_lint.py: `for ref in sorted(r for r in named if climbs(r)):` => `for ref in sorted(set()):`
+  c10-climb-passes-as-own: skill_lint.py: ` and not climbs(ref)` => ``
+  c10-normpath-leaves-claude: skill_lint.py: `return "~" + (n if n.startswith("/.claude/") else path)` => `return "~" + n`
+  c10-installed-copy-must-declare: skill_lint.py: `if installed_copy(sk):` => `if False:`
+  c10-panel-not-installed: skill_lint.py: ` or len(parts) == 5 and parts[2] == "panel" and parts[3] in ("hooks", "types")` => ``
+  c10-hooks-lib-installed: skill_lint.py: `parts[-1].endswith(".sh") and len(parts) == 2:` => `parts[-1].endswith(".sh") and len(parts) in (2, 3):`
+  c10-own-uses-kept: skill_lint.py: `uses = {u for u in uses if not is_own(sk, u)}` => `uses = uses`
   c10-uses-untyped: skill_lint.py: `if not (isinstance(raw, list) and all(isinstance(u, str) for u in raw)):` => `if False:`
   c10-not-on-machine: skill_lint.py: `elif not Path(os.path.expanduser(ref)).is_file():` => `elif False:`
   c10-uncapped: skill_lint.py: `if len(bad) > 8:` => `if False:`
