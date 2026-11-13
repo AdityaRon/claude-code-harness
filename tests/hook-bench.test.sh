@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for tools/hook-bench.py on a fixture repo with stub hooks: the gate goes
 # red on a slower hook and on a decision change nobody declared, stays green
-# A/A, and wait is the slowest hook of a call, not the sum.
+# A/A, and wait is a call's hooks launched together (about the slowest, not the
+# sum), or with --serial the slowest of each alone.
 set -u
 PASS=0; FAIL=0
 # shellcheck source-path=SCRIPTDIR source=lib.sh
@@ -67,6 +68,13 @@ jq -e '.classes.Bash.base.wait.p50 < (.hooks["fast.sh"].base.wall.p50 + .hooks["
   "$TMP/out.json" >/dev/null \
   && pass "wait is the slowest hook of a call, not the sum" \
   || fail "wait is a max" "$(jqo '[.classes.Bash.base.wait.p50, .hooks["fast.sh"].base.wall.p50, .hooks["second.sh"].base.wall.p50]')"
+[ "$(jqo '.together')" = true ] && grep -q 'launched together as Claude Code does' "$TMP/out.md" \
+  && pass "a call's hooks are launched together by default" || fail "together by default" "$(jqo '.together')"
+run --base v0.1.0 --head v0.1.0 --serial --floor-ms 100000
+[ "$(jqo '.together')" = false ] && grep -q 'run one at a time' "$TMP/out.md" \
+  && jq -e '.classes.Bash.base.wait.p50 >= ([.hooks["fast.sh"].base.wall.p50, .hooks["second.sh"].base.wall.p50] | max) - 1' "$TMP/out.json" >/dev/null \
+  && pass "--serial: each hook alone, wait the slowest" || fail "--serial" "$(jqo '[.together, .classes.Bash.base.wait.p50]')"
+run --base v0.1.0 --head v0.1.0 --gate --floor-ms 100000
 [ "$(jqo '.hooks["fast.sh"].base.wall.n')" = 7 ] && [ "$(jqo '.hooks["file.sh"].base.wall.n')" = 1 ] \
   && pass "hooks fire by matcher: fast.sh on 7 Bash calls, file.sh on 1 Write" || fail "matchers" "$(jqo '.hooks | keys')"
 [ "$(jqo '.hooks | has("missing.sh")')" = false ] && pass "an async hook is not run" || fail "async hook ran" ""
@@ -96,6 +104,61 @@ run --base v0.1.0 --head worktree --gate --intended "other,danger" --floor-ms 10
 run --base v0.1.0 --head worktree; RC=$?
 [ "$RC" = 0 ] && pass "without --gate the exit is 0 either way" || fail "no gate" "rc=$RC"
 ( cd "$FIX" && git checkout -q -- hooks/fast.sh )
+
+echo ""
+echo "=== together: the hooks of a call run at the same time, and each is waited for to its end ==="
+# A second fixture. Its base runs b.sh alone on Bash; its head adds a.sh, which
+# holds a marker while b.sh looks for it. Together b.sh sees the marker and
+# allows; one at a time it cannot, and denies. Read, WebFetch and Write each get
+# a hook that is slow in a way the old together code did not count or bound.
+F2="$TMP/fix2"; mkdir -p "$F2/hooks" "$F2/config"
+export MARK="$TMP/mark"
+printf '#!/usr/bin/env bash\ncat >/dev/null; : > "$MARK"; sleep 0.4; rm -f "$MARK"\n' > "$F2/hooks/a.sh"
+cat > "$F2/hooks/b.sh" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$MARK" ] && exit 0; sleep 0.03; done
+echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"no marker"}}'
+SH
+printf '#!/usr/bin/env bash\ncat >/dev/null; ( sleep 0.5 ) &\nexit 0\n' > "$F2/hooks/c.sh"
+printf '#!/usr/bin/env bash\ncat >/dev/null; ( sleep 20 ) &\nsleep 20\n' > "$F2/hooks/d.sh"
+printf '#!/usr/bin/env bash\nhead -c 300000 /dev/zero | tr "\\\\0" x; cat >/dev/null\n' > "$F2/hooks/e.sh"
+echo '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"~/.claude/hooks/b.sh"}]}]}}' > "$F2/config/settings.json"
+( cd "$F2" && git init -q && git -c user.email=t@example.com -c user.name=t add -A \
+  && git -c user.email=t@example.com -c user.name=t commit -qm base && git tag v0.1.0 ) || { echo "fixture 2 failed"; exit 1; }
+cat > "$F2/config/settings.json" <<'JSON'
+{"hooks":{"PreToolUse":[
+  {"matcher":"Bash","hooks":[{"type":"command","command":"~/.claude/hooks/a.sh"},{"type":"command","command":"~/.claude/hooks/b.sh"}]},
+  {"matcher":"Read","hooks":[{"type":"command","command":"~/.claude/hooks/c.sh"}]},
+  {"matcher":"WebFetch","hooks":[{"type":"command","command":"~/.claude/hooks/d.sh"}]},
+  {"matcher":"Write","hooks":[{"type":"command","command":"~/.claude/hooks/e.sh"}]}]}}
+JSON
+for i in 1 2 3; do jq -nc --arg id "b-$i" '{id:$id,tool_name:"Bash",tool_input:{command:"echo hi"}}'; done > "$TMP/c2a.jsonl"
+{ jq -nc '{id:"r-1",tool_name:"Read",tool_input:{file_path:"/x"}}'
+  jq -nc '{id:"w-1",tool_name:"WebFetch",tool_input:{url:"https://example.com/"}}'
+  jq -nc --arg big "$(head -c 300000 /dev/zero | tr '\0' y)" '{id:"big-1",tool_name:"Write",tool_input:{file_path:"/x",content:$big}}'; } > "$TMP/c2b.jsonl"
+run2() { python3 "$BENCH" --repo "$F2" --base v0.1.0 --head worktree --json "$TMP/out2.json" --md "$TMP/out2.md" --min-calls 1 "$@" >/dev/null 2>"$TMP/err2"; }
+run2 --corpus "$TMP/c2a.jsonl"
+[ "$(jq '.decisions.changed | length' "$TMP/out2.json")" = 3 ] \
+  && pass "together: b.sh sees a.sh's marker, so all 3 calls change deny to allow" \
+  || fail "together runs hooks at once" "$(jq -c '.decisions.changed' "$TMP/out2.json") $(cat "$TMP/err2")"
+run2 --corpus "$TMP/c2a.jsonl" --serial
+[ "$(jq '.decisions.changed | length' "$TMP/out2.json")" = 0 ] \
+  && pass "--serial: one at a time b.sh never sees it, and still denies" \
+  || fail "--serial runs hooks alone" "$(jq -c '.decisions.changed' "$TMP/out2.json")"
+S0=$SECONDS
+run2 --corpus "$TMP/c2b.jsonl" --hook-timeout 2
+EL=$((SECONDS - S0))
+[ "$(jq '.classes["Read/Grep"].head.wait.p50 >= 450' "$TMP/out2.json")" = true ] \
+  && pass "a background child holding the hook's output is waited for" \
+  || fail "waited to the pipes' close" "$(jq '.classes["Read/Grep"].head.wait' "$TMP/out2.json")"
+grep -q '| w-1 ' "$TMP/out2.md" && grep '| w-1 ' "$TMP/out2.md" | grep -q 'error' \
+  && [ "$(jq '.classes.WebFetch.head.wait.p50 < 4000' "$TMP/out2.json")" = true ] \
+  && pass "a hook past --hook-timeout is an error, and the call ends near the timeout" \
+  || fail "timeout bound" "$(grep '| w-1 ' "$TMP/out2.md") $(jq '.classes.WebFetch.head.wait' "$TMP/out2.json")"
+[ "$(jq '.classes["Write/Edit"].head.wait.p50 < 1500' "$TMP/out2.json")" = true ] \
+  && pass "300 KB in and out does not deadlock" || fail "no deadlock" "$(jq '.classes["Write/Edit"].head.wait' "$TMP/out2.json")"
+[ "$EL" -le 30 ] && pass "the run took ${EL}s with two 20 s hooks in it" || fail "bounded run" "${EL}s"
 
 echo ""
 echo "=== a slower hook fails the gate; both the limit and the floor must be crossed ==="
