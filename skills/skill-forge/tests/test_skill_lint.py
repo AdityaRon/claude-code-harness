@@ -30,7 +30,7 @@ Mutations that must turn this file red (deleting any check must be seen):
   c10-normpath-leaves-claude: skill_lint.py: `return "~" + (n if n.startswith("/.claude/") else path)` => `return "~" + n`
   c10-installed-copy-must-declare: skill_lint.py: `if installed_copy(sk):` => `if False:`
   c10-panel-not-installed: skill_lint.py: ` or len(parts) == 5 and parts[2] == "panel" and parts[3] in ("hooks", "types")` => ``
-  c10-hooks-lib-installed: skill_lint.py: `parts[-1].endswith(".sh") and len(parts) == 2:` => `parts[-1].endswith(".sh") and len(parts) in (2, 3):`
+  c10-hooks-lib-installed: skill_lint.py: ` or len(parts) == 3 and parts[1] == "lib"` => ``
   c10-own-uses-kept: skill_lint.py: `uses = {u for u in uses if not is_own(sk, u)}` => `uses = uses`
   c10-uses-untyped: skill_lint.py: `if not (isinstance(raw, list) and all(isinstance(u, str) for u in raw)):` => `if False:`
   c10-not-on-machine: skill_lint.py: `elif not Path(os.path.expanduser(ref)).is_file():` => `elif False:`

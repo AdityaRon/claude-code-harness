@@ -279,6 +279,30 @@ for c in sys.stdin.read().split("\0")[:-1]:
     [ "$(printf '%s\0' "${ASIS[$((i + 1))]}" | demand_keeps)" = 1 ] \
       && pass "${ASIS[$i]}: demand.py keeps the body" || fail "${ASIS[$i]}: demand.py dropped the body" ""
   done
+  # Not a bash-oracle case: the oracle runs under env -i, where $SHELL is unset.
+  [ "$(printf '%s\0' $'cat <<\'EOF\' | $SHELL\n'"$M"$'\nEOF' | demand_keeps)" = 1 ] \
+    && pass "a body piped to \$SHELL: demand.py keeps it" || fail "a body piped to \$SHELL: demand.py dropped it" ""
+  # A quote inside backticks that holds a backtick: hd_scan's HD_BAD, demand.py's ValueError.
+  r=$("$DPY" -c '
+import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
+try:
+    demand.Heredocs().scan(sys.argv[1]); print("read")
+except ValueError:
+    print("unreadable")' 'echo "`echo "x`"; true')
+  [ "$r" = unreadable ] && pass "demand.py: a backtick-holding quote inside backticks is unreadable" || fail "demand.py read a backtick-holding quote inside backticks" "$r"
+  DKEEP=()
+  while IFS= read -r k; do DKEEP+=("$k"); done < <(for ((i = 1; i < ${#DROPS[@]}; i += 2)); do printf '%s\0' "${DROPS[$i]}"; done | demand_keeps)
+  for ((i = 0; i < ${#DROPS[@]}; i += 2)); do
+    label=${DROPS[$i]#*|}
+    [ "${DKEEP[$((i / 2))]}" = 0 ] && pass "$label: demand.py drops the body" || fail "$label: demand.py kept a body bash does not run" ""
+  done
+  # Where hd_scan cannot read a line, lib.sh keeps the command as typed, and so
+  # does demand.py: a case pattern ) inside "$( )" would close it early, and the
+  # << after it would look real.
+  cmd=$'echo "$(case x in x) echo "a";; esac)" <<EOF\n'"$M"$'\nEOF'
+  keeps "$(drop_data_heredocs "$cmd")" && [ "$(printf '%s\0' "$cmd" | demand_keeps)" = 1 ] \
+    && pass "case inside \"\$( )\": lib.sh and demand.py keep it as typed" \
+    || fail "case inside \"\$( )\": a reader dropped it" "[$(drop_data_heredocs "$cmd")]"
   # skill_lint's shell_code finds openers with the same reader (heredocs.py): where
   # bash runs the marker line, a comment there is blanked (or the script is
   # unreadable, a lint finding); where bash reads it as body data, it stays.
@@ -305,30 +329,6 @@ for c in sys.stdin.read().split("\0")[:-1]:
   # The case that made a comment pass skill_lint's --apply check.
   [ "$(printf '%s\0' $'echo "a <<EOF"\n# --apply\nkubectl apply -f a.yaml' | lint_apply)" = 0 ] \
     && pass "skill_lint: a comment after a quoted <<EOF is not --apply" || fail "skill_lint: a comment after a quoted <<EOF counted as --apply" ""
-  # Not a bash-oracle case: the oracle runs under env -i, where $SHELL is unset.
-  [ "$(printf '%s\0' $'cat <<\'EOF\' | $SHELL\n'"$M"$'\nEOF' | demand_keeps)" = 1 ] \
-    && pass "a body piped to \$SHELL: demand.py keeps it" || fail "a body piped to \$SHELL: demand.py dropped it" ""
-  # A quote inside backticks that holds a backtick: hd_scan's HD_BAD, demand.py's ValueError.
-  r=$("$DPY" -c '
-import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
-try:
-    demand.Heredocs().scan(sys.argv[1]); print("read")
-except ValueError:
-    print("unreadable")' 'echo "`echo "x`"; true')
-  [ "$r" = unreadable ] && pass "demand.py: a backtick-holding quote inside backticks is unreadable" || fail "demand.py read a backtick-holding quote inside backticks" "$r"
-  DKEEP=()
-  while IFS= read -r k; do DKEEP+=("$k"); done < <(for ((i = 1; i < ${#DROPS[@]}; i += 2)); do printf '%s\0' "${DROPS[$i]}"; done | demand_keeps)
-  for ((i = 0; i < ${#DROPS[@]}; i += 2)); do
-    label=${DROPS[$i]#*|}
-    [ "${DKEEP[$((i / 2))]}" = 0 ] && pass "$label: demand.py drops the body" || fail "$label: demand.py kept a body bash does not run" ""
-  done
-  # Where hd_scan cannot read a line, lib.sh keeps the command as typed, and so
-  # does demand.py: a case pattern ) inside "$( )" would close it early, and the
-  # << after it would look real.
-  cmd=$'echo "$(case x in x) echo "a";; esac)" <<EOF\n'"$M"$'\nEOF'
-  keeps "$(drop_data_heredocs "$cmd")" && [ "$(printf '%s\0' "$cmd" | demand_keeps)" = 1 ] \
-    && pass "case inside \"\$( )\": lib.sh and demand.py keep it as typed" \
-    || fail "case inside \"\$( )\": a reader dropped it" "[$(drop_data_heredocs "$cmd")]"
 fi
 
 echo ""
