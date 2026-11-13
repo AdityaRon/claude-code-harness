@@ -4,8 +4,8 @@ set -u
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 SR="$PWD/bin/spend-report.py"
 PASS=0; FAIL=0
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 fail() { echo "  FAIL: $1"; [[ -n "${2:-}" ]] && printf '    %s\n' "$2"; FAIL=$((FAIL+1)); }
 command -v python3 >/dev/null || { echo "  SKIP: no python3"; exit 0; }
 has() { [[ "$OUT" == *"$1"* ]] && pass "$2" || fail "$2" "wanted: $1"$'\n'"$OUT"; }

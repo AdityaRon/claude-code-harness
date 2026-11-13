@@ -13,8 +13,8 @@ export CLAUDE_MEMORY_PROJECTS_DIR="$TMP/projects"
 STORE="$CLAUDE_MEMORY_PROJECTS_DIR/teststore/memory"
 mkdir -p "$STORE"
 
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 
 check_contains() {
   local label="$1" needle="$2" hay="$3"

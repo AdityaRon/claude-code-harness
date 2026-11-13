@@ -5,8 +5,8 @@
 # it in its OUT list with the reason. Samples are built from parts, so this
 # file holds no token for secret-scanner to stop.
 PASS=0; FAIL=0
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 # shellcheck source=../hooks/lib.sh
 source hooks/lib.sh

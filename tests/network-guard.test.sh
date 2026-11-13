@@ -378,9 +378,9 @@ check_bash "bundled -sXGET is a GET"       allow "curl -sXGET https://api.github
 TNAME=nwg-test-tunnel-$$
 sh_tunnel() { bash -c "exec -a 'kubectl port-forward $TNAME' sleep 30" & TUNNEL=$!; sleep 0.3; }
 sh_tunnel
-CLAUDE_NET_TUNNEL_RE="port-forward $TNAME" check_bash "a tunnel is running" ask "curl -s -X POST http://127.0.0.1:8091/x -d a=1"
+CLAUDE_NET_TUNNEL_RE="port-forward $TNAME( |\$)" check_bash "a tunnel is running" ask "curl -s -X POST http://127.0.0.1:8091/x -d a=1"
 kill "$TUNNEL" 2>/dev/null; wait "$TUNNEL" 2>/dev/null
-CLAUDE_NET_TUNNEL_RE="port-forward $TNAME" check_bash "tunnel gone"        allow "curl -s -X POST http://127.0.0.1:8091/x -d a=1"
+CLAUDE_NET_TUNNEL_RE="port-forward $TNAME( |\$)" check_bash "tunnel gone"        allow "curl -s -X POST http://127.0.0.1:8091/x -d a=1"
 # The script's arguments are what the regex cannot see through quoting or expansion.
 check_bash "quoted script path, add"       ask   'bash "$HOME/.claude/net-allowlist.sh" add logs.corp.example'
 check_bash "quoted add"                    ask   "~/.claude/net-allowlist.sh 'add' x.example"

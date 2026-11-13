@@ -6,8 +6,8 @@ set -u
 DRIFT=.github/workflows/upstream-drift.yml CLAUDE_WF=.github/workflows/claude.yml
 PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 ROOT=$PWD
 
 echo "=== Upstream drift: a fix is refused for .github/, a lost deny or ask rule, or a credential ==="

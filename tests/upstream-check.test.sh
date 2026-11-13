@@ -11,8 +11,8 @@ set -u
 CHECK="tools/upstream-check.sh"
 PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 # Defined because they were not, and calling one anyway printed "command not
 # found" while the suite still reported zero failures -- the assertion simply
 # never ran. Same names and argument order as every other suite here, so reaching

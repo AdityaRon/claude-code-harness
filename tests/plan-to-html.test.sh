@@ -11,8 +11,8 @@ trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_PLANS_HTML_DIR="$TMP/plans-html"
 export CLAUDE_PLAN_HTML_NO_OPEN=1
 
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 
 check_eq() {
   local label="$1" expect="$2" got="$3"

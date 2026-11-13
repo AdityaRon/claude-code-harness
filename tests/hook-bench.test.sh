@@ -4,8 +4,8 @@
 # A/A, and wait is the slowest hook of a call, not the sum.
 set -u
 PASS=0; FAIL=0
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 BENCH="$PWD/tools/hook-bench.py"
 CORPUS="$PWD/tests/bench-corpus.jsonl"
 command -v python3 >/dev/null || { echo "  SKIP: no python3"; echo "--- Results: 0 passed, 0 failed ---"; exit 0; }

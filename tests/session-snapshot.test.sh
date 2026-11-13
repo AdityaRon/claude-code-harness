@@ -11,8 +11,8 @@ export CLAUDE_STATE_DIR="$TMP/state"
 WORK="$TMP/work"
 mkdir -p "$WORK"
 
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 
 check_eq() {
   local label="$1" expect="$2" got="$3"

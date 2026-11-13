@@ -7,8 +7,8 @@ PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_PLAN_STATE_DIR="$TMP/plans"
 mkdir -p "$CLAUDE_PLAN_STATE_DIR"
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 run(){ printf '%s' "$1" | bash "$HOOK" 2>/dev/null; }
 
 echo "=== Base line renders ==="

@@ -22,8 +22,8 @@ export CLAUDE_CONTRACT_PIN="$TMP/no-pin"
 export CLAUDE_HARNESS_LATEST="$TMP/no-latest"
 export CLAUDE_HARNESS_VERSION="$TMP/no-version"
 
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 
 check_contains() {
   local label="$1" needle="$2" haystack="$3"

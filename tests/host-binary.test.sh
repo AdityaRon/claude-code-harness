@@ -6,8 +6,8 @@
 # the host's binary path exists, which is the measured cause.
 set -u
 PASS=0; FAIL=0
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 has() { if printf '%s' "$3" | grep -qF -- "$2"; then pass "$1"; else fail "$1" "missing: $2 in [$3]"; fi; }
 lacks() { if printf '%s' "$3" | grep -qF -- "$2"; then fail "$1" "unexpected: $2 in [$3]"; else pass "$1"; fi; }
 

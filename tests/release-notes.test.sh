@@ -3,8 +3,8 @@
 # PRs count, how they group, what the next version is, and the CHANGELOG insert.
 set -u
 PASS=0; FAIL=0
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 RN="$PWD/tools/release-notes.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 G="git -c user.email=t@example.com -c user.name=t"

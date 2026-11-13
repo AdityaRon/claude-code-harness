@@ -4,8 +4,8 @@ set -u
 SCRIPT=".github/close-superseded.sh"
 PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
-# shellcheck source=tests/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 check_eq(){ if [ "$3" = "$2" ]; then pass "$1"; else fail "$1" "expect=[$2] got=[$3]"; fi; }
 check_contains(){ case "$3" in *"$2"*) pass "$1" ;; *) fail "$1" "expected [$2] in [$3]" ;; esac; }
 
