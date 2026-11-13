@@ -250,6 +250,7 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   hook-latency.py        ← each hook's wall time per day, from local transcripts (doctor.sh --latency)
   hooknames.py           ← names the hook a transcript record numbers, for the two above
   session-census.py      ← claude processes, their memory, and idle background jobs (doctor.sh --census)
+  pickup-report.sh       ← after an install, how running sessions pick up each change (install.sh runs it)
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json
 hooks/                   ← one file per hook, plus shared lib.sh
 rules/                   ← installed to ~/.claude/rules, loaded in every session
