@@ -99,12 +99,18 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   kindless-refused: hub.py: `if args.kind is None:` => `if False:`
   kindless-text-dropped: hub.py: `args.detail = " ".join(x for x in (text, args.detail) if x)` => `pass`
   kindless-id-refused: hub.py: `text = "a note whose text is in the detail"` => `pass`
+  panel-key-renamed: hub.py: `"read": f"{local_now(cfg):%H:%M}",` => `"read_at": f"{local_now(cfg):%H:%M}",`
+  fixture-key-typed-wrong: panel/panel.test.tsx: `"parked": 0,` => `"parked": "0",`
+  fixture-key-missing: panel/panel.test.tsx: `"trigger": ""
+} /* fixture:end */` => `"_": ""
+} /* fixture:end */`
 """
 import contextlib
 import io
 import json
 import os
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from fakes import CONFIG, Env
@@ -249,7 +255,8 @@ class Corrections(unittest.TestCase):
 
 
 class Panel(unittest.TestCase):
-    def build(self, env):
+    @staticmethod
+    def build(env):
         s = env.state
         (s / "held").mkdir(parents=True)
         (s / "held" / "app-session-1761040800.000100.md").write_text(
@@ -475,7 +482,8 @@ def pr(ref, **over):
 class Prs(unittest.TestCase):
     """Item 8: what can I approve, what waits on me, without asking the session."""
 
-    def write(self, env, written=NOW, reviewing=(), authored=(), last_scan=None):
+    @staticmethod
+    def write(env, written=NOW, reviewing=(), authored=(), last_scan=None):
         env.state.mkdir(parents=True, exist_ok=True)
         (env.state / "prs.json").write_text(json.dumps({"written_at": written, "reviewing": list(reviewing),
                                                         "authored": list(authored)}))
@@ -678,6 +686,54 @@ class GatePrune(unittest.TestCase):
             self.assertEqual(hub.prune_gate(hub.load_config()), 4)
             self.assertEqual(sorted(p.stem for p in g.iterdir()), ["sent-this-month", "still-to-post"])
             self.assertEqual(hub.prune_gate(hub.load_config()), 0)
+
+
+# The panel's tests draw from a stand-in for `hub.py panel`, held in
+# panel/panel.test.tsx between /* fixture:start */ and /* fixture:end */. A key
+# hub.py renamed once left those tests green against a shape it no longer printed.
+TYPES = {str: "str", bool: "bool", int: "number", float: "number", type(None): "null"}
+
+
+def shape(v, at=""):
+    """Every path to a value, with its type; a list's items merged."""
+    if isinstance(v, dict):
+        out = set()
+        for k, x in v.items():
+            out |= shape(x, f"{at}.{k}")
+        return out or {f"{at}:{{}}"}
+    if isinstance(v, list):
+        out = set()
+        for x in v:
+            out |= shape(x, f"{at}[]")
+        return out or {f"{at}:[]"}
+    return {f"{at}:{TYPES[type(v)]}"}
+
+
+def fixture() -> dict:
+    text = (Path(__file__).resolve().parents[1] / "panel" / "panel.test.tsx").read_text()
+    a, b = text.index("/* fixture:start */"), text.index("/* fixture:end */")
+    return json.loads(text[a + len("/* fixture:start */"):b])
+
+
+class FixtureShape(unittest.TestCase):
+    def test_the_panel_tests_stand_in_has_the_shape_hub_panel_prints(self):
+        with Env(config=NAMES, now=NOW) as env:
+            Panel.build(env)   # held drafts, one needing the user, and gate records going out
+            for at, args in [("16:00", ("--kind", "scan", "scan started")),
+                             ("16:10", ("--kind", "asked", "--needs-user", "--target", "D0DMBOBXX1", "may bob drop the tables?")),
+                             ("16:20", ("--kind", "routed", "--who", "app-session", "--ref",
+                                        "https://github.com/acme/application-server/pull/16", "conflicts")),
+                             ("16:45", ("--kind", "scan", "scan started")),
+                             ("16:46", ("--kind", "sent", "--target", "C0CHANONE1", "reply to carol"))]:
+                main_out("log", *args, now=f"2026-10-21T{at}:00+00:00")
+            Prs.write(env, reviewing=[pr("acme/application-server#31", my_state="COMMENTED", my_sha=SHA1)],
+                      authored=[pr("acme/application-server#40", decision="APPROVED")])
+            (env.state / "last-scan").write_text("2026-10-21T16:55:00+00:00\n")
+            rc, out = main_out("panel")
+            self.assertEqual(rc, 0, out)
+        want, got = shape(fixture()), shape(json.loads(out))
+        self.assertEqual(sorted(want - got), [], "in the fixture, not in what hub.py panel prints")
+        self.assertEqual(sorted(got - want), [], "printed by hub.py panel, missing from the fixture")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ Mutations (run.py --mutate applies each and expects this file to fail):
   withdrawn-still-pending: hub.py: `or not s.get("sent_id") or s.get("withdrawn_at"):` => `or not s.get("sent_id"):`
   bad-context-is-text: check_draft.py: `text = context if not problem else` => `text = context if True else`
   post-at-ignored: check_draft.py: `stamp["post_at"] = post.isoformat()` => `pass`
+  peer-from-unparsed: hub.py: `^(to|from|kind|reason|needs):` => `^(to|kind|reason|needs):`
+  peer-prefix-unread: check_draft.py: `rb"\A(?:comms-hub draft\n)?to: .*?^---\n"` => `rb"\Ato: .*?^---\n"`
   post-at-earlier-ok: check_draft.py: `if not post or post < planned:` => `if not post:`
   quote-ok: check_draft.py: `if line.lstrip().startswith(">"):` => `if False:`
   code-gt-ok: check_draft.py: `if ">" in m.group(0):` => `if False:`
@@ -89,6 +91,7 @@ import io
 import json
 import os
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from fakes import CONFIG, ME, Env, Fail, FakeGh, machine_zone
@@ -524,6 +527,50 @@ class Header(unittest.TestCase):
             self.assertEqual(rc, 0, out)
             rc, out = gate(env, self.HEAD + body + "x" * 10, "--reply", "1761040800.000100", gh=fake())
             self.assertIn("2509 characters, over the 2500 cap", out)
+
+    # The draft a peer sends: the slack-draft skill shows exactly this block.
+    FORMAT = ("comms-hub draft\n"
+              "to: <channel id> reply <thread ts>      (or: to: <channel id> top-level)\n"
+              "from: <your session's name, as ListAgents lists it>\n"
+              "kind: reply | react\n"
+              "claims:\n"
+              "- <each fact the message states> | <its source: PR URL, ticket key, page URL and version>\n"
+              "user-approved: <the user's words, quoted> | no\n"
+              "fold-in: expected | none\n"
+              "---\n"
+              "<the message, exactly as it should go out; nothing for react>\n")
+
+    def test_the_peer_format_is_what_the_gate_and_the_tick_read(self):
+        fill = {"to": "C0CHANONE1 reply 1761040800.000100", "from": "app-session", "kind": "reply",
+                "user-approved": "no", "fold-in": "none"}
+        lines = []
+        for ln in self.FORMAT.splitlines():
+            key = ln.split(":", 1)[0]
+            lines.append(f"{key}: {fill[key]}" if key in fill
+                         else "- acme/app#12 is open | https://github.com/acme/app/pull/12" if ln.startswith("- <")
+                         else "Carol, could you review #12?" if ln.startswith("<") else ln)
+        draft = "\n".join(lines) + "\n"
+        self.assertIsNotNone(check_draft.HEADER.match(draft.encode()), draft)
+        with Env() as env:
+            path = env.state / "peer-draft.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(draft)
+            d = hub._draft(str(path))
+        self.assertEqual((d.get("to"), d.get("from"), d.get("kind"), d["claim"], d["first"]),
+                         (fill["to"], "app-session", "reply", "acme/app#12", "Carol, could you review #12?"))
+
+    def test_the_slack_draft_skill_shows_this_format(self):
+        md = Path(__file__).resolve().parents[2] / "slack-draft" / "SKILL.md"
+        if not md.is_file() and os.environ.get("SKILL_MUTATION_COPY"):
+            self.skipTest("run.py's mutation copy holds this skill only")
+        self.assertTrue(md.is_file(), f"{md} is missing, so peers get no draft format")
+        self.assertEqual(md.read_text().split("```\n")[1], self.FORMAT)
+
+    def test_the_value_the_tick_holds_on_is_in_the_format(self):
+        # The tick holds a thread on a draft's `fold-in: expected` (comms-hub SKILL.md).
+        tick = (Path(__file__).resolve().parents[1] / "SKILL.md").read_text()
+        self.assertIn("fold-in: expected", self.FORMAT)
+        self.assertIn("`fold-in: expected`", tick)
 
     def test_a_file_with_no_header_is_the_message(self):
         with Env() as env:
