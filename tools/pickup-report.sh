@@ -43,20 +43,23 @@ TOP=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null) && TOP=$(cd "$TOP" &
 OWN=""; [[ -n "$TOP" && "$TOP" == "$(cd "$REPO" && pwd -P)" ]] && OWN=1
 COMMITTED=$(git -C "$REPO" diff --no-renames --name-only --diff-filter=D "$PREV" HEAD -- 2>/dev/null)
 
-refs() {  # BASE DEST: each place that names BASE, DEST aside
-  local s C=$CLAUDE_DIR
-  { for s in "$C/settings.json" "$C/settings.local.json" "$HOME/.claude.json" "$HOME"/Library/LaunchAgents/*.plist; do
-      if [[ -f "$s" ]] && grep -qF -- "$1" "$s"; then printf '%s\n' "$s"; fi
-    done
-    find -H "$C" \( -path "$C/projects" -o -path "$C/logs" -o -path "$C/jobs" -o -path "$C/state" -o -path "$C/todos" \
+# FILE:NAME for each basename listed in NAMES that a place which might run or
+# load it names, in one pass over all of them. Text only.
+scan() {  # NAMES
+  local C=$CLAUDE_DIR f
+  { find -H "$C" \( -path "$C/projects" -o -path "$C/logs" -o -path "$C/jobs" -o -path "$C/state" -o -path "$C/todos" \
                     -o -path "$C/shell-snapshots" \) -prune \
-         -o -type f \( -name '*.sh' -o -name '*.py' -o -name '*.md' -o -name '*.toml' \) -print0 2>/dev/null \
-      | xargs -0 grep -lF -- "$1" 2>/dev/null
-    if crontab -l 2>/dev/null | grep -qF -- "$1"; then echo crontab; fi
-  } | grep -vxF -- "$2" | sort -u
+         -o -type f \( -name '*.sh' -o -name '*.py' -o -name '*.md' -o -name '*.toml' -o -path "$C/commands/*" -o -path "$C/agents/*" \
+                       -o \( -name '*.json' ! -path "$C/*/*" \) \) -print0 2>/dev/null
+    for f in "$HOME/.claude.json" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" \
+             "$HOME"/Library/LaunchAgents/*.plist; do
+      if [[ -f "$f" ]]; then printf '%s\0' "$f"; fi
+    done
+  } | xargs -0 grep -aHoF -f "$1" -- 2>/dev/null
+  crontab -l 2>/dev/null | grep -aoF -f "$1" | sed 's/^/crontab:/'
 }
 
-# Why DEST, the installed copy of F, is kept; empty when it may go.
+# Why DEST, the installed copy of F, is kept; empty when it may go, unless a scan names it.
 prune_why() {  # F REL DEST
   local p
   if [[ -z "$PREV" || "$PREV" == unknown ]] || ! git -C "$REPO" cat-file -e "$PREV^{commit}" 2>/dev/null; then
@@ -75,8 +78,6 @@ prune_why() {  # F REL DEST
     echo "not the plain file install wrote"
   elif [[ "$(git -C "$REPO" hash-object --no-filters -- "$3" 2>/dev/null)" != "$(git -C "$REPO" rev-parse -q --verify "$PREV:$1" 2>/dev/null)" ]]; then
     echo "edited since install"
-  elif p=$(refs "$(basename "$3")" "$3"); [[ -n "$p" ]]; then
-    printf 'named in %s\n' "$(awk 'NR<=3 { printf "%s%s", (NR>1 ? ", " : ""), $0 } END { if (NR>3) printf " and %d more", NR-3 }' <<< "$p")"
   fi
 }
 
@@ -87,7 +88,7 @@ CHANGES=$({ git -C "$REPO" diff --no-renames --name-status "$PREV" --
             git -C "$REPO" ls-files --others --exclude-standard | awk '{ print "A\t" $0 }'; } 2>/dev/null \
           | sort -t "$TAB" -k2,2 -u)
 
-LIVE="" RULES="" TOOLS="" PANEL="" SKILLS="" GONE="" REMOVED="" DOOMED=""
+LIVE="" RULES="" TOOLS="" PANEL="" SKILLS="" GONE="" REMOVED="" CANDS="" DOOMED=""
 while IFS=$TAB read -r st f; do
   [[ -n "${f:-}" ]] || continue
   map "$f" || continue
@@ -103,7 +104,7 @@ while IFS=$TAB read -r st f; do
       GONE="$GONE  $dest"
     else
       why=$(prune_why "$f" "$REL" "$dest")
-      if [[ -z "$why" ]]; then DOOMED="$DOOMED$dest"$'\n'; else GONE="$GONE  $dest ($why)"; fi
+      if [[ -z "$why" ]]; then CANDS="$CANDS$dest"$'\n'; else GONE="$GONE  $dest ($why)"; fi
     fi
     continue
   fi
@@ -116,8 +117,23 @@ while IFS=$TAB read -r st f; do
            case " $SKILLS " in *" /$s "*) ;; *) SKILLS="$SKILLS /$s" ;; esac ;;
   esac
 done <<< "$CHANGES"
-# Removed only once every candidate is decided, so a file one of them names is
-# kept whatever the order, even when the file naming it goes.
+# Every candidate is decided before any is removed, so a file one of them names
+# is kept whatever the order, even when the file naming it goes.
+if [[ -n "$CANDS" ]]; then
+  HITS="" NAMES=$(mktemp "${TMPDIR:-/tmp}/cch-prune.XXXXXX") || NAMES=""
+  if [[ -n "$NAMES" ]]; then
+    while IFS= read -r d; do [[ -n "$d" ]] && printf '%s\n' "${d##*/}"; done <<< "$CANDS" | sort -u > "$NAMES"
+    HITS=$(scan "$NAMES" | sort -u); rm -f "$NAMES"
+  fi
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    [[ -n "$NAMES" ]] || { GONE="$GONE  $d (could not search for what names it)"; continue; }
+    where=$(awk -v n="${d##*/}" -v d="$d" '{ i = length($0) - length(n)
+              if (i > 0 && substr($0, i) == ":" n) { f = substr($0, 1, i - 1); if (f != d && !seen[f]++) print f } }' <<< "$HITS")
+    if [[ -z "$where" ]]; then DOOMED="$DOOMED$d"$'\n'; continue; fi
+    GONE="$GONE  $d (named in $(awk 'NR<=3 { printf "%s%s", (NR>1 ? ", " : ""), $0 } END { if (NR>3) printf " and %d more", NR-3 }' <<< "$where"))"
+  done <<< "$CANDS"
+fi
 while IFS= read -r d; do
   [[ -n "$d" ]] || continue
   if rm -f -- "$d"; then REMOVED="$REMOVED  $d"; else GONE="$GONE  $d (could not remove)"; fi

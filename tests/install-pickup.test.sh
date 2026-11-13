@@ -134,8 +134,9 @@ OUT=$(prune2)
 echo ""
 echo "=== --prune keeps a copy anything else names, saying where, and one reached through a symlink ==="
 R4="$TMP/clone4"; H4="$TMP/rhome4"; I4="$H4/.claude"; OUTSIDE="$TMP/outside/sk"
-NAMES="t-env.sh t-cd.sh t-dbl.sh t-esc.sh t-local.sh t-mcp.sh t-plist.sh t-cron.sh t-skill.sh t-uses.sh t-call.sh t-free.sh"
-mkdir -p "$R4/bin" "$R4/skills/sk/bin" "$I4/skills/refs" "$H4/Library/LaunchAgents" "$OUTSIDE/bin"
+NAMES="t-env.sh t-cd.sh t-dbl.sh t-esc.sh t-local.sh t-mcp.sh t-plist.sh t-cron.sh t-skill.sh t-uses.sh t-call.sh t-free.sh
+       t-zsh.sh t-keys.sh t-cmd.sh t-agent.sh"
+mkdir -p "$R4/bin" "$R4/skills/sk/bin" "$I4/skills/refs" "$I4/commands" "$I4/agents" "$H4/Library/LaunchAgents" "$OUTSIDE/bin"
 for n in $NAMES; do echo v1 > "$R4/bin/$n"; echo v1 > "$I4/$n"; done
 echo v1 > "$R4/skills/sk/SKILL.md"; echo v1 > "$R4/skills/sk/bin/helper.py"
 echo v1 > "$OUTSIDE/SKILL.md"; echo v1 > "$OUTSIDE/bin/helper.py"; ln -s "$OUTSIDE" "$I4/skills/sk"
@@ -156,6 +157,10 @@ echo '17 3 * * * /bin/bash ~/.claude/t-cron.sh' > "$H4/crontab.txt"
 echo 'Run ~/.claude/t-skill.sh first.' > "$I4/skills/refs/SKILL.md"
 echo 'uses = ["t-uses.sh"]' > "$I4/skills/refs/forge.toml"
 printf '#!/bin/sh\nexec "$(dirname "$0")/t-call.sh"\n' > "$I4/caller.sh"
+echo 'alias t=~/.claude/t-zsh.sh' > "$H4/.zshrc"
+printf '%s\n' '{"bindings":{"ctrl+t":"!~/.claude/t-keys.sh"}}' > "$I4/keybindings.json"
+echo 'Run ~/.claude/t-cmd.sh' > "$I4/commands/foo"
+echo 'Use ~/.claude/t-agent.sh' > "$I4/agents/bar"
 OUT=$(HOME="$H4" PATH="$FAKEBIN:$PATH" bash "$REPO/tools/pickup-report.sh" --prune "$A4" "$R4")
 MISSED=""
 for x in "t-env.sh:$I4/settings.json" "t-cd.sh:$I4/settings.json" "t-dbl.sh:$I4/settings.json" "t-esc.sh:$I4/settings.json" \
@@ -167,6 +172,14 @@ done
 [[ -z "$MISSED" ]] \
   && pass "named in settings, settings.local, ~/.claude.json, a plist, crontab, a SKILL.md, a toml or a tool: kept, saying where" \
   || fail "references" "missed:$MISSED; $OUT"
+MISSED=""
+for x in "t-zsh.sh:$H4/.zshrc" "t-keys.sh:$I4/keybindings.json" "t-cmd.sh:$I4/commands/foo" "t-agent.sh:$I4/agents/bar"; do
+  n=${x%%:*}; w=${x#*:}
+  [[ -f "$I4/$n" && "$OUT" == *"$I4/$n (named in $w)"* ]] || MISSED="$MISSED $n"
+done
+[[ -z "$MISSED" ]] \
+  && pass "named in ~/.zshrc, keybindings.json, or a commands/ or agents/ file of no extension: kept" \
+  || fail "references, wider" "missed:$MISSED; $OUT"
 [[ ! -e "$I4/t-free.sh" && "$OUT" == *"removed here"*"$I4/t-free.sh"* ]] \
   && pass "and one named nowhere is removed" || fail "unnamed removed" "$OUT"
 [[ -f "$OUTSIDE/bin/helper.py" && "$OUT" == *"$I4/skills/sk/bin/helper.py (outside ~/.claude through a symlink)"* ]] \
