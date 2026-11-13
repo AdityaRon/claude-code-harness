@@ -39,6 +39,7 @@ SHAPES=(
   "Slack incoming webhook" "https://hooks.slack.com/services/T0$(r 8 L)/B0$(r 8 M)/$(r 24 n)"
   "Database URL with a password" "postgres://app:$(r 12 p)@db.internal:5432/x"
   "AWS secret access key" "aws_secret""_access_key=$(r 40 S)"
+  "AWS secret access key in escaped JSON" "{\\\"aws_secret""_access_key\\\":\\\"$(r 40 S)\\\"}"
   "PEM private key header" "-----BEGIN RSA PRIVATE"" KEY-----"
   "PGP private key block" "-----BEGIN PGP PRIVATE KEY"" BLOCK-----"
   "GCP private key field" "\"private_key\": \"-----BEGIN PRIVATE"" KEY-----"
@@ -47,7 +48,10 @@ LABELS=(); for ((i = 0; i < ${#SHAPES[@]}; i += 2)); do LABELS+=("${SHAPES[$i]}"
 # Every shape secret-scanner blocks has a row here, by its own label: one it adds
 # and this list misses fails below, so the other four sites are held to it too.
 SCANNER_LABELS=(); while IFS= read -r l; do SCANNER_LABELS+=("$l"); done < <(
-  sed -n '/^PATTERNS=(/,/^)/p' hooks/secret-scanner.sh | sed -nE "s/^  [\"']([^:\"']+)::.*/\1/p")
+  sed -n '/^PATTERNS=(/,/^)/p' hooks/secret-scanner.sh | sed -nE "s/^[[:space:]]*[\"']([^:\"']+)::.*/\1/p")
+# And the entries, counted apart from reading their labels: one this reader cannot
+# parse (a label with a colon or a quote) would otherwise drop out unseen.
+SCANNER_ENTRIES=$(sed -n '/^PATTERNS=(/,/^)/p' hooks/secret-scanner.sh | grep -v '^[[:space:]]*#' | grep -c '::')
 # Samples vendors publish, which secret-scanner lets through on purpose. The three
 # sites that block (scanner, draft, lint) must too; redact and friction only mask.
 JWTIO="ey""JhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ey""JzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
@@ -128,8 +132,9 @@ for site in scanner redact friction draft lint; do
   done
 done
 
-[ "${#SCANNER_LABELS[@]}" -ge 20 ] && pass "read ${#SCANNER_LABELS[@]} labels from secret-scanner's PATTERNS" \
-  || fail "secret-scanner's labels" "read ${#SCANNER_LABELS[@]}: the PATTERNS block changed shape"
+[[ "${#SCANNER_LABELS[@]}" -ge 20 && "${#SCANNER_LABELS[@]}" -eq "$SCANNER_ENTRIES" ]] \
+  && pass "read the label of each of secret-scanner's $SCANNER_ENTRIES PATTERNS entries" \
+  || fail "secret-scanner's labels" "read ${#SCANNER_LABELS[@]} of $SCANNER_ENTRIES entries: one has a label this test cannot read"
 MISSING=""; for l in "${SCANNER_LABELS[@]}"; do printf '%s\n' "${LABELS[@]}" | grep -qxF -- "$l" || MISSING="$MISSING [$l]"; done
 [ -z "$MISSING" ] && pass "every shape secret-scanner blocks has a row here" || fail "shapes with no row" "$MISSING"
 
@@ -139,6 +144,9 @@ LINE="2026-11-13T00:00:00Z | GUARD | deny | x | printf '$HDR MIIE$(r 40 Z)' > k.
 GOT=$(printf '%s\n' "$LINE" | redact_secrets)
 [[ "$GOT" == *"$HDR***"* && "$GOT" == *" | /w/proj" && "$GOT" != *MIIE* ]] \
   && pass "a key's body is masked to the field's end; the line's later fields stay" || fail "audit line fields" "$GOT"
+# The audit line's key=value rule takes an escaped quote too: JSON echoed from a command.
+GOT=$(printf '%s\n' 'x | echo "{\"pass''word\":\"hunter2hunter2\"}" > c.json | /w' | redact_secrets)
+[[ "$GOT" != *hunter2* && "$GOT" == *" | /w" ]] && pass "redact masks a password in escaped JSON" || fail "redact escaped JSON" "$GOT"
 # friction's samples keep their newlines: a key's body lines go, the command after its END line stays.
 if [ -n "$PY" ]; then
   KEYCMD=$(printf "cat > k.pem <<'EOF'\n%s\nMIIEshortline\n%s\nEOF\nchmod 600 k.pem" "$HDR" "-----END RSA PRIVATE"" KEY-----")
