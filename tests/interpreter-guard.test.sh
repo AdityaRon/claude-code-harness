@@ -228,5 +228,19 @@ check "open app/.env still asks"      ask   $'python3 -c "print(open(\'app/.env\
 check "process.env still asks"        ask   'node -e "console.log(process.env.SECRET)"'
 
 echo ""
+echo "=== The token list is one grep, not one a token ==="
+# 28 process starts on inline code holding no token, each ~88 ms where an
+# endpoint agent inspects every exec. An exported grep, which the hook and its
+# pipelines inherit, writes down each pattern it is given.
+eval "$(sed -n '/^SENSITIVE_TOKENS=(/,/^)/p' "$HOOK")"
+PATS="$TMP/patterns"; : > "$PATS"
+jq -nc '{tool_input:{command:"python3 -c \"print(1)\""}}' \
+  | PATS="$PATS" bash -c 'grep() { printf "%s\n" "${@: -1}" >> "$PATS"; command grep "$@"; }; export -f grep; bash "$0"' "$HOOK" >/dev/null 2>&1
+N=0
+while IFS= read -r p; do for t in "${SENSITIVE_TOKENS[@]}"; do [[ "$p" == *"$t"* ]] && { N=$((N + 1)); break; }; done; done < "$PATS"
+if (( N >= 1 && N <= 2 )); then echo "  OK: $N greps hold a token"; PASS=$((PASS+1))
+else echo "  FAIL: $N greps hold a token (want 1 or 2; $(wc -l < "$PATS" | tr -d ' ') greps in all)"; FAIL=$((FAIL+1)); fi
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
