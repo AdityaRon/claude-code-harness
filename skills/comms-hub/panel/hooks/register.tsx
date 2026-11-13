@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Look, Panel, Prs, Snapshot, View } from '../types'
 
@@ -359,8 +359,8 @@ export const register: Register = on => {
                         ...v, open: v.open.includes(name) ? v.open.filter(o => o !== name) : [...v.open, name] }))} />]
     }
     // A section only when it has rows: the summary already says which are empty.
-    function section<T>(title: string, name: string, items: T[], max: number, row: (item: T) => unknown[],
-                        color = 'claude') {
+    function section<T>(title: string, name: string, items: T[], max: number, row: (item: T) => RenderChildren[],
+                        color = 'claude'): RenderChildren[] {
       if (!items.length) return []
       return [
         <Text weight="bold" color={color}>{`${title} · ${items.length}`}</Text>,
@@ -370,7 +370,7 @@ export const register: Register = on => {
     }
     // What a row is about on its own line, so a long message never pushes it off the edge.
     // Dim beside its row compact; expanded, the message is what the view is for.
-    function two(head: unknown, sub: string) {
+    function two(head: RenderChildren, sub: string): RenderChildren[] {
       return [head, ...(sub ? [<Text dimColor={!full} wrap={cut}>{`    ${sub}`}</Text>] : [])]
     }
     // A draft's message: its first line compact, the whole of it expanded.
