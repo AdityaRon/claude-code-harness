@@ -6,12 +6,15 @@
   tools/hook-bench.py --gate --intended id1,id2 --md bench.md --json bench.json
   tools/hook-bench.py --corpus audit          # this machine's audit log; never publish
 
-Every payload in the corpus is fed to each hook that would fire for it under
-that side's config/settings.json (PreToolUse, command hooks, not async), one
-hook at a time, both sides back to back, alternating which side goes first.
-Wait is the slowest hook of a call, since Claude Code runs them in parallel;
-CPU is the sum over the hooks that fired (user+system of the hook and every
-process it waited for). Decisions are compared per payload: a change not named
+Every payload in the corpus is fed to the hooks that would fire for it under
+that side's config/settings.json (PreToolUse, command hooks, not async), both
+sides back to back, alternating which side goes first. A call's hooks are
+launched together, as Claude Code does: wait is from the first launch to the
+last exit, so hooks that share the machine's cores pay for it, and CPU is the
+sum of each hook's own (user+system of the hook and every process it waited
+for). The per-hook table runs each hook alone, so a hook's time there is not
+its siblings'. --serial is the earlier model: each hook alone, and wait the
+slowest of them, which scores separate hooks as if each had a core to itself. Decisions are compared per payload: a change not named
 with --intended fails the gate, as does a p50 or p95 wait that grows past the
 limit AND the floor (both, so a 2 ms wobble on a 5 ms hook is not a failure).
 
@@ -84,7 +87,7 @@ def hooks_for(side, tool):
     return out
 
 
-TOGETHER = False   # --together: a call's hooks launched at once, as Claude Code does
+TOGETHER = True   # a call's hooks launched at once, as Claude Code does; --serial turns it off
 
 
 def decide(rc, stdout):
@@ -181,17 +184,20 @@ def run_call(side, row, env, cwd):
     worst, by = 'allow', ''
     hooks = hooks_for(side, row['tool_name'])
     wall = None
+    together = {}
     if TOGETHER:
-        per, wall = run_together([(n, p) for n, p in hooks if p is not None], payload, e, cwd)
+        together, wall = run_together([(n, p) for n, p in hooks if p is not None], payload, e, cwd)
     for name, path in hooks:
         if path is None:
             per[name] = (0.0, 0.0, 'missing')
             continue
-        if not TOGETHER:
-            per[name] = run_hook(path, payload, e, cwd)
-        if RANK[per[name][2]] > RANK[worst]:
-            worst, by = per[name][2], name
-    return {'wait': wall if wall is not None else max((v[0] for v in per.values()), default=0.0),
+        per[name] = run_hook(path, payload, e, cwd)   # alone, for the per-hook table
+        d = together[name][2] if TOGETHER else per[name][2]
+        if RANK[d] > RANK[worst]:
+            worst, by = d, name
+    if TOGETHER:
+        return {'wait': wall, 'cpu': sum(v[1] for v in together.values()), 'decision': worst, 'by': by, 'hooks': per}
+    return {'wait': max((v[0] for v in per.values()), default=0.0),
             'cpu': sum(v[1] for v in per.values()), 'decision': worst, 'by': by, 'hooks': per}
 
 
@@ -278,8 +284,8 @@ def render_md(r):
              f"{', x' + str(r['repeat']) if r['repeat'] > 1 else ''}, each run through both sides, "
              'alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in '
              + ('config/settings.json, launched together as Claude Code does. Wait is from the first launch to the '
-                'last exit; CPU is the sum of each hook\'s own, and a hook\'s wall includes its share of the wait for '
-                'a core. Process start here: ' if r.get('together') else
+                'last exit, so hooks that share the cores pay for it; CPU is the sum of each hook\'s own. The per-hook '
+                'table runs each hook alone. Process start here: ' if r.get('together') else
                 'config/settings.json, run one at a time. Wait is the slowest hook of a call (Claude Code runs them in '
                 'parallel); CPU is the sum. Process start here: ')
              + ', '.join(f'`{k}` {v:.1f} ms' for k, v in r['process_start_ms'].items())
@@ -328,7 +334,8 @@ def main():
     ap.add_argument('--corpus', default='tests/bench-corpus.jsonl', help="JSONL file, or 'audit[:PATH]' for this machine's audit log")
     ap.add_argument('--quick', action='store_true', help='every third payload (CI)')
     ap.add_argument('--repeat', type=int, default=1, help='passes over the corpus')
-    ap.add_argument('--together', action='store_true', help="launch a call's hooks at once, as Claude Code does")
+    ap.add_argument('--serial', action='store_true',
+                    help="the earlier model: each hook alone, wait the slowest (as if each had its own core)")
     ap.add_argument('--gate', action='store_true', help='exit 1 on a regression or an unintended decision change')
     ap.add_argument('--intended', default='', help="payload ids whose decision may change, comma or space separated, or 'all'")
     ap.add_argument('--limit-pct', type=float, default=20.0, help='p50/p95 wait may grow by this much (default 20)')
@@ -338,7 +345,7 @@ def main():
     ap.add_argument('--json', help='write the full result here')
     a = ap.parse_args()
     global TOGETHER
-    TOGETHER = a.together
+    TOGETHER = not a.serial
 
     repo = os.path.abspath(a.repo)
     base = a.base or git(repo, 'describe', '--tags', '--abbrev=0', check=False)
@@ -443,7 +450,7 @@ def main():
                        'sha256': '' if local else hashlib.sha256(open(cpath, 'rb').read()).hexdigest(),
                        'tools': dict(sorted(((t, sum(1 for r in rows if r['tool_name'] == t)) for t in {r['tool_name'] for r in rows}),
                                             key=lambda kv: -kv[1]))},
-            'repeat': a.repeat, 'together': a.together, 'quick': a.quick, 'elapsed_s': round(elapsed, 1),
+            'repeat': a.repeat, 'together': TOGETHER, 'quick': a.quick, 'elapsed_s': round(elapsed, 1),
             'process_start_ms': start_cost(env, home),
             'classes': class_out, 'hooks': hook_out,
             'decisions': {'same': same, 'changed': changed},

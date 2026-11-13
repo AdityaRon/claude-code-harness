@@ -77,8 +77,13 @@ tools/hook-bench.py --corpus audit                   # this machine's audit log;
 
 Every payload in `tests/bench-corpus.jsonl` is fed to each PreToolUse command
 hook that side's `config/settings.json` registers for it, both sides back to
-back, alternating which side goes first. Wait is the slowest hook of a call,
-since Claude Code runs them in parallel; CPU is the sum. `--quick` takes every
+back, alternating which side goes first. A call's hooks are launched together,
+as Claude Code does: wait is from the first launch to the last exit, so hooks
+that share the cores pay for it; CPU is the sum of each hook's own. The
+per-hook table runs each hook alone. `--serial` is the earlier model (each hook
+alone, wait the slowest), which scored separate hooks as if each had its own
+core: on a 4-core runner it read the Bash dispatcher as 23% slower than v1.3.1
+when, launched together, it is 18% faster (#218). `--quick` takes every
 third payload, as CI does. The gate (`--gate`) fails on a decision change not
 named in `--intended`, or on a p50 or p95 wait that grows past both
 `--limit-pct` (default 20) and `--floor-ms` (default 5), for tool classes with

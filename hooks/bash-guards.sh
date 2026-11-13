@@ -102,9 +102,6 @@ for bg_g in "${BG_RUN[@]}"; do
   eval "exec $((10 + bg_i))<&-"
   bg_i=$((bg_i + 1))
 done
-# Reap the forks. bash does not wait for a process substitution, so each one
-# lingered as a zombie and its CPU reached no one timing this hook (wait4).
-wait
 
 # deny > ask > allow. One guard answering is passed on byte for byte; several
 # are joined in list order. Each guard wrote its own audit line.

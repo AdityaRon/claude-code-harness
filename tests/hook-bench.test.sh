@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for tools/hook-bench.py on a fixture repo with stub hooks: the gate goes
 # red on a slower hook and on a decision change nobody declared, stays green
-# A/A, and wait is the slowest hook of a call, not the sum.
+# A/A, and wait is a call's hooks launched together (about the slowest, not the
+# sum), or with --serial the slowest of each alone.
 set -u
 PASS=0; FAIL=0
 # shellcheck source-path=SCRIPTDIR source=lib.sh
@@ -67,6 +68,13 @@ jq -e '.classes.Bash.base.wait.p50 < (.hooks["fast.sh"].base.wall.p50 + .hooks["
   "$TMP/out.json" >/dev/null \
   && pass "wait is the slowest hook of a call, not the sum" \
   || fail "wait is a max" "$(jqo '[.classes.Bash.base.wait.p50, .hooks["fast.sh"].base.wall.p50, .hooks["second.sh"].base.wall.p50]')"
+[ "$(jqo '.together')" = true ] && grep -q 'launched together as Claude Code does' "$TMP/out.md" \
+  && pass "a call's hooks are launched together by default" || fail "together by default" "$(jqo '.together')"
+run --base v0.1.0 --head v0.1.0 --serial --floor-ms 100000
+[ "$(jqo '.together')" = false ] && grep -q 'run one at a time' "$TMP/out.md" \
+  && jq -e '.classes.Bash.base.wait.p50 >= ([.hooks["fast.sh"].base.wall.p50, .hooks["second.sh"].base.wall.p50] | max) - 1' "$TMP/out.json" >/dev/null \
+  && pass "--serial: each hook alone, wait the slowest" || fail "--serial" "$(jqo '[.together, .classes.Bash.base.wait.p50]')"
+run --base v0.1.0 --head v0.1.0 --gate --floor-ms 100000
 [ "$(jqo '.hooks["fast.sh"].base.wall.n')" = 7 ] && [ "$(jqo '.hooks["file.sh"].base.wall.n')" = 1 ] \
   && pass "hooks fire by matcher: fast.sh on 7 Bash calls, file.sh on 1 Write" || fail "matchers" "$(jqo '.hooks | keys')"
 [ "$(jqo '.hooks | has("missing.sh")')" = false ] && pass "an async hook is not run" || fail "async hook ran" ""
