@@ -109,7 +109,8 @@ SECRET_RULES = [
     ("a JWT", re.compile(r"\beyJ[\w-]{10,}\.eyJ[\w-]{10,}\.(?!SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c(?![\w-]))[\w-]{10,}")),
     ("a Slack webhook", re.compile(r"hooks\.slack\.com/services/[\w/+-]{20,}")),
     ("an API key", re.compile(r"(?<![\w-])sk-(?:ant-|proj-)?[A-Za-z0-9_-]{32,}")),
-    ("a private key", re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----")),
+    ("a private key", re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY(?: BLOCK)?-----")),
+    ("an AWS secret access key", re.compile(r"""(?i)\b(?:aws_secret_access_key|secretaccesskey)\\?["']?\s*[:=]\s*\\?["']?(?![A-Za-z0-9/+=]{30}EXAMPLEKEY)[A-Za-z0-9/+=]{40}""")),
     ("a URL with a password", re.compile(r"\b[a-z][a-z0-9+.-]*://[^/\s:@'\"]+:(?!(?:password|pass|passwd|secret|changeme|example)@|\\?\$|<|\*|x{3})[^/\s@'\"]{3,}@")),
 ]
 CLIENT_CTORS = re.compile(

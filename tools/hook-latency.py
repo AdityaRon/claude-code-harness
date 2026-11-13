@@ -12,6 +12,11 @@ settings.json as it is now (hooknames.py), so a record from before a settings ch
   tools/hook-latency.py --days 8 --total     one row per hook for the window
   tools/hook-latency.py --hook session-start
   bash doctor.sh --latency [ARGS]            the same
+
+hooks/bash-guards.sh runs the seven Bash guards as one hook, so its record is one row. Its
+timing log has each guard's seconds for every call, answered or not; the second table reads it,
+dated by joining each line's tool_use_id to the call in the transcripts. Those seconds are wall
+time with the seven running at once, so they overstate a guard's own cost.
 """
 import argparse
 import collections
@@ -23,7 +28,7 @@ import sys
 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # hooknames.py, also when loaded by path
-from hooknames import label, numbered, settings_hooks
+from hooknames import label, numbered, read_timing, settings_hooks
 
 HOME = os.path.expanduser("~")
 
@@ -35,6 +40,8 @@ def pct(xs, p):
 
 
 def fmt(ms):
+    if ms is None:
+        return "-"
     return f"{ms:.0f} ms" if ms < 1000 else f"{ms / 1000:.1f} s"
 
 
@@ -53,6 +60,7 @@ def main():
     ap.add_argument("--total", action="store_true", help="one row per hook for the whole window")
     ap.add_argument("--hook", default="", help="only hooks whose event or name contains this")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--timing-log", default=None, help="bash-guards' timing log (default $CLAUDE_GUARD_TIMING_LOG or ~/.claude/logs/guard-timing.log)")
     a = ap.parse_args()
 
     now = dt.datetime.now(dt.timezone.utc)
@@ -66,6 +74,8 @@ def main():
     skipped = collections.Counter()
     counted = 0
     any_nth = False
+    timing = read_timing(a.timing_log)
+    called = {}   # tool_use_id in the timing log -> when the transcript says the call was made
     first = last = None
     for f in files:
         try:
@@ -74,11 +84,18 @@ def main():
             continue
         with fh:
             for ln in fh:
-                if '"attachment"' not in ln or '"hook' not in ln:
+                use = timing and '"tool_use"' in ln and '"assistant"' in ln
+                if not use and ('"attachment"' not in ln or '"hook' not in ln):
                     continue
                 try:
                     d = json.loads(ln)
                 except ValueError:
+                    continue
+                if use:
+                    for c in (d.get("message") or {}).get("content") or []:
+                        t = parse_ts(d.get("timestamp"))
+                        if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("id") in timing and t:
+                            called[c["id"]] = t
                     continue
                 at = d.get("attachment") or {}
                 kind = str(at.get("type", ""))
@@ -108,8 +125,38 @@ def main():
         rows.append(dict(day=day, event=name, hook=hook, n=len(xs), p50=pct(xs, 50), p95=pct(xs, 95), max=xs[-1]))
     rows.sort(key=lambda r: (r["day"], -r["p95"]) if not a.total else (-r["p95"], r["event"]))
 
+    # Each Bash guard inside bash-guards: every call, from the timing log, dated by the transcript.
+    per = collections.defaultdict(list)
+    ran = collections.Counter()
+    failed = collections.Counter()
+    in_window = 0
+    for uid, guards in timing.items():
+        t = called.get(uid)
+        if t is None or t < cut:
+            continue
+        in_window += 1
+        for g, secs, status, _ in guards:
+            if a.hook and a.hook not in g and a.hook not in "bash-guards":
+                continue
+            key = ("" if a.total else t.strftime("%Y-%m-%d"), g)
+            ran[key] += 1
+            if status != "0":
+                failed[key] += 1
+            if secs is not None:
+                per[key].append(secs * 1000)
+    grows = []
+    # n counts every run; a run whose answer was lost has no seconds, so a guard lost every
+    # time still has its row, with no times and every run not 0.
+    for (day, g), n in ran.items():
+        xs = sorted(per.get((day, g), []))
+        top = (lambda q: pct(xs, q)) if xs else (lambda q: None)
+        grows.append(dict(day=day, guard=g, n=n, p50=top(50), p95=top(95), max=xs[-1] if xs else None, not_zero=failed[(day, g)]))
+    grows.sort(key=lambda r: (r["day"], -(r["p95"] or 0)) if not a.total else (-(r["p95"] or 0), r["guard"]))
+    undated = sum(1 for uid in timing if uid not in called)
+
     if a.json:
-        json.dump(dict(transcripts=len(files), counted=counted, not_counted=dict(skipped), rows=rows), sys.stdout, indent=1)
+        json.dump(dict(transcripts=len(files), counted=counted, not_counted=dict(skipped), rows=rows,
+                       timing=dict(lines=len(timing), in_window=in_window, no_call_found=undated), guards=grows), sys.stdout, indent=1)
         print()
         return 0
     span = f"{first:%Y-%m-%d} to {last:%Y-%m-%d}" if first else "no records"
@@ -119,14 +166,23 @@ def main():
     print("Claude Code records a hook only when it printed output or failed, so n counts the runs that answered, not every run.")
     if any_nth:
         print(f"\"command hook N\" is named through {a.settings} as it is now.")
-    if not rows:
-        return 0
-    w = max(len(r["hook"]) for r in rows)
-    e = max(len(r["event"]) for r in rows)
-    print()
-    print(("" if a.total else f"{'day':<11} ") + f"{'event':<{e}}  {'hook':<{w}}  {'n':>5}  {'p50':>7}  {'p95':>7}  {'max':>7}")
-    for r in rows:
-        print(("" if a.total else f"{r['day']:<11} ") + f"{r['event']:<{e}}  {r['hook']:<{w}}  {r['n']:>5}  {fmt(r['p50']):>7}  {fmt(r['p95']):>7}  {fmt(r['max']):>7}")
+    if rows:
+        w = max(len(r["hook"]) for r in rows)
+        e = max(len(r["event"]) for r in rows)
+        print()
+        print(("" if a.total else f"{'day':<11} ") + f"{'event':<{e}}  {'hook':<{w}}  {'n':>5}  {'p50':>7}  {'p95':>7}  {'max':>7}")
+        for r in rows:
+            print(("" if a.total else f"{r['day']:<11} ") + f"{r['event']:<{e}}  {r['hook']:<{w}}  {r['n']:>5}  {fmt(r['p50']):>7}  {fmt(r['p95']):>7}  {fmt(r['max']):>7}")
+    if timing:
+        print()
+        print(f"Bash guards inside bash-guards, from its timing log: {len(timing)} calls logged, {in_window} in the window, "
+              f"{undated} with no call found in these transcripts. Every call counts, answered or not; the seconds")
+        print("are each guard's wall time with the seven running at once, so they overstate its own cost.")
+        if grows:
+            w = max(len(r["guard"]) for r in grows)
+            print(("" if a.total else f"{'day':<11} ") + f"{'guard':<{w}}  {'n':>5}  {'p50':>7}  {'p95':>7}  {'max':>7}  {'not 0':>5}")
+            for r in grows:
+                print(("" if a.total else f"{r['day']:<11} ") + f"{r['guard']:<{w}}  {r['n']:>5}  {fmt(r['p50']):>7}  {fmt(r['p95']):>7}  {fmt(r['max']):>7}  {r['not_zero']:>5}")
     return 0
 
 

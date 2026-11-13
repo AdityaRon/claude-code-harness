@@ -58,7 +58,7 @@ rec "$T" 40 PreToolUse:Bash "~/.claude/hooks/rm-guard.sh" 63
 rec "$T" 1 PostToolUse:Bash "~/.claude/hooks/tcc-check.sh" "" hook_blocking_error
 rec "$P/proj/sess1/subagents/agent-a.jsonl" 1 PreToolUse:Bash "~/.claude/hooks/network-guard.sh" 250
 
-lat() { python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" "$@"; }
+lat() { python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" "$@"; }
 lat --json > "$TMP/day.json" 2>"$TMP/err"; RC=$?
 row() { jq -c --arg e "$1" --arg h "$2" '[.rows[] | select(.event == $e and .hook == $h)] | map([.n, .p50, .p95, .max])' "$3"; }
 
@@ -109,6 +109,44 @@ lat --total --json > "$TMP/tot.json"
   && pass "--hook keeps only matching hooks" || fail "--hook" ""
 [ "$(python3 "$REPO/tools/hook-latency.py" --projects "$TMP/none" --settings "$TMP/none.json" --json | jq -c '[.counted, (.rows|length)]')" = '[0,0]' ] \
   && pass "no transcripts: an empty report, exit 0" || fail "empty" ""
+
+echo ""
+echo "=== each Bash guard inside bash-guards, from its timing log, dated by the transcript ==="
+use() {   # use FILE DAYS_AGO ID: the assistant record of one Bash call
+  python3 - "$@" <<'PY'
+import datetime as dt, json, sys
+f, ago, uid = sys.argv[1:4]
+t = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=float(ago))
+with open(f, "a") as fh:
+    fh.write(json.dumps({"type": "assistant", "timestamp": t.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                         "message": {"content": [{"type": "tool_use", "id": uid, "name": "Bash", "input": {"command": "ls"}}]}}) + "\n")
+PY
+}
+use "$T" 1 g1; use "$T" 1 g2; use "$T" 40 g3
+TL="$TMP/timing.log"
+printf 'g1\tBash\tgit-guard=0.020:0:allow\trm-guard=0.010:0:allow\tkubectl-guard=-:lost:deny\tbad=0.5\n' > "$TL"
+printf 'g2\tBash\tgit-guard=0.040:0:ask\trm-guard=-:lost:deny\n' >> "$TL"
+printf 'g3\tBash\tgit-guard=0.900:0:allow\n' >> "$TL"
+printf 'g4\tBash\tgit-guard=0.900:0:allow\n' >> "$TL"
+G=$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total --json)
+grow() { jq -c --arg g "$1" '[.guards[] | select(.guard == $g)] | map([.n, (.p50|round), (.p95|round), (.max|round), .not_zero])' <<<"$G"; }
+[ "$(grow git-guard)" = '[[2,20,40,40,0]]' ] \
+  && pass "git-guard: two calls in the window, 20 and 40 ms" || fail "git-guard in bash-guards" "$(grow git-guard)"
+[ "$(grow rm-guard)" = '[[2,10,10,10,1]]' ] \
+  && pass "rm-guard: two runs, one lost: no seconds for it, and it counts as not 0" || fail "rm-guard in bash-guards" "$(grow rm-guard)"
+[ "$(jq -c '[.guards[] | select(.guard == "kubectl-guard")] | map([.n, .p50, .not_zero])' <<<"$G")" = '[[1,null,1]]' ] \
+  && pass "a guard lost every time keeps its row" || fail "always lost" "$(jq -c '.guards' <<<"$G")"
+[ "$(jq -c '[.guards[] | select(.guard == "bad")] | length' <<<"$G")" = 0 ] \
+  && pass "a column the hook never writes is skipped, not counted as a failure" || fail "malformed column" "$(jq -c '.guards' <<<"$G")"
+[ "$(jq -c '.timing' <<<"$G")" = '{"lines":4,"in_window":2,"no_call_found":1}' ] \
+  && pass "a call older than --days is left out; a line with no call in the transcripts is counted apart" || fail "timing counts" "$(jq -c '.timing' <<<"$G")"
+[ "$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total --hook rm-guard --json | jq -c '[.guards[].guard]')" = '["rm-guard"]' ] \
+  && pass "--hook keeps one guard" || fail "--hook on guards" ""
+TXT=$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total 2>&1)
+[[ "$TXT" == *"wall time with the seven running at once"* && "$TXT" == *"4 calls logged, 2 in the window, 1 with no call found"* ]] \
+  && pass "the text says what the seconds are and what was left out" || fail "guard table text" "$TXT"
+[ "$(jq -c '[(.guards | length), .timing.lines]' "$TMP/day.json")" = '[0,0]' ] \
+  && pass "no timing log: no guard rows" || fail "no timing log" "$(jq -c '.timing' "$TMP/day.json")"
 
 echo ""
 echo "=== doctor.sh --latency passes its arguments through ==="

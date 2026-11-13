@@ -140,7 +140,7 @@ mk() { printf -- '---\nname: %s\ndescription: d\nmetadata:\n  type: %s\n  modifi
 mk project_old project; mk feedback_one feedback
 printf -- '- [P](project_old.md) — hook\n- [F](feedback_one.md) — hook\n' > "$LINK/MEMORY.md"
 jq -nc --arg d "$HOME/code" '{source:"resume", session_id:"sess-link", cwd:$d, hook_event_name:"SessionStart"}' \
-  | MEMORY_INDEX_PRESSURE_LINES=1 bash hooks/session-start.sh >/dev/null 2>&1
+  | MEMORY_INDEX_PRESSURE_LINES=1 CLAUDE_SESSION_START_BUDGET=60 bash hooks/session-start.sh >/dev/null 2>&1
 [ "$(grep -o 'feedback_one\|project_old' "$P/$(slug "$D")/memory/MEMORY.md" | head -1)" = feedback_one ] \
   && pass "session-start reordered Desktop's index through the link" || fail "reorder through link" "$(cat "$P/$(slug "$D")/memory/MEMORY.md")"
 [ -f "$CLAUDE_STATE_DIR/memory-index/$(slug "$HOME/code")" ] && pass "stamped under the launch directory's slug" || fail "stamp" "$(ls "$CLAUDE_STATE_DIR/memory-index" 2>&1)"
