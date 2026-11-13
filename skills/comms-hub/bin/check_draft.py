@@ -83,7 +83,7 @@ TOKEN = re.compile(r"(?<!\w)(?:xox[abposr]-[\w-]{10,}|gh[pousr]_\w{30,}|github_p
                    r"|[a-z][\w+.-]*://[^/\s:@]+:" + URL_PLACEHOLDER + r"[^/\s@]{3,}@"  # a URL's password
                    r"|(?:sdk|mob|api)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # a LaunchDarkly key
                    r"|-----BEGIN [A-Z ]*-----"  # a PEM block
-                   r"|(?i:[a-z_]*(?:key|token|secret|password)\s*[=:]\s*[\"']?[\w./+-]{8,}))")  # key=..., token: ...
+                   r"|(?i:[a-z_]*(?:key|token|secret|password)\s*[=:]\s*[\"']?(?![\w./+-]*EXAMPLEKEY(?![\w./+-]))[\w./+-]{8,}))")  # key=..., token: ...; AWS's doc secret passes
 MENTION = re.compile(r"<@([\w.-]+)(?:\|[^>]*)?>")
 MAX_AGE = 300
 REPLY_WORDS = 60

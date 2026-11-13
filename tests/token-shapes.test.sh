@@ -17,34 +17,43 @@ PY=$(bash skills/comms-hub/bin/python.sh 2>/dev/null) || { PY=""; echo "  SKIP: 
 r() { local n=$1 c=$2; printf "$c%.0s" $(seq 1 "$n"); }   # n copies of c
 A=$(r 16 Q); B36=$(r 36 a); B40=$(r 40 b); B24=$(r 24 c); B20=$(r 20 d)
 SHAPES=(
-  "AWS key id"            "AK""IA$A"
-  "AWS temporary key id"  "AS""IA$A"
-  "GitHub classic PAT"    "gh""p_$B36"
+  "AWS Access Key ID"     "AK""IA$A"
+  "AWS Session/Temp Key"  "AS""IA$A"
+  "GitHub PAT (classic)"  "gh""p_$B36"
   "GitHub OAuth token"    "gh""o_$B36"
-  "GitHub user token"     "gh""u_$B36"
-  "GitHub server token"   "gh""s_$B36"
+  "GitHub user-server token" "gh""u_$B36"
+  "GitHub server-server token" "gh""s_$B36"
   "GitHub refresh token"  "gh""r_$B36"
-  "GitHub fine-grained"   "github""_pat_$(r 52 e)"
+  "GitHub fine-grained PAT" "github""_pat_$(r 52 e)"
   "GitLab token"          "gl""pat-$B20"
   "npm token"             "np""m_$B36"
-  "Slack bot token"       "xo""xb-1234567890-$B20"
-  "Slack app token"       "xa""pp-1-$B20"
+  "Slack bot/app token"   "xo""xb-1234567890-$B20"
+  "Slack app-level token" "xa""pp-1-$B20"
   "Google API key"        "AI""za$(r 35 f)"
   "Stripe live key"       "sk""_live_$B24"
   "Stripe test key"       "sk""_test_$B24"
-  "Anthropic key"         "sk""-ant-$(r 40 g)"
-  "OpenAI key"            "sk""-$B40$B20"
+  "Anthropic API key"     "sk""-ant-$(r 40 g)"
+  "OpenAI API key"        "sk""-$B40$B20"
   "OpenAI project key"    "sk""-proj-$(r 40 h)"
   "JWT"                   "ey""J$(r 20 i).ey""J$(r 20 j).$(r 20 k)"
-  "Slack webhook"         "https://hooks.slack.com/services/T0$(r 8 L)/B0$(r 8 M)/$(r 24 n)"
-  "URL with a password"   "postgres://app:$(r 12 p)@db.internal:5432/x"
+  "Slack incoming webhook" "https://hooks.slack.com/services/T0$(r 8 L)/B0$(r 8 M)/$(r 24 n)"
+  "Database URL with a password" "postgres://app:$(r 12 p)@db.internal:5432/x"
+  "AWS secret access key" "aws_secret""_access_key=$(r 40 S)"
+  "PEM private key header" "-----BEGIN RSA PRIVATE"" KEY-----"
+  "PGP private key block" "-----BEGIN PGP PRIVATE KEY"" BLOCK-----"
+  "GCP private key field" "\"private_key\": \"-----BEGIN PRIVATE"" KEY-----"
 )
 LABELS=(); for ((i = 0; i < ${#SHAPES[@]}; i += 2)); do LABELS+=("${SHAPES[$i]}"); done
+# Every shape secret-scanner blocks has a row here, by its own label: one it adds
+# and this list misses fails below, so the other four sites are held to it too.
+SCANNER_LABELS=(); while IFS= read -r l; do SCANNER_LABELS+=("$l"); done < <(
+  sed -n '/^PATTERNS=(/,/^)/p' hooks/secret-scanner.sh | sed -nE "s/^  [\"']([^:\"']+)::.*/\1/p")
 # Samples vendors publish, which secret-scanner lets through on purpose. The three
 # sites that block (scanner, draft, lint) must too; redact and friction only mask.
 JWTIO="ey""JhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ey""JzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
 SAMPLES=(
   "AWS's doc key"           "AK""IAIOSFODNN7EXAMPLE"
+  "AWS's doc secret"        "aws_secret""_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
   "jwt.io's sample"         "$JWTIO"
   "a <password> URL"        "postgres://app:<password>@db:5432/x"
   "a \${VAR} URL"           "https://user:\${TOKEN}@github.com/x"
@@ -118,6 +127,11 @@ for site in scanner redact friction draft lint; do
     printf '%s\n' "${LABELS[@]}" | grep -qxF -- "${x%%:*}" || fail "OUT_$site names \"${x%%:*}\"" "which is no shape here: fix or drop the entry"
   done
 done
+
+[ "${#SCANNER_LABELS[@]}" -ge 20 ] && pass "read ${#SCANNER_LABELS[@]} labels from secret-scanner's PATTERNS" \
+  || fail "secret-scanner's labels" "read ${#SCANNER_LABELS[@]}: the PATTERNS block changed shape"
+MISSING=""; for l in "${SCANNER_LABELS[@]}"; do printf '%s\n' "${LABELS[@]}" | grep -qxF -- "$l" || MISSING="$MISSING [$l]"; done
+[ -z "$MISSING" ] && pass "every shape secret-scanner blocks has a row here" || fail "shapes with no row" "$MISSING"
 
 echo ""
 echo "=== a vendor's published sample passes where a site blocks ==="
