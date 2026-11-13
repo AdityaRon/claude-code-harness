@@ -2,9 +2,10 @@
 """Run this skill's tests, or their mutations. skill-forge copies this file
 into every skill it drafts, unchanged.
 
-  run.py            every tests/test_*.py; ends with `--- Results: N passed, M failed ---`
-  run.py --mutate   each mutation listed in a test file's docstring, applied to a
-                    temp copy of the skill: the file must go red, or it cannot fail
+  run.py                 every tests/test_*.py; ends with `--- Results: N passed, M failed ---`
+  run.py --mutate [F]    each mutation listed in a test file's docstring (or only
+                         F's, with or without .py), applied to a temp copy of the
+                         skill: the file must go red, or it cannot fail
 
 A docstring mutation line reads
   name: script.py: `old text` => `new text`
@@ -12,7 +13,8 @@ where script.py is a file in bin/, or a path from the skill's root when it holds
 a slash. `name (may survive): ...` marks one a reason in the line allows to stay
 green. Either text may run on over the lines that follow. `old text` must occur
 exactly once in the file, so a mutation cannot go stale.
-Exit status is the failure count.
+Tests run in a mutation copy see SKILL_MUTATION_COPY=1: files outside the skill
+are not there. Exit status is the failure count.
 """
 from __future__ import annotations
 
@@ -37,13 +39,18 @@ def run_tests() -> int:
     suite = unittest.defaultTestLoader.discover(str(HERE), pattern="test_*.py", top_level_dir=str(HERE))
     result = unittest.TextTestRunner(verbosity=1, stream=sys.stdout).run(suite)
     failed = len(result.failures) + len(result.errors)
-    sys.stdout.write(f"--- Results: {result.testsRun - failed} passed, {failed} failed ---\n")
+    skipped = len(result.skipped)
+    if skipped:
+        names = ", ".join(t.id().rsplit(".", 1)[-1] for t, _ in result.skipped)
+        sys.stdout.write(f"--- {skipped} skipped, not passed: {names} ---\n")
+    sys.stdout.write(f"--- Results: {result.testsRun - failed - skipped} passed, {failed} failed ---\n")
     return failed
 
 
 def mutations(test_file: Path):
     """Each (name, may survive, target, old, new); old is None for a line that
-    starts a mutation and never parses."""
+    starts a mutation and never parses. Read a line at a time, seven that spanned
+    lines were once skipped without a word, and their rules went untested."""
     doc = ast.get_docstring(ast.parse(test_file.read_text())) or ""
     raw = doc.splitlines()
     lines = [ln if ln.startswith(" ") else "  " + ln for ln in raw]
@@ -65,6 +72,8 @@ def mutations(test_file: Path):
 
 def run_file(root: Path, test_file: str) -> int:
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    if root != SKILL:
+        env["SKILL_MUTATION_COPY"] = "1"
     p = subprocess.run([sys.executable, "-B", "-m", "unittest", test_file[:-3]], cwd=root / "tests",
                        env=env, capture_output=True, text=True, timeout=600)
     return p.returncode
@@ -72,9 +81,14 @@ def run_file(root: Path, test_file: str) -> int:
 
 def run_mutations(only: str | None = None) -> int:
     killed = survived = stale = 0
-    for tf in sorted(HERE.glob("test_*.py")):
-        if only and tf.name != only:
-            continue
+    files = sorted(HERE.glob("test_*.py"))
+    if only:
+        want = only if only.endswith(".py") else only + ".py"
+        files = [f for f in files if f.name == want]
+        if not files:
+            sys.stdout.write(f"NONE {only}: no tests/{want}\n--- Results: 0 passed, 1 failed ---\n")
+            return 1
+    for tf in files:
         listed = list(mutations(tf))
         if not listed:
             sys.stdout.write(f"NONE {tf.name}: no mutations listed\n")
@@ -91,8 +105,15 @@ def run_mutations(only: str | None = None) -> int:
                 continue
             work = Path(tempfile.mkdtemp(prefix="skill-mutate."))
             try:
+                # The whole skill: comms-hub's tests read its example config, and with
+                # only bin/ and tests/ copied every hub.py mutation went red on
+                # FileNotFoundError, not on the rule.
                 shutil.copytree(SKILL, work / "s", ignore=shutil.ignore_patterns("__pycache__", ".git"))
-                path = work / "s" / (target if "/" in target else f"bin/{target}")
+                path = (work / "s" / (target if "/" in target else f"bin/{target}")).resolve()
+                if not path.is_relative_to((work / "s").resolve()):
+                    sys.stdout.write(f"STALE {tf.name} {name}: {target} is outside the skill\n")
+                    stale += 1
+                    continue
                 text = path.read_text() if path.is_file() else ""
                 n = text.count(old)
                 if n != 1:

@@ -97,18 +97,20 @@ SECRET_RULES = [
     ("a secret-named CLI flag", re.compile(r"""(?i)add_argument\(\s*["']--?[\w-]*(?:password|passwd|pwd|token|secret|api[-_]?key|credential)[\w-]*["']""")),
     ("a secret in argv", re.compile(r"""(?i)["']--(?:password|token|api-key|secret)(?:=|["'])|["']-p\{|\bf["'][^"'\n]*(?:bearer\s*\{|password=\{|token=\{)""")),
     ("a literal secret value", re.compile(r"""(?i)\b(?:password|passwd|secret|token|api_?key)\s*[:=]\s*["'][^"'\s${<]{6,}["']""")),
-    ("an AWS key id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    # Vendors' published samples pass, as in secret-scanner: an AWS key ending
+    # EXAMPLE, jwt.io's signature, a placeholder for a URL's password.
+    ("an AWS key id", re.compile(r"\b(?:AKIA|ASIA)(?![0-9A-Z]{9}EXAMPLE\b)[0-9A-Z]{16}\b")),
     ("a GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36}\b")),
     ("a Slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}|\bxapp-\d+-[A-Za-z0-9-]{10,}")),
     ("a GitHub fine-grained token", re.compile(r"\bgithub_pat_\w{50,}")),
     ("a GitLab or npm token", re.compile(r"\bglpat-[\w-]{20,}|\bnpm_[A-Za-z0-9]{36}")),
     ("a Google API key", re.compile(r"\bAIza[\w-]{35}")),
     ("a Stripe key", re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9]{24,}")),
-    ("a JWT", re.compile(r"\beyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]{10,}")),
+    ("a JWT", re.compile(r"\beyJ[\w-]{10,}\.eyJ[\w-]{10,}\.(?!SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c(?![\w-]))[\w-]{10,}")),
     ("a Slack webhook", re.compile(r"hooks\.slack\.com/services/[\w/+-]{20,}")),
     ("an API key", re.compile(r"(?<![\w-])sk-(?:ant-|proj-)?[A-Za-z0-9_-]{32,}")),
     ("a private key", re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----")),
-    ("a URL with a password", re.compile(r"\b[a-z][a-z0-9+.-]*://[^/\s:@'\"]+:(?!password@|\$|<|\*|x{3})[^/\s@'\"]{3,}@")),
+    ("a URL with a password", re.compile(r"\b[a-z][a-z0-9+.-]*://[^/\s:@'\"]+:(?!(?:password|pass|passwd|secret|changeme|example)@|\\?\$|<|\*|x{3})[^/\s@'\"]{3,}@")),
 ]
 CLIENT_CTORS = re.compile(
     r"\bboto3\.(?:client|resource|Session)\(|\bconfig\.load_(?:kube|incluster)_config\(|\bclient\.(?:CoreV1Api|AppsV1Api|BatchV1Api|ApiClient)\("
