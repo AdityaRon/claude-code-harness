@@ -92,7 +92,7 @@ SHELL_CMD = re.compile(r"(?:^|[;&|(`]|\$\()[ \t]*(?:(?:sudo|exec|command|nohup|e
                        r"(?:[A-Za-z_]\w*=\S*[ \t]+)*(?:(?:/[\w.-]+)*/)?"
                        r"(?:(?:ba|z|da|k|fi|s)?sh|\$\{?SHELL\}?)(?=[ \t;&|)]|$)"
                        r"|(?:^|[;&|(`]|\$\()[ \t]*(?:eval|source|\.)[ \t]")
-HD_SUB = re.compile(r"\$\(|`")
+HD_SUB = re.compile(r"\$\(|`|[<>]\(")
 # Re-login and session checks: None means every subcommand is one. A tool that also
 # does the work (tsh ssh, aws-vault exec) lists only its login subcommands, one or two words.
 ACCESS = {"kinit": None, "kubelogin": None, "okta": None, "gimme-aws-creds": None,
@@ -195,9 +195,54 @@ class Heredocs:
     def __init__(self):
         self.q, self.frames, self.bt, self.cont = "", [], False, False
         self.subseen = self.insub = False
+        self.hbq, self.hbdep, self.tail = "", 0, ""   # hd_body's HB_Q, HB_DEP, HB_TAIL
+
+    def body(self, s: str) -> bool:
+        """One line of a body opened inside $( ), <( ) or backticks, through bash 3.2's
+        substitution scanner (lib.sh's hd_body): True where it might end the substitution."""
+        i, n = 0, len(s)
+        while i < n:
+            c = s[i]
+            if self.hbq == "'":
+                if c == "'":
+                    self.hbq = ""
+            elif self.hbq in ("`", "B"):
+                if c == "\\":
+                    i += 1
+                elif c == "`":
+                    self.hbq = '"' if self.hbq == "B" else ""
+            elif self.hbq == '"':
+                if c == "\\":
+                    i += 1
+                elif c == '"':
+                    self.hbq = ""
+                elif c == "`":
+                    self.hbq = "B"
+                elif c == "$" and s[i + 1:i + 2] in ("(", "{", "["):
+                    return True
+            elif c == "\\":
+                i += 1
+            elif c == "'":
+                if i > 0 and s[i - 1] == "$":
+                    return True
+                self.hbq = "'"
+            elif c in "\"`":
+                self.hbq = c
+            elif c == "(":
+                self.hbdep += 1
+            elif c == ")":
+                self.hbdep -= 1
+                if self.hbdep < 0:
+                    return True
+            elif c == "#" and (i == 0 or s[i - 1] in " \t"):
+                return bool(re.search(r"[()'\"`\\]", s[i + 1:]))
+            i += 1
+        return False
 
     def scan(self, s: str):
         found, n, esc, i = None, len(s), -2, 0
+        if self.tail and self.tail in s:   # a quote a body left open flips this line
+            raise ValueError(s)
         while i < n:
             c = s[i]
             if self.q == "'":
@@ -266,6 +311,8 @@ class Heredocs:
                 i = s.find("]", i)
                 if i < 0:
                     raise ValueError(s)
+            elif found and self.insub and c == ")":   # x=$(cat <<EOF) ends it here, in zsh too
+                raise ValueError(s)
             elif self.frames and not self.frames[-1][2] and c in "()":
                 self.frames[-1][1] += 1 if c == "(" else -1
                 if self.frames[-1][1] == 0:
@@ -281,11 +328,14 @@ class Heredocs:
                     if not w:
                         raise ValueError(s)
                     found = w
+                    self.hbq, self.hbdep = "", 0
                     self.insub = self.subseen or bool(HD_SUB.search(s, 0, i + 1))
+                    if self.insub and (re.search(r"[()'\"`\\]", w[1]) or self.body(s[i + w[0]:])):
+                        raise ValueError(s)
                     i += w[0] - 1
             i += 1
         self.cont = esc == n
-        self.subseen = self.subseen or bool(HD_SUB.search(s))
+        self.subseen = self.subseen or bool(HD_SUB.search(s)) or (self.cont and s[-2:-1] in ("$", "<", ">"))
         if found and (self.q or self.cont):
             raise ValueError(s)
         return found
@@ -302,10 +352,16 @@ def drop_heredocs(cmd: str) -> str:
     for i, line in enumerate(lines):
         if term is not None:
             t = line.lstrip("\t") if dash else line
-            if t == term:
-                term = None
-            elif hd.insub and t == term + ")":
+            if hd.tail and hd.tail in line:
                 return "\n".join(out[:kept] + lines[start:])   # this body as typed
+            if t == term:
+                if hd.insub and hd.hbq:
+                    hd.tail = "`" if hd.hbq == "B" else hd.hbq
+                elif hd.insub and hd.hbdep:
+                    return "\n".join(out[:kept] + lines[start:])
+                term = None
+            elif hd.insub and (t == term + ")" or hd.body(line)):
+                return "\n".join(out[:kept] + lines[start:])
             elif keep:
                 out.append(line)
             continue
