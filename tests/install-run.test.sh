@@ -130,7 +130,7 @@ for m in project_old:project feedback_one:feedback; do
 done
 printf -- '- [P](project_old.md) — hook\n- [F](feedback_one.md) — hook\n' > "$STORE/MEMORY.md"
 ( cd "$LAUNCH" && jq -nc --arg d "$LAUNCH" '{source:"resume", session_id:"inst", hook_event_name:"SessionStart", cwd:$d}' \
-    | env -i HOME="$HOME" PATH="$PATH" MEMORY_INDEX_PRESSURE_LINES=1 CLAUDE_CONTRACT_PIN="$TMP/no-pin" \
+    | env -i HOME="$HOME" PATH="$PATH" MEMORY_INDEX_PRESSURE_LINES=1 CLAUDE_SESSION_START_BUDGET=60 CLAUDE_CONTRACT_PIN="$TMP/no-pin" \
         CLAUDE_HARNESS_LATEST="$TMP/no-latest" CLAUDE_HARNESS_VERSION="$TMP/no-version" \
         bash "$HOME/.claude/hooks/session-start.sh" >/dev/null 2>&1 )
 [[ "$(grep -o 'feedback_one\|project_old' "$STORE/MEMORY.md" | head -1)" = feedback_one ]] \

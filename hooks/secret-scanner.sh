@@ -30,7 +30,7 @@ B='(^|[^A-Za-z0-9_-])'   # a key's start: `sk-` inside base64 or a longer word i
 PATTERNS=(
   'AWS Access Key ID::AKIA[0-9A-Z]{16}::EXAMPLE$'
   'AWS Session/Temp Key::ASIA[0-9A-Z]{16}::EXAMPLE$'
-  "AWS secret access key::(aws_secret_access_key|AWS_SECRET_ACCESS_KEY|[Ss]ecretAccessKey)[\"']?[[:space:]]*[:=][[:space:]]*[\"']?[A-Za-z0-9/+=]{40}::EXAMPLEKEY"
+  "AWS secret access key::(aws_secret_access_key|AWS_SECRET_ACCESS_KEY|[Ss]ecretAccessKey)\\\\?[\"']?[[:space:]]*[:=][[:space:]]*\\\\?[\"']?[A-Za-z0-9/+=]{40}::EXAMPLEKEY"
   'GitHub PAT (classic)::ghp_[A-Za-z0-9]{36}'
   'GitHub fine-grained PAT::github_pat_[A-Za-z0-9_]{50,}'
   'GitHub OAuth token::gho_[A-Za-z0-9]{36}'
