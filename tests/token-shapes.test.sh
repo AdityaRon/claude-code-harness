@@ -113,7 +113,7 @@ if [ -n "$PY" ]; then
   [ "${#PYRES[@]}" = "${#LABELS[@]}" ] && pass "the Python sites read every shape" || fail "the Python sites" "${#PYRES[@]} of ${#LABELS[@]} lines"
 fi
 for site in scanner redact friction draft lint; do
-  arr="OUT_$site[@]"
+  arr="OUT_${site}[@]"
   for x in "${!arr}"; do
     printf '%s\n' "${LABELS[@]}" | grep -qxF -- "${x%%:*}" || fail "OUT_$site names \"${x%%:*}\"" "which is no shape here: fix or drop the entry"
   done
