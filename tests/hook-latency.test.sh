@@ -124,7 +124,7 @@ PY
 }
 use "$T" 1 g1; use "$T" 1 g2; use "$T" 40 g3
 TL="$TMP/timing.log"
-printf 'g1\tBash\tgit-guard=0.020:0:allow\trm-guard=0.010:0:allow\n' > "$TL"
+printf 'g1\tBash\tgit-guard=0.020:0:allow\trm-guard=0.010:0:allow\tkubectl-guard=-:lost:deny\tbad=0.5\n' > "$TL"
 printf 'g2\tBash\tgit-guard=0.040:0:ask\trm-guard=-:lost:deny\n' >> "$TL"
 printf 'g3\tBash\tgit-guard=0.900:0:allow\n' >> "$TL"
 printf 'g4\tBash\tgit-guard=0.900:0:allow\n' >> "$TL"
@@ -132,8 +132,12 @@ G=$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/setti
 grow() { jq -c --arg g "$1" '[.guards[] | select(.guard == $g)] | map([.n, (.p50|round), (.p95|round), (.max|round), .not_zero])' <<<"$G"; }
 [ "$(grow git-guard)" = '[[2,20,40,40,0]]' ] \
   && pass "git-guard: two calls in the window, 20 and 40 ms" || fail "git-guard in bash-guards" "$(grow git-guard)"
-[ "$(grow rm-guard)" = '[[1,10,10,10,1]]' ] \
-  && pass "rm-guard: a lost answer has no seconds and counts as not 0" || fail "rm-guard in bash-guards" "$(grow rm-guard)"
+[ "$(grow rm-guard)" = '[[2,10,10,10,1]]' ] \
+  && pass "rm-guard: two runs, one lost: no seconds for it, and it counts as not 0" || fail "rm-guard in bash-guards" "$(grow rm-guard)"
+[ "$(jq -c '[.guards[] | select(.guard == "kubectl-guard")] | map([.n, .p50, .not_zero])' <<<"$G")" = '[[1,null,1]]' ] \
+  && pass "a guard lost every time keeps its row" || fail "always lost" "$(jq -c '.guards' <<<"$G")"
+[ "$(jq -c '[.guards[] | select(.guard == "bad")] | length' <<<"$G")" = 0 ] \
+  && pass "a column the hook never writes is skipped, not counted as a failure" || fail "malformed column" "$(jq -c '.guards' <<<"$G")"
 [ "$(jq -c '.timing' <<<"$G")" = '{"lines":4,"in_window":2,"no_call_found":1}' ] \
   && pass "a call older than --days is left out; a line with no call in the transcripts is counted apart" || fail "timing counts" "$(jq -c '.timing' <<<"$G")"
 [ "$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total --hook rm-guard --json | jq -c '[.guards[].guard]')" = '["rm-guard"]' ] \

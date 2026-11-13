@@ -83,6 +83,8 @@ def read_timing(path=None):
                     g, _, v = c.partition("=")
                     secs, _, rest = v.partition(":")
                     status, _, decision = rest.partition(":")
+                    if not g or not status:
+                        continue   # not a column the hook writes
                     try:
                         s = float(secs)
                     except ValueError:

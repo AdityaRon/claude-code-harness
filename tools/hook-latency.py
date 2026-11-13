@@ -40,6 +40,8 @@ def pct(xs, p):
 
 
 def fmt(ms):
+    if ms is None:
+        return "-"
     return f"{ms:.0f} ms" if ms < 1000 else f"{ms / 1000:.1f} s"
 
 
@@ -91,8 +93,9 @@ def main():
                     continue
                 if use:
                     for c in (d.get("message") or {}).get("content") or []:
-                        if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("id") in timing:
-                            called[c["id"]] = parse_ts(d.get("timestamp"))
+                        t = parse_ts(d.get("timestamp"))
+                        if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("id") in timing and t:
+                            called[c["id"]] = t
                     continue
                 at = d.get("attachment") or {}
                 kind = str(at.get("type", ""))
@@ -124,6 +127,7 @@ def main():
 
     # Each Bash guard inside bash-guards: every call, from the timing log, dated by the transcript.
     per = collections.defaultdict(list)
+    ran = collections.Counter()
     failed = collections.Counter()
     in_window = 0
     for uid, guards in timing.items():
@@ -135,15 +139,19 @@ def main():
             if a.hook and a.hook not in g and a.hook not in "bash-guards":
                 continue
             key = ("" if a.total else t.strftime("%Y-%m-%d"), g)
+            ran[key] += 1
             if status != "0":
                 failed[key] += 1
             if secs is not None:
                 per[key].append(secs * 1000)
     grows = []
-    for (day, g), xs in per.items():
-        xs.sort()
-        grows.append(dict(day=day, guard=g, n=len(xs), p50=pct(xs, 50), p95=pct(xs, 95), max=xs[-1], not_zero=failed[(day, g)]))
-    grows.sort(key=lambda r: (r["day"], -r["p95"]) if not a.total else (-r["p95"], r["guard"]))
+    # n counts every run; a run whose answer was lost has no seconds, so a guard lost every
+    # time still has its row, with no times and every run not 0.
+    for (day, g), n in ran.items():
+        xs = sorted(per.get((day, g), []))
+        top = (lambda q: pct(xs, q)) if xs else (lambda q: None)
+        grows.append(dict(day=day, guard=g, n=n, p50=top(50), p95=top(95), max=xs[-1] if xs else None, not_zero=failed[(day, g)]))
+    grows.sort(key=lambda r: (r["day"], -(r["p95"] or 0)) if not a.total else (-(r["p95"] or 0), r["guard"]))
     undated = sum(1 for uid in timing if uid not in called)
 
     if a.json:
