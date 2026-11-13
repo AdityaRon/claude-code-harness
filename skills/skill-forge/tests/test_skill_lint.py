@@ -407,6 +407,16 @@ class SkillMdTest(unittest.TestCase):
             md.write_text(md.read_text() + '\nRun `bash "${HOME}/.claude/memory-verify.sh"`, `$HOME/.claude//memory-verify.sh`, '
                           "`/Users/someone/.claude/./memory-verify.sh` or `/home/someone/.claude/memory-verify.sh`; "
                           "never `~/.claude/memory-verify.sh.bak`.\n")
+            for spelling in ('`bash "$HOME"/.claude/memory-verify.sh`', '`bash "${HOME}"/.claude/memory-verify.sh`',
+                             "Then run ~/.claude/memory-verify.sh."):
+                with self.subTest(spelling=spelling):
+                    alone = root.parent / "alone"
+                    shutil.rmtree(alone, ignore_errors=True)
+                    shutil.copytree(root, alone)
+                    (alone / "SKILL.md").write_text(md.read_text().split("\nRun `bash")[0] + f"\n{spelling}\n")
+                    self.assertIn("SKILL.md runs ~/.claude/memory-verify.sh, outside the folder",
+                                  skill_lint.lint(alone)["C10"].detail)
+                    shutil.rmtree(alone)
             res = skill_lint.lint(root)
             self.assertEqual(failing(res), {"C10"}, fails(res))
             self.assertEqual(res["C10"].detail.count("SKILL.md runs ~/.claude/memory-verify.sh, outside the folder"), 1,
@@ -426,10 +436,13 @@ class SkillMdTest(unittest.TestCase):
     def test_many_findings_are_capped_so_the_first_stays_readable(self):
         with Workdir() as root, home():
             md = root / "SKILL.md"
-            md.write_text(md.read_text() + "\n" + " ".join(f"`~/.claude/t{i}.sh`" for i in range(12)) + "\n")
+            md.write_text(md.read_text() + "\n" + " ".join(f"`~/.claude/t{i}.sh`" for i in range(12))
+                          + "\n`python3 scripts/report.py` prints a report.\n")
+            (root / "scripts").mkdir()
+            (root / "scripts" / "report.py").write_text('"""report.py --help"""\n')
             res = skill_lint.lint(root)
         self.assertEqual(failing(res), {"C10"}, fails(res))
-        self.assertTrue(res["C10"].detail.endswith("; and 4 more"), res["C10"].detail)
+        self.assertTrue(res["C10"].detail.endswith("; and 5 more"), res["C10"].detail)
 
     def test_uses_that_is_not_a_list_of_strings_fails_without_a_crash(self):
         for value in ('"~/.claude/memory-verify.sh"', '[{a = 1}]'):
@@ -456,14 +469,51 @@ class SkillMdTest(unittest.TestCase):
             res = skill_lint.lint(root)
         self.assertEqual(res["C10"].status, "PASS", res["C10"].detail)
 
+    def test_a_uses_entry_for_the_skills_own_script_is_not_a_finding(self):
+        with Workdir() as root, home():
+            md = root / "SKILL.md"
+            own = f"~/.claude/skills/{root.name}/bin/engine.py"
+            md.write_text(md.read_text() + f"\nRun `python3 {own} --help`.\n")
+            uses(root, f'["{own}"]')
+            res = skill_lint.lint(root)
+        self.assertEqual(res["C10"].status, "PASS", res["C10"].detail)
+
+    def test_a_reference_that_climbs_out_of_claude_fails(self):
+        up3 = "../" * 3   # built: whole, C10 reads this test as climbing out of its folder
+        for ref in ("~/.claude/../bin/x.sh", "~/.claude/skills/{name}/" + up3 + "x.sh"):
+            with self.subTest(ref=ref), Workdir() as root, home():
+                ref = ref.format(name=root.name)
+                md = root / "SKILL.md"
+                md.write_text(md.read_text() + f"\nRun `bash {ref}`.\n")
+                uses(root, f'["{ref}"]')
+                res = skill_lint.lint(root)
+                self.assertEqual(failing(res), {"C10"}, fails(res))
+                self.assertIn(f"SKILL.md runs {ref}, which climbs out of ~/.claude", res["C10"].detail)
+
+    def test_an_installed_copy_is_judged_by_what_is_on_this_machine(self):
+        # install.sh copies no forge.toml, so an installed skill has nowhere to declare uses.
+        with Workdir() as fixture, home() as h:
+            root = h / ".claude" / "skills" / fixture.name
+            shutil.copytree(fixture, root)
+            (root / "forge.toml").unlink()
+            md = root / "SKILL.md"
+            md.write_text(md.read_text() + "\nRun `bash ~/.claude/memory-verify.sh`.\n")
+            self.assertIn("SKILL.md runs ~/.claude/memory-verify.sh, which is not on this machine",
+                          skill_lint.lint(root)["C10"].detail)
+            (h / ".claude" / "memory-verify.sh").write_text("true\n")
+            res = skill_lint.lint(root)
+            self.assertEqual(res["C10"].status, "PASS", res["C10"].detail)
+            (root / "forge.toml").write_text('name = "x"\n')   # a manifest there: declare as anywhere else
+            self.assertIn("declare it in forge.toml uses", skill_lint.lint(root)["C10"].detail)
+
     def test_in_a_harness_clone_a_declared_script_must_be_one_install_sh_installs(self):
         other = "~/.claude/" + "skills/other"   # in two parts: whole, C10 reads this test as reaching into a skill
-        refs = ["~/.claude/memory-verify.sh", "~/.claude/hooks/x.sh", "~/.claude/hooks/x.py",
-                f"{other}/tests/t.py", f"{other}/bin/t.py"]
+        refs = ["~/.claude/memory-verify.sh", "~/.claude/hooks/x.sh", "~/.claude/hooks/x.py", "~/.claude/hooks/lib/l.sh",
+                f"{other}/tests/t.py", f"{other}/bin/t.py", f"{other}/panel/hooks/h.py", f"{other}/panel/p.py"]
         with tempfile.TemporaryDirectory() as tmp, Workdir() as fixture, home():
             repo = Path(tmp)
             subprocess.run(["git", "init", "-q", str(repo)], check=True)
-            for d in ("bin", "hooks", "skills/skill-forge", "skills/other/tests", "skills/other/bin"):
+            for d in ("bin", "hooks/lib", "skills/skill-forge", "skills/other/tests", "skills/other/bin", "skills/other/panel/hooks"):
                 (repo / d).mkdir(parents=True)
             (repo / "skills" / "skill-forge" / "SKILL.md").write_text("x\n")   # how the lint knows the harness
             root = repo / "skills" / fixture.name
@@ -472,12 +522,15 @@ class SkillMdTest(unittest.TestCase):
             md.write_text(md.read_text() + "\nRun " + ", ".join(f"`{r}`" for r in refs) + ".\n")
             uses(root, "[" + ", ".join(f'"{r}"' for r in refs) + "]")
             (repo / "memory-verify.sh").write_text("true\n")   # at the root, not in bin/: not installed
-            for f in ("hooks/x.sh", "hooks/x.py", "skills/other/tests/t.py", "skills/other/bin/t.py"):
+            for f in ("hooks/x.sh", "hooks/x.py", "hooks/lib/l.sh", "skills/other/tests/t.py", "skills/other/bin/t.py",
+                      "skills/other/panel/hooks/h.py", "skills/other/panel/p.py"):
                 (repo / f).write_text("true\n")
             detail = skill_lint.lint(root)["C10"].detail
-            for r in ("~/.claude/memory-verify.sh", "~/.claude/hooks/x.py", f"{other}/tests/t.py"):
+            # install.sh copies hooks/*.sh, not hooks/lib/ (until the lib split installs it).
+            for r in ("~/.claude/memory-verify.sh", "~/.claude/hooks/x.py", "~/.claude/hooks/lib/l.sh",
+                      f"{other}/tests/t.py", f"{other}/panel/p.py"):
                 self.assertIn(f"SKILL.md runs {r}, which install.sh in this clone does not install", detail)
-            for r in ("~/.claude/hooks/x.sh", f"{other}/bin/t.py"):
+            for r in ("~/.claude/hooks/x.sh", f"{other}/bin/t.py", f"{other}/panel/hooks/h.py"):
                 self.assertNotIn(f"{r}, which install.sh", detail)
             (repo / "bin" / "memory-verify.sh").write_text("true\n")
             self.assertNotIn("memory-verify.sh, which install.sh", skill_lint.lint(root)["C10"].detail)

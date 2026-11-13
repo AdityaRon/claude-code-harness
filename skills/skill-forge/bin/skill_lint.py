@@ -24,7 +24,8 @@ forge.toml keys it reads (a hand-written skill needs none of them):
   audit_table  the table a write's audit row goes to
   uses         the ~/.claude/ scripts SKILL.md runs that are not the skill's own;
                each must be declared, and in a harness clone install.sh must
-               install it
+               install it. An installed copy has no forge.toml (install.sh
+               does not copy it); there each must be on this machine
   [deps]       other-skill = "ENV_VAR" for anything outside the folder
   [tests]      "bin/x.sh" = "path/to/its.test.sh", for a test kept outside the
                skill's own test locations; the path must exist
@@ -496,21 +497,41 @@ CLIMB = re.compile(r"(?:^|/)\.\./\.\.(?:/|$)")
 CLAUDE_SKILL = re.compile(r"\.claude/skills/([\w-]+)")
 SIBLING = re.compile(r"^(?:\.\./)+skills/([\w-]+)")
 PARENTS = re.compile(r"Path\(__file__\)(?:\.resolve\(\))?((?:\.parent)+)|\.parents\[(\d+)\]|((?:os\.path\.dirname\(){3,})")
-# ~/.claude/<path>.sh|.py in any spelling of home: ~, $HOME, ${HOME}, /Users/<u>, /home/<u>.
-INSTALLED_REF = re.compile(r"(?<![\w.$/-])(?:~|\$HOME|\$\{HOME\}|/(?:Users|home)/[\w.-]+)(/\.claude/[\w./-]+\.(?:py|sh))(?![\w.-])")
+# ~/.claude/<path>.sh|.py in any spelling of home: ~, $HOME, "$HOME", ${HOME}, /Users/<u>,
+# /home/<u>. A period after it ends the sentence; .bak or -old after it is another name.
+INSTALLED_REF = re.compile(r'(?<![\w.$/-])(?:~|\$HOME"?|\$\{HOME\}"?|/(?:Users|home)/[\w.-]+)(/\.claude/[\w./-]+\.(?:py|sh))(?![\w-]|\.\w)')
+
+
+def home_ref(path: str) -> str:
+    """~ + PATH with // and ./ collapsed; one whose .. leaves ~/.claude stays as written."""
+    n = posixpath.normpath(path)
+    return "~" + (n if n.startswith("/.claude/") else path)
+
+
+def climbs(ref: str) -> bool:
+    return ".." in ref.split("/")
 
 
 def installed_ref(text: str) -> str | None:
-    """TEXT as ~/.claude/<path>, with // and ./ collapsed, when it is one whole; else None."""
+    """TEXT as ~/.claude/<path> (home_ref) when it is one whole; else None."""
     m = INSTALLED_REF.fullmatch(text.strip())
-    return "~" + posixpath.normpath(m.group(1)) if m else None
+    return home_ref(m.group(1)) if m else None
+
+
+def is_own(sk: Skill, ref: str) -> bool:
+    return ref.startswith(tuple(f"~/.claude/skills/{n}/" for n in (sk.name, sk.root.name))) and not climbs(ref)
 
 
 def installed_refs(sk: Skill) -> set[str]:
     """The ~/.claude/ scripts SKILL.md names, less the skill's own folder."""
-    own = tuple(f"~/.claude/skills/{n}/" for n in (sk.name, sk.root.name))
-    refs = {"~" + posixpath.normpath(m.group(1)) for m in INSTALLED_REF.finditer(sk.md or "")}
-    return {r for r in refs if not r.startswith(own)}
+    refs = {home_ref(m.group(1)) for m in INSTALLED_REF.finditer(sk.md or "")}
+    return {r for r in refs if not is_own(sk, r)}
+
+
+def installed_copy(sk: Skill) -> bool:
+    """A skill install.sh placed: under ~/.claude/skills, with no forge.toml (it is not installed)."""
+    skills = Path(os.path.expanduser("~/.claude/skills")).resolve()
+    return not (sk.root / "forge.toml").is_file() and sk.root.resolve().parent == skills
 
 
 def find_harness(path: Path) -> Path | None:
@@ -530,13 +551,13 @@ def find_harness(path: Path) -> Path | None:
 
 def installed_from(repo: Path, ref: str) -> Path | None:
     """Where in the clone install.sh copies ~/.claude/<path> from; None where it copies
-    nothing: bin/ whole and flat, hooks/*.sh, hooks/lib/*.sh, and a skill's bin/."""
+    nothing: bin/ whole and flat, hooks/*.sh, and a skill's bin/, panel/hooks/, panel/types/."""
     parts = ref[len("~/.claude/"):].split("/")
     if len(parts) == 1:
         return repo / "bin" / parts[0]
-    if parts[0] == "hooks" and parts[-1].endswith(".sh") and (len(parts) == 2 or (len(parts) == 3 and parts[1] == "lib")):
+    if parts[0] == "hooks" and parts[-1].endswith(".sh") and len(parts) == 2:
         return repo.joinpath(*parts)
-    if parts[0] == "skills" and len(parts) == 4 and parts[2] == "bin":
+    if parts[0] == "skills" and (len(parts) == 4 and parts[2] == "bin" or len(parts) == 5 and parts[2] == "panel" and parts[3] in ("hooks", "types")):
         return repo.joinpath(*parts)
     return None
 
@@ -588,6 +609,12 @@ def check_self_contained(sk: Skill, opts) -> Result:
         bad.append('forge.toml uses must be a list of strings, as uses = ["~/.claude/tool.sh"]')
         raw = []
     uses = {installed_ref(u) or u for u in raw}
+    uses = {u for u in uses if not is_own(sk, u)}
+    for ref in sorted(r for r in named if climbs(r)):
+        bad.append(f"SKILL.md runs {ref}, which climbs out of ~/.claude")
+    named = {r for r in named if not climbs(r)}
+    if installed_copy(sk):
+        uses = named   # nothing to declare it in: each must be on this machine
     for ref in sorted(named - uses):
         bad.append(f"SKILL.md runs {ref}, outside the folder; declare it in forge.toml uses")
     for ref in sorted(uses - named):
@@ -603,11 +630,11 @@ def check_self_contained(sk: Skill, opts) -> Result:
             elif not Path(os.path.expanduser(ref)).is_file():
                 bad.append(f"SKILL.md runs {ref}, which is not on this machine")
     outside = [r for r in outside if installed_ref(r) not in named]
-    if len(bad) > 8:
-        bad[:] = bad[:8] + [f"and {len(bad) - 8} more"]
     for ref in mine:
         where = next((u for u in sk.unread if Path(u).name == ref.rsplit("/", 1)[-1]), "")
         bad.append(f"SKILL.md runs {ref}; lint found no engine" + (f" (it is at {where}, which the lint does not read)" if where else ""))
+    if len(bad) > 8:
+        bad[:] = bad[:8] + [f"and {len(bad) - 8} more"]
     if bad:
         return Result("FAIL", "; ".join(bad))
     also = f"; SKILL.md also names {', '.join(outside[:4])}{' and more' if len(outside) > 4 else ''} outside the folder" if outside else ""
