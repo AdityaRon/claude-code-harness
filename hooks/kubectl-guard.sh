@@ -48,6 +48,7 @@ CMD=$(jq_get '.tool_input.command')
 # precise bail-out below still runs on the normalized text.
 printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qi 'kubectl' || exit 0
 CMD=$(strip_inert_heredocs "$CMD")
+unreadable_check kubectl-guard "$CMD"
 # A script's shell-outs are checked as commands of their own (lib.sh); "ask":
 # one built from a value it cannot read asks, as `kubectl $verb` does.
 check_inline_shellouts kubectl ask
@@ -480,7 +481,8 @@ name_kind() {
 # the line. kubectl as an argument (`xargs grep -l kubectl`) is not that command,
 # and neither is `| xargs kubectl` inside a quoted commit message.
 if [[ "$CMD" == *xargs* || "$CMD" == *parallel* ]]; then
-  read -ra TOKENS <<<"$(neutralize_quoted_separators "$CMD" | tr '\n' ';' | sed -E 's/\|\||&&|\|&|[|;]/ & /g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g')"
+  NQS=$(neutralize_quoted_separators "$CMD")
+  read -ra TOKENS <<<"$(printf '%s\n' "$NQS" | tr '\n' ';' | sed -E 's/\|\||&&|\|&|[|;]/ & /g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g; s/(^|[^<>&|\\])&([^>&[:space:]])/\1 \& \2/g')"
   n=${#TOKENS[@]}
   for (( j = 0; j < n; j++ )); do
     [[ "${TOKENS[$j]##*/}" == xargs || "${TOKENS[$j]##*/}" == parallel ]] || continue

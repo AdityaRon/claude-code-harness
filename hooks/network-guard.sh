@@ -171,7 +171,9 @@ case "$TOOL" in
     # backslashes and case but never adds a letter, so a command with none of
     # them once those are gone is done before ~25 ms of normalizing.
     printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qiE 'curl|wget|scp|rsync|sftp|http|php|net-allowlist|local-settings' || exit 0
-    CMD=$(neutralize_quoted_separators "$(strip_inert_heredocs "$CMD")")
+    CMD=$(strip_inert_heredocs "$CMD")
+    unreadable_check network-guard "$CMD"
+    CMD=$(neutralize_quoted_separators "$CMD")
     # `/usr/bin/curl` and `CURL` are curl too: scan the normalized form (lib.sh) as
     # a second line.
     CMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")

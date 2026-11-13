@@ -29,6 +29,7 @@ CMD=$(strip_inert_heredocs "$CMD")
 # so `cat .env.example && cat .env` still denies on the second half.
 # The second line is the normalized form (lib.sh): `/bin/cat`, `CAT` and `\cat`
 # all run cat.
+unreadable_check env-guard "$CMD"
 NCMD=$(neutralize_quoted_separators "$CMD")
 SCAN=$(printf '%s\n%s' "$NCMD" "$(normalize_command "$NCMD")" \
   | sed -E 's#[^[:space:]]*\.(example|sample|template|dist|tpl)([[:space:]]|$)#TEMPLATEFILE\2#g')

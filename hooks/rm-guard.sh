@@ -26,7 +26,11 @@ CWD=$(jq_get '.cwd')
 
 # One segment per line, quoted separators kept as text. Split before normalizing:
 # normalize_command drops a leading `J=…;`, and the assignment is needed below.
-SEGS=$(neutralize_quoted_separators "$(separate_groups "$CMD")" | tr '\n' ';' \
+# neutralize first: it classifies the text bash reads, and separate_groups's
+# `;;y = 1 << x;;` from `((y = 1 << x))` would read as a heredoc.
+unreadable_check rm-guard "$CMD"
+NQS=$(neutralize_quoted_separators "$CMD")
+SEGS=$(separate_groups "$NQS" | tr '\n' ';' \
   | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;&]/\n/g'; echo; exec_fn_suffixes "$CMD")
 # A cd inside ( ) or $( ) does not outlast it, and the split above cannot see
 # where one ends, so with any parenthesis present a cd never widens BASE.
