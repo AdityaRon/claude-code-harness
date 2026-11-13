@@ -317,12 +317,16 @@ for c in sys.stdin.read().split("\0")[:-1]:
   }
   LA=()
   while IFS= read -r k; do LA+=("$k"); done < <(for i in "${RUNS[@]}"; do printf '%s\0' "${CASES[$((i + 1))]//"$M"/# --apply}"; done | lint_apply)
+  [ "${#LA[@]}" = "${#RUNS[@]}" ] && pass "skill_lint answered for each of the ${#RUNS[@]} cases bash runs" \
+    || fail "skill_lint's answers" "${#LA[@]} of ${#RUNS[@]}: the helper failed"
   for j in "${!RUNS[@]}"; do
     [ "${LA[$j]}" != 1 ] && pass "${CASES[${RUNS[$j]}]}: skill_lint reads the line bash runs as code" \
       || fail "${CASES[${RUNS[$j]}]}: skill_lint read a comment bash skips as heredoc data" ""
   done
   LD=()
   while IFS= read -r k; do LD+=("$k"); done < <(for ((i = 1; i < ${#DROPS[@]}; i += 2)); do printf '%s\0' "${DROPS[$i]//"$M"/# --apply}"; done | lint_apply)
+  [ "${#LD[@]}" = "$(( ${#DROPS[@]} / 2 ))" ] && pass "skill_lint answered for each dropped-body case" \
+    || fail "skill_lint's answers" "${#LD[@]} of $(( ${#DROPS[@]} / 2 )): the helper failed"
   for ((i = 0; i < ${#DROPS[@]}; i += 2)); do
     [ "${LD[$((i / 2))]}" = 1 ] && pass "${DROPS[$i]#*|}: skill_lint keeps the body line" || fail "${DROPS[$i]#*|}: skill_lint" "${LD[$((i / 2))]}"
   done

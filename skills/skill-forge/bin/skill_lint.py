@@ -226,6 +226,12 @@ class Unreadable(ValueError):
         self.name, self.line = name, line
 
 
+def bash_lines(src: str) -> list:
+    """A script's lines as bash reads them: split on \\n only (no form feed or \\x85), \\r kept."""
+    lines = src.split("\n")
+    return lines[:-1] if lines and lines[-1] == "" else lines
+
+
 def shell_code(src: str, name: str = "script") -> str:
     """The script with comment lines blanked, so line numbers still hold. A heredoc's
     body is data: a line in it that starts with # is printed, not a comment, so it stays,
@@ -233,7 +239,7 @@ def shell_code(src: str, name: str = "script") -> str:
     otherwise raises Unreadable, since a presence check and an absence check would
     each take the wrong side of a guess."""
     out, hd, term, dash, shell = [], Heredocs(), None, False, False
-    for n, line in enumerate(src.splitlines(), 1):
+    for n, line in enumerate(bash_lines(src), 1):
         try:
             if term is not None:
                 out.append("" if shell and line.lstrip().startswith("#") else line)
@@ -599,9 +605,9 @@ def check_self_contained(sk: Skill, opts) -> Result:
     bad = []
     files = {**sk.scripts, **sk.tests, **sk.shell_tests}
     for path, src in files.items():
-        lines = src.splitlines()
+        lines = bash_lines(src) if is_shell(path) else src.splitlines()
         hits = set()
-        strings = enumerate(shell_code(src, path).splitlines(), 1) if is_shell(path) else code_strings(src)
+        strings = enumerate(bash_lines(shell_code(src, path)), 1) if is_shell(path) else code_strings(src)
         for i, value in strings:
             names = [m.group(1) for m in CLAUDE_SKILL.finditer(value)] + [m.group(1) for m in SIBLING.finditer(value)]
             if CLIMB.search(value) or any(n not in (sk.name, sk.root.name) for n in names):
