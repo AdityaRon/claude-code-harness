@@ -65,7 +65,7 @@ changed, the hook benchmark: [docs/releases.md](docs/releases.md).
 harness relies on are pinned in `config/upstream-contract.json` and checked daily
 by `tools/upstream-check.sh`: [docs/upstream-contract.md](docs/upstream-contract.md).
 
-**Testing.** `bash doctor.sh` runs every suite in `tests/`. CI runs it on Linux
+**Testing.** `bash doctor.sh` runs every suite in `tests/`; `--smoke` runs the few in `tests/smoke.list` that exercise every wired hook, which is what `install.sh` runs (`install.sh --full` runs all). A suite gets 30 minutes (`CCH_SUITE_TIMEOUT`); the summary lists wall times slowest first and names a suite stopped by a signal KILLED and one past its limit TIMEOUT, apart from failures. CI runs it on Linux
 and macOS, lints the scripts with shellcheck, and benchmarks each PR's hooks
 against main.
 
@@ -256,7 +256,8 @@ tests/                   ← <name>.test.sh for most hooks, tools and .github sc
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
                            heredoc-openers, repo-layout and workflow-gates cut across files; comms-hub,
                            comms-hub-prereqs, skill-forge and skill-lint run the skills' own suites;
-                           bench-corpus.jsonl feeds hook-bench
+                           bench-corpus.jsonl feeds hook-bench; doctor tests doctor.sh's own report;
+                           smoke.list is the set install.sh verifies with (doctor.sh --smoke)
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
   permissions.md  auto-mode.md  customization.md  known-limitations.md

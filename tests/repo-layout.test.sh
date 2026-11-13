@@ -173,6 +173,19 @@ UNWIRED=$(comm -13 <(printf '%s\n' "$WIRED") <(printf '%s\n' "$ROWS") | tr '\n' 
   || fail "every README row is a wired hook" "not wired: $UNWIRED"
 
 echo ""
+echo "=== tests/smoke.list names real suites, and every wired hook is in one ==="
+# install.sh verifies with these alone: a hook no smoke suite names is one an install never checks.
+SMOKE=$(grep -v '^#' tests/smoke.list 2>/dev/null)
+NOFILE=""; for s in $SMOKE; do [ -f "$s" ] || NOFILE="$NOFILE $s"; done
+[ -n "$SMOKE" ] && [ -z "$NOFILE" ] && pass "every smoke.list entry is a suite" || fail "smoke.list entries" "missing:$NOFILE"
+SMOKE_TEXT=$(for s in $SMOKE; do [ -f "$s" ] && cat "$s"; done)
+UNSMOKED=""
+for h in $WIRED; do
+  printf '%s' "$SMOKE_TEXT" | grep -qE "(^|[^A-Za-z0-9_.-])${h//./\\.}\.sh" || UNSMOKED="$UNSMOKED $h"
+done
+[ -z "$UNSMOKED" ] && pass "every wired hook is named by a smoke suite" || fail "hooks no smoke suite names" "$UNSMOKED"
+
+echo ""
 echo "=== The README layout block names every bin/ and tools/ file and each skill's folders ==="
 # comms-hub's panel/ shipped with no mention in the map, beside the bin/ and
 # tests/ the line did name.
