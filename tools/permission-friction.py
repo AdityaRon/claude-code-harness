@@ -51,7 +51,10 @@ def load_masks():
         (re.compile(r'\b(?:npm_[A-Za-z0-9]{36}|ASIA[0-9A-Z]{16})\b'), '<TOKEN>'),   # npm_config_x is a variable
         (re.compile(r'\beyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]{10,}'), '<JWT>'),
         (re.compile(r'hooks\.slack\.com/services/[\w/+-]{20,}'), 'hooks.slack.com/services/<MASKED>'),
-        (re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----.*'), '<MASKED>'),   # a key's body follows its header
+        # A key from its header to its END line, or to the text's end without one: a
+        # sample keeps its newlines, so the body is on the lines after the header.
+        (re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----'
+                    r'(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|[\s\S]*)'), '<MASKED>'),
         (re.compile(r'[\w.+-]+@[\w-]+\.[\w.]+'), '<EMAIL>'),
         (re.compile(r'[A-Za-z0-9+/=_-]{48,}'), '<LONG>'),
         (re.compile(re.escape(HOME)), '~'),

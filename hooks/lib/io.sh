@@ -127,12 +127,13 @@ unreadable_exit() {
 }
 
 # Secret-shaped values out of an audit line: URL credentials, well-known token
-# prefixes, an AWS secret key, a private key's body after its header, and the
-# value after a key-like word. The line keeps its shape.
+# prefixes, an AWS secret key, a private key's body after its header (to the
+# line's next ` | `, which base64 never holds), and the value after a key-like
+# word. The line keeps its shape and its other fields.
 redact_secrets() {
   sed -E \
     -e "s#((aws_secret_access_key|AWS_SECRET_ACCESS_KEY|[Ss]ecretAccessKey)[\"']?[[:space:]]*[:=][[:space:]]*[\"']?)[A-Za-z0-9/+=]{40}#\1***#g" \
-    -e 's/(-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----).*/\1***/' \
+    -e 's/(-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----)([^|]*[^| ])?/\1***/g' \
     -e 's#(://[^/@[:space:]:]+):[^/@[:space:]]+@#\1:***@#g' \
     -e 's/((ghp|gho|ghu|ghs|ghr)_|github_pat_|glpat-|xox[abprs]-|xapp-|sk-(ant-|proj-)?|sk_(live|test)_|AKIA|AIza)[A-Za-z0-9_-]{8,}/\1***/g' \
     -e 's/npm_[A-Za-z0-9]{36}/npm_***/g; s/ASIA[0-9A-Z]{16}/ASIA***/g' \

@@ -133,6 +133,24 @@ done
 MISSING=""; for l in "${SCANNER_LABELS[@]}"; do printf '%s\n' "${LABELS[@]}" | grep -qxF -- "$l" || MISSING="$MISSING [$l]"; done
 [ -z "$MISSING" ] && pass "every shape secret-scanner blocks has a row here" || fail "shapes with no row" "$MISSING"
 
+# redact_secrets runs on the whole audit line: a key's body goes, the fields after it stay.
+HDR="-----BEGIN RSA PRIVATE"" KEY-----"
+LINE="2026-11-13T00:00:00Z | GUARD | deny | x | printf '$HDR MIIE$(r 40 Z)' > k.pem | /w/proj"
+GOT=$(printf '%s\n' "$LINE" | redact_secrets)
+[[ "$GOT" == *"$HDR***"* && "$GOT" == *" | /w/proj" && "$GOT" != *MIIE* ]] \
+  && pass "a key's body is masked to the field's end; the line's later fields stay" || fail "audit line fields" "$GOT"
+# friction's samples keep their newlines: a key's body lines go, the command after its END line stays.
+if [ -n "$PY" ]; then
+  KEYCMD=$(printf "cat > k.pem <<'EOF'\n%s\nMIIEshortline\n%s\nEOF\nchmod 600 k.pem" "$HDR" "-----END RSA PRIVATE"" KEY-----")
+  GOT=$(printf '%s' "$KEYCMD" | HOME="$TMP/home" "$PY" -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("friction", "tools/permission-friction.py")
+f = importlib.util.module_from_spec(spec); spec.loader.exec_module(f)
+print(f.mask(sys.stdin.read(), 10000))')
+  [[ "$GOT" == *"<MASKED>"* && "$GOT" != *MIIE* && "$GOT" == *"chmod 600 k.pem"* ]] \
+    && pass "friction masks a key's lines to its END line; the command after stays" || fail "friction multi-line key" "$GOT"
+fi
+
 echo ""
 echo "=== a vendor's published sample passes where a site blocks ==="
 for ((i = 0; i < ${#SAMPLES[@]}; i += 2)); do
