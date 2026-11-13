@@ -303,6 +303,36 @@ except ValueError:
   keeps "$(drop_data_heredocs "$cmd")" && [ "$(printf '%s\0' "$cmd" | demand_keeps)" = 1 ] \
     && pass "case inside \"\$( )\": lib.sh and demand.py keep it as typed" \
     || fail "case inside \"\$( )\": a reader dropped it" "[$(drop_data_heredocs "$cmd")]"
+  # skill_lint's shell_code finds openers with the same reader (heredocs.py): where
+  # bash runs the marker line, a comment there is blanked (or the script is
+  # unreadable, a lint finding); where bash reads it as body data, it stays.
+  lint_apply() {   # each script, NUL-ended, on stdin: 1 if "--apply" survives shell_code, 2 if unreadable
+    "$DPY" -c '
+import sys; sys.path.insert(0, "skills/skill-forge/bin"); import skill_lint
+for c in sys.stdin.read().split("\0")[:-1]:
+    try:
+        print(int("--apply" in skill_lint.shell_code(c)))
+    except skill_lint.Unreadable:
+        print(2)'
+  }
+  LA=()
+  while IFS= read -r k; do LA+=("$k"); done < <(for i in "${RUNS[@]}"; do printf '%s\0' "${CASES[$((i + 1))]//"$M"/# --apply}"; done | lint_apply)
+  [ "${#LA[@]}" = "${#RUNS[@]}" ] && pass "skill_lint answered for each of the ${#RUNS[@]} cases bash runs" \
+    || fail "skill_lint's answers" "${#LA[@]} of ${#RUNS[@]}: the helper failed"
+  for j in "${!RUNS[@]}"; do
+    [ "${LA[$j]}" != 1 ] && pass "${CASES[${RUNS[$j]}]}: skill_lint reads the line bash runs as code" \
+      || fail "${CASES[${RUNS[$j]}]}: skill_lint read a comment bash skips as heredoc data" ""
+  done
+  LD=()
+  while IFS= read -r k; do LD+=("$k"); done < <(for ((i = 1; i < ${#DROPS[@]}; i += 2)); do printf '%s\0' "${DROPS[$i]//"$M"/# --apply}"; done | lint_apply)
+  [ "${#LD[@]}" = "$(( ${#DROPS[@]} / 2 ))" ] && pass "skill_lint answered for each dropped-body case" \
+    || fail "skill_lint's answers" "${#LD[@]} of $(( ${#DROPS[@]} / 2 )): the helper failed"
+  for ((i = 0; i < ${#DROPS[@]}; i += 2)); do
+    [ "${LD[$((i / 2))]}" = 1 ] && pass "${DROPS[$i]#*|}: skill_lint keeps the body line" || fail "${DROPS[$i]#*|}: skill_lint" "${LD[$((i / 2))]}"
+  done
+  # The case that made a comment pass skill_lint's --apply check.
+  [ "$(printf '%s\0' $'echo "a <<EOF"\n# --apply\nkubectl apply -f a.yaml' | lint_apply)" = 0 ] \
+    && pass "skill_lint: a comment after a quoted <<EOF is not --apply" || fail "skill_lint: a comment after a quoted <<EOF counted as --apply" ""
 fi
 
 echo ""

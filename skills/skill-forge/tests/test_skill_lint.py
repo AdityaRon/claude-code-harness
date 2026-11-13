@@ -30,7 +30,7 @@ Mutations that must turn this file red (deleting any check must be seen):
   c10-normpath-leaves-claude: skill_lint.py: `return "~" + (n if n.startswith("/.claude/") else path)` => `return "~" + n`
   c10-installed-copy-must-declare: skill_lint.py: `if installed_copy(sk):` => `if False:`
   c10-panel-not-installed: skill_lint.py: ` or len(parts) == 5 and parts[2] == "panel" and parts[3] in ("hooks", "types")` => ``
-  c10-hooks-lib-installed: skill_lint.py: `parts[-1].endswith(".sh") and len(parts) == 2:` => `parts[-1].endswith(".sh") and len(parts) in (2, 3):`
+  c10-hooks-lib-installed: skill_lint.py: ` or len(parts) == 3 and parts[1] == "lib"` => ``
   c10-own-uses-kept: skill_lint.py: `uses = {u for u in uses if not is_own(sk, u)}` => `uses = uses`
   c10-uses-untyped: skill_lint.py: `if not (isinstance(raw, list) and all(isinstance(u, str) for u in raw)):` => `if False:`
   c10-not-on-machine: skill_lint.py: `elif not Path(os.path.expanduser(ref)).is_file():` => `elif False:`
@@ -48,10 +48,10 @@ Mutations that must turn this file red (deleting any check must be seen):
   requests-write-unseen: skill_lint.py: `\\b(?:requests|httpx)` => `\\bNEVER(?:requests|httpx)`
   flat-root-unread: skill_lint.py: `for d in (root, root / "bin", root / "tests"):` => `for d in (root / "bin", root / "tests"):`
   shell-verbs-unseen: skill_lint.py: `(?:apply|create|delete|patch|replace|scale|annotate|label|taint|cordon|uncordon"` => `(?:NEVER"`
-  shell-apply-unchecked: skill_lint.py: `return "--apply" in shell_code(src)` => `return True`
-  shell-mask-unchecked: skill_lint.py: `if not SH_MASKED.search(shell_code(src)):` => `if False:`
-  shell-header-unchecked: skill_lint.py: `return "# target:" in shell_code(src)` => `return True`
-  shell-comments-read: skill_lint.py: `            out.append("")` => `            out.append(line)`
+  shell-apply-unchecked: skill_lint.py: `return "--apply" in shell_code(src, name)` => `return True`
+  shell-mask-unchecked: skill_lint.py: `if not SH_MASKED.search(shell_code(src, e)):` => `if False:`
+  shell-header-unchecked: skill_lint.py: `return "# target:" in shell_code(src, name)` => `return True`
+  shell-comments-read: skill_lint.py: `out.append("" if line.lstrip().startswith("#") else line)` => `out.append(line)`
   shell-test-names-unseen: skill_lint.py: `({f"test_{stem}.sh", f"{stem}.test.sh"} if is_shell(n) else set())` => `set()`
   declared-test-unchecked: skill_lint.py: `return bool(declared) and (sk.root / declared).is_file()` => `return bool(declared)`
   python-sh-not-vendored: skill_lint.py: `"python.sh": None}` => `}`
@@ -65,7 +65,11 @@ Mutations that must turn this file red (deleting any check must be seen):
   curl-body-unseen: skill_lint.py: `(?:-d|-F|-T|--data(?:-raw|-binary|-urlencode|-ascii)?` => `(?:--nodata(?:-x)?`
   curl-get-body-a-write: skill_lint.py: `(?![^\\n|;&]*\\s(?:-G|--get)\\b)` => `(?!x\\by)`
   gh-fields-unseen: skill_lint.py: `(?:-f|-F|--field|--raw-field|--input)` => `(?:--nofield)`
-  heredoc-comments-blanked: skill_lint.py: `        if ends:` => `        if False:`
+  heredoc-comments-blanked: skill_lint.py: `            if term is not None:` => `            if False:`
+  shell-body-comments-read: skill_lint.py: `out.append("" if shell and line.lstrip().startswith("#") else line)` => `out.append(line)`
+  quote-state-per-line: skill_lint.py: `            found = hd.scan(line)` => `            found = Heredocs().scan(line)`
+  unreadable-read-on: skill_lint.py: `            raise Unreadable(name, n) from None` => `            break`
+  unreadable-not-a-finding: skill_lint.py: `        except Unreadable as e:   # every check that reads the script fails on it` => `        except KeyError as e:`
   walk-enters-skipped: skill_lint.py: `        dirs[:] = sorted(d for d in dirs if d not in NOT_READ)` => `        dirs[:] = sorted(dirs)`
 """
 from __future__ import annotations
@@ -341,6 +345,35 @@ class FlatLayoutTest(unittest.TestCase):
         self.assertTrue(skill_lint.has_header("tool.sh", quoted))
         self.assertFalse(skill_lint.has_header("tool.sh", commented))
         self.assertEqual(skill_lint.shell_code("x=$((1<<2))\n# c\ncat <<<'a'\n# d\n"), "x=$((1<<2))\n\ncat <<<'a'\n")
+
+    def test_a_comment_after_a_quoted_double_lt_is_not_a_body(self):
+        # `<<EOF` in double quotes opens nothing in bash, so the next line is a
+        # comment, and a --apply there is no --apply (it made the check pass).
+        src = 'echo "a <<EOF"\n# --apply\nkubectl -n x apply -f a.yaml\n'
+        self.assertEqual(skill_lint.shell_code(src), 'echo "a <<EOF"\n\nkubectl -n x apply -f a.yaml')
+        self.assertFalse(skill_lint.has_apply("tool.sh", src))
+        self.assertFalse(skill_lint.has_apply("tool.sh", "true # <<EOF\n# --apply\nEOF\n"))
+        self.assertFalse(skill_lint.has_apply("tool.sh", 'echo "a\n<<EOF"\n# --apply\nEOF\n'))   # a string over two lines
+
+    def test_a_comment_in_a_body_a_shell_runs_is_a_comment(self):
+        self.assertFalse(skill_lint.has_apply("tool.sh", "bash <<'EOF'\n# --apply\nkubectl apply -f a.yaml\nEOF\n"))
+        self.assertTrue(skill_lint.has_apply("tool.sh", "cat <<'EOF'\n# --apply\nEOF\n"))   # printed: data
+
+    def test_a_heredoc_ends_at_its_exact_terminator(self):
+        self.assertIn("# x", skill_lint.shell_code("cat <<EOF\n  EOF\n# x\nEOF\n"))
+        self.assertEqual(skill_lint.shell_code("cat <<-EOF\n\t# x\n\tEOF\n# y\n"), "cat <<-EOF\n\t# x\n\tEOF\n")
+
+    def test_a_script_the_lint_cannot_read_is_a_finding(self):
+        for src in ('x=${y:-"z"}\n', "x=$(cat <<'EOF'\n)\n# --apply\nEOF\n)\n", "cat <<A <<B\na\nA\nb\nB\n"):
+            with self.assertRaises(skill_lint.Unreadable):
+                skill_lint.shell_code(src, "tool.sh")
+        with Workdir("flat-sh", "flat-sh") as root:
+            p = root / "tool.sh"
+            p.write_text('x=${y:-"z"}\n' + p.read_text())
+            res = skill_lint.lint(root)
+        for c in ("C1", "C6", "C7", "C10"):
+            self.assertEqual(res[c].status, "FAIL", (c, res[c].detail))
+            self.assertIn("tool.sh: line 1: the lint cannot tell its code from its comments", res[c].detail)
 
     def test_shell_write_verbs(self):
         writes = ["kubectl -n x apply -f a.yaml", "kubectl rollout restart deploy/x", "helm upgrade x ./chart",
