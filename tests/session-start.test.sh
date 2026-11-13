@@ -21,6 +21,8 @@ export CLAUDE_CONTRACT_PIN="$TMP/no-pin"
 # And the real release record, which harness-update.sh writes on this machine.
 export CLAUDE_HARNESS_LATEST="$TMP/no-latest"
 export CLAUDE_HARNESS_VERSION="$TMP/no-version"
+# And the Bash guards' timing log, which the hook rotates.
+export CLAUDE_GUARD_TIMING_LOG="$TMP/guard-timing.log"
 
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
@@ -304,6 +306,19 @@ for _ in $(seq 50); do git -C "$L/repo" worktree list | grep -q wt-gone || break
 WT=$(git -C "$L/repo" worktree list)
 check_not_contains "stale record pruned" "wt-gone" "$WT"
 check_contains "live worktree kept" "wt-live" "$WT"
+
+echo ""
+echo "=== Start rotates the Bash guards' timing log past 10 MB ==="
+printf 'small\n' > "$CLAUDE_GUARD_TIMING_LOG"
+jq -nc '{source:"startup",session_id:"sess-rot"}' | bash "$HOOK" >/dev/null 2>&1
+sleep 1
+[[ -f "$CLAUDE_GUARD_TIMING_LOG" && ! -e "$CLAUDE_GUARD_TIMING_LOG.1" ]] && pass "a small log stays" || fail "a small log stays" "$(ls "$TMP")"
+head -c 10500000 /dev/zero | tr '\0' x > "$CLAUDE_GUARD_TIMING_LOG"
+jq -nc '{source:"startup",session_id:"sess-rot"}' | bash "$HOOK" >/dev/null 2>&1
+# Detached, like the prune; give it up to 10 s.
+for _ in $(seq 50); do [[ -e "$CLAUDE_GUARD_TIMING_LOG.1" ]] && break; sleep 0.2; done
+[[ ! -e "$CLAUDE_GUARD_TIMING_LOG" && "$(wc -c < "$CLAUDE_GUARD_TIMING_LOG.1" | tr -d ' ')" == 10500000 ]] \
+  && pass "a log past 10 MB moves to .1" || fail "a log past 10 MB moves to .1" "$(ls -l "$CLAUDE_GUARD_TIMING_LOG"* 2>&1)"
 
 echo ""
 echo "=== input: one jq reads all three fields, and a value is data, never code ==="

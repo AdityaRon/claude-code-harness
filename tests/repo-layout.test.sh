@@ -160,6 +160,10 @@ echo "=== The README hook table and settings.json name the same hooks ==="
 # table a reader checks before installing undercounted what runs on their machine.
 WIRED=$(jq -r '.hooks[][]?.hooks[]?.command // empty' config/settings.json 2>/dev/null \
   | grep -oE "hooks/[^[:space:]\"']+" | sed -E 's|^hooks/||; s/\.[A-Za-z0-9]+$//' | sort -u)
+# The guards hooks/bash-guards.sh runs are wired through it, and keep their rows.
+if printf '%s\n' "$WIRED" | grep -qx bash-guards; then
+  WIRED=$( { printf '%s\n' "$WIRED"; sed -nE 's/^BG_GUARDS=\((.*)\)$/\1/p' hooks/bash-guards.sh | tr ' ' '\n'; } | sort -u)
+fi
 TABLE=$(awk '/^## What it blocks, asks and logs$/{f=1; next} f&&/^## /{exit} f' README.md)
 ROWS=$(printf '%s\n' "$TABLE" | sed -nE 's/^\| `([^`]+)` \|.*/\1/p' | sort -u)
 NOROW=$(comm -23 <(printf '%s\n' "$WIRED") <(printf '%s\n' "$ROWS") | tr '\n' ' ')

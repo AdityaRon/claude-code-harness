@@ -5,3 +5,5 @@ __pycache__/
 # skill-forge reads ~/.config/skill-forge/config.toml; its mask patterns can name
 # customers, so a copy made in the clone by mistake stays out of this public repo.
 /skills/skill-forge/config.toml
+# A skip file is one machine's choice of Bash guards to switch off.
+/hooks/*.skip

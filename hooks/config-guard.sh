@@ -6,8 +6,8 @@
 # anyway. Moving or emptying ~/.claude itself is denied. A write to a Claude Code
 # settings file, the installed-plugin cache ~/.claude/plugins, a shell startup
 # file, ~/.gitconfig or ~/Library/LaunchAgents asks first, as does a Bash write
-# into a mod Claude Code loads by itself, which mod-gate.sh never sees.
-# Reads pass. Writes made from inside an interpreter are not seen.
+# into a mod Claude Code loads by itself, which mod-gate.sh never sees, and a
+# write to ~/.claude/hooks/bash-guards.skip. Reads pass; interpreter writes are not seen.
 source "$(dirname "$0")/lib.sh"
 
 read_input
@@ -36,6 +36,7 @@ note() {   # note LEVEL WORD
     plugins) why="$2 is in the installed-plugin cache, whose hooks and commands load in every session. Approve only if you asked for this; /plugin install from your own prompt is unaffected." ;;
     startup) why="$2 runs at every shell start or login, or sets git's behaviour everywhere. Approve only if you asked for this." ;;
     mods) why="$2 is in a mod Claude Code loads by itself, in auto mode with no question, and a write from Bash skips mod-gate's review. Write the mod's files with Write or Edit instead, so mod-gate reviews them; approve this only if you asked for it." ;;
+    skip) why="$2 lists Bash guards to switch off: a guard named there stops checking every Bash and Monitor call. Approve only if you asked for this." ;;
     *) return ;;
   esac
   if [[ "$1" == deny ]]; then
@@ -75,7 +76,7 @@ abs_path() {
 H=$(abs_path "$HOME")
 HR=$(cd "$H" 2>/dev/null && pwd -P) || HR=$H
 
-level_of() {   # level_of PATH DESTRUCTIVE: deny, harness, settings, plugins, startup, mods or nothing
+level_of() {   # level_of PATH DESTRUCTIVE: deny, harness, settings, plugins, startup, mods, skip or nothing
   local p="$1" h c s d
   case "$p" in */.claude/settings.json|*/.claude/settings.local.json) echo settings; return ;; esac
   # The file tools reach mod-gate.sh, which reviews the mod; a removal adds no code.
@@ -95,6 +96,7 @@ level_of() {   # level_of PATH DESTRUCTIVE: deny, harness, settings, plugins, st
   for h in "$H" "$HR"; do
     c="$h/.claude"
     case "$p" in
+      "$c/hooks/bash-guards.skip") echo skip; return ;;   # read by hooks/bash-guards.sh
       "$c/hooks"|"$c/hooks/"*) echo harness; return ;;
       "$c/dev-mods"|"$c/dev-mods/"*) [[ -n "$mods" ]] && { echo mods; return; } ;;
       # The Edit deny rules cover the file tools and, since 2.1.309, a redirect;

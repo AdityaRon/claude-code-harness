@@ -128,6 +128,18 @@ bash_is allow 'echo x > ~/.claude/skills/plain/notes.md'
 file_is allow Write "$HOME/.claude/dev-mods/s/m/hooks/register.tsx"
 file_is allow Edit "$HOME/.claude/skills/tally/hooks/register.tsx"
 
+echo "=== the Bash guards' skip file (hooks/bash-guards.sh): a write asks, a read passes ==="
+bash_is ask 'echo kubectl-guard >> ~/.claude/hooks/bash-guards.skip'
+bash_is ask 'printf "rm-guard\n" | tee "$HOME/.claude/hooks/bash-guards.skip"'
+bash_is ask 'cp /srv/skip ~/.claude/hooks/bash-guards.skip'
+bash_is ask 'cp /srv/bash-guards.skip ~/.claude/hooks/'
+bash_is ask 'echo env-guard > bash-guards.skip' "$HOME/.claude/hooks"
+bash_is ask 'ln -sf /srv/skip ~/.claude/hooks/bash-guards.skip'
+bash_is allow 'cat ~/.claude/hooks/bash-guards.skip'
+file_is ask Write "$HOME/.claude/hooks/bash-guards.skip"
+file_is ask Edit "$HOME/.claude/hooks/bash-guards.skip"
+file_is allow Write "$TMP/proj/bash-guards.skip"
+
 echo "=== reads and unrelated writes: allow ==="
 bash_is allow 'cmp -s hooks/env-guard.sh ~/.claude/hooks/env-guard.sh'
 bash_is allow 'diff -q hooks/lib.sh ~/.claude/hooks/lib.sh'

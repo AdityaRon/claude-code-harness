@@ -79,12 +79,13 @@ weekly (`.github/workflows/mutations.yml`).
 
 | Hook | Runs on | Behaviour |
 |---|---|---|
+| `bash-guards` | Bash, Monitor | Runs the seven Bash guards below as one hook: one parse of the call, each guard a fork, deny over ask over allow. A guard that dies is a deny naming it. `~/.claude/hooks/bash-guards.skip` switches one off ([docs/guards.md](docs/guards.md)) |
 | `env-guard` | Bash | Deny: reading, dumping, copying or sending env values and dotfiles (`cat .env`, `printenv`, `nc`) |
 | `sensitive-file-guard` | Read, Grep, file writes | Deny: `.env`, keys, SSH and cloud credentials, credential folders. Ask: a Grep at or above your home folder |
 | `secret-scanner` | file writes | Deny: high-confidence token shapes (AWS, GitHub, Slack, Stripe, Google, Anthropic, OpenAI, PEM) in written content |
 | `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, a broad `git add` that would stage a credential file or that it cannot check. Ask: force-deleting a local branch, or deleting a remote one, whose tip no other ref holds (a plain `git branch -d` runs: git refuses an unmerged branch itself), remote and identity changes |
 | `rm-guard` | Bash | Deny: recursive `rm` of home, root or a top-level folder, and `rm -rf` outside the session's scratch folder |
-| `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, shell startup files, `~/.gitconfig`, LaunchAgents, and Bash writes into a mod Claude Code loads by itself. Deny: moving or emptying `~/.claude` |
+| `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, the Bash guards' skip file, shell startup files, `~/.gitconfig`, LaunchAgents, and Bash writes into a mod Claude Code loads by itself. Deny: moving or emptying `~/.claude` |
 | `network-guard` | Bash, WebFetch | Deny: file uploads and pipe-to-shell. Ask: request bodies, `DELETE`, hosts off the allowlist, `scp`/`rsync`, local servers |
 | `interpreter-guard` | Bash | Ask: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts |
 | `kubectl-guard` | Bash | Ask: every mutating verb wherever it sits, secret reads, and any subcommand it cannot classify |
@@ -126,7 +127,8 @@ What `install.sh` does with a value you set, from `config/merge-settings.jq`:
 | `syncClaudeAiSkills`, `syncClaudeAiPlugins` | `false` | Yes |
 | `remoteControlAtStartup` and the other top-level switches ([docs/permissions.md](docs/permissions.md)) | `true` | Yes |
 
-- **A hook off:** there is no per-hook switch. Deleting its entry from `~/.claude/settings.json` lasts until the next install. To keep it off, remove it from `config/settings.json` in your clone; `harness-update.sh` leaves an install from a changed clone alone, so update with `git pull && bash install.sh`.
+- **A Bash guard off:** put its name on a line of `~/.claude/hooks/bash-guards.skip` (`kubectl-guard`, say); `config-guard` asks before Claude writes that file. Names off the shipped list are ignored, so the file can only switch guards off ([docs/guards.md](docs/guards.md)).
+- **Any other hook off:** there is no per-hook switch. Deleting its entry from `~/.claude/settings.json` lasts until the next install. To keep it off, remove it from `config/settings.json` in your clone; `harness-update.sh` leaves an install from a changed clone alone, so update with `git pull && bash install.sh`.
 - **Auto mode off:** `claude --permission-mode manual` for one session. Every install rewrites `permissions.defaultMode`, so to keep it off set `"manual"` in your clone's `config/settings.json`, as for a hook.
 - **Your own hooks:** a script in `~/.claude/hooks` under a name this repo does not use, plus its entry in `~/.claude/settings.json`. Installs keep both.
 - **Allow rules for work tools:** `~/.claude/local-settings/<name>.json`; only its `permissions.allow` and `permissions.deny` are read.
@@ -213,7 +215,7 @@ library of prebuilt infra skills: the archetypes are templates it specializes.
 ## Design choices
 
 - A hook sees the whole command and a permission rule sees only a prefix, so enforcement lives in the guards and the deny list is a backstop ([docs/permissions.md](docs/permissions.md)).
-- Guards fail closed: no jq or unparsable input denies (`tests/fail-closed.test.sh`), and a crash or timeout blocks through `"onFailure": "block"` (Claude Code 2.1.295 and later).
+- Guards fail closed: no jq or unparsable input denies (`tests/fail-closed.test.sh`), and a crash or timeout blocks through `"onFailure": "block"` (Claude Code 2.1.295 and later). Inside `bash-guards`, a guard that dies is a deny naming it, and an early exit of the hook itself is made exit 2 (`tests/bash-guards.test.sh`).
 - No `autoMode` block ships: setting a category appears to replace Claude Code's own rules for it, 65 `soft_deny` rules by the `claude auto-mode defaults` count in [docs/auto-mode.md](docs/auto-mode.md).
 - Every deny and ask is an audit line; MCP calls are logged, not guarded ([docs/hooks.md](docs/hooks.md)).
 - The memory tools propose and never delete ([docs/memory.md](docs/memory.md)), and the upstream facts are a contract checked daily ([docs/upstream-contract.md](docs/upstream-contract.md)).
@@ -252,7 +254,7 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   session-census.py      ← claude processes, their memory, and idle background jobs (doctor.sh --census)
   pickup-report.sh       ← after an install, how running sessions pick up each change (install.sh runs it)
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json
-hooks/                   ← one file per hook, plus shared lib.sh
+hooks/                   ← one file per hook, plus shared lib.sh; bash-guards.sh runs the Bash guards
 rules/                   ← installed to ~/.claude/rules, loaded in every session
   prose-and-comments.md  collaboration.md  working-agreement.md  environment.md
   python-tests.md        ← path-scoped: loads only when Claude opens Python

@@ -31,7 +31,8 @@ repo layout is for reading the repo, not for the installed tree.
 ~/.claude/
   settings.json            ← merged with harness defaults (user keys preserved)
   settings.json.bak.<ts>   ← one per install, newest 10 kept
-  hooks/                   ← every hooks/*.sh, lib.sh included, by glob
+  hooks/                   ← every hooks/*.sh, lib.sh included, by glob; beside them your
+                             bash-guards.skip, if you make one: Bash guards to switch off (guards.md)
   statusline.sh            ← model, repo:branch, context, tokens, cost, rate limits, plan and wf links
   memory-verify.sh         ← checks memories against GitHub; run on demand, not a hook
   memory-fix.sh  memory-index.sh  memory-provenance.sh
@@ -53,6 +54,7 @@ repo layout is for reading the repo, not for the installed tree.
   local-settings/*.json    ← yours, read by install.sh and network-guard
   logs/
     audit.log              ← append-only audit trail, 0600, rotated
+    guard-timing.log       ← each Bash guard's seconds, status and decision per call, rotated at 10 MB
     harness-update.log     ← scheduled update runs
   transcripts/
     transcript_<trigger>_<ts>_<session>.jsonl  ← pre-compact backups, newest 20
