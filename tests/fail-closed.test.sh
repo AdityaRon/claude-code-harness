@@ -139,5 +139,26 @@ OUT=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"cwd":"/tmp
   || { echo "  FAIL: a missing part  rc=$RC [$OUT]"; FAIL=$((FAIL+1)); }
 
 echo ""
+echo "=== A part that reads but is cut short blocks too ==="
+P2="$TMP/cut"; mkdir -p "$P2"; cp -R hooks "$P2/hooks"; : > "$P2/hooks/lib/command.sh"
+RMRF='{"tool_name":"Bash","tool_input":{"command":"rm -rf /"},"cwd":"/tmp","session_id":"s"}'
+OUT=$(printf '%s' "$RMRF" | bash "$P2/hooks/rm-guard.sh" 2>&1 >/dev/null); RC=$?
+[[ "$RC" == 2 && "$OUT" == *"a part in $P2/hooks/lib/ is incomplete"* ]] \
+  && { echo "  OK: an empty lib/command.sh: exit 2 for a guard run alone"; PASS=$((PASS+1)); } \
+  || { echo "  FAIL: an empty part, guard alone  rc=$RC [$OUT]"; FAIL=$((FAIL+1)); }
+OUT=$(printf '%s' "$RMRF" | bash "$P2/hooks/bash-guards.sh" 2>/dev/null); RC=$?
+[[ "$RC" == 2 && -z "$OUT" ]] \
+  && { echo "  OK: and through bash-guards: exit 2, no answer"; PASS=$((PASS+1)); } \
+  || { echo "  FAIL: an empty part, dispatcher  rc=$RC [$OUT]"; FAIL=$((FAIL+1)); }
+# The list lib.sh checks is the last function of each part, in its order.
+WANT=""; for p in $(sed -n 's/^for _lib_part in \(.*\); do$/\1/p' hooks/lib.sh); do
+  WANT="$WANT$(grep -oE '^[A-Za-z_][A-Za-z_0-9]*\(\)' "hooks/lib/$p.sh" | tail -1 | tr -d '()') "
+done
+GOT=$(sed -n 's/^declare -F \(.*\) >\/dev\/null.*/\1/p' hooks/lib.sh)
+[[ -n "$GOT" && "$GOT " == "$WANT" ]] \
+  && { echo "  OK: lib.sh checks the last function of each part"; PASS=$((PASS+1)); } \
+  || { echo "  FAIL: lib.sh's part check  want [$WANT] got [$GOT]"; FAIL=$((FAIL+1)); }
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

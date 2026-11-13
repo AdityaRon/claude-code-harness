@@ -28,4 +28,9 @@ for _lib_part in command paths scratch io inline net host; do
   # shellcheck source=/dev/null
   source "$_lib_dir/lib/$_lib_part.sh" || { echo "hooks/lib.sh: cannot read $_lib_dir/lib/$_lib_part.sh; run install.sh again" >&2; exit 2; }
 done
+# A part that reads but defines less (empty, or cut short at a function's end)
+# would leave a guard without its checks: the last function of each must be
+# here. tests/fail-closed.test.sh holds this list to the parts.
+declare -F neutralize_quoted_separators canonical_path in_scratch log_audit check_inline_shellouts local_net_hosts stale_claude_hosts >/dev/null \
+  || { echo "hooks/lib.sh: a part in $_lib_dir/lib/ is incomplete; run install.sh again" >&2; exit 2; }
 unset _lib_dir _lib_part
