@@ -50,8 +50,13 @@ CHILD=$(cat "$TMP/child" 2>/dev/null)
   && pass "the hung suite's own child is stopped with it" || { fail "child left running" "pid $CHILD"; kill "$CHILD" 2>/dev/null; }
 [[ "$OUT" == *"TIMEOUT: tests/f-cases.test.sh, 2 case(s) past their limit, none failed"* ]] \
   && pass "a suite whose only misses are timed-out cases reads TIMEOUT" || fail "case timeout" "$OUT"
+# Times are whole seconds (bash's SECONDS), so under load the 1 s suite can read 2
+# and tie the one stopped at 2 s, and a quick one can read 1: the check is that the
+# list runs slowest first and each of the two slow suites reads its least.
 SLOW=$(printf '%s\n' "$OUT" | sed -n 's/^Slowest suites (wall seconds): //p')
-[[ "$SLOW" == "e-hang "[23]", g-slow "[12]* ]] \
+LIST=$(printf '%s\n' "$SLOW" | tr ',' '\n' | sed 's/^ *//')
+EH=$(awk '$1 == "e-hang" { print $2 }' <<<"$LIST"); GS=$(awk '$1 == "g-slow" { print $2 }' <<<"$LIST")
+awk '{ print $2 }' <<<"$LIST" | sort -rnc 2>/dev/null && [[ "${EH:-0}" -ge 2 && "${GS:-0}" -ge 1 ]] \
   && pass "wall times slowest first ($SLOW)" || fail "slowest first" "$SLOW"
 
 echo ""
