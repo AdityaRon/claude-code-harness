@@ -614,7 +614,8 @@ def decide(hook, tool, inp, extra_env=None):
            'CLAUDE_LOCAL_SETTINGS_DIR': os.devnull, 'CLAUDE_NET_TUNNEL_RE': '^cch-no-tunnel$',
            **(extra_env or {})}
     try:
-        p = subprocess.run(['bash', hook], input=payload, capture_output=True, text=True, env=env, timeout=30)
+        p = subprocess.run(['bash', hook], input=payload, capture_output=True, text=True, env=env,
+                           timeout=float(os.environ.get('CCH_GUARD_TIMEOUT', 30)))
     except subprocess.TimeoutExpired:
         return 'timeout'
     if p.returncode == 2:

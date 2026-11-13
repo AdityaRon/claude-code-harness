@@ -87,6 +87,37 @@ OUT=$(approved); [[ "$OUT" == "file edit under .claude/ in an agent worktree (pr
 OUT=$(approved --project /w/other); [[ -z "$OUT" ]] && pass "--project keeps only that working directory" || fail "--project" "$OUT"
 
 echo ""
+# A --cases run is a pass, a timeout (every miss is a guard past its limit: at
+# load average 7.6 one was, and a rerun passed 15 of 15) or a failure.
+cases_verdict() {  # rc output; a run that did not finish (no tally, or one that disagrees) is a failure
+  local miss n; miss=$(grep '^MISS' <<<"$2"); n=$(grep -c '^MISS' <<<"$2")
+  if [[ $1 == 0 ]]; then echo pass
+  elif [[ -n "$miss" ]] && ! grep -qv 'now=timeout' <<<"$miss" && [[ "$(tail -1 <<<"$2")" == "$n case(s) differ from want" ]]; then echo timeout
+  else echo fail; fi
+}
+
+echo "=== a guard past its limit is a timeout, a wrong decision a failure ==="
+[ "$(cases_verdict 0 'ok    a  now=deny')" = pass ] && pass "exit 0 passes" || fail "verdict pass" ""
+[ "$(cases_verdict 1 $'MISS  a  now=timeout want=deny\nok    b  now=ask\n1 case(s) differ from want')" = timeout ] \
+  && pass "misses that are all timeouts read timeout" || fail "verdict timeout" ""
+[ "$(cases_verdict 1 $'MISS  a  now=timeout want=deny\nMISS  b  now=allow want=ask\n2 case(s) differ from want')" = fail ] \
+  && pass "one wrong decision among them is a failure" || fail "verdict mixed" ""
+[ "$(cases_verdict 1 'Traceback (most recent call last):')" = fail ] && pass "a crash is a failure" || fail "verdict crash" ""
+[ "$(cases_verdict 1 $'MISS  a  now=timeout want=deny\nTraceback (most recent call last):')" = fail ] \
+  && pass "a crash after a timed-out case is a failure" || fail "verdict crash after timeout" ""
+printf '#!/usr/bin/env bash\nsleep 3\n' > "$TMP/hooks/slow.sh"
+case_line slow slow deny > "$TMP/c6.jsonl"
+OUT=$(HOME="$TMP/home" CCH_GUARD_TIMEOUT=1 python3 "$PF" --cases "$TMP/c6.jsonl" --replay "$TMP/hooks" 2>&1); rc=$?
+[ "$(cases_verdict "$rc" "$OUT")" = timeout ] && pass "a guard slower than CCH_GUARD_TIMEOUT reads now=timeout" || fail "real timeout" "rc=$rc $OUT"
+LINE=$(bash -c 'PASS=2 FAIL=0; source tests/lib.sh; timed_out x; results' 2>&1); RC=$?
+[[ "$LINE" == *"--- Results: 2 passed, 0 failed, 1 timed out ---" && $RC == 1 ]] \
+  && pass "results: a ', 1 timed out' tally and a nonzero exit" || fail "results line" "rc=$RC $LINE"
+bash -c 'PASS=0 FAIL=256; source tests/lib.sh; results' >/dev/null 2>&1; RC=$?
+[[ $RC == 100 ]] && pass "256 misses exit 100, not 0" || fail "exit cap" "rc=$RC"
+LINE=$(bash -c 'PASS=2 FAIL=0; source tests/lib.sh; results' 2>&1)
+[[ "$LINE" == *"--- Results: 2 passed, 0 failed ---" ]] && pass "and no suffix when none did" || fail "results plain" "$LINE"
+
+echo ""
 echo "=== a guard ask recorded as \"command hook N\" (2.1.319+) is named through settings.json ==="
 printf '%s\n' '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"~/.claude/hooks/env-guard.sh"},{"type":"command","command":"~/.claude/hooks/git-guard.sh"}]}]}}' \
   > "$TMP/home/.claude/settings.json"
@@ -101,8 +132,11 @@ OUT=$(HOME="$TMP/home" python3 "$PF" --days 1 --out "$TMP/o" >/dev/null 2>&1 && 
 echo ""
 echo "=== every shipped case meets its want on this repo's hooks ==="
 OUT=$(HOME="$TMP/home" python3 "$PF" --cases --replay "$PWD/hooks" 2>&1); rc=$?
-[[ $rc == 0 ]] && pass "$(tail -1 <<<"$OUT")" || fail "shipped cases" "$(grep MISS <<<"$OUT")"
+case "$(cases_verdict "$rc" "$OUT")" in
+  pass) pass "$(tail -1 <<<"$OUT")" ;;
+  timeout) timed_out "shipped cases" "$(grep -c '^MISS' <<<"$OUT") guard run(s) past their limit: the machine's load, not a decision" ;;
+  *) fail "shipped cases" "$(grep MISS <<<"$OUT")" ;;
+esac
 
 echo ""
-echo "--- Results: $PASS passed, $FAIL failed ---"
-exit $FAIL
+results
