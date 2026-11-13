@@ -254,6 +254,7 @@ check_eq "stamp lives in the state dir" "2.1.281 $(date +%Y-%m-%d)" "$(head -1 "
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.282 run_resume "sess-clean")
 check_contains "a newer CLI nudges again" "Installed 2.1.282; the harness was verified at 2.1.280" "$OUT"
 printf '2.1.282 2000-01-01\n' > "$CLAUDE_STATE_DIR/contract-nudge"
+rm -f "$CLAUDE_STATE_DIR"/contract-nudge.claim.*   # a new day has no claim yet
 OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.282 run_resume "sess-clean")
 check_contains "and so does a stale stamp from another day" "Installed 2.1.282" "$OUT"
 
@@ -355,8 +356,8 @@ run_tree() {  # sid [VAR=value...]: the copied hook on a resume payload
 due() {  # every optional section has work: the index changed, both nudges are due
   mkdir -p "${IDX%/*}"; [ -f "$IDX" ] || printf -- '- [P](p.md) - h\n' > "$IDX"
   touch -t "20260103$(printf '%02d' $((RANDOM % 60)))00" "$IDX"
-  rm -f "$CLAUDE_STATE_DIR/contract-nudge" "$CLAUDE_STATE_DIR/release-nudge" "$CLAUDE_STATE_DIR"/*.lock \
-    "$CLAUDE_STATE_DIR/memory-index/$SLUG" "$RUNS"
+  rm -f "$CLAUDE_STATE_DIR/contract-nudge" "$CLAUDE_STATE_DIR/release-nudge" "$CLAUDE_STATE_DIR"/*.claim.* \
+    "$CLAUDE_STATE_DIR/memory-index/$SLUG" "$CLAUDE_STATE_DIR"/memory-index/*.claim.* "$RUNS"
   printf 'v1.0.3\n' > "$LATEST"; printf 'version=v1.0.2\n' > "$VERSION"
 }
 NUDGES=(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.281 CLAUDE_HARNESS_LATEST="$LATEST"
@@ -374,11 +375,19 @@ check_contains "one line names each section it skipped" \
   "session-start: past its 2 s budget, skipped: worktree-prune contract-nudge release-nudge resume-drift" "$OUT"
 check_not_contains "no nudge from a skipped section" "Harness v1.0.3 is available" "$OUT"
 check_eq "the slow section ran once, started in budget" "1" "$(cat "$RUNS" 2>/dev/null | wc -l | tr -d ' ')"
-[ "$EL" -le 5 ] && pass "back in ${EL}s: the 3 s section it was in, nothing after" || fail "elapsed" "${EL}s"
+[ "$EL" -le 5 ] && pass "back in ${EL}s, not hung" || fail "elapsed" "${EL}s"
 due
-OUT=$(run_tree sess-clean "${NUDGES[@]}" CLAUDE_SESSION_START_BUDGET=0)
+mkdir -p "$TMP/mods/sess-clean/m1/.claude-plugin"; : > "$TMP/mods/sess-clean/m1/.claude-plugin/plugin.json"
+OUT=$(run_tree sess-clean "${NUDGES[@]}" CLAUDE_SESSION_START_BUDGET=0 CLAUDE_DEV_MODS_DIR="$TMP/mods")
 check_contains "a budget already spent names every section" \
   "skipped: git-context memory-index worktree-prune contract-nudge release-nudge resume-drift" "$OUT"
+check_contains "and still names a mod loading from this session: no process, a safety notice" \
+  "Mod loading from this session: $TMP/mods/sess-clean/m1" "$OUT"
+due
+OUT=$(run_tree sess-clean "${NUDGES[@]}" SECONDS=100)
+check_not_contains "a SECONDS in the environment does not spend the budget" "past its" "$OUT"
+check_contains "and the sections run" "Harness v1.0.3 is available" "$OUT"
+due
 OUT=$(run_tree sess-clean "${NUDGES[@]}")
 check_not_contains "under budget nothing is named" "past its" "$OUT"
 check_contains "and the sections run" "Harness v1.0.3 is available" "$OUT"
@@ -393,20 +402,41 @@ wait
 check_eq "the index tool ran once" "1" "$(cat "$RUNS" 2>/dev/null | wc -l | tr -d ' ')"
 check_eq "one session showed the contract nudge" "1" "$(cat "$TMP"/storm-*.out | grep -c 'past the harness contract')"
 check_eq "one session showed the release nudge" "1" "$(cat "$TMP"/storm-*.out | grep -c 'Harness v1.0.3 is available')"
-check_eq "no lock left behind" "" "$(ls "$CLAUDE_STATE_DIR"/*.lock "$CLAUDE_STATE_DIR"/memory-index/*.lock 2>/dev/null)"
+check_eq "one claim per stamp is left" "1 1" \
+  "$(ls "$CLAUDE_STATE_DIR"/contract-nudge.claim.* | wc -l | tr -d ' ') $(ls "$CLAUDE_STATE_DIR"/release-nudge.claim.* | wc -l | tr -d ' ')"
 
 echo ""
-echo "=== a lock left by a killed run expires after 10 minutes ==="
+echo "=== claims from an earlier day: a storm still does the work once, and clears them ==="
+# After a reboot, a session killed mid-claim leaves its claim; the next storm must
+# not run the work twice (the timed lock this replaced did, 6 of 8 trials).
 due
-printf '0\n' > "$CLAUDE_STATE_DIR/contract-nudge.lock"
-OUT=$(run_tree sess-clean "${NUDGES[@]}")
-check_contains "an old lock is taken over" "past the harness contract" "$OUT"
-check_eq "and removed" "" "$(ls "$CLAUDE_STATE_DIR"/contract-nudge.lock* 2>/dev/null)"
+for f in contract-nudge release-nudge; do : > "$CLAUDE_STATE_DIR/$f.claim.2.1.281_2000-01-01"; done
+for i in $(seq 1 14); do run_tree "storm2-$i" "${NUDGES[@]}" > "$TMP/storm2-$i.out" & done
+wait
+check_eq "the contract nudge once" "1" "$(cat "$TMP"/storm2-*.out | grep -c 'past the harness contract')"
+check_eq "the release nudge once" "1" "$(cat "$TMP"/storm2-*.out | grep -c 'Harness v1.0.3 is available')"
+check_eq "the old claims are gone" "" "$(ls "$CLAUDE_STATE_DIR"/*.claim.*2000-01-01 2>/dev/null)"
 due
-date +%s > "$CLAUDE_STATE_DIR/contract-nudge.lock"
+: > "$CLAUDE_STATE_DIR/contract-nudge.claim.2.1.281_$(date +%Y-%m-%d)"
 OUT=$(run_tree sess-clean "${NUDGES[@]}")
-check_not_contains "a fresh one means another session has it" "past the harness contract" "$OUT"
-rm -f "$CLAUDE_STATE_DIR/contract-nudge.lock" "$LATEST" "$VERSION"
+check_not_contains "today's claim left by a killed run costs that day's nudge, no more" "past the harness contract" "$OUT"
+
+echo ""
+echo "=== an unwritable state folder: every session shows the nudge, as before ==="
+due
+chmod 555 "$CLAUDE_STATE_DIR"
+A=$(run_tree sess-clean "${NUDGES[@]}"); B=$(run_tree sess-clean "${NUDGES[@]}")
+chmod 755 "$CLAUDE_STATE_DIR"
+check_eq "both sessions" "2" "$(printf '%s\n%s\n' "$A" "$B" | grep -c 'Harness v1.0.3 is available')"
+
+echo ""
+echo "=== nothing new on stderr from a fresh state folder ==="
+due
+rm -rf "$TMP/fresh-state"
+ERR=$(jq -nc '{source:"resume", session_id:"sess-clean", hook_event_name:"SessionStart"}' \
+  | env "${NUDGES[@]}" CLAUDE_STATE_DIR="$TMP/fresh-state" bash "$TREE/hooks/session-start.sh" 2>&1 >/dev/null)
+check_eq "no 'No such file' from reading a stamp not yet written" "" "$ERR"
+rm -f "$LATEST" "$VERSION"
 
 echo ""
 echo "=== resume drift hashes every edited file in one process ==="

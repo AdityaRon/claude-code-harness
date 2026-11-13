@@ -20,26 +20,25 @@ fi
 # --- time budget -------------------------------------------------------------
 # Every section below is context or housekeeping the session can start without.
 # One that would start past the budget (bash's whole-second SECONDS: 3.2 has no
-# finer clock, so a budget of 3 is between two and three seconds) is skipped and named on one line at exit. A section already
-# running is not stopped, so the hook can overrun by one section; settings.json's
-# 30 s timeout is the hard stop, where Claude Code's own default is 10 minutes.
-BUDGET=${CLAUDE_SESSION_START_BUDGET:-3}
+# finer clock, so 3 means between two and three seconds) is skipped and named on
+# one line at exit. A section already running is not stopped, so the hook can
+# overrun by one; settings.json's 30 s timeout is the hard stop (Claude Code's
+# own default is 10 minutes).
+BUDGET=${CLAUDE_SESSION_START_BUDGET:-3} SECONDS=0
 SKIPPED=""
 in_budget() { (( SECONDS < BUDGET )) && return 0; SKIPPED="$SKIPPED $1"; return 1; }
 trap '[[ -z "$SKIPPED" ]] || printf "\nsession-start: past its %s s budget, skipped:%s\n" "$BUDGET" "$SKIPPED"' EXIT
 
-# lock FILE: true for one of the sessions that resume together after a reboot, so
-# one of them does the per-machine work. A noclobber create is atomic and starts
-# no process. The holder removes FILE; one older than 10 minutes was left by a
-# killed run, and the first to rename it away takes over.
-lock() {  # FILE [NOW]: NOW saves a date call where the caller has the time
-  local t now=${2:-$(date +%s)}
-  set -C; { printf '%s\n' "$now" > "$1"; } 2>/dev/null && { set +C; return 0; }; set +C
-  # A lock with no time yet is being written by its holder this instant.
-  t="" && { read -r t < "$1" 2>/dev/null || true; }
-  [[ "$t" =~ ^[0-9]+$ ]] && (( now - t > 600 )) || return 1
-  mv "$1" "$1.$$" 2>/dev/null || return 1
-  rm -f "$1.$$"; lock "$1" "$now"
+# claim FILE STAMP: true for one of the sessions that race to do what STAMP names
+# (a day's nudge, one state of an index), so a resume storm does it once. A
+# noclobber create is atomic, starts no process and never expires: a run killed
+# after it claims loses that one nudge or rewrite. The winner clears older claims.
+claim() {
+  local c="$1.claim.${2//[^A-Za-z0-9._-]/_}" o old=()
+  [[ -w "${1%/*}" ]] || return 0   # an unwritable state folder: every session, as before
+  set -C; { : > "$c"; } 2>/dev/null || { set +C; return 1; }; set +C
+  for o in "$1".claim.*; do [[ "$o" == "$c" ]] || old+=("$o"); done
+  [[ ${#old[@]} -eq 0 ]] || rm -f "${old[@]}"
 }
 
 # Skipped on startup: the CLI's own system prompt already carries branch,
@@ -106,16 +105,12 @@ if { [[ "$IDX_LINES" -ge "${MEMORY_INDEX_PRESSURE_LINES:-180}" ]] || [[ "$IDX_BY
     done
     # Silent: a pure permutation leaves the model nothing to act on. Stamped
     # after the write so the stamp records the index as it is now. One session
-    # per store writes; the stamp is read again under the lock.
+    # per store and index state writes.
     [[ -d "$STATE_DIR/memory-index" ]] || mkdir -p "$STATE_DIR/memory-index" 2>/dev/null
-    if [[ -n "$INDEX_TOOL" ]] && lock "$STAMP_FILE.lock"; then
-      CUR="" && { read -r CUR < "$STAMP_FILE" 2>/dev/null || true; }
-      if [[ "$CUR" != "$STAMP" ]]; then
-        CLAUDE_MEMORY_PROJECTS_DIR="$PROJECTS_DIR" \
-          bash "$INDEX_TOOL" --store "$STORE_SLUG" --write >/dev/null 2>&1 || true
-        printf '%s %s\n' "$(date -r "$MEM_DIR/MEMORY.md" +%s 2>/dev/null)" "$(wc -c < "$MEM_DIR/MEMORY.md" | tr -d ' ')" > "$STAMP_FILE" 2>/dev/null
-      fi
-      rm -f "$STAMP_FILE.lock"
+    if [[ -n "$INDEX_TOOL" ]] && claim "$STAMP_FILE" "$STAMP"; then
+      CLAUDE_MEMORY_PROJECTS_DIR="$PROJECTS_DIR" \
+        bash "$INDEX_TOOL" --store "$STORE_SLUG" --write >/dev/null 2>&1 || true
+      printf '%s %s\n' "$(date -r "$MEM_DIR/MEMORY.md" +%s 2>/dev/null)" "$(wc -c < "$MEM_DIR/MEMORY.md" | tr -d ' ')" > "$STAMP_FILE" 2>/dev/null
     fi
   fi
 fi
@@ -148,13 +143,11 @@ if [[ -f "$PIN_FILE" ]] && in_budget contract-nudge; then
   CLI=${CLAUDE_CLI_VERSION:-$(cli_version)}
   if [[ -n "$PIN" && -n "$CLI" && "$CLI" != "$PIN" ]]; then
     STAMP_FILE="$STATE_DIR/contract-nudge"
-    read -r NOW TODAY < <(date '+%s %Y-%m-%d')
-    STAMP="$CLI $TODAY"
-    CUR="" && { read -r CUR < "$STAMP_FILE" 2>/dev/null || true; }
+    STAMP="$CLI $(date +%Y-%m-%d)"
+    CUR="" && { { read -r CUR < "$STAMP_FILE"; } 2>/dev/null || true; }
     [[ "$CUR" != "$STAMP" && ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR" 2>/dev/null
-    # Once per machine per day: the session holding the lock reads the stamp again.
-    if [[ "$CUR" != "$STAMP" ]] && lock "$STAMP_FILE.lock" "$NOW" \
-       && { CUR="" && { read -r CUR < "$STAMP_FILE" 2>/dev/null || true; }; [[ "$CUR" != "$STAMP" ]] || { rm -f "$STAMP_FILE.lock"; false; }; }; then
+    # Once per machine per day.
+    if [[ "$CUR" != "$STAMP" ]] && claim "$STAMP_FILE" "$STAMP"; then
       echo ""
       # An older CLI is behind, not past: the review already merged, and settings
       # it added (onFailure needs 2.1.295) are ignored until Claude Code updates.
@@ -166,7 +159,6 @@ if [[ -f "$PIN_FILE" ]] && in_budget contract-nudge; then
         echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift run lands the review and the release that follows; the scheduled harness-update installs it. If this persists for more than a day, see the Release blocked issue."
       fi
       printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
-      rm -f "$STAMP_FILE.lock"
     fi
   fi
 fi
@@ -192,16 +184,13 @@ if [[ -f "$LATEST_FILE" && -f "$VERSION_FILE" ]] && in_budget release-nudge; the
   if [[ "$LATEST" =~ $SEMVER && "$INSTALLED" =~ $SEMVER && "$LATEST" != "$INSTALLED" \
         && "$(printf '%s\n%s\n' "$LATEST" "$INSTALLED" | sort -V | tail -1)" == "$LATEST" ]]; then
     STAMP_FILE="$STATE_DIR/release-nudge"
-    read -r NOW TODAY < <(date '+%s %Y-%m-%d')
-    STAMP="$LATEST $TODAY"
-    CUR="" && { read -r CUR < "$STAMP_FILE" 2>/dev/null || true; }
+    STAMP="$LATEST $(date +%Y-%m-%d)"
+    CUR="" && { { read -r CUR < "$STAMP_FILE"; } 2>/dev/null || true; }
     [[ "$CUR" != "$STAMP" && ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR" 2>/dev/null
-    if [[ "$CUR" != "$STAMP" ]] && lock "$STAMP_FILE.lock" "$NOW" \
-       && { CUR="" && { read -r CUR < "$STAMP_FILE" 2>/dev/null || true; }; [[ "$CUR" != "$STAMP" ]] || { rm -f "$STAMP_FILE.lock"; false; }; }; then
+    if [[ "$CUR" != "$STAMP" ]] && claim "$STAMP_FILE" "$STAMP"; then
       echo ""
       echo "## Harness $LATEST is available; $INSTALLED is installed. Run ~/.claude/harness-update.sh."
       printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
-      rm -f "$STAMP_FILE.lock"
     fi
   fi
 fi
@@ -210,15 +199,16 @@ fi
 # jq and a prior snapshot both exist.
 [[ "$SOURCE" != "resume" ]] && exit 0
 [[ -z "$SESSION_ID" ]] && exit 0
-in_budget resume-drift || exit 0
 
 # A mod Claude wrote in this session loads when it resumes, even if hot reload
 # was declined with "Not now". Name each one rather than let it arrive unseen.
+# Outside the budget: it starts no process, and it is a safety notice.
 DEV_MODS=$(expand_tilde "${CLAUDE_DEV_MODS_DIR:-$HOME/.claude/dev-mods}")/$SESSION_ID
 for m in "$DEV_MODS"/*/; do
   [[ -f "$m.claude-plugin/plugin.json" ]] || continue
   echo "Mod loading from this session: ${m%/} (review: claude plugin validate ${m%/})"
 done
+in_budget resume-drift || exit 0
 command -v jq &>/dev/null || exit 0
 
 SNAP="$STATE_DIR/${SESSION_ID}.json"
