@@ -66,6 +66,9 @@ sed -n 's/.*"last_verified_version": *"\([^ "]*\).*/\1/p' "$REPO/config/upstream
   > ~/.claude/harness-contract.version
 echo "  ✓ harness-contract.version"
 
+# The commit the last install recorded, read before this one is: the report at the end diffs from it.
+PREV_COMMIT=$(sed -n 's/^commit=//p' ~/.claude/harness.version 2>/dev/null | head -1)
+
 # ---- Installed version ------------------------------------------------
 # A plain tag only when the clone sits exactly on one, clean; session-start
 # nudges about a newer release only then. harness-update.sh reads version=,
@@ -310,6 +313,9 @@ if [[ -z "${CCH_SKIP_SELFTEST:-}" && -x "$REPO/doctor.sh" ]]; then
   fi
 fi
 
+echo ""
+echo ""
+bash "$REPO/tools/pickup-report.sh" "$PREV_COMMIT" "$REPO"
 echo ""
 echo "Done. Open Claude Code and run /hooks to verify."
 echo "Audit log:   ~/.claude/logs/audit.log"
