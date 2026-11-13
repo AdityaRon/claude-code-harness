@@ -585,5 +585,19 @@ check "a code span in a heredoc, git after"  allow $'cat > notes.md <<\'EOF\'\nt
 check "a python variable after -C"           allow $'python3 -c "import subprocess; repo=\'/r\'; subprocess.run([\'git\',\'-C\',repo,\'status\'])"'
 
 echo ""
+echo "=== The sensitive-file list is one grep, not one a name ==="
+# 12 process starts on a git add that stages none, each ~88 ms where an endpoint
+# agent inspects every exec. An exported grep, which the hook and its pipelines
+# inherit, writes down each pattern it is given.
+eval "$(sed -n '/^SENSITIVE=(/,/^)/p' "$HOOK")"
+PATS="$TMP/patterns"; : > "$PATS"
+jq -nc '{tool_input:{command:"git add notes.txt"}}' \
+  | PATS="$PATS" bash -c 'grep() { printf "%s\n" "${@: -1}" >> "$PATS"; command grep "$@"; }; export -f grep; bash "$0"' "$HOOK" >/dev/null 2>&1
+N=0
+while IFS= read -r p; do for s in "${SENSITIVE[@]}"; do [[ "$p" == *"$s"* ]] && { N=$((N + 1)); break; }; done; done < "$PATS"
+if (( N == 1 )); then echo "  OK: 1 grep holds the list"; PASS=$((PASS+1))
+else echo "  FAIL: $N greps hold a name from the list (want 1; $(wc -l < "$PATS" | tr -d ' ') greps in all)"; FAIL=$((FAIL+1)); fi
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
