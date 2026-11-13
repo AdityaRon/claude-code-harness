@@ -138,6 +138,17 @@ printf -- '- [P](project_old.md) — hook\n- [F](feedback_one.md) — hook\n' > 
   || fail "the installed session-start.sh finds memory-index.sh and reorders" "$(cat "$STORE/MEMORY.md")"
 
 echo ""
+echo "=== lib.sh's parts install before it, and define what the clone's lib.sh does ==="
+WANT=$(bash -c 'source "$1/hooks/lib.sh"; declare -F' _ "$REPO" | sort)
+GOT=$(env -i HOME="$HOME" PATH="$PATH" bash -c 'source ~/.claude/hooks/lib.sh; declare -F' | sort)
+[[ -n "$WANT" && "$WANT" == "$GOT" ]] && pass "the installed lib.sh defines the clone's $(printf '%s\n' "$WANT" | wc -l | tr -d ' ') functions" \
+  || fail "the installed lib.sh defines the clone's functions" "$(diff <(printf '%s\n' "$WANT") <(printf '%s\n' "$GOT") | head -5)"
+LAST_PART=$(printf '%s\n' "$OUT" | grep -n '✓ hooks/lib/' | tail -1 | cut -d: -f1)
+LIB_AT=$(printf '%s\n' "$OUT" | grep -n '✓ hooks/lib.sh$' | cut -d: -f1)
+[[ -n "$LAST_PART" && -n "$LIB_AT" && "$LAST_PART" -lt "$LIB_AT" ]] \
+  && pass "every part is placed before lib.sh" || fail "every part is placed before lib.sh" "last part at ${LAST_PART:-?}, lib.sh at ${LIB_AT:-?}"
+
+echo ""
 echo "=== machine-local rules survive the install byte for byte ==="
 [ -f "$HOME/.claude/rules/local-work.md" ] \
   && pass "local-work.md still exists" || fail "local-work.md still exists" "deleted by install"

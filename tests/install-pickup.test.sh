@@ -8,9 +8,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 REPO=$PWD
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 R="$TMP/clone"
-mkdir -p "$R"/{hooks/sub,config,rules,bin/sub,tests,docs,skills/s1/bin,skills/s2/tests/templates,skills/s3/templates/x,skills/c/panel/hooks,skills/c/tests}
+mkdir -p "$R"/{hooks/sub,hooks/lib,config,rules,bin/sub,tests,docs,skills/s1/bin,skills/s2/tests/templates,skills/s3/templates/x,skills/c/panel/hooks,skills/c/tests}
 # Each line past the first holds files deeper than install copies, or not copied.
-for f in hooks/a.sh hooks/b.sh hooks/old.sh config/settings.json rules/r.md rules/gone.md bin/t.sh bin/u.sh \
+for f in hooks/a.sh hooks/b.sh hooks/old.sh hooks/lib/l.sh config/settings.json rules/r.md rules/gone.md bin/t.sh bin/u.sh \
          skills/s1/SKILL.md skills/s1/bin/e.py skills/s2/SKILL.md skills/s3/templates/x/y.md \
          skills/c/SKILL.md skills/c/panel/hooks/register.tsx \
          tests/x.test.sh docs/d.md skills/c/tests/test_c.py \
@@ -33,13 +33,13 @@ OUT=$(report "$PREV")
 
 echo ""
 echo "=== each change under how a running session picks it up ==="
-echo v2 > "$R/hooks/a.sh"; echo v2 > "$R/config/settings.json"; echo v2 > "$R/rules/r.md"; echo v2 > "$R/bin/t.sh"
+echo v2 > "$R/hooks/a.sh"; echo v2 > "$R/hooks/lib/l.sh"; echo v2 > "$R/config/settings.json"; echo v2 > "$R/rules/r.md"; echo v2 > "$R/bin/t.sh"
 echo v2 > "$R/skills/s1/bin/e.py"; echo v2 > "$R/skills/s1/SKILL.md"; echo v2 > "$R/skills/s2/SKILL.md"; echo v2 > "$R/skills/c/panel/hooks/register.tsx"
 echo v2 > "$R/skills/s3/templates/x/y.md"
 echo new > "$R/hooks/new.sh"
 OUT=$(report "$PREV")
-[[ "$OUT" == *"Hooks and settings, on each session's next tool call:  config/settings.json  hooks/a.sh  hooks/new.sh"$'\n'* ]] \
-  && pass "hooks and settings, a file not yet committed included" || fail "live group" "$OUT"
+[[ "$OUT" == *"Hooks and settings, on each session's next tool call:  config/settings.json  hooks/a.sh  hooks/lib/l.sh  hooks/new.sh"$'\n'* ]] \
+  && pass "hooks and settings, a part of lib.sh and a file not yet committed included" || fail "live group" "$OUT"
 [[ "$OUT" == *"Rules, when a session starts or resumes:  rules/r.md"$'\n'* ]] && pass "rules" || fail "rules" "$OUT"
 [[ "$OUT" == *"Tools in ~/.claude, on their next run:  bin/t.sh"$'\n'* ]] && pass "tools" || fail "tools" "$OUT"
 [[ "$OUT" == *"Skills, when a running session calls them again: /s1 /s2 /s3"$'\n'* ]] \
@@ -56,7 +56,7 @@ git -C "$R" mv rules/old-name.md rules/new-name.md
 OUT=$(report "$PREV")
 [[ "$OUT" == *"the earlier copy stays until removed by hand:  $HOME/.claude/u.sh  $HOME/.claude/hooks/old.sh  $HOME/.claude/rules/gone.md  $HOME/.claude/rules/old-name.md" ]] \
   && pass "deleted: a tool, a hook, a rule and a renamed rule's old name, at their installed paths" || fail "deleted" "$OUT"
-[[ "$OUT" == *"next tool call:  config/settings.json  hooks/a.sh  hooks/new.sh"$'\n'* && "$OUT" == *"resumes:  rules/new-name.md  rules/r.md"$'\n'* \
+[[ "$OUT" == *"next tool call:  config/settings.json  hooks/a.sh  hooks/lib/l.sh  hooks/new.sh"$'\n'* && "$OUT" == *"resumes:  rules/new-name.md  rules/r.md"$'\n'* \
    && "$OUT" == *"next run:  bin/t.sh"$'\n'* ]] \
   && pass "and not as a change to pick up; the new name is one" || fail "deleted as change" "$OUT"
 

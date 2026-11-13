@@ -553,11 +553,11 @@ def find_harness(path: Path) -> Path | None:
 
 def installed_from(repo: Path, ref: str) -> Path | None:
     """Where in the clone install.sh copies ~/.claude/<path> from; None where it copies
-    nothing: bin/ whole and flat, hooks/*.sh, and a skill's bin/, panel/hooks/, panel/types/."""
+    nothing: bin/ whole and flat, hooks/*.sh, hooks/lib/*.sh, and a skill's bin/, panel/hooks/, panel/types/."""
     parts = ref[len("~/.claude/"):].split("/")
     if len(parts) == 1:
         return repo / "bin" / parts[0]
-    if parts[0] == "hooks" and parts[-1].endswith(".sh") and len(parts) == 2:
+    if parts[0] == "hooks" and parts[-1].endswith(".sh") and (len(parts) == 2 or len(parts) == 3 and parts[1] == "lib"):
         return repo.joinpath(*parts)
     if parts[0] == "skills" and (len(parts) == 4 and parts[2] == "bin" or len(parts) == 5 and parts[2] == "panel" and parts[3] in ("hooks", "types")):
         return repo.joinpath(*parts)
