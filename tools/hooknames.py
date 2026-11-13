@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """The hook a transcript's hook record names, for hook-latency.py and permission-friction.py.
 
 Up to Claude Code 2.1.314 a record's `command` is the hook's command line. From 2.1.319 it is
@@ -5,6 +6,8 @@ Up to Claude Code 2.1.314 a record's `command` is the hook's command line. From 
 an entry repeated later keeping its first number (config-guard is 7 on Edit as on Bash, network-
 guard 5 on WebFetch). No record here numbers an entry after a repeat, so where counting repeats
 or skipping them gives different hooks, both are named.
+
+  tools/hooknames.py PreToolUse 4 [--settings PATH]   the hook a record calls "command hook 4"
 """
 import json
 import os
@@ -58,3 +61,13 @@ def label(cmd, event, hooks):
     if a and b and a != b:
         return f"hook {n} ({a} or {b})"
     return a or b or f"hook {n}"
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="the hook a transcript record calls \"command hook N\"")
+    ap.add_argument("event")
+    ap.add_argument("n", type=int)
+    ap.add_argument("--settings", default=os.path.expanduser("~/.claude/settings.json"))
+    a = ap.parse_args()
+    print(label(f"command hook {a.n}", a.event, settings_hooks(a.settings)))

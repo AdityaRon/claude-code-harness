@@ -5,8 +5,8 @@
 # shellcheck disable=SC2088  # records carry a literal ~, as Claude Code writes them
 set -u
 PASS=0; FAIL=0
-pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
-fail() { echo "  FAIL: $1"; [[ -n "${2:-}" ]] && printf '    %s\n' "$2"; FAIL=$((FAIL+1)); }
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 command -v python3 >/dev/null || { echo "  SKIP: no python3"; echo "--- Results: 0 passed, 0 failed ---"; exit 0; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 REPO=$PWD
@@ -81,6 +81,9 @@ echo "=== \"command hook N\" is named through settings.json ==="
   && pass "a number past a repeat names both readings" || fail "ambiguous" "$(jq -c '[.rows[].hook]' "$TMP/day.json")"
 [ "$(row PreToolUse:Bash 'hook 9' "$TMP/day.json")" = '[[1,62,62,62]]' ] \
   && pass "a number past the settings stays a number" || fail "out of range" "$(jq -c '[.rows[].hook]' "$TMP/day.json")"
+
+[ "$(python3 "$REPO/tools/hooknames.py" PreToolUse 2 --settings "$TMP/settings.json")" = git-guard.sh ] \
+  && pass "tools/hooknames.py PreToolUse 2 names the hook from the command line" || fail "hooknames CLI" ""
 
 echo ""
 echo "=== what is read and what is not counted ==="
