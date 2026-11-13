@@ -19,6 +19,10 @@ transcripts show only the rejections.
 """
 import argparse, collections, datetime as dt, glob, json, os, re, shlex, subprocess, sys
 
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # hooknames.py, also when loaded by path
+from hooknames import label, settings_hooks
+
 HOME = os.path.expanduser('~')
 CLAUDE = os.path.join(HOME, '.claude')
 PROJECTS = os.path.join(CLAUDE, 'projects')
@@ -244,6 +248,9 @@ def pct(xs, q):
 
 def collect(cut):
     uses, results, asks, hblocks, kind = {}, {}, collections.defaultdict(list), collections.defaultdict(list), {}
+    # Claude Code 2.1.319 on names a hook only by its number; hooknames.py maps it back.
+    hooks = settings_hooks(SETTINGS)
+    guard = lambda c: re.sub(r'\.sh$', '', label(c, 'PreToolUse', hooks))
     files = [p for p in glob.glob(os.path.join(PROJECTS, '**', '*.jsonl'), recursive=True)
              if os.path.getmtime(p) >= cut.timestamp()]
     for p in files:
@@ -280,11 +287,11 @@ def collect(cut):
                     except Exception:
                         continue
                     if hs.get('permissionDecision') in ('ask', 'deny'):
-                        asks[at['toolUseID']].append((hs['permissionDecision'], os.path.basename(str(at.get('command')))[:-3],
+                        asks[at['toolUseID']].append((hs['permissionDecision'], guard(at.get('command')),
                                                       hs.get('permissionDecisionReason', '')))
                 elif at.get('type') == 'hook_blocking_error':
                     be = at.get('blockingError') or {}
-                    hblocks[at['toolUseID']].append(os.path.basename(str(be.get('command'))).replace('.sh', ''))
+                    hblocks[at['toolUseID']].append(guard(be.get('command')))
     return files, uses, results, asks, hblocks, kind
 
 

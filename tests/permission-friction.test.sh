@@ -86,6 +86,18 @@ OUT=$(approved); [[ "$OUT" == "file edit under .claude/ in an agent worktree (pr
 OUT=$(approved --project /w/other); [[ -z "$OUT" ]] && pass "--project keeps only that working directory" || fail "--project" "$OUT"
 
 echo ""
+echo "=== a guard ask recorded as \"command hook N\" (2.1.319+) is named through settings.json ==="
+printf '%s\n' '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"~/.claude/hooks/env-guard.sh"},{"type":"command","command":"~/.claude/hooks/git-guard.sh"}]}]}}' \
+  > "$TMP/home/.claude/settings.json"
+ASK='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"This deletes a branch"}}'
+{ jq -nc --arg t "$NOW" '{type:"assistant", timestamp:$t, sessionId:"s2", cwd:"/w/proj", message:{content:[{type:"tool_use", id:"g1", name:"Bash", input:{command:"git branch -D x"}}]}}'
+  jq -nc --arg t "$NOW" --arg out "$ASK" '{type:"attachment", timestamp:$t, attachment:{type:"hook_success", hookEvent:"PreToolUse", hookName:"PreToolUse:Bash", toolUseID:"g1", command:"command hook 2", durationMs:120, stdout:$out}}'
+  jq -nc --arg t "$NOW" '{type:"user", timestamp:$t, sessionId:"s2", permissionDecision:{decision:"accept", source:"user_temporary"}, message:{content:[{type:"tool_result", tool_use_id:"g1", content:"ok"}]}}'
+} > "$TMP/home/.claude/projects/p/s2.jsonl"
+OUT=$(HOME="$TMP/home" python3 "$PF" --days 1 --out "$TMP/o" >/dev/null 2>&1 && jq -r '[.guard_asks[] | "\(.key)=\(.count)"] | join(",")' "$TMP/o/friction.json")
+[[ "$OUT" == "git-guard=1" ]] && pass "hook 2 on Bash is git-guard, not 'command ho'" || fail "numbered hook name" "$OUT"
+
+echo ""
 echo "=== every shipped case meets its want on this repo's hooks ==="
 OUT=$(HOME="$TMP/home" python3 "$PF" --cases --replay "$PWD/hooks" 2>&1); rc=$?
 [[ $rc == 0 ]] && pass "$(tail -1 <<<"$OUT")" || fail "shipped cases" "$(grep MISS <<<"$OUT")"

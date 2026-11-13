@@ -3,8 +3,15 @@
 # Exit code = number of failing suites.
 #   bash doctor.sh --skill comms-hub   that skill's prerequisites instead
 #   bash doctor.sh --hosts             running claude processes whose binary is gone
+#   bash doctor.sh --latency [ARGS]    hook wall times from the transcripts (tools/hook-latency.py)
+#   bash doctor.sh --census [ARGS]     claude processes, their memory, idle background jobs
 set -u
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
+
+case "${1:-}" in
+  --latency) shift; exec python3 tools/hook-latency.py "$@" ;;
+  --census) shift; exec python3 tools/session-census.py "$@" ;;
+esac
 
 if [[ "${1:-}" == "--skill" ]]; then
   [[ -f "skills/${2:-}/bin/prereqs.sh" ]] || { echo "no prerequisite check for skill '${2:-}'" >&2; exit 2; }

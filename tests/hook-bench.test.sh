@@ -73,6 +73,13 @@ jq -e '.classes.Bash.base.wait.p50 < (.hooks["fast.sh"].base.wall.p50 + .hooks["
 [ "$(jqo '.decisions.same')" = 9 ] && pass "9 of 9 decisions the same" || fail "decisions" "$(jqo '.decisions')"
 grep -q '^| Bash | 7 |' "$TMP/out.md" && pass "markdown table has the Bash row" || fail "markdown" "$(head -8 "$TMP/out.md")"
 [ "$(jqo '.process_start_ms["bash -c :"] > 0')" = true ] && pass "process start cost measured" || fail "start cost" ""
+[ "$(jqo '.process_start_ms["true"] > 0')" = true ] && pass "the bare exec floor (true) measured" || fail "exec floor" "$(jqo '.process_start_ms')"
+# second.sh sleeps 150 ms: its p50 past one bash start is its wall p50 less `bash -c :`.
+PAST=$(awk -F'|' '$2 ~ /^ second\.sh / { gsub(/ ms /, "", $7); split($7, v, "→"); printf "%.1f", v[2] }' "$TMP/out.md")
+WANT=$(jq -r '.hooks["second.sh"].head.wall.p50 - .process_start_ms["bash -c :"] | . * 10 | round / 10' "$TMP/out.json")
+awk -v a="${PAST:-0}" -v b="${WANT:-x}" 'BEGIN { d = a - b; exit !(b + 0 >= 100 && d < 0.11 && d > -0.11) }' \
+  && pass "a hook's p50 past bash start is its wall p50 less bash -c : (second.sh: $PAST ms)" \
+  || fail "p50 past bash start" "column $PAST, wall p50 less floor $WANT"
 
 echo ""
 echo "=== a decision change in the working tree fails the gate unless intended ==="
