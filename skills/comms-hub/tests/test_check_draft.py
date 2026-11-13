@@ -561,9 +561,16 @@ class Header(unittest.TestCase):
 
     def test_the_slack_draft_skill_shows_this_format(self):
         md = Path(__file__).resolve().parents[2] / "slack-draft" / "SKILL.md"
-        if not md.is_file():
-            self.skipTest("slack-draft is not beside this skill: run.py's mutation copy holds this skill only")
+        if not md.is_file() and os.environ.get("SKILL_MUTATION_COPY"):
+            self.skipTest("run.py's mutation copy holds this skill only")
+        self.assertTrue(md.is_file(), f"{md} is missing, so peers get no draft format")
         self.assertEqual(md.read_text().split("```\n")[1], self.FORMAT)
+
+    def test_the_value_the_tick_holds_on_is_in_the_format(self):
+        # The tick holds a thread on a draft's `fold-in: expected` (comms-hub SKILL.md).
+        tick = (Path(__file__).resolve().parents[1] / "SKILL.md").read_text()
+        self.assertIn("fold-in: expected", self.FORMAT)
+        self.assertIn("`fold-in: expected`", tick)
 
     def test_a_file_with_no_header_is_the_message(self):
         with Env() as env:
