@@ -14,6 +14,7 @@ import argparse
 import collections
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -32,8 +33,9 @@ def ps_lines(path):
 
 
 def role(args):
-    a = " " + args + " "
-    if " daemon " in a:
+    """By whole arguments, so a prompt that says "daemon" is not one."""
+    a = args.split()
+    if a[1:2] == ["daemon"]:
         return "daemon"
     if "--bg-pty-host" in a:
         return "pty host"
@@ -44,6 +46,11 @@ def role(args):
     return "other"
 
 
+def is_claude(exe):
+    """claude itself, or a native install's binary named by its version (.../claude/versions/2.1.330)."""
+    return os.path.basename(exe) in ("claude", "claude.exe") or bool(re.search(r"/claude/versions/\d+\.\d+\.\d+$", exe))
+
+
 def processes(lines):
     roles, rss = collections.Counter(), 0
     for ln in lines:
@@ -51,8 +58,7 @@ def processes(lines):
         if len(parts) < 3 or not parts[1].isdigit():
             continue
         cmd = parts[2]
-        exe = os.path.basename(cmd.split()[0])
-        if exe not in ("claude", "claude.exe"):
+        if not is_claude(cmd.split()[0]):
             continue
         roles[role(cmd)] += 1
         rss += int(parts[1])

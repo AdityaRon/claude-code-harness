@@ -17,8 +17,7 @@ DOC="$TMP/doc"; mkdir -p "$DOC/tests"; cp doctor.sh "$DOC/"; ln -s "$REPO/tools"
 mkdir -p "$P/proj/sess1/subagents"
 
 # Settings: Bash has env (1), git (2), config (3); Edit has mod-gate (4), config again
-# (5, a repeat) and plan (6). "command hook 5" then names config-guard if repeats
-# count and plan if they do not, so the report names both.
+# (a repeat, not counted) and plan (5). Counting the repeat would make 5 config-guard.
 cat > "$TMP/settings.json" <<'JSON'
 {"hooks": {"PreToolUse": [
   {"matcher": "Bash", "hooks": [
@@ -76,9 +75,9 @@ echo "=== \"command hook N\" is named through settings.json ==="
 [ "$(row PreToolUse:Edit mod-gate.sh "$TMP/day.json")" = '[[1,700,700,700]]' ] \
   && pass "a command line with an interpreter names its script (bash mod-gate.sh)" || fail "mod-gate" "$(jq -c '.rows' "$TMP/day.json")"
 [ "$(row PreToolUse:Edit config-guard.sh "$TMP/day.json")" = '[[1,60,60,60]]' ] \
-  && pass "an entry repeated later keeps its first number (hook 3 on Edit)" || fail "repeat" "$(jq -c '.rows' "$TMP/day.json")"
-[ "$(row PreToolUse:Edit 'hook 5 (config-guard.sh or plan.sh)' "$TMP/day.json")" = '[[1,61,61,61]]' ] \
-  && pass "a number past a repeat names both readings" || fail "ambiguous" "$(jq -c '[.rows[].hook]' "$TMP/day.json")"
+  && pass "hook 3 on Edit is config-guard, its first place" || fail "first place" "$(jq -c '.rows' "$TMP/day.json")"
+[ "$(row PreToolUse:Edit plan.sh "$TMP/day.json")" = '[[1,61,61,61]]' ] \
+  && pass "a repeated command is counted once: hook 5 is plan.sh, past the repeat" || fail "repeat" "$(jq -c '[.rows[].hook]' "$TMP/day.json")"
 [ "$(row PreToolUse:Bash 'hook 9' "$TMP/day.json")" = '[[1,62,62,62]]' ] \
   && pass "a number past the settings stays a number" || fail "out of range" "$(jq -c '[.rows[].hook]' "$TMP/day.json")"
 
@@ -123,6 +122,7 @@ cat > "$TMP/ps.txt" <<'PS'
   102  51200 claude bg-pty-host --bg-pty-host /tmp/x.pty.sock 200 50 -- /x/claude --bg-spare
   103 204800 claude bg-spare --bg-spare /tmp/x.claim.sock
   104 307200 /x/claude --session-id abc --agent claude
+  107   8192 /Users/u/.local/share/claude/versions/2.1.330 -p restart the daemon
   105  10240 /usr/bin/vim claude.txt
   106  20480 /bin/zsh -c claude
 PS
@@ -139,12 +139,12 @@ for p in ("aaa/state.json", "aaa/timeline.jsonl", "bbb/state.json"):
     os.utime(os.path.join(j, p), (old, old))
 PY
 OUT=$(python3 "$REPO/tools/session-census.py" --ps "$TMP/ps.txt" --jobs "$J" 2>&1)
-[[ "$OUT" == *"claude processes (ps): 4, 0.63 GB resident: "* ]] \
-  && pass "four claude processes, 650 MB summed; vim and zsh with claude in their arguments are not counted" || fail "processes" "$OUT"
-for r in "1 daemon" "1 pty host" "1 spare or session" "1 session"; do
-  [[ "$OUT" == *"$r"* ]] || { fail "role $r" "$OUT"; continue; }
-done
-[[ "$OUT" == *"1 daemon"* && "$OUT" == *"1 pty host"* && "$OUT" == *"1 session"* ]] && pass "each process by its role" || true
+[[ "$OUT" != *"vim"* && "$OUT" != *"zsh"* ]] \
+  && pass "vim and zsh with claude in their arguments are not counted" || fail "processes" "$OUT"
+MISSING=""; for r in "1 daemon" "1 pty host" "1 spare or session" "1 session" "1 other"; do [[ "$OUT" == *"$r"* ]] || MISSING="$MISSING [$r]"; done
+[ -z "$MISSING" ] && pass "each process by its role; a prompt saying daemon is not one" || fail "roles" "missing$MISSING in $OUT"
+[[ "$OUT" == *"claude processes (ps): 5, 0.64 GB resident"* ]] \
+  && pass "a native install named by its version counts" || fail "native install" "$OUT"
 [[ "$OUT" == *"background jobs ($J): 3: "* ]] && pass "three jobs; a folder with no state.json is skipped" || fail "job count" "$OUT"
 [[ "$OUT" == *"not done and idle over 12 h: 1"* && "$OUT" == *"  aaa  working, last activity 20 h ago"* ]] \
   && pass "the working job quiet for 20 h is named; the old done job and the fresh blocked one are not" || fail "idle" "$OUT"
@@ -153,7 +153,7 @@ OUT=$(python3 "$REPO/tools/session-census.py" --ps "$TMP/ps.txt" --jobs "$J" --i
 OUT=$(python3 "$REPO/tools/session-census.py" --ps "$TMP/ps.txt" --jobs "$TMP/nojobs" 2>&1)
 [[ "$OUT" == *"background jobs: no $TMP/nojobs"* ]] && pass "no jobs folder says so" || fail "no jobs" "$OUT"
 OUT=$(bash "$DOC/doctor.sh" --census --ps "$TMP/ps.txt" --jobs "$J" 2>&1)
-[[ "$OUT" == *"claude processes (ps): 4"* ]] && pass "doctor.sh --census runs session-census.py" || fail "doctor --census" "$OUT"
+[[ "$OUT" == *"claude processes (ps): 5"* ]] && pass "doctor.sh --census runs session-census.py" || fail "doctor --census" "$OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
