@@ -79,3 +79,21 @@ jobs:
         # is in the list because CI's own helpers are shell too, and a broken
         # one fails every job before anything else gets a chance to run.
         run: shellcheck -S warning hooks/*.sh bin/*.sh tools/*.sh ./*.sh .github/*.sh skills/*/bin/*.sh
+      - name: Lint the test suites
+        # Errors only: the suites carry warnings (SC2015's `a && b || c` as a
+        # pass/fail line) that are their idiom, while an error is a broken test.
+        run: shellcheck -x -S error tests/*.sh
+
+  python-compile:
+    # A syntax error in a script no test imports fails nothing else. The oldest
+    # interpreter any of them runs under is macOS's /usr/bin/python3 (3.9), so
+    # compile with that one; setup-python has no 3.9 for current Ubuntu.
+    name: python compile
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile every Python file
+        run: |
+          /usr/bin/python3 --version
+          git ls-files -z '*.py' | xargs -0 /usr/bin/python3 -m py_compile

@@ -13,8 +13,8 @@
 # A layout rule that only lives in prose is a rule nothing enforces.
 set -u
 PASS=0; FAIL=0
-pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
-fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 
 echo "=== The root holds only the documented entry points ==="
 # README: "Two entry points sit at the root". README.md itself is the conventional
@@ -239,6 +239,15 @@ done
 [ -z "$UNLISTED" ] \
   && pass "every suite is named after its file or on the tests/ line" \
   || fail "every suite is named after its file or on the tests/ line" "unlisted:$UNLISTED"
+
+echo ""
+echo "=== Every skill's tests/run.py is skill-forge's, byte for byte ==="
+# comms-hub's was an older copy (111 lines of diff): it copied only bin/ and
+# tests/, so a mutation could not name a file elsewhere in the skill.
+for f in skills/*/tests/run.py; do
+  [ "$f" = skills/skill-forge/tests/run.py ] && continue
+  cmp -s "$f" skills/skill-forge/tests/run.py && pass "$f is skill-forge's" || fail "$f differs from skill-forge's" "copy skills/skill-forge/tests/run.py over it"
+done
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

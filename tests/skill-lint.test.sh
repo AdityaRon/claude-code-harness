@@ -5,7 +5,8 @@
 # passes, so a waiver cannot outlive its finding. One result per skill.
 set -u
 PASS=0; FAIL=0
-pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 fail(){ echo "  FAIL: $1"; printf '%s\n' "$2" | sed 's/^/        /'; FAIL=$((FAIL+1)); }
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

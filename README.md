@@ -63,9 +63,11 @@ changed, the hook benchmark: [docs/releases.md](docs/releases.md).
 harness relies on are pinned in `config/upstream-contract.json` and checked daily
 by `tools/upstream-check.sh`: [docs/upstream-contract.md](docs/upstream-contract.md).
 
-**Testing.** `bash doctor.sh` runs every suite in `tests/`. CI runs it on Linux
-and macOS, lints the scripts with shellcheck, and benchmarks each PR's hooks
-against main.
+**Testing.** `bash doctor.sh` runs every suite in `tests/`; a new suite sources
+`tests/lib.sh` for `pass` and `fail`. CI runs doctor on Linux and macOS, lints
+the scripts and suites with shellcheck, compiles every Python file with macOS's /usr/bin/python3 (3.9),
+and benchmarks each PR's hooks against main. Each skill's mutation list runs
+weekly (`.github/workflows/mutations.yml`).
 
 ## What it blocks, asks and logs
 
@@ -251,9 +253,10 @@ skills/                  ← memory-audit/, memory-archive/, pr-review/, slack-d
                            forge.toml (its manifest for skill_lint, not installed)
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
-                           heredoc-openers, repo-layout and workflow-gates cut across files; comms-hub,
-                           comms-hub-prereqs, skill-forge and skill-lint run the skills' own suites;
-                           bench-corpus.jsonl feeds hook-bench
+                           heredoc-openers, repo-layout, token-shapes and workflow-gates cut across
+                           files; comms-hub, comms-hub-prereqs, skill-forge and skill-lint run the
+                           skills' own suites; lib.sh is their shared pass/fail; bench-corpus.jsonl
+                           feeds hook-bench
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
   permissions.md  auto-mode.md  customization.md  known-limitations.md

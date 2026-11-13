@@ -915,7 +915,10 @@ unreadable_exit() {
 redact_secrets() {
   sed -E \
     -e 's#(://[^/@[:space:]:]+):[^/@[:space:]]+@#\1:***@#g' \
-    -e 's/((ghp|gho|ghu|ghs|ghr)_|github_pat_|glpat-|xox[abprs]-|sk-(ant-)?|AKIA)[A-Za-z0-9_-]{8,}/\1***/g' \
+    -e 's/((ghp|gho|ghu|ghs|ghr)_|github_pat_|glpat-|xox[abprs]-|xapp-|sk-(ant-|proj-)?|sk_(live|test)_|AKIA|AIza)[A-Za-z0-9_-]{8,}/\1***/g' \
+    -e 's/npm_[A-Za-z0-9]{36}/npm_***/g; s/ASIA[0-9A-Z]{16}/ASIA***/g' \
+    -e 's/eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/eyJ***/g' \
+    -e 's#(hooks\.slack\.com/services/)[A-Za-z0-9/_+-]{20,}#\1***#g' \
     -e "s/([Aa]uthorization|[Bb]earer|[Tt]oken|TOKEN|[Ss]ecret|SECRET|[Pp]assword|PASSWORD|[Pp]asswd|[Aa]pi[_-]?[Kk]ey|API[_-]?KEY)([\"']?[=:[:space:]]+[\"']?)([Bb]earer[[:space:]]+)?[^[:space:]\"'&]+/\1\2\3***/g"
 }
 

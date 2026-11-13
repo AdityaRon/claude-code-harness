@@ -1,0 +1,47 @@
+name: Mutations
+# Each skill's run.py --mutate applies the mutations its test files list
+# and expects every one to fail a test. They take minutes, so they run weekly
+# and on demand, not on every push.
+on:
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  skills:
+    # Every skill whose tests folder holds run.py, so one skill-forge drafts later is not left out.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: echo "list=$(ls skills/*/tests/run.py | cut -d/ -f2 | jq -Rcs 'split("\n") | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
+
+  mutate:
+    needs: skills
+    name: ${{ matrix.skill }} mutations
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        skill: ${{ fromJSON(needs.skills.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run the mutations
+        # The interpreter the skill's own python.sh picks, as the suites use:
+        # a bare python3 on a Mac is 3.9, where every test file fails unmutated.
+        env:
+          SKILL: ${{ matrix.skill }}
+        run: |
+          PY=python3
+          if [ -f "skills/$SKILL/bin/python.sh" ]; then PY=$(bash "skills/$SKILL/bin/python.sh"); fi
+          "$PY" "skills/$SKILL/tests/run.py" --mutate
