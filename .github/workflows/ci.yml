@@ -78,7 +78,7 @@ jobs:
         # linted the day it lands instead of the day someone remembers. .github
         # is in the list because CI's own helpers are shell too, and a broken
         # one fails every job before anything else gets a chance to run.
-        run: shellcheck -S warning hooks/*.sh bin/*.sh tools/*.sh ./*.sh .github/*.sh skills/*/bin/*.sh
+        run: shellcheck -S warning hooks/*.sh hooks/lib/*.sh bin/*.sh tools/*.sh ./*.sh .github/*.sh skills/*/bin/*.sh
       - name: Lint the test suites
         # Errors only: the suites carry warnings (SC2015's `a && b || c` as a
         # pass/fail line) that are their idiom, while an error is a broken test.

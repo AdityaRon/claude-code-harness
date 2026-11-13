@@ -358,7 +358,7 @@ check_contains "the contract nudge uses it" "Installed 2.1.330; the harness was 
 # STUB_SLEEP seconds (lib.sh puts the system folders first on PATH, so a stub has
 # to be one the hook finds beside itself).
 TREE="$TMP/tree"; mkdir -p "$TREE/hooks" "$TREE/bin"
-cp hooks/session-start.sh hooks/lib.sh "$TREE/hooks/"
+cp hooks/session-start.sh hooks/lib.sh "$TREE/hooks/"; cp -R hooks/lib "$TREE/hooks/lib"
 export RUNS="$TMP/index-runs"
 printf '#!/usr/bin/env bash\necho run >> "$RUNS"\nsleep "${STUB_SLEEP:-1}"\n' > "$TREE/bin/memory-index.sh"
 printf '2.1.280\n' > "$TMP/pin"

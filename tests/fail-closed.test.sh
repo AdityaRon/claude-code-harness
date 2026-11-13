@@ -22,6 +22,7 @@ done
 
 # Copy lib.sh with the fixed PATH rewritten to our jq-free toolbox.
 sed "s#^export PATH=.*#export PATH=\"$TMP/bin\"#" hooks/lib.sh > "$TMP/hooks/lib.sh"
+cp -R hooks/lib "$TMP/hooks/lib"   # the parts lib.sh sources
 
 check_deny_no_jq() {
   local label="$1" hook="$2" payload="$3"
@@ -125,6 +126,38 @@ echo "=== Every PreToolUse hook on Bash also fires on Monitor ==="
 MISSING=$(jq -r 'def on($t): [.hooks.PreToolUse[] | . as $e | select($t | test("^(" + ($e.matcher // "") + ")$")) | .hooks[].command];
   (on("Bash") - on("Monitor"))[]' config/settings.json)
 [[ -z "$MISSING" ]] && { echo "  OK"; PASS=$((PASS+1)); } || { echo "  FAIL, Bash only: ${MISSING//$'\n'/ }"; FAIL=$((FAIL+1)); }
+
+echo ""
+echo "=== A lib.sh part that cannot be read blocks the call, naming it ==="
+# A half-done install, or a deleted part: the guard must not run without the
+# functions it checks with. Exit 2 from a PreToolUse hook blocks the call.
+P="$TMP/partless"; mkdir -p "$P"; cp -R hooks "$P/hooks"; rm "$P/hooks/lib/net.sh"
+OUT=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"cwd":"/tmp","session_id":"s"}' \
+  | bash "$P/hooks/rm-guard.sh" 2>&1 >/dev/null); RC=$?
+[[ "$RC" == 2 && "$OUT" == *"cannot read $P/hooks/lib/net.sh"* ]] \
+  && { echo "  OK: exit 2, naming lib/net.sh"; PASS=$((PASS+1)); } \
+  || { echo "  FAIL: a missing part  rc=$RC [$OUT]"; FAIL=$((FAIL+1)); }
+
+echo ""
+echo "=== A part that reads but is cut short blocks too ==="
+P2="$TMP/cut"; mkdir -p "$P2"; cp -R hooks "$P2/hooks"; : > "$P2/hooks/lib/command.sh"
+RMRF='{"tool_name":"Bash","tool_input":{"command":"rm -rf /"},"cwd":"/tmp","session_id":"s"}'
+OUT=$(printf '%s' "$RMRF" | bash "$P2/hooks/rm-guard.sh" 2>&1 >/dev/null); RC=$?
+[[ "$RC" == 2 && "$OUT" == *"a part in $P2/hooks/lib/ is incomplete"* ]] \
+  && { echo "  OK: an empty lib/command.sh: exit 2 for a guard run alone"; PASS=$((PASS+1)); } \
+  || { echo "  FAIL: an empty part, guard alone  rc=$RC [$OUT]"; FAIL=$((FAIL+1)); }
+OUT=$(printf '%s' "$RMRF" | bash "$P2/hooks/bash-guards.sh" 2>/dev/null); RC=$?
+[[ "$RC" == 2 && -z "$OUT" ]] \
+  && { echo "  OK: and through bash-guards: exit 2, no answer"; PASS=$((PASS+1)); } \
+  || { echo "  FAIL: an empty part, dispatcher  rc=$RC [$OUT]"; FAIL=$((FAIL+1)); }
+# The list lib.sh checks is the last function of each part, in its order.
+WANT=""; for p in $(sed -n 's/^for _lib_part in \(.*\); do$/\1/p' hooks/lib.sh); do
+  WANT="$WANT$(grep -oE '^[A-Za-z_][A-Za-z_0-9]*\(\)' "hooks/lib/$p.sh" | tail -1 | tr -d '()') "
+done
+GOT=$(sed -n 's/^declare -F \(.*\) >\/dev\/null.*/\1/p' hooks/lib.sh)
+[[ -n "$GOT" && "$GOT " == "$WANT" ]] \
+  && { echo "  OK: lib.sh checks the last function of each part"; PASS=$((PASS+1)); } \
+  || { echo "  FAIL: lib.sh's part check  want [$WANT] got [$GOT]"; FAIL=$((FAIL+1)); }
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

@@ -244,8 +244,8 @@ disp "$TMP/hk" "$(payload 'ls')"
 [[ $RC == 2 && -z "$OUT" && "$ERR" == *"Blocked: bash-guards stopped"* ]] && pass "lib.sh missing: exit 2" || fail "lib.sh missing" "rc=$RC out=$OUT err=$ERR"
 copy_hooks
 # An older lib.sh than this hook: each fork would read an empty stdin and allow.
-sed '/^  \[\[ -n "\${HARNESS_PRESET:-}" \]\] && return 0$/d' hooks/lib.sh > "$TMP/hk/lib.sh"
-cmp -s hooks/lib.sh "$TMP/hk/lib.sh" && fail "test setup" "read_input's seam line was not found"
+sed '/^  \[\[ -n "\${HARNESS_PRESET:-}" \]\] && return 0$/d' hooks/lib/io.sh > "$TMP/hk/lib/io.sh"
+cmp -s hooks/lib/io.sh "$TMP/hk/lib/io.sh" && fail "test setup" "read_input's seam line was not found"
 disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
 [[ $RC == 2 && -z "$OUT" && "$ERR" == *"lib.sh is older than bash-guards.sh"* ]] \
   && pass "a lib.sh without the seams: exit 2" || fail "a lib.sh without the seams" "rc=$RC out=$OUT err=$ERR"

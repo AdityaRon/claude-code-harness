@@ -254,7 +254,8 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   session-census.py      ← claude processes, their memory, and idle background jobs (doctor.sh --census)
   pickup-report.sh       ← after an install, how running sessions pick up each change (install.sh runs it)
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json
-hooks/                   ← one file per hook, plus shared lib.sh; bash-guards.sh runs the Bash guards
+hooks/                   ← one file per hook, plus lib.sh, which sources lib/: command, paths,
+                           scratch, io, inline, net and host; bash-guards.sh runs the Bash guards
 rules/                   ← installed to ~/.claude/rules, loaded in every session
   prose-and-comments.md  collaboration.md  working-agreement.md  environment.md
   python-tests.md        ← path-scoped: loads only when Claude opens Python

@@ -535,11 +535,11 @@ class SkillMdTest(unittest.TestCase):
                       "skills/other/panel/hooks/h.py", "skills/other/panel/p.py"):
                 (repo / f).write_text("true\n")
             detail = skill_lint.lint(root)["C10"].detail
-            # install.sh copies hooks/*.sh, not hooks/lib/ (until the lib split installs it).
-            for r in ("~/.claude/memory-verify.sh", "~/.claude/hooks/x.py", "~/.claude/hooks/lib/l.sh",
+            # install.sh copies hooks/*.sh and hooks/lib/*.sh, not hooks/x.py.
+            for r in ("~/.claude/memory-verify.sh", "~/.claude/hooks/x.py",
                       f"{other}/tests/t.py", f"{other}/panel/p.py"):
                 self.assertIn(f"SKILL.md runs {r}, which install.sh in this clone does not install", detail)
-            for r in ("~/.claude/hooks/x.sh", f"{other}/bin/t.py", f"{other}/panel/hooks/h.py"):
+            for r in ("~/.claude/hooks/x.sh", "~/.claude/hooks/lib/l.sh", f"{other}/bin/t.py", f"{other}/panel/hooks/h.py"):
                 self.assertNotIn(f"{r}, which install.sh", detail)
             (repo / "bin" / "memory-verify.sh").write_text("true\n")
             self.assertNotIn("memory-verify.sh, which install.sh", skill_lint.lint(root)["C10"].detail)

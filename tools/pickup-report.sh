@@ -24,7 +24,7 @@ while IFS=$TAB read -r st f; do
   # install copies at by the number of slashes in the path.
   n=${f//[^\/]/}; n=${#n}
   case "$n:$f" in
-    1:hooks/*.sh|1:config/settings.json|1:config/merge-settings.jq|1:config/retired-rules.json) g=LIVE ;;
+    1:hooks/*.sh|2:hooks/lib/*.sh|1:config/settings.json|1:config/merge-settings.jq|1:config/retired-rules.json) g=LIVE ;;
     1:rules/*.md) g=RULES ;;
     1:bin/*) g=TOOLS ;;
     4:skills/*/panel/.claude-plugin/plugin.json|4:skills/*/panel/hooks/*|4:skills/*/panel/types/*) g=PANEL ;;

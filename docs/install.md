@@ -31,7 +31,7 @@ repo layout is for reading the repo, not for the installed tree.
 ~/.claude/
   settings.json            ← merged with harness defaults (user keys preserved)
   settings.json.bak.<ts>   ← one per install, newest 10 kept
-  hooks/                   ← every hooks/*.sh, lib.sh included, by glob; beside them your
+  hooks/                   ← every hooks/*.sh and hooks/lib/*.sh, by glob; beside them your
                              bash-guards.skip, if you make one: Bash guards to switch off (guards.md)
   statusline.sh            ← model, repo:branch, context, tokens, cost, rate limits, plan and wf links
   memory-verify.sh         ← checks memories against GitHub; run on demand, not a hook
