@@ -279,6 +279,32 @@ for c in sys.stdin.read().split("\0")[:-1]:
     [ "$(printf '%s\0' "${ASIS[$((i + 1))]}" | demand_keeps)" = 1 ] \
       && pass "${ASIS[$i]}: demand.py keeps the body" || fail "${ASIS[$i]}: demand.py dropped the body" ""
   done
+  # skill_lint's shell_code finds openers with the same reader (heredocs.py): where
+  # bash runs the marker line, a comment there is blanked (or the script is
+  # unreadable, a lint finding); where bash reads it as body data, it stays.
+  lint_apply() {   # each script, NUL-ended, on stdin: 1 if "--apply" survives shell_code, 2 if unreadable
+    "$DPY" -c '
+import sys; sys.path.insert(0, "skills/skill-forge/bin"); import skill_lint
+for c in sys.stdin.read().split("\0")[:-1]:
+    try:
+        print(int("--apply" in skill_lint.shell_code(c)))
+    except skill_lint.Unreadable:
+        print(2)'
+  }
+  LA=()
+  while IFS= read -r k; do LA+=("$k"); done < <(for i in "${RUNS[@]}"; do printf '%s\0' "${CASES[$((i + 1))]//"$M"/# --apply}"; done | lint_apply)
+  for j in "${!RUNS[@]}"; do
+    [ "${LA[$j]}" != 1 ] && pass "${CASES[${RUNS[$j]}]}: skill_lint reads the line bash runs as code" \
+      || fail "${CASES[${RUNS[$j]}]}: skill_lint read a comment bash skips as heredoc data" ""
+  done
+  LD=()
+  while IFS= read -r k; do LD+=("$k"); done < <(for ((i = 1; i < ${#DROPS[@]}; i += 2)); do printf '%s\0' "${DROPS[$i]//"$M"/# --apply}"; done | lint_apply)
+  for ((i = 0; i < ${#DROPS[@]}; i += 2)); do
+    [ "${LD[$((i / 2))]}" = 1 ] && pass "${DROPS[$i]#*|}: skill_lint keeps the body line" || fail "${DROPS[$i]#*|}: skill_lint" "${LD[$((i / 2))]}"
+  done
+  # The case that made a comment pass skill_lint's --apply check.
+  [ "$(printf '%s\0' $'echo "a <<EOF"\n# --apply\nkubectl apply -f a.yaml' | lint_apply)" = 0 ] \
+    && pass "skill_lint: a comment after a quoted <<EOF is not --apply" || fail "skill_lint: a comment after a quoted <<EOF counted as --apply" ""
   # Not a bash-oracle case: the oracle runs under env -i, where $SHELL is unset.
   [ "$(printf '%s\0' $'cat <<\'EOF\' | $SHELL\n'"$M"$'\nEOF' | demand_keeps)" = 1 ] \
     && pass "a body piped to \$SHELL: demand.py keeps it" || fail "a body piped to \$SHELL: demand.py dropped it" ""
