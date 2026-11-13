@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs the Claude Code harness to ~/.claude
-# Run once per machine: bash install.sh
+# Run once per machine: bash install.sh   (--full: verify with every suite, not the smoke set)
 #
 # Safe to re-run: existing settings.json is backed up; custom keys are
 # preserved when the user has jq installed and a mergeable file.
@@ -291,17 +291,22 @@ fi
 # suite in tests/, and one of those suites installs into a temp HOME to prove the
 # install preserves local-*.md — without the guard that suite would re-enter the
 # installer through doctor and recurse until something gave way.
+# The smoke set covers every wired hook in seconds; the whole run took 18 to 84
+# minutes on a machine where each process start costs ~90 ms, blocking install.
 if [[ -z "${CCH_SKIP_SELFTEST:-}" && -x "$REPO/doctor.sh" ]]; then
+  SET=--smoke; [[ "${1:-}" == "--full" ]] && SET=""
   echo ""
-  echo "Running doctor.sh to verify hooks..."
+  echo "Running doctor.sh ${SET:-(every suite)} to verify hooks..."
   # A fixed /tmp name is shared by every user and every concurrent run.
   log=$(mktemp "${TMPDIR:-/tmp}/cch-doctor.XXXXXX")
-  if bash "$REPO/doctor.sh" > "$log" 2>&1; then
-    summary=$(grep '^SUMMARY:' "$log" || echo "(no summary)")
-    echo "  ✓ $summary"
+  if bash "$REPO/doctor.sh" $SET > "$log" 2>&1; then
+    echo "  ✓ $(grep '^SUMMARY:' "$log")"
+    [[ -n "$SET" ]] && echo "    the smoke set; every suite: bash $REPO/doctor.sh"
     rm -f "$log"
+  elif ! grep -q '^SUMMARY:' "$log" || grep -q '^SUMMARY: KILLED' "$log"; then
+    echo "  ✗ doctor.sh was stopped before it finished, so this is not a test result. See $log"
   else
-    echo "  ✗ doctor.sh reported failures. See $log"
+    echo "  ✗ $(grep '^SUMMARY:' "$log"). See $log"
   fi
 fi
 

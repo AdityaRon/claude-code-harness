@@ -66,7 +66,11 @@ harness relies on are pinned in `config/upstream-contract.json` and checked dail
 by `tools/upstream-check.sh`: [docs/upstream-contract.md](docs/upstream-contract.md).
 
 **Testing.** `bash doctor.sh` runs every suite in `tests/`; a new suite sources
-`tests/lib.sh` for `pass` and `fail`. CI runs doctor on Linux and macOS, lints
+`tests/lib.sh` for `pass` and `fail`. `--smoke` runs the few in `tests/smoke.list`
+that name every wired hook, which is what `install.sh` runs (`install.sh --full`
+runs all). A suite gets 30 minutes (`CCH_SUITE_TIMEOUT`); the summary lists wall
+times slowest first and names a suite stopped by a signal KILLED and one past its
+limit TIMEOUT, apart from failures. CI runs doctor on Linux and macOS, lints
 the scripts and suites with shellcheck, compiles every Python file with macOS's /usr/bin/python3 (3.9),
 and benchmarks each PR's hooks against main. Each skill's mutation list runs
 weekly (`.github/workflows/mutations.yml`).
@@ -261,7 +265,8 @@ tests/                   ← <name>.test.sh for most hooks, tools and .github sc
                            heredoc-openers, repo-layout, token-shapes and workflow-gates cut across
                            files; comms-hub, comms-hub-prereqs, skill-forge and skill-lint run the
                            skills' own suites; lib.sh is their shared pass/fail; bench-corpus.jsonl
-                           feeds hook-bench
+                           feeds hook-bench; doctor tests doctor.sh's own report; smoke.list is the
+                           set install.sh verifies with (doctor.sh --smoke)
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
   permissions.md  auto-mode.md  customization.md  known-limitations.md

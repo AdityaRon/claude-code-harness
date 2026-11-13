@@ -1,0 +1,20 @@
+# Suites doctor.sh --smoke runs, and install.sh with it: together they name every
+# wired hook (repo-layout.test.sh checks), and took 42 s on an Apple M2 (2026-11-13).
+tests/fail-closed.test.sh
+tests/guard-latency.test.sh
+tests/audit.test.sh
+tests/comment-budget.test.sh
+tests/config-guard.test.sh
+tests/rm-guard.test.sh
+tests/memory-lint.test.sh
+tests/mod-gate.test.sh
+tests/notify.test.sh
+tests/plan-to-html.test.sh
+tests/pre-compact.test.sh
+tests/secret-scanner.test.sh
+tests/sensitive-file-guard.test.sh
+tests/session-snapshot.test.sh
+tests/session-start.test.sh
+tests/subagent-cache-guard.test.sh
+tests/host-binary.test.sh
+tests/install-merge.test.sh
