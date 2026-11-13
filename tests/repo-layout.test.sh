@@ -13,8 +13,8 @@
 # A layout rule that only lives in prose is a rule nothing enforces.
 set -u
 PASS=0; FAIL=0
-pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
-fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 
 echo "=== The root holds only the documented entry points ==="
 # README: "Two entry points sit at the root". README.md itself is the conventional

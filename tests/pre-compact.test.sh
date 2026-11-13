@@ -8,8 +8,8 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_TRANSCRIPT_DIR="$TMP/backups"
 # A long retention for the count test; the age test sets its own.
 printf '{"cleanupPeriodDays": 100000}' > "$TMP/settings.json"; export CLAUDE_SETTINGS_FILE="$TMP/settings.json"
-pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
-fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 run(){ jq -nc --arg t "$1" --arg g "$2" '{hook_event_name:"PreCompact",transcript_path:$t,trigger:$g}' | bash "$HOOK"; }
 # GNU first: on Linux `stat -f` is filesystem status and succeeds with the wrong output.
 mode(){ stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
