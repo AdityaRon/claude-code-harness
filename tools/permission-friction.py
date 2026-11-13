@@ -21,7 +21,7 @@ import argparse, collections, datetime as dt, glob, json, os, re, shlex, subproc
 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # hooknames.py, also when loaded by path
-from hooknames import label, settings_hooks
+from hooknames import label, read_timing, settings_hooks
 
 HOME = os.path.expanduser('~')
 CLAUDE = os.path.join(HOME, '.claude')
@@ -249,23 +249,6 @@ def pct(xs, q):
 
 # ---- collection ---------------------------------------------------------------
 
-def read_timing():
-    """tool_use_id -> [(guard, decision)], from bash-guards' timing log and its rotated copy."""
-    path = os.path.expanduser(os.environ.get('CLAUDE_GUARD_TIMING_LOG') or '~/.claude/logs/guard-timing.log')
-    out = {}
-    for p in (path + '.1', path):
-        try:
-            f = open(p, errors='replace')
-        except OSError:
-            continue
-        with f:
-            for line in f:
-                cols = line.rstrip('\n').split('\t')
-                if len(cols) > 2 and cols[0] != '-':
-                    out[cols[0]] = [(g, v.rsplit(':', 1)[-1]) for g, _, v in (c.partition('=') for c in cols[2:])]
-    return out
-
-
 def collect(cut):
     uses, results, asks, hblocks, kind = {}, {}, collections.defaultdict(list), collections.defaultdict(list), {}
     # Claude Code 2.1.319 on names a hook only by its number; hooknames.py maps it back.
@@ -282,7 +265,7 @@ def collect(cut):
             return [(decision, name, reason)]
         if timing is None:
             timing = read_timing()
-        per = [(g, d) for g, d in timing.get(uid, []) if d in ('ask', 'deny')]
+        per = [(g, d) for g, _, _, d in timing.get(uid, []) if d in ('ask', 'deny')]
         if not per:
             return [(decision, name, reason)]
         top = [g for g, d in per if d == decision]

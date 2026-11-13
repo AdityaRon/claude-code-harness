@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The hook a transcript's hook record names, for hook-latency.py and permission-friction.py.
+"""The hook a transcript's hook record names, for hook-latency.py and permission-friction.py,
+and what each Bash guard did inside hooks/bash-guards.sh, from its timing log.
 
 Up to Claude Code 2.1.314 a record's `command` is the hook's command line. From 2.1.319 it is
 "command hook N": the Nth distinct command among that event's hooks in settings.json, every
@@ -56,6 +57,41 @@ def label(cmd, event, hooks):
     n = int(m[1])
     uniq = list(dict.fromkeys(hooks.get(event) or []))
     return script_name(uniq[n - 1]) if 0 < n <= len(uniq) else f"hook {n}"
+
+
+def read_timing(path=None):
+    """bash-guards' timing log and its rotated copy: tool_use_id -> [(guard, seconds, status, decision)].
+
+    One line a call: the id, the tool, then guard=seconds:status:decision for each guard that
+    ran. seconds is None where the hook wrote '-' (an answer that went missing); status is the
+    guard's exit status, or 'lost'. The log holds no time of day: join the id to a transcript.
+    """
+    path = os.path.expanduser(path or os.environ.get("CLAUDE_GUARD_TIMING_LOG") or "~/.claude/logs/guard-timing.log")
+    out = {}
+    for p in (path + ".1", path):
+        try:
+            f = open(p, errors="replace")
+        except OSError:
+            continue
+        with f:
+            for line in f:
+                cols = line.rstrip("\n").split("\t")
+                if len(cols) < 3 or cols[0] == "-":
+                    continue
+                per = []
+                for c in cols[2:]:
+                    g, _, v = c.partition("=")
+                    secs, _, rest = v.partition(":")
+                    status, _, decision = rest.partition(":")
+                    if not g or not status:
+                        continue   # not a column the hook writes
+                    try:
+                        s = float(secs)
+                    except ValueError:
+                        s = None
+                    per.append((g, s, status, decision))
+                out[cols[0]] = per
+    return out
 
 
 if __name__ == "__main__":
