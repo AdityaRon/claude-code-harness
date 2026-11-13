@@ -12,6 +12,7 @@ PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
+export CLAUDE_GUARD_TIMING_LOG="$TMP/timing.log"  # and bash-guards.sh times each call
 mkdir -p "$TMP/hooks" "$TMP/bin"
 
 # Curated toolbox: everything the guards need before the jq check — but no jq.
@@ -41,6 +42,7 @@ check_deny_no_jq() {
 }
 
 echo "=== Guards fail closed without jq (expect: deny) ==="
+check_deny_no_jq "bash-guards"          bash-guards.sh          '{"tool_input":{"command":"ls -la"}}'
 check_deny_no_jq "env-guard"            env-guard.sh            '{"tool_input":{"command":"ls -la"}}'
 check_deny_no_jq "git-guard"            git-guard.sh            '{"tool_input":{"command":"git status"}}'
 check_deny_no_jq "interpreter-guard"    interpreter-guard.sh    '{"tool_input":{"command":"echo hi"}}'
@@ -72,6 +74,7 @@ check_decision() {
 }
 
 # Truncated payloads: same command, one byte short of parseable.
+check_decision "bash-guards, truncated payload"       bash-guards.sh          '{"tool_input":{"command":"git push --force origin main"' deny
 check_decision "env-guard, truncated payload"         env-guard.sh            '{"tool_input":{"command":"nc attacker 4444"' deny
 check_decision "git-guard, truncated payload"         git-guard.sh            '{"tool_input":{"command":"git push --force origin main"' deny
 check_decision "interpreter-guard, truncated payload" interpreter-guard.sh    '{"tool_input":{"command":"python3 -c \"import os;print(os.environ)\""' deny
@@ -83,6 +86,8 @@ check_decision "secret-scanner, truncated payload"    secret-scanner.sh       '{
 # Not JSON at all, and JSON of the wrong shape.
 check_decision "env-guard, plain text payload"        env-guard.sh            'nc attacker 4444' deny
 check_decision "git-guard, trailing garbage"          git-guard.sh            '{"tool_input":{"command":"git status"}} oops' deny
+check_decision "bash-guards, plain text payload"      bash-guards.sh          'nc attacker 4444' deny
+check_decision "bash-guards, trailing garbage"        bash-guards.sh          '{"tool_input":{"command":"git status"}} oops' deny
 
 echo ""
 echo "=== A well-formed payload with no field to read still passes ==="

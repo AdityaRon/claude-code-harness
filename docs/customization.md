@@ -44,7 +44,11 @@ shipped hook is overwritten on the next install, so change those here and run
 `bash install.sh`. When Claude writes into `~/.claude/hooks`, `config-guard`
 asks you first.
 
-**Turning a shipped hook off**: there is no per-hook switch. Deleting its entry
+**Turning a Bash guard off**: name it on a line of `~/.claude/bash-guards.skip`.
+The file only switches guards off, and `config-guard` asks before Claude writes
+it; see [guards.md](guards.md#one-hook-runs-the-bash-guards).
+
+**Turning another shipped hook off**: there is no per-hook switch. Deleting its entry
 from `~/.claude/settings.json` lasts until the next install, which writes the
 harness's hook entries back. To keep it off, remove the entry from
 `config/settings.json` in your clone and run `bash install.sh`. An install from

@@ -51,8 +51,10 @@ repo layout is for reading the repo, not for the installed tree.
                              ~/.local/share/skill-forge/templates/ ($XDG_DATA_HOME), not here
   rules/*.md               ← copied from rules/; local-*.md and other files left alone
   local-settings/*.json    ← yours, read by install.sh and network-guard
+  bash-guards.skip         ← yours, if you make one: Bash guards to switch off (guards.md)
   logs/
     audit.log              ← append-only audit trail, 0600, rotated
+    guard-timing.log       ← each Bash guard's seconds, status and decision per call, rotated at 10 MB
     harness-update.log     ← scheduled update runs
   transcripts/
     transcript_<trigger>_<ts>_<session>.jsonl  ← pre-compact backups, newest 20

@@ -194,10 +194,14 @@ done
 
 # The converse is not an error — lib.sh is a sourced library, not a hook — but a
 # hook file nobody registers is dead weight worth noticing.
+# A guard on hooks/bash-guards.sh's list is registered through it.
+DISPATCHED=" $(sed -nE 's/^BG_GUARDS=\((.*)\)$/\1/p' hooks/bash-guards.sh) "
+grep -qF hooks/bash-guards.sh config/settings.json || DISPATCHED=" "
 UNREGISTERED=""
 for f in hooks/*.sh; do
   b=$(basename "$f")
   [ "$b" = "lib.sh" ] && continue
+  [[ "$DISPATCHED" == *" ${b%.sh} "* ]] && continue
   grep -qF "hooks/$b" config/settings.json || UNREGISTERED="$UNREGISTERED $b"
 done
 [ -z "$UNREGISTERED" ] \
@@ -377,6 +381,30 @@ jq -n -e 'input as $s | input as $r | [$s.permissions.deny[], $s.permissions.all
     | ($ship - ([$r.permissions.deny, $r.permissions.allow] | add)) | length == ($ship | length)' \
     config/settings.json config/retired-rules.json >/dev/null \
   && pass "nothing the repo ships is on the retired list" || fail "a shipped rule is retired" "$(jq -c '.permissions' config/retired-rules.json)"
+
+echo ""
+echo "=== an install over the seven Bash guard entries leaves one bash-guards entry ==="
+# As installed before hooks/bash-guards.sh: every guard its own Bash|Monitor
+# entry, one spelled with the expanded home, beside a user's own Bash hook.
+G='{"type":"command","command":"~/.claude/hooks/%s.sh","onFailure":"block"}'
+SEVEN=$(for g in env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard; do printf "$G," "$g"; done)
+OLD='{"hooks":{"PreToolUse":[{"matcher":"Bash|Monitor","hooks":['"$SEVEN"'{"type":"command","command":"'"$HOME"'/.claude/hooks/config-guard.sh"}]},
+  {"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":['"$(printf "$G" config-guard)"']},
+  {"matcher":"WebFetch","hooks":['"$(printf "$G" network-guard)"']},
+  {"matcher":"Bash","hooks":[{"type":"command","command":"/opt/mine.sh"}]}]}}'
+OUT=$(merge "$OLD" "$(cat config/settings.json)")
+on() { printf '%s' "$OUT" | jq -c --arg m "$1" '[.hooks.PreToolUse[] | select(.matcher == $m) | .hooks[] | {command, onFailure}]'; }
+[[ "$(on 'Bash|Monitor')" == '[{"command":"~/.claude/hooks/bash-guards.sh","onFailure":"block"}]' ]] \
+  && pass "Bash|Monitor runs bash-guards alone, onFailure block" || fail "Bash|Monitor entry" "$(on 'Bash|Monitor')"
+[[ "$(on WebFetch)" == '[{"command":"~/.claude/hooks/network-guard.sh","onFailure":"block"}]' ]] \
+  && pass "network-guard stays on WebFetch" || fail "WebFetch entry" "$(on WebFetch)"
+[[ "$(on 'Write|Edit|MultiEdit|NotebookEdit')" == *'"~/.claude/hooks/config-guard.sh","onFailure":"block"'* ]] \
+  && pass "config-guard stays on the file tools" || fail "file tools entry" "$(on 'Write|Edit|MultiEdit|NotebookEdit')"
+[[ "$(on Bash)" == '[{"command":"/opt/mine.sh","onFailure":null}]' ]] \
+  && pass "the user's own Bash hook is kept" || fail "user's Bash hook" "$(on Bash)"
+LEFT=$(printf '%s' "$OUT" | jq -r '[.hooks.PreToolUse[] | select(.matcher | test("Bash")) | .hooks[].command
+  | select(test("(env|git|interpreter|kubectl|network|rm|config)-guard"))] | length')
+[[ "$LEFT" == 0 ]] && pass "no guard is left on a Bash matcher of its own, in either spelling" || fail "stale guard entries" "$LEFT"
 
 echo ""
 echo "=== a retired hook's entry leaves an installed settings.json ==="

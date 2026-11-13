@@ -158,15 +158,7 @@
     "PreToolUse": [
       {
         "matcher": "Bash|Monitor",
-        "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/env-guard.sh", "onFailure": "block" },
-          { "type": "command", "command": "~/.claude/hooks/git-guard.sh", "onFailure": "block" },
-          { "type": "command", "command": "~/.claude/hooks/interpreter-guard.sh", "onFailure": "block" },
-          { "type": "command", "command": "~/.claude/hooks/kubectl-guard.sh", "onFailure": "block" },
-          { "type": "command", "command": "~/.claude/hooks/network-guard.sh", "onFailure": "block" },
-          { "type": "command", "command": "~/.claude/hooks/rm-guard.sh", "onFailure": "block" },
-          { "type": "command", "command": "~/.claude/hooks/config-guard.sh", "onFailure": "block" }
-        ]
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/bash-guards.sh", "onFailure": "block" }]
       },
       {
         "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit|Grep",

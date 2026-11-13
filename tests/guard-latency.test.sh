@@ -4,7 +4,7 @@
 # 30 s on an 8,000-byte command while every suite passed.
 set -u
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
-export CLAUDE_AUDIT_LOG="$TMP/audit.log"
+export CLAUDE_AUDIT_LOG="$TMP/audit.log" CLAUDE_GUARD_TIMING_LOG="$TMP/timing.log"
 LIMIT=${GUARD_LATENCY_LIMIT:-10}
 PASS=0; FAIL=0
 
@@ -22,7 +22,7 @@ timed() {   # timed HOOK PAYLOAD LABEL
 each_guard() {
   local payload g
   payload=$(jq -nc --arg c "$1" '{tool_name:"Bash",tool_input:{command:$c},cwd:"/repo",session_id:"00000000-test"}')
-  for g in env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard tcc-check; do
+  for g in env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard bash-guards tcc-check; do
     timed "$g" "$payload" "$g"
   done
 }

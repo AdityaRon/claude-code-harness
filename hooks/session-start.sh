@@ -195,6 +195,14 @@ if [[ -f "$LATEST_FILE" && -f "$VERSION_FILE" ]] && in_budget release-nudge; the
   fi
 fi
 
+# --- the Bash guards' timing log ----------------------------------------------
+# bash-guards.sh appends a line a call with a builtin and never sizes the file.
+# Past 10 MB it moves to .1, replacing the last one; detached, as the prune is.
+TIMING_LOG=$(expand_tilde "${CLAUDE_GUARD_TIMING_LOG:-$HOME/.claude/logs/guard-timing.log}")
+if [[ -f "$TIMING_LOG" ]] && in_budget guard-timing; then
+  ( [[ -n "$(find "$TIMING_LOG" -size +10240k 2>/dev/null)" ]] && mv -f "$TIMING_LOG" "$TIMING_LOG.1" ) >/dev/null 2>&1 &
+fi
+
 # Resume-drift detection. Only meaningful for source=resume, and only when
 # jq and a prior snapshot both exist.
 [[ "$SOURCE" != "resume" ]] && exit 0

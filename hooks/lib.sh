@@ -2,6 +2,12 @@
 # Shared helpers for Claude Code harness hooks.
 # Source from every hook: source "$(dirname "$0")/lib.sh"
 
+# A Bash guard run by hooks/bash-guards.sh is a fork of it: this file is loaded
+# and the payload read once there, and HARNESS_PRESET says so. It is never
+# exported, so a guard's own `bash` child (check_inline_shellouts) loads this
+# file and reads its stdin as a hook run alone does.
+[[ -n "${HARNESS_PRESET:-}" ]] && return 0
+
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 # Bytes, not characters: macOS awk's substr cut a "⏎" in half, its regex match
@@ -612,6 +618,7 @@ in_scratch() {
 
 # Read full stdin once into $INPUT. Safe to call with no stdin.
 read_input() {
+  [[ -n "${HARNESS_PRESET:-}" ]] && return 0
   if [[ -t 0 ]]; then
     INPUT=""
   else
@@ -646,14 +653,26 @@ require_jq_or_deny() {
 require_parsable_or_deny() {
   [[ -z "$INPUT" ]] && return 0
   command -v jq &>/dev/null || return 0
-  printf '%s' "$INPUT" | jq empty 2>/dev/null && return 0
+  if [[ -n "${HARNESS_PRESET:-}" ]]; then [[ "${PRESET_OK:-}" == ok ]] && return 0
+  else printf '%s' "$INPUT" | jq empty 2>/dev/null && return 0; fi
   emit_deny "Blocked: the security harness could not parse this tool call as JSON, and it will not allow a command it cannot inspect. Retry the call; if it repeats, the hook input is malformed."
   exit 0
 }
 
 # Extract a field from $INPUT using jq. Empty if jq is missing or field absent.
+# Under the dispatcher the fields every Bash guard reads come from its one jq.
 jq_get() {
   local expr="$1"
+  if [[ -n "${HARNESS_PRESET:-}" ]]; then
+    case "$expr" in
+      .tool_input.command) printf '%s\n' "$PRESET_CMD"; return 0 ;;
+      .tool_name) printf '%s\n' "$PRESET_TOOL"; return 0 ;;
+      .cwd) printf '%s\n' "$PRESET_CWD"; return 0 ;;
+      .session_id) printf '%s\n' "$PRESET_SID"; return 0 ;;
+      .tool_input.url) printf '%s\n' "$PRESET_URL"; return 0 ;;
+      .tool_input.ws.url) printf '%s\n' "$PRESET_WS"; return 0 ;;
+    esac
+  fi
   if command -v jq &>/dev/null; then
     printf '%s\n' "$INPUT" | jq -r "$expr // \"\"" 2>/dev/null
   fi
@@ -674,7 +693,8 @@ log_decision() {
   command -v jq &>/dev/null && target=$(printf '%s' "$INPUT" \
     | jq -j '.tool_input | .command // .file_path // .path // .notebook_path // .url // .ws.url // ""' 2>/dev/null \
     | tr '\n\t' '  ' | head_utf8 200)
-  log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | GUARD | $1 | $(basename "$0" .sh) | ${target:-unknown} | $PWD"
+  # Under the dispatcher $0 is bash-guards.sh; GUARD_NAME names the guard.
+  log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | GUARD | $1 | ${GUARD_NAME:-$(basename "$0" .sh)} | ${target:-unknown} | $PWD"
 }
 
 # Emit a PreToolUse deny decision with a reason. Safe against quotes/backslashes.
@@ -894,6 +914,7 @@ inline_script_view() {
 # check_inline_shellouts TOOL OPQMODE runs this guard on each shell-out as a
 # command of its own, with the payload it was given, and answers as that run
 # does. Otherwise CMD becomes the command with the scripts' text taken out.
+# Under hooks/bash-guards.sh $0 is the dispatcher, and GUARD_SELF this guard.
 check_inline_shellouts() {
   local tool="$1" mode="$2" iv views v r d reason depth=${HARNESS_SHELLOUT_DEPTH:-0}
   case "$CMD" in *python*|*node*|*ruby*|*perl*|*php*|*bun*|*deno*) ;; *) return 0 ;; esac
@@ -911,7 +932,7 @@ check_inline_shellouts() {
       exit 0
     fi
     if (( depth >= 4 )) || ! r=$(printf '%s' "$INPUT" | jq -c --arg c "$v" '.tool_input.command = $c' \
-        | HARNESS_SHELLOUT_DEPTH=$((depth + 1)) CLAUDE_AUDIT_LOG=/dev/null bash "$0"); then
+        | HARNESS_SHELLOUT_DEPTH=$((depth + 1)) CLAUDE_AUDIT_LOG=/dev/null bash "${GUARD_SELF:-$0}"); then
       emit_ask "This guard could not check what an inline script hands a shell-out: $v"
       exit 0
     fi
