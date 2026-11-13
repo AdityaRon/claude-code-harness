@@ -12,8 +12,14 @@ description: How to write a PR review, answer review comments, and request revie
   follow it; a session launched outside the repo never auto-loads it. The shape
   below is the fallback for a repo with none.
 - Shape: open on the sources actually read, not the diff. Bold lead-ins for what
-  you chased down, each citing `file`:line. Asks numbered, ranked, non-blocking;
-  "Nit:" for trivia; label what is inherited, not introduced. Close "Net: approving".
+  you chased down, each citing `file`:line. Asks numbered and ranked, non-blocking
+  unless the next bullet says otherwise; "Nit:" for trivia; label what is
+  inherited, not introduced. Close "Net: approving" only when no ask blocks.
+- Rate an ask by its fail direction, not by how rare its trigger is. A path where
+  the change's own headline claim does not hold (a case-insensitive match that
+  still returns nothing once a second filter is set), or one that returns a silent
+  wrong answer marked complete (a paged read that reports nothing truncated after
+  it stopped early), is a `[blocking]` ask: it holds the approval until answered.
 - Read every review and inline thread already on the PR first. Leave out what
   another reviewer raised; where you would add to it, reply on their thread
   instead. A finding raised twice costs the author a second answer.
