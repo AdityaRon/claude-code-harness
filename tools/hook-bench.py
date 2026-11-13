@@ -180,7 +180,9 @@ def machine():
 
 def start_cost(env, cwd):
     out = {}
-    for label, cmd in (('bash -c :', ['bash', '-c', ':']), ('jq -n 1', ['jq', '-n', '1'])):
+    # `true` is the bare exec floor; a hook's own cost is its wall time past one `bash` start.
+    true = shutil.which('true') or '/usr/bin/true'
+    for label, cmd in (('true', [true]), ('bash -c :', ['bash', '-c', ':']), ('jq -n 1', ['jq', '-n', '1'])):
         ws = []
         for _ in range(20):
             t0 = time.perf_counter()
@@ -214,22 +216,25 @@ def render_md(r):
              'config/settings.json, run one at a time. Wait is the slowest hook of a call (Claude Code runs them in '
              'parallel); CPU is the sum. Process start here: '
              + ', '.join(f'`{k}` {v:.1f} ms' for k, v in r['process_start_ms'].items())
-             + ' (p50 of 20), so only same-run comparisons are meaningful.')
+             + ' (p50 of 20), so only same-run comparisons are meaningful. A machine whose process start is slower '
+             'pays it again for each process a hook starts: the last column is a hook\'s p50 past one `bash -c :`.')
     L += ['', '| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |', '|---|---:|---|---|---|---|']
     for cls, c in r['classes'].items():
         bw, hw, bc, hc = c['base']['wait'], c['head']['wait'], c['base']['cpu'], c['head']['cpu']
         L.append(f"| {cls} | {bw['n']} | {fmt_pair(bw['p50'], hw['p50'])} | {fmt_pair(bw['mean'], hw['mean'])} | "
                  f"{fmt_pair(bw['p95'], hw['p95'])} | {fmt_pair(bc['mean'], hc['mean'])} |")
-    L += ['', '| Hook | runs | wall p50 | wall p95 | CPU mean |', '|---|---:|---|---|---|']
+    floor = r['process_start_ms'].get('bash -c :', 0.0)
+    L += ['', '| Hook | runs | wall p50 | wall p95 | CPU mean | p50 past bash start |', '|---|---:|---|---|---|---|']
     for name, hk in r['hooks'].items():
         bw, hw = hk.get('base'), hk.get('head')
         if bw and hw:
             L.append(f"| {name} | {bw['wall']['n']} | {fmt_pair(bw['wall']['p50'], hw['wall']['p50'])} | "
-                     f"{fmt_pair(bw['wall']['p95'], hw['wall']['p95'])} | {fmt_pair(bw['cpu']['mean'], hw['cpu']['mean'])} |")
+                     f"{fmt_pair(bw['wall']['p95'], hw['wall']['p95'])} | {fmt_pair(bw['cpu']['mean'], hw['cpu']['mean'])} | "
+                     f"{bw['wall']['p50'] - floor:.1f} → {hw['wall']['p50'] - floor:.1f} ms |")
         else:
             side, s = ('base only', bw) if bw else ('head only', hw)
             L.append(f"| {name} | {s['wall']['n']} | {s['wall']['p50']:.1f} ms ({side}) | {s['wall']['p95']:.1f} ms | "
-                     f"{s['cpu']['mean']:.1f} ms |")
+                     f"{s['cpu']['mean']:.1f} ms | {s['wall']['p50'] - floor:.1f} ms |")
     d = r['decisions']
     L += ['', f"Decisions: {d['same']} of {d['same'] + len(d['changed'])} payloads got the same answer on both sides."]
     if d['changed']:

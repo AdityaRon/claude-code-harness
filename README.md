@@ -17,6 +17,8 @@ a same-run table against the previous tag (`.github/workflows/release.yml`).
 Asks cost more time: in 49 days of one machine's transcripts
 (`docs/permission-friction.md`), 849 of 872 guard asks were approved, and the
 median approved ask held its call 133 s, against 5 s for a Bash call with no prompt.
+On your own machine, `bash doctor.sh --latency` reads each hook's wall time per day from
+Claude Code's transcripts, and `bash doctor.sh --census` counts claude processes and their memory.
 
 ## Install and update
 
@@ -241,6 +243,9 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts
+  hook-latency.py        ← each hook's wall time per day, from local transcripts (doctor.sh --latency)
+  hooknames.py           ← names the hook a transcript record numbers, for the two above
+  session-census.py      ← claude processes, their memory, and idle background jobs (doctor.sh --census)
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json
 hooks/                   ← one file per hook, plus shared lib.sh
 rules/                   ← installed to ~/.claude/rules, loaded in every session
