@@ -23,7 +23,7 @@ Absolute numbers depend on the machine (process start cost varies 3x between
 laptops), which is why both sides run in the same process on the same corpus
 and only the comparison is reported as a verdict.
 """
-import argparse, hashlib, io, json, os, platform, re, resource, shutil, statistics, subprocess, sys, tarfile, tempfile, time
+import argparse, hashlib, io, json, os, platform, re, resource, shutil, statistics, subprocess, sys, tarfile, tempfile, threading, time
 
 RANK = {'allow': 0, 'ask': 2, 'deny': 3, 'error': 4}
 CLASSES = {'Bash': 'Bash', 'Write': 'Write/Edit', 'Edit': 'Write/Edit', 'MultiEdit': 'Write/Edit',
@@ -84,6 +84,66 @@ def hooks_for(side, tool):
     return out
 
 
+TOGETHER = False   # --together: a call's hooks launched at once, as Claude Code does
+
+
+def decide(rc, stdout):
+    if rc == 2:
+        return 'deny'
+    if rc != 0:
+        return 'error'
+    out = stdout.decode('utf-8', 'replace').strip()
+    if not out:
+        return 'allow'
+    try:
+        dec = (json.loads(out).get('hookSpecificOutput') or {}).get('permissionDecision') or 'allow'
+    except (ValueError, AttributeError):
+        return 'error'
+    return dec if dec in RANK else 'error'
+
+
+def run_together(hooks, payload, env, cwd, timeout=30):
+    """A call's hooks launched at once: ({name: (ms to its exit, cpu ms, decision)}, ms from the first
+    launch to the last exit). Each child's CPU is its own wait4 rusage: itself and what it waited for."""
+    t0 = time.perf_counter()
+    procs = {}
+    for name, path in hooks:
+        p = subprocess.Popen(['bash', path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, env=env, cwd=cwd)
+        procs[p.pid] = (name, p)
+    outs = {}
+
+    def feed(pid, p):
+        try:
+            p.stdin.write(payload)
+            p.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        outs[pid] = p.stdout.read()
+    threads = [threading.Thread(target=feed, args=(pid, p), daemon=True) for pid, (_, p) in procs.items()]
+    for t in threads:
+        t.start()
+    killer = threading.Timer(timeout, lambda: [p.kill() for _, p in procs.values() if p.returncode is None])
+    killer.start()
+    done, pending = {}, set(procs)
+    while pending:
+        pid, status, ru = os.wait4(-1, 0)
+        if pid not in pending:
+            continue
+        pending.discard(pid)
+        procs[pid][1].returncode = os.waitstatus_to_exitcode(status)
+        done[pid] = ((time.perf_counter() - t0) * 1000.0, (ru.ru_utime + ru.ru_stime) * 1000.0)
+    wall = (time.perf_counter() - t0) * 1000.0
+    killer.cancel()
+    for t in threads:
+        t.join()
+    per = {}
+    for pid, (name, p) in procs.items():
+        w, c = done[pid]
+        per[name] = (w, c, 'error' if p.returncode < 0 else decide(p.returncode, outs.get(pid, b'')))
+    return per, wall
+
+
 def run_hook(path, payload, env, cwd, timeout=30):
     """(wall ms, cpu ms, decision) for one hook on one payload."""
     r0 = resource.getrusage(resource.RUSAGE_CHILDREN)
@@ -119,15 +179,19 @@ def run_call(side, row, env, cwd):
     e.update({k: str(v) for k, v in (row.get('env') or {}).items()})
     per = {}
     worst, by = 'allow', ''
-    for name, path in hooks_for(side, row['tool_name']):
+    hooks = hooks_for(side, row['tool_name'])
+    wall = None
+    if TOGETHER:
+        per, wall = run_together([(n, p) for n, p in hooks if p is not None], payload, e, cwd)
+    for name, path in hooks:
         if path is None:
             per[name] = (0.0, 0.0, 'missing')
             continue
-        w, c, d = run_hook(path, payload, e, cwd)
-        per[name] = (w, c, d)
-        if RANK[d] > RANK[worst]:
-            worst, by = d, name
-    return {'wait': max((v[0] for v in per.values()), default=0.0),
+        if not TOGETHER:
+            per[name] = run_hook(path, payload, e, cwd)
+        if RANK[per[name][2]] > RANK[worst]:
+            worst, by = per[name][2], name
+    return {'wait': wall if wall is not None else max((v[0] for v in per.values()), default=0.0),
             'cpu': sum(v[1] for v in per.values()), 'decision': worst, 'by': by, 'hooks': per}
 
 
@@ -213,8 +277,11 @@ def render_md(r):
              f"Corpus {r['corpus']['name']}{note}: {r['corpus']['count']} payloads ({counts})"
              f"{', x' + str(r['repeat']) if r['repeat'] > 1 else ''}, each run through both sides, "
              'alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in '
-             'config/settings.json, run one at a time. Wait is the slowest hook of a call (Claude Code runs them in '
-             'parallel); CPU is the sum. Process start here: '
+             + ('config/settings.json, launched together as Claude Code does. Wait is from the first launch to the '
+                'last exit; CPU is the sum of each hook\'s own, and a hook\'s wall includes its share of the wait for '
+                'a core. Process start here: ' if r.get('together') else
+                'config/settings.json, run one at a time. Wait is the slowest hook of a call (Claude Code runs them in '
+                'parallel); CPU is the sum. Process start here: ')
              + ', '.join(f'`{k}` {v:.1f} ms' for k, v in r['process_start_ms'].items())
              + ' (p50 of 20), so only same-run comparisons are meaningful. A machine whose process start is slower '
              'pays it again for each process a hook starts: the last column is a hook\'s p50 past one `bash -c :`.')
@@ -261,6 +328,7 @@ def main():
     ap.add_argument('--corpus', default='tests/bench-corpus.jsonl', help="JSONL file, or 'audit[:PATH]' for this machine's audit log")
     ap.add_argument('--quick', action='store_true', help='every third payload (CI)')
     ap.add_argument('--repeat', type=int, default=1, help='passes over the corpus')
+    ap.add_argument('--together', action='store_true', help="launch a call's hooks at once, as Claude Code does")
     ap.add_argument('--gate', action='store_true', help='exit 1 on a regression or an unintended decision change')
     ap.add_argument('--intended', default='', help="payload ids whose decision may change, comma or space separated, or 'all'")
     ap.add_argument('--limit-pct', type=float, default=20.0, help='p50/p95 wait may grow by this much (default 20)')
@@ -269,6 +337,8 @@ def main():
     ap.add_argument('--md', help='write the markdown report here (always printed to stdout)')
     ap.add_argument('--json', help='write the full result here')
     a = ap.parse_args()
+    global TOGETHER
+    TOGETHER = a.together
 
     repo = os.path.abspath(a.repo)
     base = a.base or git(repo, 'describe', '--tags', '--abbrev=0', check=False)
@@ -373,7 +443,7 @@ def main():
                        'sha256': '' if local else hashlib.sha256(open(cpath, 'rb').read()).hexdigest(),
                        'tools': dict(sorted(((t, sum(1 for r in rows if r['tool_name'] == t)) for t in {r['tool_name'] for r in rows}),
                                             key=lambda kv: -kv[1]))},
-            'repeat': a.repeat, 'quick': a.quick, 'elapsed_s': round(elapsed, 1),
+            'repeat': a.repeat, 'together': a.together, 'quick': a.quick, 'elapsed_s': round(elapsed, 1),
             'process_start_ms': start_cost(env, home),
             'classes': class_out, 'hooks': hook_out,
             'decisions': {'same': same, 'changed': changed},
