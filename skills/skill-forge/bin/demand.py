@@ -82,11 +82,16 @@ INTERP_VALUE_FLAGS = {"-W", "-X", "-Q"}
 SCRIPT = re.compile(r"\.(?:py|sh|js|ts|rb|pl)$")
 SKILL_SCRIPT = re.compile(r"(?:^|/)skills/([\w.-]+)/(?:bin/)?([\w.-]+)$")
 MODULE = re.compile(r"[A-Za-z_][\w.]{0,40}")
-# Ported from hooks/lib.sh's HEREDOC_AWK (hd_scan, hd_word, hd_shell, hd_bad_end), not
-# imported: this skill installs alone. tests/heredoc-openers.test.sh holds the two together.
+# Ported from hooks/lib.sh's HEREDOC_AWK (hd_scan, hd_word, hd_bad_end), not imported:
+# this skill installs alone. tests/heredoc-openers.test.sh holds the two together.
 HD_WORD = re.compile(r"[A-Za-z0-9_.-]+")
-HD_SHELL = re.compile(r"(?:^|[^A-Za-z0-9_.-])(?:ba|z|da|k|fi|s)?sh(?:[^A-Za-z0-9_.-]|$)"
-                      r"|\$\{?SHELL(?:[^A-Za-z0-9_]|$)|(?:^|[;&|(])[ \t]*(?:eval|source|\.)[ \t]")
+# Not lib.sh's hd_shell, on purpose: a guard keeps a body whenever its line names a
+# shell (its safe side), while a counter keeps one only when a shell runs it, so a
+# PR title or a path naming bash does not turn the body into counted commands.
+SHELL_CMD = re.compile(r"(?:^|[;&|(`]|\$\()[ \t]*(?:(?:sudo|exec|command|nohup|env)(?:[ \t]+-\S+)*[ \t]+)*"
+                       r"(?:[A-Za-z_]\w*=\S*[ \t]+)*(?:(?:/[\w.-]+)*/)?"
+                       r"(?:(?:ba|z|da|k|fi|s)?sh|\$\{?SHELL\}?)(?=[ \t;&|)]|$)"
+                       r"|(?:^|[;&|(`]|\$\()[ \t]*(?:eval|source|\.)[ \t]")
 HD_SUB = re.compile(r"\$\(|`")
 # Re-login and session checks: None means every subcommand is one. A tool that also
 # does the work (tsh ssh, aws-vault exec) lists only its login subcommands, one or two words.
@@ -287,19 +292,20 @@ class Heredocs:
 
 
 def drop_heredocs(cmd: str) -> str:
-    """Heredoc bodies and their terminators out, unless the line feeds a shell;
-    an unterminated one runs to the end. A << bash's reading of which is unsure
-    leaves the command as typed."""
+    """Heredoc bodies and their terminators out, unless a shell runs the body;
+    an unterminated one runs to the end. Where bash's reading is unsure, the text
+    from there on stays as typed, and the bodies dropped before it stay dropped."""
     if "<<" not in cmd:
         return cmd
-    hd, out, term, dash, keep = Heredocs(), [], None, False, False
-    for line in cmd.split("\n"):
+    lines = cmd.split("\n")
+    hd, out, term, dash, keep, start, kept = Heredocs(), [], None, False, False, 0, 0
+    for i, line in enumerate(lines):
         if term is not None:
             t = line.lstrip("\t") if dash else line
             if t == term:
                 term = None
             elif hd.insub and t == term + ")":
-                return cmd
+                return "\n".join(out[:kept] + lines[start:])   # this body as typed
             elif keep:
                 out.append(line)
             continue
@@ -307,10 +313,10 @@ def drop_heredocs(cmd: str) -> str:
         try:
             found = hd.scan(line)
         except ValueError:
-            return cmd
+            return "\n".join(out + lines[i + 1:])
         if found:
             _, term, dash, _ = found
-            keep = bool(HD_SHELL.search(line))
+            keep, start, kept = bool(SHELL_CMD.search(line)), i + 1, len(out)
     return "\n".join(out)
 
 

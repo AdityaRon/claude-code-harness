@@ -66,11 +66,11 @@ CASES=(
 )
 
 echo "=== bash runs the marker: every stripper keeps it ==="
-n=0
+n=0; RUNS=()   # the cases bash runs, for demand.py below
 for ((i = 0; i < ${#CASES[@]}; i += 2)); do
   label=${CASES[$i]}; cmd=${CASES[$((i + 1))]}
   if ! runs_in_bash "$cmd"; then fail "$label" "(bash did not run the marker: the case is wrong)"; continue; fi
-  n=$((n + 1))
+  n=$((n + 1)); RUNS+=("$i")
   for fn in strip_message_heredocs strip_inert_heredocs drop_data_heredocs; do
     out=$("$fn" "$cmd")
     keeps "$out" && pass "$label: $fn keeps it" || fail "$label: $fn dropped a line bash runs" "[$out]"
@@ -190,8 +190,10 @@ echo ""
 echo "=== skill-forge's demand.py reads heredocs as bash does ==="
 # demand.py counts the commands a session runs; a body read as commands, or a
 # command read as a body, miscounts them. Same cases, same oracle.
-DPY=$(bash skills/comms-hub/bin/python.sh 2>/dev/null)
-if [ -z "$DPY" ]; then echo "  SKIP: no Python 3.10+ with a TOML reader"
+DPY=$(bash skills/skill-forge/bin/python.sh 2>/dev/null)
+if [ -z "$DPY" ]; then
+  # CI sets up Python 3.12: a skip there would leave the parity check unable to fail.
+  if [ -n "${CI:-}" ]; then fail "demand.py parity" "no Python 3.10+ in CI"; else echo "  SKIP: no Python 3.10+ with a TOML reader"; fi
 else
   demand_keeps() {   # each command, NUL-ended, on stdin: 1 if drop_heredocs keeps the marker line
     "$DPY" -c '
@@ -199,13 +201,36 @@ import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
 for c in sys.stdin.read().split("\0")[:-1]:
     print(int("echo HDMARK" in demand.drop_heredocs(c).split("\n")))'
   }
-  RUNS=(); KEEP=()
-  for ((i = 0; i < ${#CASES[@]}; i += 2)); do runs_in_bash "${CASES[$((i + 1))]}" && RUNS+=("$i"); done
+  KEEP=()
   while IFS= read -r k; do KEEP+=("$k"); done < <(for i in "${RUNS[@]}"; do printf '%s\0' "${CASES[$((i + 1))]}"; done | demand_keeps)
   for j in "${!RUNS[@]}"; do
     label=${CASES[${RUNS[$j]}]}
     [ "${KEEP[$j]}" = 1 ] && pass "$label: demand.py keeps it" || fail "$label: demand.py dropped a line bash runs" ""
   done
+  [ "${#KEEP[@]}" -ge 25 ] && pass "demand.py read ${#KEEP[@]} cases bash runs" || fail "demand.py's cases" "only ${#KEEP[@]}"
+  # A counter keeps a body only when a shell runs it; lib.sh keeps one whenever
+  # its line names a shell, so these are demand.py's alone.
+  DEMAND_DROPS=(
+    "a PR title naming bash"   $'gh pr create --title "hooks: bash 3.2 fix" --body-file - <<\'EOF\'\n'"$M"$'\nEOF'
+    "a path naming sh"         $'cat > /etc/profile.d/x.sh <<\'EOF\'\n'"$M"$'\nEOF'
+    "an unreadable line after a body" $'cat > notes.md <<\'EOF\'\n'"$M"$'\nEOF\necho "${OUT:-\'none\'}"'
+  )
+  DD=()
+  while IFS= read -r k; do DD+=("$k"); done < <(for ((i = 1; i < ${#DEMAND_DROPS[@]}; i += 2)); do printf '%s\0' "${DEMAND_DROPS[$i]}"; done | demand_keeps)
+  for ((i = 0; i < ${#DEMAND_DROPS[@]}; i += 2)); do
+    [ "${DD[$((i / 2))]}" = 0 ] && pass "${DEMAND_DROPS[$i]}: demand.py drops the body" || fail "${DEMAND_DROPS[$i]}: demand.py counts a body no shell runs" ""
+  done
+  # Not a bash-oracle case: the oracle runs under env -i, where $SHELL is unset.
+  [ "$(printf '%s\0' $'cat <<\'EOF\' | $SHELL\n'"$M"$'\nEOF' | demand_keeps)" = 1 ] \
+    && pass "a body piped to \$SHELL: demand.py keeps it" || fail "a body piped to \$SHELL: demand.py dropped it" ""
+  # A quote inside backticks that holds a backtick: hd_scan's HD_BAD, demand.py's ValueError.
+  r=$("$DPY" -c '
+import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
+try:
+    demand.Heredocs().scan(sys.argv[1]); print("read")
+except ValueError:
+    print("unreadable")' 'echo "`echo "x`"; true')
+  [ "$r" = unreadable ] && pass "demand.py: a backtick-holding quote inside backticks is unreadable" || fail "demand.py read a backtick-holding quote inside backticks" "$r"
   DKEEP=()
   while IFS= read -r k; do DKEEP+=("$k"); done < <(for ((i = 1; i < ${#DROPS[@]}; i += 2)); do printf '%s\0' "${DROPS[$i]}"; done | demand_keeps)
   for ((i = 0; i < ${#DROPS[@]}; i += 2)); do
