@@ -194,10 +194,13 @@ check_word() {   # check_word WORD DESTRUCTIVE [TREE]
 # A copy or move into folder DEST writes DEST/NAME for each source. A source
 # given as its contents (dir/, dir/., a glob) writes names the command does not
 # show, so DEST itself is the target. Either way the target is checked as a tree:
-# `cp -R x/.claude ~/` merges into ~/.claude.
+# `cp -R x/.claude ~/` merges into ~/.claude. One source to a name that is not a
+# folder yet (no trailing /) is copied to that name: `mv .claude .claude.bak`.
 check_into() {   # check_into DEST SOURCE...
   local dest=$1 s b
   shift
+  s=${dest//\"/}; s=${s//\'/}
+  if [[ $# -eq 1 && "$s" != */ && ! -d "$(abs_path "$s")" ]]; then check_word "$dest" 0 tree; return; fi
   for s in "$@"; do
     s=${s//\"/}; s=${s//\'/}
     case "$s" in [!/]*:*) s=${s#*:} ;; esac   # host:path, as scp and rsync take it
@@ -307,9 +310,9 @@ scan_segment() {
   n=${#ops[@]}
   case "$c" in
     ln|cp|install|rsync|scp|mv)
-      if [[ -n "$tdir" ]]; then [[ $n -gt 0 ]] && check_into "$tdir" "${ops[@]}"
+      if [[ -n "$tdir" ]]; then [[ $n -gt 0 ]] && check_into "$tdir/" "${ops[@]}"
       elif [[ $n -gt 1 ]]; then check_into "${ops[n-1]}" "${ops[@]:0:n-1}"
-      elif [[ "$c" == ln && $n == 1 ]]; then check_into . "${ops[0]}"; fi ;;
+      elif [[ "$c" == ln && $n == 1 ]]; then check_into ./ "${ops[0]}"; fi ;;
     ditto) [[ $n -gt 0 ]] && check_word "${ops[n-1]}" 0 tree ;;   # copies each source's contents
     tar) [[ -n "$extract" ]] && for w in "${xdirs[@]:-.}"; do check_word "$w" 0 tree; done ;;
     unzip) [[ -z "$listing" ]] && for w in "${xdirs[@]:-.}"; do check_word "$w" 0 tree; done ;;
