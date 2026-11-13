@@ -188,7 +188,7 @@ function hd_word(s, i,    j, c, k, w) {
   }
   c = substr(s, j, 1)
   if (c != "" && c !~ /[ \t;&|()<>]/) return 0
-  HD_POS = i; HD_LEN = j - i; HD_TERM = w
+  HD_POS = i; HD_LEN = j - i; HD_TERM = w; HB_Q = ""; HB_DEP = 0
   return 1
 }
 # With HD_CLS set, hd_scan also records in HCLS the class of each ( ) { } ; & |
@@ -211,6 +211,7 @@ function hd_btq(s, i, c,    j, d, n) {
 }
 function hd_scan(s,    i, n, c, j, w) {
   HD_POS = 0; HD_LEN = 0; HD_BAD = 0; n = length(s); hesc = -1
+  if (HB_TAIL != "" && index(s, HB_TAIL)) { HD_BAD = 1; return }
   if (HD_CLS) { split("", HCLS); HDS = s }
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
@@ -247,6 +248,8 @@ function hd_scan(s,    i, n, c, j, w) {
     }
     if (c == "(" && substr(s, i + 1, 1) == "(") { j = hd_arith(s, i); if (!j) { HD_BAD = 1; return } i = j; continue }
     if (c == "$" && substr(s, i + 1, 1) == "[") { j = index(substr(s, i), "]"); if (!j) { HD_BAD = 1; return } i += j - 1; continue }
+    # x=$(cat <<EOF) ends the substitution on the opener line, in zsh too.
+    if (HD_POS && HD_INSUB && c == ")") { HD_BAD = 1; return }
     if (hsp > 0 && !hbtf[hsp] && c == "(") hdep[hsp]++
     if (hsp > 0 && !hbtf[hsp] && c == ")" && --hdep[hsp] == 0) { hd_span(i, i, hd_ctx(hup[hsp])); hq = hup[hsp--]; continue }
     # A case pattern ) would close the $( ) early (bash 3.2 rejects it, zsh runs on).
@@ -255,12 +258,12 @@ function hd_scan(s,    i, n, c, j, w) {
       if (substr(s, i + 2, 1) == "<") { i += 2; continue }
       if (hbt || HD_POS || (hsp > 0 && hbtf[hsp])) { HD_BAD = 1; return }
       if (!hd_word(s, i)) { HD_BAD = 1; return }
-      HD_INSUB = HD_SUBSEEN || substr(s, 1, i) ~ /\$\(|`/
+      HD_INSUB = HD_SUBSEEN || substr(s, 1, i) ~ /\$\(|`|[<>]\(/
       hd_span(i, i + HD_LEN - 1, "q"); i += HD_LEN - 1
     }
   }
   hcont = (hesc == n + 1)
-  if (s ~ /\$\(|`/) HD_SUBSEEN = 1
+  if (s ~ /\$\(|`|[<>]\(/) HD_SUBSEEN = 1
   if (HD_POS && (hq != "" || hcont)) HD_BAD = 1
 }
 # The classes of a whole command held in line[1..nl]: CLS[k, i] for line k, and
@@ -272,12 +275,12 @@ function hd_scan(s,    i, n, c, j, w) {
 function sh_save(   k) { sq = hq; ssp = hsp; sbt = hbt; scont = hcont; for (k = 1; k <= hsp; k++) { sup[k] = hup[k]; sdep[k] = hdep[k]; sbtf[k] = hbtf[k] } }
 function sh_restore(   k) { hq = sq; hsp = ssp; hbt = sbt; hcont = scont; for (k = 1; k <= ssp; k++) { hup[k] = sup[k]; hdep[k] = sdep[k]; hbtf[k] = sbtf[k] } }
 function sh_classify(nl,    k, t, i, body, lit, shell, found, insub, nb) {
-  SH_BAD = 0; split("", CLS); split("", DATA); split("", BODY); HD_CLS = 1
+  SH_BAD = 0; split("", CLS); split("", DATA); split("", BODY); HD_CLS = 1; HB_TAIL = ""
   hq = ""; hsp = 0; hbt = 0; hcont = 0
   for (k = 1; k <= nl; k++) {
     if (body) {
-      if (hd_end(line[k])) { body = 0; sh_restore(); continue }
       if (hd_bad_end(line[k])) { SH_BAD = 1; return }
+      if (hd_end(line[k])) { body = 0; sh_restore(); continue }
       if (!shell) BODY[k] = nb
       # After a $( or backtick, bash 3.2 can end the substitution at a ) in the
       # body and run the rest, so such a body is code, and is not scanned.
@@ -298,9 +301,44 @@ function sh_classify(nl,    k, t, i, body, lit, shell, found, insub, nb) {
   }
 }
 function hd_end(s) { if (HD_DASH) sub(/^\t+/, "", s); return s == HD_TERM }
-# Inside $( ), bash 3.2 also ends a body at a line like EOF) and zsh does not.
-# After a $( or backtick anywhere before the opener, such a line is unreadable.
-function hd_bad_end(s) { if (HD_DASH) sub(/^\t+/, "", s); return HD_INSUB && s == HD_TERM ")" }
+# bash 3.2, not zsh, reads a body inside $( ), <( ) or backticks with the substitution
+# scanner: EOF), a ) past the parens it opened, or a quote open at the terminator
+# change what runs, so each is unreadable (1). Call it before hd_end, terminator too.
+function hd_bad_end(s,    t) {
+  if (HB_TAIL != "" && index(s, HB_TAIL)) return 1
+  if (!HD_INSUB) return 0
+  t = s; if (HD_DASH) sub(/^\t+/, "", t)
+  if (t == HD_TERM) {
+    if (HB_Q != "") { HB_TAIL = HB_Q == "B" ? "`" : HB_Q; return 0 }
+    return HB_DEP != 0
+  }
+  return t == HD_TERM ")" || hd_body(s)
+}
+# One body line through that scanner: HB_Q its open quote (B a backtick in
+# double quotes), HB_DEP its open parens. A comment holding a paren, quote,
+# backtick or backslash is unreadable: bash honours it in some frames only.
+function hd_body(s,    i, n, c) {
+  n = length(s)
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (HB_Q == "\047") { if (c == "\047") HB_Q = ""; continue }
+    if (HB_Q == "`" || HB_Q == "B") { if (c == "\\") i++; else if (c == "`") HB_Q = HB_Q == "B" ? "\"" : ""; continue }
+    if (HB_Q == "\"") {
+      if (c == "\\") i++
+      else if (c == "\"") HB_Q = ""
+      else if (c == "`") HB_Q = "B"
+      else if (c == "$" && substr(s, i + 1, 1) ~ /[({[]/) return 1
+      continue
+    }
+    if (c == "\\") { i++; continue }
+    if (c == "\047") { if (i > 1 && substr(s, i - 1, 1) == "$") return 1; HB_Q = "\047"; continue }
+    if (c == "\"" || c == "`") { HB_Q = c; continue }
+    if (c == "(") { HB_DEP++; continue }
+    if (c == ")") { if (--HB_DEP < 0) return 1; continue }
+    if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t]/)) return substr(s, i + 1) ~ /[()\047"`\\]/
+  }
+  return 0
+}
 # A body some shell reads: a shell named on the line, $SHELL, or eval, source
 # or . in command position.
 function hd_shell(s) { return s ~ /(^|[^A-Za-z0-9_.-])(ba|z|da|k|fi|s)?sh([^A-Za-z0-9_.-]|$)|\$\{?SHELL([^A-Za-z0-9_]|$)|(^|[;&|(])[ \t]*(eval|source|\.)[ \t]/ }
