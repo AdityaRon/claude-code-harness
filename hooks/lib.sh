@@ -268,15 +268,17 @@ function hd_scan(s,    i, n, c, j, w) {
 # cannot read. The quote state around a body is kept for the line after it
 # (`-m "$(cat <<EOF` ... `)"`); a body fed to a shell starts fresh. An opener with
 # no terminator line (a caller dropped the body) leaves the lines after it code.
+# BODY[k] numbers the lines of each body no shell reads, data or not scanned.
 function sh_save(   k) { sq = hq; ssp = hsp; sbt = hbt; scont = hcont; for (k = 1; k <= hsp; k++) { sup[k] = hup[k]; sdep[k] = hdep[k]; sbtf[k] = hbtf[k] } }
 function sh_restore(   k) { hq = sq; hsp = ssp; hbt = sbt; hcont = scont; for (k = 1; k <= ssp; k++) { hup[k] = sup[k]; hdep[k] = sdep[k]; hbtf[k] = sbtf[k] } }
-function sh_classify(nl,    k, t, i, body, lit, shell, found, insub) {
-  SH_BAD = 0; split("", CLS); split("", DATA); HD_CLS = 1
+function sh_classify(nl,    k, t, i, body, lit, shell, found, insub, nb) {
+  SH_BAD = 0; split("", CLS); split("", DATA); split("", BODY); HD_CLS = 1
   hq = ""; hsp = 0; hbt = 0; hcont = 0
   for (k = 1; k <= nl; k++) {
     if (body) {
       if (hd_end(line[k])) { body = 0; sh_restore(); continue }
       if (hd_bad_end(line[k])) { SH_BAD = 1; return }
+      if (!shell) BODY[k] = nb
       # After a $( or backtick, bash 3.2 can end the substitution at a ) in the
       # body and run the rest, so such a body is code, and is not scanned.
       if (insub && !shell) continue
@@ -291,7 +293,7 @@ function sh_classify(nl,    k, t, i, body, lit, shell, found, insub) {
     if (!HD_POS) continue
     found = 0; for (t = k + 1; t <= nl; t++) if (hd_end(line[t])) { found = 1; break }
     if (!found) continue
-    body = 1; lit = HD_LIT; shell = hd_shell(line[k]); insub = HD_INSUB; sh_save()
+    body = 1; nb++; lit = HD_LIT; shell = hd_shell(line[k]); insub = HD_INSUB; sh_save()
     hq = (shell || lit) ? "" : "H"; hsp = 0; hbt = 0; hcont = 0
   }
 }
@@ -450,6 +452,9 @@ drop_data_heredocs() {
 # data or in ${ } inside quotes no longer runs on over the lines after it. On a
 # command hd_scan cannot read it prints the old reading and returns 3: a guard
 # asks, since neither hiding nor keeping a separator is safe there.
+# A body no shell reads may be a script run later, where a quote spans lines:
+# the reading carried from the body's first line is printed after the command
+# where it differs, so the lines a guard replays in order (cd) stay in order.
 neutralize_quoted_separators() {
   case "$1" in *'&'*|*';'*|*'|'*) ;; *) printf '%s' "$1"; return ;; esac
   printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
@@ -478,17 +483,26 @@ neutralize_quoted_separators() {
     { line[NR] = $0 }
     END {
       sh_classify(NR)
+      if (!SH_BAD) for (k = 1; k <= NR; k++) if (k in BODY) {
+        if (!((k - 1) in BODY) || BODY[k - 1] != BODY[k]) { oq = ""; osp = 0 }
+        alt[k] = naive(line[k])
+      }
+      oq = ""; osp = 0; extra = ""
       for (k = 1; k <= NR; k++) {
         if (SH_BAD) { print naive(line[k]); continue }
-        if (DATA[k]) { oq = ""; osp = 0; print naive(line[k]); continue }
-        s = line[k]; out = ""; n = length(s)
-        for (i = 1; i <= n; i++) {
-          c = substr(s, i, 1)
-          if (index(";&|", c) && CLS[k, i] == "q") c = hide(c)
-          out = out c
+        if (DATA[k]) { oq = ""; osp = 0; out = naive(line[k]) }
+        else {
+          s = line[k]; out = ""; n = length(s)
+          for (i = 1; i <= n; i++) {
+            c = substr(s, i, 1)
+            if (index(";&|", c) && CLS[k, i] == "q") c = hide(c)
+            out = out c
+          }
         }
         print out
+        if ((k in BODY) && alt[k] != out) extra = extra alt[k] "\n"
       }
+      printf "%s", extra
       if (SH_BAD) exit 3
     }'
 }

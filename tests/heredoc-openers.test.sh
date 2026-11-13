@@ -343,6 +343,12 @@ BLOCK=(
   "env-guard|x=\"${BT}true #${BT}\"${NL}echo ${BT}true ; cat .env ; true${BT}"
   "rm-guard|git commit -m \"\$(cat <<'EOF'${NL}a )\" ; rm -rf ~/ ; echo \"${NL}EOF${NL})\""
   "rm-guard|git commit -m \"\$(cat <<'EOF'${NL}a )\" ; (rm -rf ~/) ; echo \"${NL}EOF${NL})\""
+  # A script body: a quote spans its lines (both readings are kept).
+  "env-guard|cat > x.sh <<'EOF'${NL}x='${NL}'; cat .env${NL}EOF${NL}bash x.sh"
+  "rm-guard|cat > x.sh <<EOF${NL}x=\"${NL}\" && rm -rf ~/${NL}EOF${NL}bash x.sh"
+  "env-guard|d=\$(pwd); cat > x.sh <<'EOF'${NL}grep \"a|b\" .env${NL}EOF${NL}bash x.sh"
+  "env-guard|cat > x.sh <<'EOF'${NL}# it's${NL}true; cat .env${NL}EOF${NL}bash x.sh"
+  "env-guard|cat > a.sh <<'EOF'${NL}it's${NL}EOF${NL}cat > x.sh <<'EOF'${NL}x='${NL}'; cat .env${NL}EOF${NL}bash x.sh"
 )
 MSG="Fix it's \"quoted\" and ${BT}code${BT} in case x) we"
 ALLOW=(
