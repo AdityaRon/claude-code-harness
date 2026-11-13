@@ -1,0 +1,3 @@
+# skill_lint reads this manifest. The scripts SKILL.md runs that install.sh
+# puts in ~/.claude; C10 fails one SKILL.md names and this does not list.
+uses = ["~/.claude/memory-verify.sh"]

@@ -10,9 +10,10 @@ Mutations that must turn this file red:
   shared-tests-not-vendored: forge.py: `shutil.copy2(shared / t, out / "tests" / t)` => `pass`
   install-without-apply: forge.py: `    if not apply:` => `    if False:`
   harness-allowed: forge.py: `    if harness:` => `    if False:`
+  any-forge-toml-is-a-draft: forge.py: `if "archetype" not in (read_toml(out / "forge.toml") if (out / "forge.toml").is_file() else {}):` => `if not (out / "forge.toml").is_file():`
   lint-skipped: forge.py: `    if failing:` => `    if False:`
   question-unrecorded: forge.py: `    record(name, m.get("question", "?"), m.get("archetype", "?"), dest)` => `    pass`
-  non-draft-replaced: forge.py: `if not (out / "forge.toml").is_file():` => `if False:`
+  non-draft-replaced: forge.py: `raise ValueError(f"{out} exists and is not a draft` => `print(f"{out}`
   bad-name-allowed: forge.py: `if not NAME.fullmatch(name):` => `if False:`
   yaml-unquoted: forge.py: `if ": " in text or " #" in text or` => `if False and`
   guards-dropped: forge.py: `f"guards = {toml_value(spec.get('guards', []))}",` => `"guards = []",`
@@ -137,6 +138,14 @@ class RenderTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 forge.draft("runbook", "alert-triage", "q", out=tmp / "mine", force=True)
             self.assertTrue((tmp / "mine" / "notes.txt").exists())
+            # A hand-written skill may hold a forge.toml for the lint (uses, [tests]):
+            # without an archetype it is still not a draft.
+            (tmp / "mine" / "forge.toml").write_text('uses = ["~/.claude/memory-verify.sh"]\n')
+            with self.assertRaisesRegex(ValueError, "not a draft"):
+                forge.draft("runbook", "alert-triage", "q", out=tmp / "mine", force=True)
+            self.assertTrue((tmp / "mine" / "notes.txt").exists())
+            forge.draft("runbook", "alert-triage", "q", out=tmp / "d2")
+            forge.draft("runbook", "alert-triage", "q", out=tmp / "d2", force=True)   # a real draft is replaced
 
     def test_the_shared_copies_match_the_skills_own(self):
         for name in ("run.py", "test_mask.py", "test_sqlguard.py", "test_access.py"):
