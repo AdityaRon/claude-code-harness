@@ -87,7 +87,7 @@ CHANGES=$({ git -C "$REPO" diff --no-renames --name-status "$PREV" --
             git -C "$REPO" ls-files --others --exclude-standard | awk '{ print "A\t" $0 }'; } 2>/dev/null \
           | sort -t "$TAB" -k2,2 -u)
 
-LIVE="" RULES="" TOOLS="" PANEL="" SKILLS="" GONE="" REMOVED=""
+LIVE="" RULES="" TOOLS="" PANEL="" SKILLS="" GONE="" REMOVED="" DOOMED=""
 while IFS=$TAB read -r st f; do
   [[ -n "${f:-}" ]] || continue
   map "$f" || continue
@@ -103,7 +103,7 @@ while IFS=$TAB read -r st f; do
       GONE="$GONE  $dest"
     else
       why=$(prune_why "$f" "$REL" "$dest")
-      if [[ -z "$why" ]] && rm -f -- "$dest"; then REMOVED="$REMOVED  $dest"; else GONE="$GONE  $dest (${why:-could not remove})"; fi
+      if [[ -z "$why" ]]; then DOOMED="$DOOMED$dest"$'\n'; else GONE="$GONE  $dest ($why)"; fi
     fi
     continue
   fi
@@ -116,6 +116,12 @@ while IFS=$TAB read -r st f; do
            case " $SKILLS " in *" /$s "*) ;; *) SKILLS="$SKILLS /$s" ;; esac ;;
   esac
 done <<< "$CHANGES"
+# Removed only once every candidate is decided, so a file one of them names is
+# kept whatever the order, even when the file naming it goes.
+while IFS= read -r d; do
+  [[ -n "$d" ]] || continue
+  if rm -f -- "$d"; then REMOVED="$REMOVED  $d"; else GONE="$GONE  $d (could not remove)"; fi
+done <<< "$DOOMED"
 
 if [[ -z "$LIVE$RULES$TOOLS$PANEL$SKILLS$GONE$REMOVED" ]]; then
   echo "  ✓ nothing installed changed since ${PREV:0:12}"

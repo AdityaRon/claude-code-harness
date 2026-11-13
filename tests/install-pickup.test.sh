@@ -173,6 +173,21 @@ done
   && pass "a copy in a skill linked from outside ~/.claude stays" || fail "symlinked skill" "$OUT"
 
 echo ""
+echo "=== --prune decides every candidate before removing any, so order does not matter ==="
+# Two deleted pairs, each one file naming the other: the namer sorts first in x, last in y.
+R5="$TMP/clone5"; H5="$TMP/rhome5"; I5="$H5/.claude"; mkdir -p "$R5/bin" "$I5"
+echo 'exec ~/.claude/x-target.sh' > "$R5/bin/x-caller.sh"; echo v1 > "$R5/bin/x-target.sh"
+echo v1 > "$R5/bin/y-a-target.sh"; echo 'exec ~/.claude/y-a-target.sh' > "$R5/bin/y-b-caller.sh"
+cp "$R5"/bin/*.sh "$I5/"
+g5() { git -C "$R5" -c user.name=t -c user.email=t@example.com "$@"; }
+g5 init -q; g5 add -A; g5 commit -q -m A; A5=$(g5 rev-parse HEAD)
+g5 rm -q bin/x-caller.sh bin/x-target.sh bin/y-a-target.sh bin/y-b-caller.sh; g5 commit -q -m B
+OUT=$(HOME="$H5" PATH="$FAKEBIN:$PATH" bash "$REPO/tools/pickup-report.sh" --prune "$A5" "$R5")
+[[ -f "$I5/x-target.sh" && ! -e "$I5/x-caller.sh" && "$OUT" == *"$I5/x-target.sh (named in $I5/x-caller.sh)"* \
+   && -f "$I5/y-a-target.sh" && ! -e "$I5/y-b-caller.sh" && "$OUT" == *"$I5/y-a-target.sh (named in $I5/y-b-caller.sh)"* ]] \
+  && pass "a named file stays and its namer goes, whichever is checked first" || fail "order" "$OUT; $(ls "$I5")"
+
+echo ""
 echo "=== a commit the clone lacks ==="
 [ -z "$(report "")" ] && [ -z "$(report unknown)" ] && pass "no record prints nothing" || fail "no record" ""
 OUT=$(report 0123456789abcdef0123456789abcdef01234567)
