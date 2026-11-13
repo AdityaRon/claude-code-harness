@@ -19,7 +19,6 @@ export HOME="$TMP/home" CLAUDE_AUDIT_LOG="$TMP/audit.log" CLAUDE_GUARD_TIMING_LO
 export CLAUDE_NET_ALLOWLIST="" CLAUDE_LOCAL_SETTINGS_DIR="$TMP/no-local" CLAUDE_NET_TUNNEL_RE='^cch-no-tunnel$'
 unset CLAUDE_JOB_DIR
 mkdir -p "$HOME/.claude" "$TMP/run" "$TMP/par"
-SKIP="$HOME/.claude/bash-guards.skip"
 GUARDS="env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard"
 
 echo "=== parity: the seven guards one by one and the dispatcher, same payload ==="
@@ -114,7 +113,10 @@ def one(i, label, payload, env):
         diffs.append('audit %s vs today %s' % (new[3], want_audit))
     if new[2] != 0 or any(t[2] for t in today):
         diffs.append('exit %d, today %s' % (new[2], [t[2] for t in today]))
-    if sorted(new[1].splitlines()) != sorted(l for t in today for l in t[1].splitlines()):
+    # bash 4.4+ warns each time a $( ) drops a NUL, so seven reads of the payload
+    # warned from seven places and one read warns once: that warning is left out.
+    errs = lambda b: sorted(l for l in b.splitlines() if b'ignored null byte in input' not in l)
+    if errs(new[1]) != sorted(l for t in today for l in errs(t[1])):
         diffs.append('stderr %r' % new[1][:300])
     return dict(label=label, worst=worst, nans=len(ans), parse=parse, diffs=diffs, payload=payload[:120])
 
@@ -191,6 +193,11 @@ R=$(why "$OUT")
 [[ "$R" == *$'\n'* && "${R%%$'\n'*}" != *git* && "${R#*$'\n'}" == *push* && "$R" != *kubectl* ]] \
   && pass "env-guard's reason, then git-guard's; the ask's left out" || fail "joined reason" "$R"
 copy_hooks
+{ head -1 hooks/kubectl-guard.sh; echo 'echo "warning: from kubectl-guard" >&2'; tail -n +2 hooks/kubectl-guard.sh; } > "$TMP/hk/kubectl-guard.sh"
+disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
+printf '%s' "$OUT" | jq -e . >/dev/null 2>&1 && [[ "$(dec "$OUT")" == ask && "$ERR" == *"warning: from kubectl-guard"* ]] \
+  && pass "a guard's stderr goes to the hook's stderr, not into its answer" || fail "guard stderr" "out=$OUT err=$ERR"
+copy_hooks
 printf '%s\n' 'printf "%s" "{\"hookSpecificOutput\":{\"permissionDecision\":\"ask\""' > "$TMP/hk/env-guard.sh"
 disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
 [[ "$(dec "$OUT")" == deny && "$(why "$OUT")" == *"could not be combined"* && "$(audit_for deny bash-guards)" == 1 ]] \
@@ -260,18 +267,20 @@ disp hooks "$(payload "python3 -c 'import os; os.system(\"git status; kubectl de
 
 echo ""
 echo "=== the skip file only takes guards off the shipped list ==="
+# It is read beside the hook, so these run a copy of hooks/ and never the clone's.
+copy_hooks; SKIP="$TMP/hk/bash-guards.skip"
 fields() { last_timing | awk -F'\t' '{ for (i = 3; i <= NF; i++) { sub(/=.*/, "", $i); printf "%s ", $i } }'; }
 rm -f "$SKIP"
-disp hooks "$(payload 'kubectl delete pod web')"
+disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
 [[ "$(fields)" == "$GUARDS " && "$(dec "$OUT")" == ask ]] && pass "no skip file: all seven" || fail "no skip file" "$(fields)"
 : > "$SKIP"
-disp hooks "$(payload 'kubectl delete pod web')"
+disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
 [[ "$(fields)" == "$GUARDS " && "$(dec "$OUT")" == ask ]] && pass "an empty skip file: all seven" || fail "empty skip file" "$(fields)"
 printf '%s\n' '# kubectl is gated elsewhere' '' '  kubectl-guard.sh  # why' > "$SKIP"
-disp hooks "$(payload 'kubectl delete pod web')"
+disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
 [[ "$(fields)" == "${GUARDS/kubectl-guard /} " && "$(dec "$OUT")" == allow ]] \
   && pass "kubectl-guard skipped: absent from the answer and the timing log" || fail "skip kubectl-guard" "$(fields) $OUT"
-disp hooks "$(payload 'kubectl delete pod web; cat .env')"
+disp "$TMP/hk" "$(payload 'kubectl delete pod web; cat .env')"
 [[ "$(dec "$OUT")" == deny ]] && pass "the others still run" || fail "the others still run" "$OUT"
 copy_hooks
 printf '%s\n' 'source "$(dirname "$0")/lib.sh"' 'emit_deny "evil ran"' > "$TMP/hk/evil-guard.sh"
@@ -279,15 +288,32 @@ printf '%s\n' evil-guard > "$SKIP"
 disp "$TMP/hk" "$(payload 'ls')"
 [[ "$(fields)" == "$GUARDS " && "$(dec "$OUT")" == allow ]] && pass "a name off the list adds nothing" || fail "skip file adds" "$(fields) $OUT"
 printf '%s\n' kubectl-guard > "$TMP/elsewhere"; rm -f "$SKIP"; ln -s "$TMP/elsewhere" "$SKIP"
-disp hooks "$(payload 'kubectl delete pod web')"
+disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
 [[ "$(fields)" == "$GUARDS " && "$(dec "$OUT")" == ask ]] && pass "a symlinked skip file is not read" || fail "symlink" "$(fields)"
 rm -f "$SKIP"; printf '%s\n' $GUARDS > "$SKIP"
-disp hooks "$(payload 'cat .env')"
+disp "$TMP/hk" "$(payload 'cat .env')"
 [[ -z "$(fields)" && "$(dec "$OUT")" == allow ]] && pass "all seven named: none run, as asked" || fail "all skipped" "$(fields) $OUT"
 rm -f "$SKIP"
-disp hooks "$(payload 'echo kubectl-guard >> ~/.claude/bash-guards.skip')"
+disp hooks "$(payload 'echo kubectl-guard >> ~/.claude/hooks/bash-guards.skip')"
 [[ "$(dec "$OUT")" == ask && "$(why "$OUT")" == *"lists Bash guards to switch off"* ]] \
   && pass "config-guard asks before a write to the skip file" || fail "config-guard on the skip file" "$OUT"
+
+echo ""
+echo "=== HARNESS_PRESET, GUARD_SELF or GUARD_NAME in the environment change nothing ==="
+envcase() {   # envcase HOOK PAYLOAD: the same answer with and without them
+  local a b
+  a=$(printf '%s' "$2" | bash "hooks/$1.sh" 2>/dev/null)
+  b=$(printf '%s' "$2" | env HARNESS_PRESET=1 GUARD_SELF=/usr/bin/true GUARD_NAME=x bash "hooks/$1.sh" 2>/dev/null)
+  [[ -n "$a" && "$a" == "$b" ]] && pass "$1 run alone: $(dec "$a") either way" || fail "$1 with them set" "alone=$a with=$b"
+}
+envcase sensitive-file-guard "$(jq -nc --arg d "$TMP/run" '{tool_name:"Read",tool_input:{file_path:"/repo/.env"},cwd:$d}')"
+envcase config-guard "$(jq -nc --arg d "$TMP/run" --arg f "$HOME/.claude/settings.json" '{tool_name:"Write",tool_input:{file_path:$f,content:"{}"},cwd:$d}')"
+envcase network-guard "$(jq -nc --arg d "$TMP/run" '{tool_name:"WebFetch",tool_input:{url:"https://evil.example.com/x"},cwd:$d}')"
+# A guard run alone re-runs itself on an inline script; GUARD_SELF must not redirect that.
+envcase git-guard "$(payload "python3 -c 'import os; os.system(\"git push --force origin main\")'")"
+OUT=$(payload "python3 -c 'import os; os.system(\"git push --force origin main\")'" \
+  | env HARNESS_PRESET=1 GUARD_SELF=/usr/bin/true GUARD_NAME=x bash hooks/bash-guards.sh 2>/dev/null)
+[[ "$(dec "$OUT")" == deny ]] && pass "bash-guards with them set still denies an inline force push" || fail "dispatcher with them set" "$OUT"
 
 echo ""
 echo "=== the timing log: one line a call, keyed by tool_use_id ==="

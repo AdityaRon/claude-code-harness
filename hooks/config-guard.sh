@@ -7,7 +7,7 @@
 # settings file, the installed-plugin cache ~/.claude/plugins, a shell startup
 # file, ~/.gitconfig or ~/Library/LaunchAgents asks first, as does a Bash write
 # into a mod Claude Code loads by itself, which mod-gate.sh never sees, and a
-# write to ~/.claude/bash-guards.skip. Reads pass; interpreter writes are not seen.
+# write to ~/.claude/hooks/bash-guards.skip. Reads pass; interpreter writes are not seen.
 source "$(dirname "$0")/lib.sh"
 
 read_input
@@ -96,12 +96,12 @@ level_of() {   # level_of PATH DESTRUCTIVE: deny, harness, settings, plugins, st
   for h in "$H" "$HR"; do
     c="$h/.claude"
     case "$p" in
+      "$c/hooks/bash-guards.skip") echo skip; return ;;   # read by hooks/bash-guards.sh
       "$c/hooks"|"$c/hooks/"*) echo harness; return ;;
       "$c/dev-mods"|"$c/dev-mods/"*) [[ -n "$mods" ]] && { echo mods; return; } ;;
       # The Edit deny rules cover the file tools and, since 2.1.309, a redirect;
       # cp, tee and the rest reached the cache with nothing asking.
       "$c/plugins"|"$c/plugins/"*) echo plugins; return ;;
-      "$c/bash-guards.skip") echo skip; return ;;   # read by hooks/bash-guards.sh
       "$c/"*.sh) [[ "${p#"$c"/}" != */* ]] && { echo harness; return; } ;;
       "$c") [[ "$2" == 1 ]] && { echo deny; return; } ;;
       "$h/.zshrc"|"$h/.zshenv"|"$h/.zprofile"|"$h/.zlogin"|"$h/.zlogout"|"$h/.bashrc"|"$h/.bash_profile"|"$h/.bash_login"|"$h/.profile"|"$h/.gitconfig"|"$h/.config/git/config"|"$h/Library/LaunchAgents/"*)

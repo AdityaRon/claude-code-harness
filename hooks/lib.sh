@@ -3,10 +3,13 @@
 # Source from every hook: source "$(dirname "$0")/lib.sh"
 
 # A Bash guard run by hooks/bash-guards.sh is a fork of it: this file is loaded
-# and the payload read once there, and HARNESS_PRESET says so. It is never
-# exported, so a guard's own `bash` child (check_inline_shellouts) loads this
-# file and reads its stdin as a hook run alone does.
-[[ -n "${HARNESS_PRESET:-}" ]] && return 0
+# and the payload read once there, and HARNESS_PRESET says so. It holds the
+# dispatcher's $$, which its forks share and no other process has, and it is
+# never exported, so a guard's own `bash` child (check_inline_shellouts) loads
+# this file and reads its stdin as a hook run alone does. Any other value, as
+# from the environment, is dropped here with the two names that go with it.
+[[ -n "${HARNESS_PRESET:-}" && "$HARNESS_PRESET" == "$$" ]] && return 0
+unset HARNESS_PRESET GUARD_NAME GUARD_SELF
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 

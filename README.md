@@ -79,7 +79,7 @@ weekly (`.github/workflows/mutations.yml`).
 
 | Hook | Runs on | Behaviour |
 |---|---|---|
-| `bash-guards` | Bash, Monitor | Runs the seven Bash guards below as one hook: one parse of the call, each guard a fork, deny over ask over allow. A guard that dies is a deny naming it. `~/.claude/bash-guards.skip` switches one off ([docs/guards.md](docs/guards.md)) |
+| `bash-guards` | Bash, Monitor | Runs the seven Bash guards below as one hook: one parse of the call, each guard a fork, deny over ask over allow. A guard that dies is a deny naming it. `~/.claude/hooks/bash-guards.skip` switches one off ([docs/guards.md](docs/guards.md)) |
 | `env-guard` | Bash | Deny: reading, dumping, copying or sending env values and dotfiles (`cat .env`, `printenv`, `nc`) |
 | `sensitive-file-guard` | Read, Grep, file writes | Deny: `.env`, keys, SSH and cloud credentials, credential folders. Ask: a Grep at or above your home folder |
 | `secret-scanner` | file writes | Deny: high-confidence token shapes (AWS, GitHub, Slack, Stripe, Google, Anthropic, OpenAI, PEM) in written content |
@@ -127,7 +127,7 @@ What `install.sh` does with a value you set, from `config/merge-settings.jq`:
 | `syncClaudeAiSkills`, `syncClaudeAiPlugins` | `false` | Yes |
 | `remoteControlAtStartup` and the other top-level switches ([docs/permissions.md](docs/permissions.md)) | `true` | Yes |
 
-- **A Bash guard off:** put its name on a line of `~/.claude/bash-guards.skip` (`kubectl-guard`, say); `config-guard` asks before Claude writes that file. Names off the shipped list are ignored, so the file can only switch guards off ([docs/guards.md](docs/guards.md)).
+- **A Bash guard off:** put its name on a line of `~/.claude/hooks/bash-guards.skip` (`kubectl-guard`, say); `config-guard` asks before Claude writes that file. Names off the shipped list are ignored, so the file can only switch guards off ([docs/guards.md](docs/guards.md)).
 - **Any other hook off:** there is no per-hook switch. Deleting its entry from `~/.claude/settings.json` lasts until the next install. To keep it off, remove it from `config/settings.json` in your clone; `harness-update.sh` leaves an install from a changed clone alone, so update with `git pull && bash install.sh`.
 - **Auto mode off:** `claude --permission-mode manual` for one session. Every install rewrites `permissions.defaultMode`, so to keep it off set `"manual"` in your clone's `config/settings.json`, as for a hook.
 - **Your own hooks:** a script in `~/.claude/hooks` under a name this repo does not use, plus its entry in `~/.claude/settings.json`. Installs keep both.

@@ -60,21 +60,22 @@ PRESET_OK=no
 {
   PRESET_TOOL=${BG_F[0]:-} PRESET_CMD=${BG_F[1]:-} PRESET_CWD=${BG_F[2]:-} PRESET_SID=${BG_F[3]:-}
   PRESET_URL=${BG_F[4]:-} PRESET_WS=${BG_F[5]:-} PRESET_ID=${BG_F[6]:-}
-  HARNESS_PRESET=1
+  HARNESS_PRESET=$$   # lib.sh honours it only where $$ is this, in these forks
 }
 unset BG_F bg_f
 # A payload that does not parse is denied once, here, under this hook's name.
 [[ "$PRESET_OK" == ok ]] || { BG_DONE=1; require_parsable_or_deny; BG_DONE=""; exit 1; }
 
-# ~/.claude/bash-guards.skip names guards to leave out, one a line. It only takes
-# names off the list above, so a missing or empty file runs all seven, and a
-# symlink is not read. config-guard asks before a write to it.
+# bash-guards.skip beside this hook (~/.claude/hooks/) names guards to leave out,
+# one a line. It only takes names off the list above, so a missing or empty file
+# runs all seven, and a symlink is not read. In the hooks folder, a write to it is
+# one config-guard asks about as it does for the guards themselves.
 BG_SKIP=" "
-if [[ -f "$HOME/.claude/bash-guards.skip" && ! -L "$HOME/.claude/bash-guards.skip" ]]; then
+if [[ -f "$BG_DIR/bash-guards.skip" && ! -L "$BG_DIR/bash-guards.skip" ]]; then
   while IFS= read -r bg_l || [[ -n "$bg_l" ]]; do
     bg_l=${bg_l%%#*}; bg_l=${bg_l//[[:space:]]/}; bg_l=${bg_l%.sh}
     [[ -n "$bg_l" ]] && BG_SKIP="$BG_SKIP$bg_l "
-  done < "$HOME/.claude/bash-guards.skip"
+  done < "$BG_DIR/bash-guards.skip"
 fi
 BG_RUN=()
 for bg_g in "${BG_GUARDS[@]}"; do [[ "$BG_SKIP" == *" $bg_g "* ]] || BG_RUN[${#BG_RUN[@]}]=$bg_g; done
