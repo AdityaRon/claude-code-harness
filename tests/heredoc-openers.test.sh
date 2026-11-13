@@ -98,6 +98,8 @@ INSUB=(
   "\${ } holding ) after it"     $'x=$(cat <<\'EOF\' ${y)}\n'"$M"$'\nEOF\n)'
   "a backtick opened after it"   $'x=$(cat <<\'EOF\' `\n`)\n'"$M"$'\n`\nEOF\n)'
   "\$\\ then ( on the next line" $'x=$\\\n(cat <<\'EOF\'\nhi\n)\n'"$M"$'\nEOF'
+  # bash 3.2 counts the paren in ${x:-(}: the $( ) that looks closed is open.
+  "\${x:-(} in a \$( ) before it" $'d=$(echo ${x:-(}); cat <<\'EOF\'\n)\n'"$M"$'\nEOF\n)'
 )
 n32=0
 for ((i = 0; i < ${#INSUB[@]}; i += 2)); do
@@ -235,6 +237,90 @@ done
 for cmd in "${READ_D[@]}"; do
   unread "$cmd" && fail "unreadable: [${cmd//$'\n'/\\n}]" "" || pass "readable: [${cmd//$'\n'/\\n}]"
 done
+
+echo ""
+echo "=== a heredoc after a substitution that closed: its body is read as without it ==="
+# An opener is inside a substitution only when one is open at its << or the
+# reading is in doubt (lib.sh's hd_in, HD_DOUBT). After one that closed, bash
+# reads the body as data: no hazard line below runs the marker, the row runs to
+# its end, and every stripper keeps or drops the body as without the prefix.
+CLOSED=(
+  "a closed \$( )"             'd=$(pwd); '
+  "a \$( ) closed on a later line" $'d=$(\npwd\n)\n'
+  "closed backticks"           'd=`pwd`; '
+  "a closed <( )"              'cat <(echo a) >/dev/null; '
+  "a closed \"\$( )\""         'd="$(pwd)"; '
+  "\"\$( )\" in a closed \$( )" 'd=$(cd "$(dirname "$0")" && pwd); '
+  "\$( in single quotes"       "echo '\$(' >/dev/null; "
+  "\$( in a comment"           $'true # $(\n'
+  "two closed \$( )"           'a=$(echo a); b=$(echo b); '
+  "an earlier unquoted body, a backslash in its \$( )" $'cat >/dev/null <<E1\n$(echo \\( )\nE1\n'
+  "an earlier body fed to a shell, a \$( ) left open in it" $'bash >/dev/null 2>&1 <<\'E1\'\necho $(echo\nE1\n'
+)
+HAZARD=(   # body | the line after the terminator; each runs to its end after a closed prefix
+  ") ; $M|"   ")\" ; $M ; echo \"|"   "') ; $M ; echo '|"
+  "x )) ; $M|"   "it's|echo ' ; $M ; echo '"   "say \"|echo \" ; $M ; echo \""   $'# it\'s (\n) ; '"$M|"   $'EOF)\n'"$M|"
+)
+CLOSED_ROWS=()
+for ((i = 0; i < ${#CLOSED[@]}; i += 2)); do
+  p=${CLOSED[$((i + 1))]}
+  for h in "${HAZARD[@]}"; do
+    body=${h%%|*}; tail=${h#*|}
+    c=$'cat >/dev/null <<\'EOF\'\n'"$body"$'\nEOF\n'"${tail:+$tail$'\n'}echo HDLIVE"
+    CLOSED_ROWS+=("${CLOSED[$i]}" "$p" "$c")
+  done
+done
+for ((i = 0; i < ${#CLOSED_ROWS[@]}; i += 3)); do
+  label=${CLOSED_ROWS[$i]}; p=${CLOSED_ROWS[$((i + 1))]}; c=${CLOSED_ROWS[$((i + 2))]}
+  out=$(cd "$TMP/run" && env -i HOME="$TMP/home" PATH="$TMP/stub:/usr/bin:/bin" /bin/bash -c "$p$c" 2>/dev/null)
+  if printf '%s\n' "$out" | grep -qx HDMARK || ! printf '%s\n' "$out" | grep -qx HDLIVE; then
+    fail "$label: [${c%%$'\n'EOF*}]" "(bash ran the marker or stopped early: the case is wrong)"; continue
+  fi
+  same=1; b1=${c#*$'\n'}; b1=${b1%%$'\n'*}
+  for fn in strip_message_heredocs strip_inert_heredocs drop_data_heredocs; do
+    printf '%s\n' "$("$fn" "$p$c")" | grep -qxF -- "$b1"; a=$?
+    printf '%s\n' "$("$fn" "$c")" | grep -qxF -- "$b1"
+    [ "$a" = $? ] || { same=0; fail "$label, body [${c%%$'\n'EOF*}]: $fn reads it unlike without the prefix" "[$("$fn" "$p$c")]"; }
+  done
+  unread "$p$c"; a=$?; unread "$c"
+  [ "$a" = $? ] || { same=0; fail "$label, body [${c%%$'\n'EOF*}]: sh_classify reads it unlike without the prefix" ""; }
+  [ "$same" = 1 ] && pass "$label, body [${c%%$'\n'EOF*}]: read as without the prefix"
+done
+# Each doubt on its own: the opener after it is read as inside a substitution,
+# so a bare ) in the body keeps the command as typed. Only the \${x:-(} and $\
+# rows have a shell that runs a marker (the INSUB table); the rest are caution.
+DOUBT=(
+  "a backslash in \$( )"          'd=$(echo \( ); '
+  "a comment in \$( )"            $'d=$(echo # c\n); '
+  "a \$' string in \$( )"         "d=\$(echo \$'a' ); "
+  "case in \$( )"                 'd=$(case a in a) echo;; esac); '
+  "(( in \$( )"                   'd=$( ((x = 1)) ; echo ); '
+  "a backtick in \$( )"           'd=$(echo `echo a`); '
+  "a paren in backticks"          'd=`echo (a)`; '
+  "\${ } holding a paren"         'd=$(echo ${x:-(}); '
+  "\${ } holding \$"              'd=${x:-$HOME}; '
+  "\$(( ))"                       'n=$((1 + 2)); '
+  "\$(( )) in double quotes"      'n="$((1 + 2))"; '
+  "a backtick in double quotes"   'd="`pwd`"; '
+  "\$[ ] in \$( )"                'd=$(echo $[1]); '
+  "\$\\ then ( on the next line"  $'d=$\\\n(pwd); '
+  "an opener in a substitution before" $'x=$(cat <<\'E1\'\nhi\nE1\n)\n'
+)
+for ((i = 0; i < ${#DOUBT[@]}; i += 2)); do
+  label=${DOUBT[$i]}; cmd=${DOUBT[$((i + 1))]}$'cat > notes.md <<\'EOF\'\n)\n'"$M"$'\nEOF'
+  for fn in strip_message_heredocs strip_inert_heredocs drop_data_heredocs; do
+    out=$("$fn" "$cmd")
+    keeps "$out" && pass "after $label: $fn keeps the body" || fail "after $label: $fn dropped the body" "[$out]"
+  done
+done
+# The doubt outlasts a heredoc read in between, in sh_classify as in the strippers.
+cmd=$'d=${x:-$HOME}; cat >/dev/null <<E1\na\nE1\ncat > notes.md <<\'EOF\'\n)\n'"$M"$'\nEOF'
+unread "$cmd" && pass "a doubt, then a heredoc, then an opener: still inside a substitution" \
+  || fail "a doubt, then a heredoc, then an opener" "sh_classify read the second body as data"
+# #208 left this unreadable: a closed $( ), then a script body with an apostrophe.
+cmd=$'d=$(pwd); cat > x.sh <<\'EOF\'\n# it\'s\necho hi\nEOF'
+printf '%s\n' "$cmd" | awk "$HEREDOC_AWK"'{ line[NR] = $0 } END { sh_classify(NR); exit SH_BAD }' \
+  && pass "a closed \$( ), then a body with an apostrophe: readable" || fail "a closed \$( ), then a body with an apostrophe" "unreadable"
 
 echo ""
 echo "=== bash runs a grouped marker: separate_groups opens the group ==="
@@ -419,6 +505,24 @@ for c in sys.stdin.read().split("\0")[:-1]:
     else [ "${DU[$j]}" = 0 ] && pass "demand.py: readable row $j" || fail "demand.py: readable row $j is unreadable" ""; fi
   done
   [ "${#DU[@]}" = $((want + ${#READ_D[@]})) ] && pass "demand.py read every item-D row" || fail "demand.py's item-D rows" "${#DU[@]}"
+  # After a substitution that closed, demand.py reads the body as without it;
+  # after each doubt, it keeps the body as typed.
+  DC=()
+  while IFS= read -r k; do DC+=("$k"); done < <(for ((i = 0; i < ${#CLOSED_ROWS[@]}; i += 3)); do printf '%s\0%s\0' "${CLOSED_ROWS[$((i + 1))]}" "${CLOSED_ROWS[$((i + 2))]}"; done | "$DPY" -c '
+import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
+f = sys.stdin.read().split("\0")[:-1]
+for p, c in zip(f[0::2], f[1::2]):
+    b1 = c.split("\n")[1]
+    print(int((b1 in demand.drop_heredocs(p + c).split("\n")) == (b1 in demand.drop_heredocs(c).split("\n"))))')
+  bad=0
+  for k in "${DC[@]}"; do [ "$k" = 1 ] || bad=$((bad + 1)); done
+  [ "${#DC[@]}" = $((${#CLOSED_ROWS[@]} / 3)) ] && [ "$bad" = 0 ] && pass "demand.py reads ${#DC[@]} bodies after a closed substitution as without it" \
+    || fail "demand.py after a closed substitution" "$bad of ${#DC[@]} read unlike without the prefix"
+  DD2=()
+  while IFS= read -r k; do DD2+=("$k"); done < <(for ((i = 1; i < ${#DOUBT[@]}; i += 2)); do printf '%s\0' "${DOUBT[$i]}"$'cat > notes.md <<\'EOF\'\n)\n'"$M"$'\nEOF'; done | demand_keeps)
+  for ((i = 0; i < ${#DOUBT[@]}; i += 2)); do
+    [ "${DD2[$((i / 2))]}" = 1 ] && pass "after ${DOUBT[$i]}: demand.py keeps the body" || fail "after ${DOUBT[$i]}: demand.py dropped the body" ""
+  done
   # Not a bash-oracle case: the oracle runs under env -i, where $SHELL is unset.
   [ "$(printf '%s\0' $'cat <<\'EOF\' | $SHELL\n'"$M"$'\nEOF' | demand_keeps)" = 1 ] \
     && pass "a body piped to \$SHELL: demand.py keeps it" || fail "a body piped to \$SHELL: demand.py dropped it" ""
