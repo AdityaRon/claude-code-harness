@@ -8,7 +8,7 @@
 # output format changing. No Claude Code install needed — CLAUDE_DOCTOR_CMD
 # substitutes a stub that behaves like `claude doctor`.
 set -u
-CHECK="bin/upstream-check.sh"
+CHECK="tools/upstream-check.sh"
 PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }

@@ -11,7 +11,7 @@ comes to you even in auto mode: Claude Code's
 switching to auto mode, "because auto mode still shows you those prompts". The
 classifier decides only what no guard or rule names; see
 [auto-mode.md](auto-mode.md). An ask costs a person's time: on one Mac,
-`bin/permission-friction.py --days 23` over 2026-09-24 to 2026-10-16 (PR #90)
+`tools/permission-friction.py --days 23` over 2026-09-24 to 2026-10-16 (PR #90)
 found an approved guard ask held its call 92 to 269 s at the median, by guard.
 
 ## What each guard does

@@ -8,7 +8,7 @@ disk), ask you about a short list (cluster writes, request bodies to unknown
 hosts, inline code that reads the environment), and let everything else run
 under auto mode. Every deny and ask is a line in `~/.claude/logs/audit.log`.
 
-What the guards cost: `python3 bin/hook-bench.py --base v1.0.0 --head HEAD`, run
+What the guards cost: `python3 tools/hook-bench.py --base v1.0.0 --head HEAD`, run
 at 4f4dae0 on an Apple M2 with macOS 26.6.2 on 2026-10-17 UTC, measured a Bash
 call waiting 54.5 ms at p50 and 108.7 ms at p95 over the 321 Bash payloads in
 `tests/bench-corpus.jsonl` (83.4 and 124.1 ms at v1.0.0 in the same run). Other
@@ -21,7 +21,7 @@ median approved ask held its call 133 s, against 5 s for a Bash call with no pro
 ## Install and update
 
 Needs macOS or Linux with bash, `jq` (the guards fail closed without it), `gh`,
-`python3` (for `bin/hook-bench.py` and `bin/permission-friction.py`; 3.10 or
+`python3` (for `tools/hook-bench.py` and `tools/permission-friction.py`; 3.10 or
 newer with a TOML reader for the comms-hub and skill-forge skills and their
 tests) and `claude`.
 
@@ -36,10 +36,10 @@ bash install.sh
 - Runs `doctor.sh` to verify every hook.
 
 **A fork, or a fresh copy.** Clone your own copy instead, then run
-`bin/fork-setup.sh` from it. It reports what GitHub needs before this repo's
+`tools/fork-setup.sh` from it. It reports what GitHub needs before this repo's
 workflows run: Actions on, the workflows GitHub turns off on a fork back on,
 Actions allowed to open pull requests (Release and Upstream drift open them),
-and the `CLAUDE_CODE_OAUTH_TOKEN` secret. `bin/fork-setup.sh --apply` turns on
+and the `CLAUDE_CODE_OAUTH_TOKEN` secret. `tools/fork-setup.sh --apply` turns on
 what is off; the secret you set yourself, with `/install-github-app` in Claude
 Code.
 
@@ -61,7 +61,7 @@ changed, the hook benchmark: [docs/releases.md](docs/releases.md).
 
 **Keeping up with Claude Code.** Claude Code auto-updates, so the facts the
 harness relies on are pinned in `config/upstream-contract.json` and checked daily
-by `bin/upstream-check.sh`: [docs/upstream-contract.md](docs/upstream-contract.md).
+by `tools/upstream-check.sh`: [docs/upstream-contract.md](docs/upstream-contract.md).
 
 **Testing.** `bash doctor.sh` runs every suite in `tests/`. CI runs it on Linux
 and macOS, lints the scripts with shellcheck, and benchmarks each PR's hooks
@@ -85,7 +85,7 @@ against main.
 | `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
 | `memory-lint` | file writes | Advise: name, type, description, `verify:` block and index tier of a memory file |
 | `comment-budget` | file writes | Advise: a comment block an edit grew past 6 lines |
-| `tcc-check` | Bash results | Advise: names macOS privacy control (TCC) when a Bash result holds "Operation not permitted" and the cwd or the command is under `~/Desktop`, `~/Documents`, `~/Downloads` or iCloud Drive. It reads the text, not the exit code, so output that only quotes the phrase triggers it too |
+| `tcc-check` | Bash results and failures | Advise: names macOS privacy control (TCC) when a Bash call prints an "Operation not permitted" error (a tool's, zsh's or python's) for a path in `~/Desktop`, `~/Documents`, `~/Downloads` or iCloud Drive, or for no path while the cwd (or a `cd` in the command) is in one. A line quoting one, in backticks or after grep -n's `file:line:`, is not an error; a log line printed whole still is |
 | `session-start` | SessionStart | Inject: branch, status and recent commits; on resume, files that drifted since the last session |
 | `session-snapshot` | Stop, SessionEnd | Record: hashes of the files the session edited, for the resume drift check |
 | `pre-compact` | PreCompact | Back up: the transcript before compaction, newest 20 kept |
@@ -168,7 +168,7 @@ you as a comment only. It never approves a PR or merges someone else's.
   while it is drawn, so it calls no model; its PR rows move when a tick
   scans, and every five minutes while it is drawn in active hours, from one
   GitHub query (`queue.py check`). `claude plugin test skills/comms-hub/panel` runs its tests,
-  and `bin/upstream-check.sh` runs them against each new Claude Code release.
+  and `tools/upstream-check.sh` runs them against each new Claude Code release.
 
 ## skill-forge: one skill per recurring question
 
@@ -226,16 +226,17 @@ everything else is grouped by what it is.
 install.sh  doctor.sh    ← install once per machine; run every suite in tests/
 CHANGELOG.md             ← one entry per release
 LICENSE                  ← MIT
-bin/                     ← installed to ~/.claude, or run from the clone
+bin/                     ← every file installed flat to ~/.claude by install.sh
   statusline.sh  harness-update.sh  net-allowlist.sh  sandbox.sh  sandbox-trial.sh
   memory-verify.sh  memory-fix.sh  memory-index.sh  memory-provenance.sh
   session-route.sh       ← which session owns this PR (docs/session-routing.md)
-  upstream-check.sh      ← the daily drift check
   relocate-clones.sh     ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads (docs/known-limitations.md)
+  spend-report.py        ← what sessions, subagents and loop ticks cost, from local transcripts
+tools/                   ← run from the clone only, by CI, releases and whoever maintains a fork
+  upstream-check.sh      ← the daily drift check
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts
-  spend-report.py        ← what sessions, subagents and loop ticks cost, from local transcripts
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json
 hooks/                   ← one file per hook, plus shared lib.sh
 rules/                   ← installed to ~/.claude/rules, loaded in every session
@@ -257,7 +258,7 @@ docs/
   memory.md              ← what Claude Code's memory does now, and each harness tool's verdict
   session-routing.md     ← routing a PR to its session; holds only in single-author repos
   permission-friction.md ← which guard asks and denies cost the most, and why
-  permission-friction-cases.jsonl  ← cases bin/permission-friction.py --cases replays
+  permission-friction-cases.jsonl  ← cases tools/permission-friction.py --cases replays
   history/               ← superseded memory research the skills still cite
 ```
 

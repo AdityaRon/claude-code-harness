@@ -6,6 +6,88 @@ the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
 installed machine to the newest tag.
 
+## v1.3.1 (2026-11-13)
+
+Merged since v1.3.0: 2 PRs.
+
+### Other
+- fix(tcc-check): fire on the error line, and after failed Bash calls (#200)
+- fix: bin/ holds exactly what installs; clone-only tools move to tools/ (#196)
+
+### Benchmark vs v1.3.0
+
+
+2026-11-13T00:41:42Z, Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor, python 3.14.4. Corpus tests/bench-corpus.jsonl: 492 payloads (372 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 NotebookEdit, 2 MultiEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, run one at a time. Wait is the slowest hook of a call (Claude Code runs them in parallel); CPU is the sum. Process start here: `bash -c :` 1.2 ms, `jq -n 1` 2.0 ms (p50 of 20), so only same-run comparisons are meaningful.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 372 | 58.5 → 58.2 ms (-0%) | 57.3 → 57.2 ms (-0%) | 99.8 → 100.3 ms (+0%) | 189.7 → 189.8 ms (+0%) |
+| WebFetch | 11 | 18.3 → 18.3 ms (-0%) | 24.5 → 24.5 ms (+0%) | 41.3 → 41.7 ms (+1%) | 36.1 → 36.1 ms (+0%) |
+| Read/Grep | 41 | 40.7 → 40.7 ms (+0%) | 45.0 → 45.4 ms (+1%) | 61.5 → 61.8 ms (+1%) | 56.7 → 57.2 ms (+1%) |
+| Write/Edit | 63 | 40.6 → 40.7 ms (+0%) | 42.6 → 42.7 ms (+0%) | 66.3 → 66.3 ms (-0%) | 104.3 → 104.7 ms (+0%) |
+| Monitor | 5 | 41.5 → 41.0 ms (-1%) | 49.0 → 49.1 ms (+0%) | 94.5 → 94.3 ms (-0%) | 160.5 → 160.4 ms (-0%) |
+| All | 492 | 51.0 → 51.3 ms (+1%) | 53.6 → 53.6 ms (-0%) | 96.8 → 96.7 ms (-0%) | 163.9 → 164.1 ms (+0%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean |
+|---|---:|---|---|---|
+| config-guard.sh | 440 | 12.0 → 12.0 ms (+0%) | 34.9 → 35.1 ms (+1%) | 13.1 → 13.1 ms (+0%) |
+| env-guard.sh | 377 | 14.8 → 14.8 ms (+0%) | 84.0 → 85.0 ms (+1%) | 32.6 → 32.6 ms (+0%) |
+| git-guard.sh | 377 | 15.1 → 15.1 ms (-0%) | 86.6 → 86.9 ms (+0%) | 29.9 → 29.8 ms (-0%) |
+| interpreter-guard.sh | 377 | 14.9 → 14.9 ms (-0%) | 80.1 → 79.8 ms (-0%) | 33.3 → 33.3 ms (-0%) |
+| kubectl-guard.sh | 377 | 14.8 → 14.8 ms (+0%) | 63.7 → 64.2 ms (+1%) | 28.8 → 28.8 ms (-0%) |
+| mod-gate.sh | 63 | 3.7 → 3.8 ms (+1%) | 12.5 → 12.6 ms (+1%) | 4.2 → 4.3 ms (+1%) |
+| network-guard.sh | 388 | 17.9 → 17.9 ms (+0%) | 73.9 → 73.9 ms (-0%) | 30.2 → 30.3 ms (+0%) |
+| rm-guard.sh | 377 | 12.3 → 12.3 ms (+0%) | 12.8 → 13.1 ms (+3%) | 15.9 → 16.0 ms (+0%) |
+| secret-scanner.sh | 63 | 22.0 → 22.1 ms (+0%) | 66.3 → 66.3 ms (-0%) | 27.0 → 27.2 ms (+0%) |
+| sensitive-file-guard.sh | 104 | 40.6 → 40.6 ms (+0%) | 59.0 → 59.7 ms (+1%) | 45.9 → 46.1 ms (+0%) |
+| subagent-cache-guard.sh | 492 | 7.1 → 7.1 ms (+0%) | 7.4 → 7.4 ms (+0%) | 7.0 → 7.0 ms (+0%) |
+
+Decisions: 492 of 492 payloads got the same answer on both sides.
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended).
+
+## v1.3.0 (2026-11-12)
+
+Merged since v1.2.0: 4 PRs.
+
+### Other
+- docs: README names every wired hook, skill folder and suite; repo-layout enforces it (#195)
+- session-start: 5 processes on a start, not 20 (#193)
+- fix: install.sh replaces live files by rename, not in place (#192)
+- feat: skill-forge fixes from a first run on a real machine (#191)
+
+### Benchmark vs v1.2.0
+
+
+2026-11-12T15:28:52Z, Linux 7.0.0-1019-azure x86_64, INTEL(R) XEON(R) PLATINUM 8573C, python 3.14.4. Corpus tests/bench-corpus.jsonl: 492 payloads (372 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 NotebookEdit, 2 MultiEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, run one at a time. Wait is the slowest hook of a call (Claude Code runs them in parallel); CPU is the sum. Process start here: `bash -c :` 1.1 ms, `jq -n 1` 1.9 ms (p50 of 20), so only same-run comparisons are meaningful.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 372 | 52.5 → 52.4 ms (-0%) | 52.0 → 52.0 ms (+0%) | 89.9 → 90.7 ms (+1%) | 172.8 → 172.3 ms (-0%) |
+| WebFetch | 11 | 17.5 → 17.6 ms (+1%) | 23.1 → 23.1 ms (+0%) | 38.8 → 38.7 ms (-0%) | 34.2 → 34.2 ms (-0%) |
+| Read/Grep | 41 | 38.8 → 38.9 ms (+0%) | 42.5 → 42.5 ms (-0%) | 62.6 → 61.1 ms (-2%) | 53.1 → 53.0 ms (-0%) |
+| Write/Edit | 63 | 39.7 → 39.2 ms (-1%) | 40.7 → 40.6 ms (-0%) | 58.0 → 56.3 ms (-3%) | 98.4 → 98.1 ms (-0%) |
+| Monitor | 5 | 38.9 → 40.0 ms (+3%) | 45.7 → 46.7 ms (+2%) | 87.7 → 88.7 ms (+1%) | 151.5 → 151.6 ms (+0%) |
+| All | 492 | 46.4 → 45.3 ms (-2%) | 49.0 → 49.1 ms (+0%) | 87.7 → 88.6 ms (+1%) | 150.0 → 149.5 ms (-0%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean |
+|---|---:|---|---|---|
+| config-guard.sh | 440 | 11.1 → 11.1 ms (+0%) | 31.7 → 32.0 ms (+1%) | 11.9 → 11.9 ms (-0%) |
+| env-guard.sh | 377 | 13.5 → 13.5 ms (-0%) | 76.8 → 77.4 ms (+1%) | 30.0 → 29.7 ms (-1%) |
+| git-guard.sh | 377 | 13.8 → 13.7 ms (-0%) | 78.7 → 79.1 ms (+1%) | 27.2 → 27.2 ms (+0%) |
+| interpreter-guard.sh | 377 | 13.5 → 13.4 ms (-1%) | 73.9 → 72.7 ms (-2%) | 30.5 → 30.3 ms (-1%) |
+| kubectl-guard.sh | 377 | 13.4 → 13.4 ms (-0%) | 56.7 → 57.4 ms (+1%) | 26.1 → 26.0 ms (-0%) |
+| mod-gate.sh | 63 | 3.3 → 3.3 ms (-0%) | 11.1 → 11.8 ms (+6%) | 3.7 → 3.7 ms (+1%) |
+| network-guard.sh | 388 | 16.4 → 16.4 ms (-0%) | 65.5 → 65.6 ms (+0%) | 27.5 → 27.5 ms (+0%) |
+| rm-guard.sh | 377 | 11.2 → 11.2 ms (-0%) | 12.1 → 12.9 ms (+7%) | 14.6 → 14.6 ms (+0%) |
+| secret-scanner.sh | 63 | 21.0 → 20.8 ms (-1%) | 58.0 → 56.3 ms (-3%) | 25.4 → 25.2 ms (-1%) |
+| sensitive-file-guard.sh | 104 | 39.1 → 38.9 ms (-1%) | 56.9 → 55.2 ms (-3%) | 43.8 → 43.8 ms (-0%) |
+| subagent-cache-guard.sh | 492 | 6.4 → 6.4 ms (+0%) | 6.8 → 6.8 ms (-0%) | 6.2 → 6.3 ms (+0%) |
+
+Decisions: 492 of 492 payloads got the same answer on both sides.
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended).
+
 ## v1.2.0 (2026-11-12)
 
 Merged since v1.1.19: 3 PRs.

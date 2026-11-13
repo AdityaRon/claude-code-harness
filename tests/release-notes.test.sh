@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Tests for bin/release-notes.sh on a fixture repo and a PR list file: which
+# Tests for tools/release-notes.sh on a fixture repo and a PR list file: which
 # PRs count, how they group, what the next version is, and the CHANGELOG insert.
 set -u
 PASS=0; FAIL=0
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
 fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
-RN="$PWD/bin/release-notes.sh"
+RN="$PWD/tools/release-notes.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 G="git -c user.email=t@example.com -c user.name=t"
 

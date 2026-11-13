@@ -1,6 +1,9 @@
 # skill_lint manifest (skills/skill-forge/bin/skill_lint.py). comms-hub is
 # hand-written; this says only where a test lives that C9 cannot find on its own.
 
+# The ~/.claude scripts SKILL.md runs that install.sh installs from bin/.
+uses = ["~/.claude/session-route.sh", "~/.claude/spend-report.py"]
+
 [tests]
 # doctor.sh runs it from the harness's tests/, where the other prerequisite tests live.
 "bin/prereqs.sh" = "../../tests/comms-hub-prereqs.test.sh"

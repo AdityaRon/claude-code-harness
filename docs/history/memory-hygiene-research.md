@@ -26,7 +26,7 @@ readable, but read them with these corrections:
   `byteCount > 25000`; truncation is line-first (`split("\n").slice(0, 200)`) and then clamped to
   the byte limit, so passing line 200 drops everything after it. The size limit is **bytes** — the
   identifier is literally `byteCount` — which is why the harness reports bytes, not characters.
-  `bin/upstream-check.sh` section 4d now re-reads both numbers from the CLI on every run, resolving
+  `tools/upstream-check.sh` section 4d now re-reads both numbers from the CLI on every run, resolving
   the minified identifiers from the expression so a rename moves the check with the code.
   Token budget is a *separate* constraint, and the `/context` advisory (above both 5% of context and
   5000 tokens) measures that one, not this.
