@@ -45,7 +45,7 @@ SLOW=$(printf '%s\n' "$OUT" | sed -n 's/^Slowest suites (wall seconds): //p')
 echo ""
 echo "=== --smoke runs only the listed suites ==="
 printf 'tests/a-pass.test.sh\ntests/g-slow.test.sh\n' > "$D/tests/smoke.list"
-OUT=$(bash "$D/doctor.sh" --smoke 2>&1); RC=$?
+OUT=$(CCH_SUITE_TIMEOUT=2 bash "$D/doctor.sh" --smoke 2>&1); RC=$?
 [[ "$OUT" == *"SUMMARY: 2 suites │ 4 passed │ 0 failed │ 0 suite(s) failed"* && "$RC" = 0 ]] \
   && pass "two suites, green" || fail "--smoke" "rc=$RC $(printf '%s\n' "$OUT" | grep SUMMARY)"
 
