@@ -9,7 +9,7 @@ tested. Moved from the README.
 - Backs up the previous file as `settings.json.bak.<timestamp>`, and keeps the newest 10 (`CCH_KEEP_BACKUPS` changes the count).
 - Folds in machine-local allow/deny rules from `~/.claude/local-settings/*.json` (see [customization.md](customization.md)).
 - Runs `doctor.sh` to verify every hook after install.
-- Removes from `~/.claude` a file the clone deleted since the last install, when install wrote it and nothing changed it: its bytes are that file at the last install's commit, and `settings.json` does not name its path. Any other such file stays, and the report at the end names it with the reason: edited since install, or settings.json refers to it. A first install, or one whose clone lacks the last install's commit, removes nothing.
+- Removes from `~/.claude` a file the clone deleted since the last install, when install wrote it and nothing changed it: the clone's HEAD descends from the last install's commit, the installed bytes are that file at that commit, and `settings.json` does not name its path. Any other such file stays, and the report at the end names it with the reason: the clone is not ahead of the last install (a downgrade, or a branch split off before it), edited since install, or settings.json refers to it. A first install, or one whose clone lacks the last install's commit, removes nothing.
 
 Then open Claude Code and run `/hooks` to confirm everything is registered.
 

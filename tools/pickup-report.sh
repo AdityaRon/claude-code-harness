@@ -15,11 +15,14 @@ if ! git -C "$REPO" cat-file -e "$PREV^{commit}" 2>/dev/null; then
 fi
 
 # Why DEST, the installed copy of F, is kept; empty when it may go. Bytes equal
-# to F's blob at PREV mean install wrote it and nothing edited it since.
+# to F's blob at PREV mean install wrote it and nothing edited it since. Only a
+# clone that moved forward from PREV deleted F; a downgrade or older branch did not.
 SETTINGS="$HOME/.claude/settings.json"
 prune_why() {  # F REL DEST
   if [[ -z "$PREV" || "$PREV" == unknown ]] || ! git -C "$REPO" cat-file -e "$PREV^{commit}" 2>/dev/null; then
     echo "previous install unknown"
+  elif ! git -C "$REPO" merge-base --is-ancestor "$PREV" HEAD 2>/dev/null; then
+    echo "the clone is not ahead of the last install"
   elif [[ ! -f "$3" || -L "$3" ]] \
        || [[ "$(git -C "$REPO" hash-object --no-filters -- "$3" 2>/dev/null)" != "$(git -C "$REPO" rev-parse -q --verify "$PREV:$1" 2>/dev/null)" ]]; then
     echo "edited since install"

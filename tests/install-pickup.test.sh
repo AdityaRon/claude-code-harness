@@ -94,6 +94,27 @@ OUT=$(report --prune "$PREV")
 [[ -f "$I/case.sh" ]] && pass "a file renamed only in case keeps its installed copy" || fail "case rename" "$OUT"
 
 echo ""
+echo "=== --prune keeps a file the clone lacks only because it is not ahead of the last install ==="
+# A, then B adds bin/x.sh and is installed; the clone then checks out A, or a branch off A.
+R2="$TMP/clone2"; mkdir -p "$R2/bin" "$I"
+g2() { git -C "$R2" -c user.name=t -c user.email=t@example.com "$@"; }
+echo a > "$R2/bin/a.sh"; g2 init -q; g2 add -A; g2 commit -q -m A; A=$(g2 rev-parse HEAD)
+echo x > "$R2/bin/x.sh"; g2 add -A; g2 commit -q -m B; B=$(g2 rev-parse HEAD)
+prune2() { HOME="$RH" bash "$REPO/tools/pickup-report.sh" --prune "$B" "$R2"; }
+echo x > "$I/x.sh"; g2 checkout -q "$A"
+OUT=$(prune2)
+[[ -f "$I/x.sh" && "$OUT" == *"stays until removed by hand:  $I/x.sh (the clone is not ahead of the last install)" ]] \
+  && pass "a downgrade keeps an unchanged copy, and says why" || fail "downgrade" "$OUT"
+g2 checkout -q -b side "$A"; echo s > "$R2/bin/s.sh"; g2 add -A; g2 commit -q -m S
+OUT=$(prune2)
+[[ -f "$I/x.sh" && "$OUT" == *"$I/x.sh (the clone is not ahead of the last install)" ]] \
+  && pass "so does a branch split off before the last install" || fail "older branch" "$OUT"
+g2 checkout -q -b fwd "$B"; g2 rm -q bin/x.sh; g2 commit -q -m C
+OUT=$(prune2)
+[[ ! -e "$I/x.sh" && "$OUT" == *"removed here"*"$I/x.sh"* ]] \
+  && pass "and a commit after it that deletes the file removes it" || fail "forward delete" "$OUT"
+
+echo ""
 echo "=== a commit the clone lacks ==="
 [ -z "$(report "")" ] && [ -z "$(report unknown)" ] && pass "no record prints nothing" || fail "no record" ""
 OUT=$(report 0123456789abcdef0123456789abcdef01234567)
