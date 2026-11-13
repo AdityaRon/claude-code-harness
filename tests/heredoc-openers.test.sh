@@ -18,9 +18,19 @@ M='echo HDMARK'
 # The oracle runs each case for real, so nothing it names may reach a repo, a
 # cluster or GitHub: an empty environment, a throwaway HOME, and stubs first on PATH.
 for b in git gh python3 kubectl curl sudo; do printf '#!/bin/sh\nexit 0\n' > "$TMP/stub/$b"; chmod +x "$TMP/stub/$b"; done
-runs_in_bash() {
-  (cd "$TMP/run" && env -i HOME="$TMP/home" PATH="$TMP/stub:/usr/bin:/bin" /bin/bash -c "$1" 2>/dev/null) | grep -qx HDMARK
+# Each run reads /dev/null and its process group is killed after it, or after
+# ORACLE_LIMIT seconds: a case a shell hangs on is a failed row, not a stuck suite.
+ORACLE_LIMIT=10
+oracle() {   # SHELL CMD: 0 if SHELL printed the marker line
+  local out="$TMP/oracle.out"; rm -f "$out" "$out.late"
+  ( set -m
+    (cd "$TMP/run" && exec env -i HOME="$TMP/home" PATH="$TMP/stub:/usr/bin:/bin" "$1" -c "$2" </dev/null >"$out" 2>/dev/null) & p=$!
+    (sleep "$ORACLE_LIMIT"; kill -9 -- -"$p" && : > "$out.late") & w=$!
+    wait "$p"; kill -- -"$w"; wait "$w"; kill -9 -- -"$p" ) 2>/dev/null
+  [ -e "$out.late" ] && { fail "$1 did not end within ${ORACLE_LIMIT}s" "[${2//$'\n'/\\n}]"; return 1; }
+  grep -qx HDMARK "$out"
 }
+runs_in_bash() { oracle /bin/bash "$1"; }
 keeps() { printf '%s\n' "$1" | grep -qxF "$M"; }
 
 # Each case: a label, then the command. The marker line is always a line of its own.
@@ -136,14 +146,15 @@ echo "=== a substitution the opener line leaves open: the next line is code ==="
 # calls it unreadable and keeps the ; before it. demand.py checks every row.
 # strip_message_heredocs drops only a message body, so its row has git commit -F -
 # for cat. A check main passes too is left out: strip_inert on a >( target, and
-# separate_groups in "$( )".
+# separate_groups in "$( )". The >( rows write stderr to it: on Linux, cat given
+# a >( as a file reads its own pipe and never ends.
 GM='(echo HDMARK)'
 B32=; [ "$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"')" = 3 ] && B32=1
 OPENAT=(
   "a \$( opened after the opener"      $'cat > notes.md <<\'EOF\' $(echo\nx ) ; \\\n'"$M"$'\nEOF'
   "a \"\$( opened after the opener"    $'cat > notes.md <<\'EOF\' "$(echo\nx )" ; \\\n'"$M"$'\nEOF'
   "a <( opened after the opener"       $'cat > notes.md <<\'EOF\' <(echo\nx ) ; \\\n'"$M"$'\nEOF'
-  "a >( opened after the opener"       $'cat > notes.md <<\'EOF\' >(echo\nx ) ; \\\n'"$M"$'\nEOF'
+  "a >( opened after the opener"       $'cat > notes.md <<\'EOF\' 2> >(echo\nx ) ; \\\n'"$M"$'\nEOF'
   "a backtick opened after the opener" $'cat > notes.md <<\'EOF\' `echo\nx ` ; \\\n'"$M"$'\nEOF'
   "a group closed in a \$( ) opened after it" $'cat > notes.md <<\'EOF\' $( (echo)\nx ) ; \\\n'"$M"$'\nEOF'
   "\${x:-(} in a \$( ) after it (bash 3.2 counts the paren)" $'cat > notes.md <<\'EOF\' $(echo ${x:-(})\nx ) ; \\\n'"$M"$'\nEOF'
@@ -152,7 +163,7 @@ OPENAT=(
 FRAME_OPEN=(
   "a \$( opened after an opener in \"\$( )\"" $'echo "$(cat <<\'EOF\' $(echo\nx ) ; \\\n'"$M"$'\nEOF\necho )"'
   "a <( opened after an opener in \"\$( )\"" $'echo "$(cat <<\'EOF\' <(echo\nx ) ; \\\n'"$M"$'\nEOF\necho )"'
-  "a >( opened after an opener in \"\$( )\"" $'echo "$(cat <<\'EOF\' >(echo\nx ) ; \\\n'"$M"$'\nEOF\necho )"'
+  "a >( opened after an opener in \"\$( )\"" $'echo "$(cat <<\'EOF\' 2> >(echo\nx ) ; \\\n'"$M"$'\nEOF\necho )"'
 )
 as_message() {   # the command with a commit message for its body
   local c=$1 a='cat > notes.md' b='git commit -F -' f='$(cat <<' g='$(true; git commit -F - <<'
@@ -188,9 +199,7 @@ else echo "  ($nopen of $((${#OF[@]} / 2)) opener rows run the marker in this /b
 ZSH_OPENAT=(
   "case in a \$( ) opened after the opener (zsh)" $'cat > notes.md <<\'EOF\' $(case a in a) echo\nx ;; esac) ; \\\n'"$M"$'\nEOF'
 )
-runs_in_zsh() {
-  (cd "$TMP/run" && env -i HOME="$TMP/home" PATH="$TMP/stub:/usr/bin:/bin" /bin/zsh -c "$1" 2>/dev/null) | grep -qx HDMARK
-}
+runs_in_zsh() { oracle /bin/zsh "$1"; }
 if [ -x /bin/zsh ]; then
   for ((i = 0; i < ${#ZSH_OPENAT[@]}; i += 2)); do
     label=${ZSH_OPENAT[$i]}; cmd=${ZSH_OPENAT[$((i + 1))]}; mcmd=$(as_message "$cmd")
