@@ -17,11 +17,36 @@ if command -v jq &>/dev/null; then
   eval "$(printf '%s\n' "$INPUT" | jq -r '@sh "SOURCE=\(.source // "") SESSION_ID=\(.session_id // "") LAUNCH_DIR=\(.cwd // "")"' 2>/dev/null)"
 fi
 
+# --- time budget -------------------------------------------------------------
+# Every section below is context or housekeeping the session can start without.
+# One that would start past the budget (bash's whole-second SECONDS: 3.2 has no
+# finer clock, so a budget of 3 is between two and three seconds) is skipped and named on one line at exit. A section already
+# running is not stopped, so the hook can overrun by one section; settings.json's
+# 30 s timeout is the hard stop, where Claude Code's own default is 10 minutes.
+BUDGET=${CLAUDE_SESSION_START_BUDGET:-3}
+SKIPPED=""
+in_budget() { (( SECONDS < BUDGET )) && return 0; SKIPPED="$SKIPPED $1"; return 1; }
+trap '[[ -z "$SKIPPED" ]] || printf "\nsession-start: past its %s s budget, skipped:%s\n" "$BUDGET" "$SKIPPED"' EXIT
+
+# lock FILE: true for one of the sessions that resume together after a reboot, so
+# one of them does the per-machine work. A noclobber create is atomic and starts
+# no process. The holder removes FILE; one older than 10 minutes was left by a
+# killed run, and the first to rename it away takes over.
+lock() {  # FILE [NOW]: NOW saves a date call where the caller has the time
+  local t now=${2:-$(date +%s)}
+  set -C; { printf '%s\n' "$now" > "$1"; } 2>/dev/null && { set +C; return 0; }; set +C
+  # A lock with no time yet is being written by its holder this instant.
+  t="" && { read -r t < "$1" 2>/dev/null || true; }
+  [[ "$t" =~ ^[0-9]+$ ]] && (( now - t > 600 )) || return 1
+  mv "$1" "$1.$$" 2>/dev/null || return 1
+  rm -f "$1.$$"; lock "$1" "$now"
+}
+
 # Skipped on startup: the CLI's own system prompt already carries branch,
 # main branch, status and `git log --oneline -n 5` (its gitStatus block), so
 # this was a second copy. A cleared conversation gets a fresh gitStatus too.
 # On resume/compact/fork that snapshot may be stale.
-if [[ "$SOURCE" != "startup" && "$SOURCE" != "clear" ]] && git rev-parse --git-dir &>/dev/null 2>&1; then
+if [[ "$SOURCE" != "startup" && "$SOURCE" != "clear" ]] && in_budget git-context && git rev-parse --git-dir &>/dev/null 2>&1; then
   BRANCH=$(git branch --show-current 2>/dev/null || echo "detached HEAD")
   DIRTY=$(git status --short 2>/dev/null | head -10)
   COMMITS=$(git log --oneline -5 2>/dev/null)
@@ -68,7 +93,8 @@ MEM_DIR="$PROJECTS_DIR/$STORE_SLUG/memory"
 IDX_LINES=0 IDX_BYTES=0
 [[ -f "$MEM_DIR/MEMORY.md" ]] && read -r IDX_LINES IDX_BYTES < <(wc -lc < "$MEM_DIR/MEMORY.md")
 # The stamp and the lock are read only under pressure, the rare case.
-if { [[ "$IDX_LINES" -ge "${MEMORY_INDEX_PRESSURE_LINES:-180}" ]] || [[ "$IDX_BYTES" -ge "${MEMORY_INDEX_PRESSURE_CHARS:-20000}" ]]; }; then
+if { [[ "$IDX_LINES" -ge "${MEMORY_INDEX_PRESSURE_LINES:-180}" ]] || [[ "$IDX_BYTES" -ge "${MEMORY_INDEX_PRESSURE_CHARS:-20000}" ]]; } \
+   && in_budget memory-index; then
   STAMP_FILE="$STATE_DIR/memory-index/$STORE_SLUG"
   STAMP="$(date -r "$MEM_DIR/MEMORY.md" +%s 2>/dev/null) $IDX_BYTES"
   LOCK_FRESH=""
@@ -79,12 +105,17 @@ if { [[ "$IDX_LINES" -ge "${MEMORY_INDEX_PRESSURE_LINES:-180}" ]] || [[ "$IDX_BY
       [[ -f "$cand" ]] && INDEX_TOOL="$cand" && break
     done
     # Silent: a pure permutation leaves the model nothing to act on. Stamped
-    # after the write so the stamp records the index as it is now.
-    if [[ -n "$INDEX_TOOL" ]]; then
-      CLAUDE_MEMORY_PROJECTS_DIR="$PROJECTS_DIR" \
-        bash "$INDEX_TOOL" --store "$STORE_SLUG" --write >/dev/null 2>&1 || true
-      mkdir -p "$STATE_DIR/memory-index" 2>/dev/null \
-        && printf '%s %s\n' "$(date -r "$MEM_DIR/MEMORY.md" +%s 2>/dev/null)" "$(wc -c < "$MEM_DIR/MEMORY.md" | tr -d ' ')" > "$STAMP_FILE" 2>/dev/null
+    # after the write so the stamp records the index as it is now. One session
+    # per store writes; the stamp is read again under the lock.
+    [[ -d "$STATE_DIR/memory-index" ]] || mkdir -p "$STATE_DIR/memory-index" 2>/dev/null
+    if [[ -n "$INDEX_TOOL" ]] && lock "$STAMP_FILE.lock"; then
+      CUR="" && { read -r CUR < "$STAMP_FILE" 2>/dev/null || true; }
+      if [[ "$CUR" != "$STAMP" ]]; then
+        CLAUDE_MEMORY_PROJECTS_DIR="$PROJECTS_DIR" \
+          bash "$INDEX_TOOL" --store "$STORE_SLUG" --write >/dev/null 2>&1 || true
+        printf '%s %s\n' "$(date -r "$MEM_DIR/MEMORY.md" +%s 2>/dev/null)" "$(wc -c < "$MEM_DIR/MEMORY.md" | tr -d ' ')" > "$STAMP_FILE" 2>/dev/null
+      fi
+      rm -f "$STAMP_FILE.lock"
     fi
   fi
 fi
@@ -94,7 +125,7 @@ fi
 # the record, and the branch stays checked out there: it cannot be deleted or
 # checked out again. Prune the launch repo and the repos one level under it.
 # Reading the records forks nothing; git runs only when one is stale, detached.
-for g in "$LAUNCH_DIR/.git" "$LAUNCH_DIR"/*/.git; do
+in_budget worktree-prune && for g in "$LAUNCH_DIR/.git" "$LAUNCH_DIR"/*/.git; do
   [[ -d "$g/worktrees" ]] || continue
   for f in "$g"/worktrees/*/gitdir; do
     [[ -f "$f" ]] || continue
@@ -112,13 +143,18 @@ done
 # once per CLI version per day, stamped in STATE_DIR: nothing the reader can do
 # changes between sessions, and it fired in every session in every repo.
 PIN_FILE=$(expand_tilde "${CLAUDE_CONTRACT_PIN:-$HOME/.claude/harness-contract.version}")
-if [[ -f "$PIN_FILE" ]]; then
+if [[ -f "$PIN_FILE" ]] && in_budget contract-nudge; then
   PIN="" && { IFS= read -r PIN < "$PIN_FILE" || true; }
   CLI=${CLAUDE_CLI_VERSION:-$(cli_version)}
   if [[ -n "$PIN" && -n "$CLI" && "$CLI" != "$PIN" ]]; then
     STAMP_FILE="$STATE_DIR/contract-nudge"
-    STAMP="$CLI $(date +%Y-%m-%d)"
-    if [[ ! -f "$STAMP_FILE" || "$(head -1 "$STAMP_FILE" 2>/dev/null)" != "$STAMP" ]]; then
+    read -r NOW TODAY < <(date '+%s %Y-%m-%d')
+    STAMP="$CLI $TODAY"
+    CUR="" && { read -r CUR < "$STAMP_FILE" 2>/dev/null || true; }
+    [[ "$CUR" != "$STAMP" && ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR" 2>/dev/null
+    # Once per machine per day: the session holding the lock reads the stamp again.
+    if [[ "$CUR" != "$STAMP" ]] && lock "$STAMP_FILE.lock" "$NOW" \
+       && { CUR="" && { read -r CUR < "$STAMP_FILE" 2>/dev/null || true; }; [[ "$CUR" != "$STAMP" ]] || { rm -f "$STAMP_FILE.lock"; false; }; }; then
       echo ""
       # An older CLI is behind, not past: the review already merged, and settings
       # it added (onFailure needs 2.1.295) are ignored until Claude Code updates.
@@ -129,7 +165,8 @@ if [[ -f "$PIN_FILE" ]]; then
         echo "## Claude Code is past the harness contract"
         echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift run lands the review and the release that follows; the scheduled harness-update installs it. If this persists for more than a day, see the Release blocked issue."
       fi
-      mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
+      printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
+      rm -f "$STAMP_FILE.lock"
     fi
   fi
 fi
@@ -145,7 +182,7 @@ if ! host_binary_check; then echo ""; fi
 # the tag is being worked on.
 LATEST_FILE=$(expand_tilde "${CLAUDE_HARNESS_LATEST:-$HOME/.claude/state/harness-latest}")
 VERSION_FILE=$(expand_tilde "${CLAUDE_HARNESS_VERSION:-$HOME/.claude/harness.version}")
-if [[ -f "$LATEST_FILE" && -f "$VERSION_FILE" ]]; then
+if [[ -f "$LATEST_FILE" && -f "$VERSION_FILE" ]] && in_budget release-nudge; then
   LATEST="" INSTALLED=""
   read -r LATEST _ < "$LATEST_FILE" || true
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -155,11 +192,16 @@ if [[ -f "$LATEST_FILE" && -f "$VERSION_FILE" ]]; then
   if [[ "$LATEST" =~ $SEMVER && "$INSTALLED" =~ $SEMVER && "$LATEST" != "$INSTALLED" \
         && "$(printf '%s\n%s\n' "$LATEST" "$INSTALLED" | sort -V | tail -1)" == "$LATEST" ]]; then
     STAMP_FILE="$STATE_DIR/release-nudge"
-    STAMP="$LATEST $(date +%Y-%m-%d)"
-    if [[ ! -f "$STAMP_FILE" || "$(head -1 "$STAMP_FILE" 2>/dev/null)" != "$STAMP" ]]; then
+    read -r NOW TODAY < <(date '+%s %Y-%m-%d')
+    STAMP="$LATEST $TODAY"
+    CUR="" && { read -r CUR < "$STAMP_FILE" 2>/dev/null || true; }
+    [[ "$CUR" != "$STAMP" && ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR" 2>/dev/null
+    if [[ "$CUR" != "$STAMP" ]] && lock "$STAMP_FILE.lock" "$NOW" \
+       && { CUR="" && { read -r CUR < "$STAMP_FILE" 2>/dev/null || true; }; [[ "$CUR" != "$STAMP" ]] || { rm -f "$STAMP_FILE.lock"; false; }; }; then
       echo ""
       echo "## Harness $LATEST is available; $INSTALLED is installed. Run ~/.claude/harness-update.sh."
-      mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
+      printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
+      rm -f "$STAMP_FILE.lock"
     fi
   fi
 fi
@@ -168,6 +210,7 @@ fi
 # jq and a prior snapshot both exist.
 [[ "$SOURCE" != "resume" ]] && exit 0
 [[ -z "$SESSION_ID" ]] && exit 0
+in_budget resume-drift || exit 0
 
 # A mod Claude wrote in this session loads when it resumes, even if hot reload
 # was declined with "Not now". Name each one rather than let it arrive unseen.
@@ -186,8 +229,9 @@ SNAP_HEAD=$(jq -r '.git_head // ""' "$SNAP" 2>/dev/null)
 CUR_HEAD=""
 git rev-parse --git-dir &>/dev/null 2>&1 && CUR_HEAD=$(git rev-parse HEAD 2>/dev/null)
 
-# Walk edited_files, classify each.
-DRIFT_LINES=()
+# Walk edited_files, classify each. One hash process for all of them, not one
+# each: a long session edits dozens. A file the hasher cannot read has drifted.
+DRIFT_LINES=() PATHS=() WANT=() GOT_P=() GOT_H=()
 while IFS=$'\t' read -r path expected_hash expected_exists; do
   [[ -z "$path" ]] && continue
   if [[ ! -f "$path" ]]; then
@@ -196,11 +240,20 @@ while IFS=$'\t' read -r path expected_hash expected_exists; do
     fi
     continue
   fi
-  actual_hash=$(sha256_file "$path")
-  if [[ -n "$expected_hash" && "$actual_hash" != "$expected_hash" ]]; then
-    DRIFT_LINES+=("drifted: $path")
-  fi
+  [[ -n "$expected_hash" ]] && { PATHS+=("$path"); WANT+=("$expected_hash"); }
 done < <(jq -r '.edited_files[]? | [.path, .sha256, (.exists|tostring)] | @tsv' "$SNAP" 2>/dev/null)
+if [[ ${#PATHS[@]} -gt 0 ]]; then
+  while IFS= read -r line; do
+    GOT_H+=("${line%%  *}"); GOT_P+=("${line#*  }")
+  done < <(sha256_files "${PATHS[@]}")
+  for ((i = 0; i < ${#PATHS[@]}; i++)); do
+    actual_hash=""
+    for ((j = 0; j < ${#GOT_P[@]}; j++)); do
+      [[ "${GOT_P[$j]}" == "${PATHS[$i]}" ]] && { actual_hash=${GOT_H[$j]}; break; }
+    done
+    [[ "$actual_hash" != "${WANT[$i]}" ]] && DRIFT_LINES+=("drifted: ${PATHS[$i]}")
+  done
+fi
 
 HEAD_CHANGED=0
 if [[ -n "$SNAP_HEAD" && -n "$CUR_HEAD" && "$SNAP_HEAD" != "$CUR_HEAD" ]]; then
