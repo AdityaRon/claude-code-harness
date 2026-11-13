@@ -1,15 +1,33 @@
 #!/usr/bin/env bash
 # What an install changed since the commit the last one recorded, grouped by how
-# a running session picks it up. install.sh runs it; it reads the clone only.
-#   tools/pickup-report.sh PREV_COMMIT [REPO]
+# a running session picks it up. install.sh runs it with --prune, which removes
+# what prune_why allows; without it, it reads the clone only.
+#   tools/pickup-report.sh [--prune] PREV_COMMIT [REPO]
 set -u
+PRUNE=""
+if [[ "${1:-}" == --prune ]]; then PRUNE=1; shift; fi
 PREV=${1:-}
 REPO=${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 [[ -n "$PREV" && "$PREV" != unknown ]] || exit 0
 if ! git -C "$REPO" cat-file -e "$PREV^{commit}" 2>/dev/null; then
-  echo "  ℹ the last install was at ${PREV:0:12}, which this clone does not have; after a fetch: tools/pickup-report.sh ${PREV:0:12}"
+  echo "  ℹ the last install was at ${PREV:0:12}, which this clone does not have$([[ -n "$PRUNE" ]] && echo ", so nothing deleted from the clone was removed (previous install unknown)"); after a fetch: tools/pickup-report.sh ${PREV:0:12}"
   exit 0
 fi
+
+# Why DEST, the installed copy of F, is kept; empty when it may go. Bytes equal
+# to F's blob at PREV mean install wrote it and nothing edited it since.
+SETTINGS="$HOME/.claude/settings.json"
+prune_why() {  # F REL DEST
+  if [[ -z "$PREV" || "$PREV" == unknown ]] || ! git -C "$REPO" cat-file -e "$PREV^{commit}" 2>/dev/null; then
+    echo "previous install unknown"
+  elif [[ ! -f "$3" || -L "$3" ]] \
+       || [[ "$(git -C "$REPO" hash-object --no-filters -- "$3" 2>/dev/null)" != "$(git -C "$REPO" rev-parse -q --verify "$PREV:$1" 2>/dev/null)" ]]; then
+    echo "edited since install"
+  elif grep -qsF -- ".claude/$2" "$SETTINGS"; then
+    echo "settings.json refers to it"
+  fi
+}
+
 # The last install's commit against the working tree, as install copies it, and
 # files not yet committed, each with its status so a deleted file is told apart.
 TAB=$'\t'
@@ -17,7 +35,7 @@ CHANGES=$({ git -C "$REPO" diff --no-renames --name-status "$PREV" --
             git -C "$REPO" ls-files --others --exclude-standard | awk '{ print "A\t" $0 }'; } 2>/dev/null \
           | sort -t "$TAB" -k2,2 -u)
 
-LIVE="" RULES="" TOOLS="" PANEL="" SKILLS="" GONE=""
+LIVE="" RULES="" TOOLS="" PANEL="" SKILLS="" GONE="" REMOVED=""
 while IFS=$TAB read -r st f; do
   [[ -n "${f:-}" ]] || continue
   # In a case pattern * matches / too, so each pattern is held to the depth
@@ -31,11 +49,22 @@ while IFS=$TAB read -r st f; do
     2:skills/*/SKILL.md|2:skills/*/*.example.toml|3:skills/*/bin/*) g=SKILL ;;
     *) [[ "$f" == skills/* && "${f#skills/*/}" == templates/* ]] || continue; g=SKILL ;;
   esac
-  # install copies and never deletes, so a file gone from the clone stays where
-  # an earlier install put it. templates/ is swapped whole; config/ is merged.
+  # A file gone from the clone stays where an earlier install put it, unless
+  # --prune removes it. templates/ is swapped whole; config/ is merged.
   if [[ "$st" == D && "$f" != skills/*/templates/* && "$f" != config/* ]]; then
-    [[ "$g" == TOOLS ]] && f=${f#bin/}
-    GONE="$GONE  $HOME/.claude/$f"
+    rel=$f; [[ "$g" == TOOLS ]] && rel=${f#bin/}
+    dest="$HOME/.claude/$rel"
+    # Nothing there to keep or remove: no install wrote it, or it is gone already.
+    [[ -e "$dest" || -L "$dest" ]] || continue
+    # Still in the clone under that name: on a case-insensitive disk, a file
+    # renamed only in case, whose installed copy is the new one.
+    [[ -e "$REPO/$f" ]] && continue
+    if [[ -z "$PRUNE" ]]; then
+      GONE="$GONE  $dest"
+    else
+      why=$(prune_why "$f" "$rel" "$dest")
+      if [[ -z "$why" ]] && rm -f -- "$dest"; then REMOVED="$REMOVED  $dest"; else GONE="$GONE  $dest (${why:-could not remove})"; fi
+    fi
     continue
   fi
   case "$g" in
@@ -48,7 +77,7 @@ while IFS=$TAB read -r st f; do
   esac
 done <<< "$CHANGES"
 
-if [[ -z "$LIVE$RULES$TOOLS$PANEL$SKILLS$GONE" ]]; then
+if [[ -z "$LIVE$RULES$TOOLS$PANEL$SKILLS$GONE$REMOVED" ]]; then
   echo "  ✓ nothing installed changed since ${PREV:0:12}"
   exit 0
 fi
@@ -58,5 +87,6 @@ echo "How running sessions pick up what changed since ${PREV:0:12}:"
 [[ -n "$TOOLS" ]] && echo "  Tools in ~/.claude, on their next run:$TOOLS"
 [[ -n "$SKILLS" ]] && echo "  Skills, when a running session calls them again:$SKILLS"
 [[ -n "$PANEL" ]] && echo "  A panel, when the session that shows it restarts: type \`! claude respawn <job>\` at your own prompt (from another session the auto-mode classifier denies it):$PANEL"
-[[ -n "$GONE" ]] && echo "  Deleted from the clone; install does not delete, so the earlier copy stays until removed by hand:$GONE"
+[[ -n "$REMOVED" ]] && echo "  Deleted from the clone, and removed here because install wrote it and nothing changed it (each is in git at ${PREV:0:12}):$REMOVED"
+[[ -n "$GONE" ]] && echo "  Deleted from the clone; the earlier copy stays until removed by hand:$GONE"
 exit 0
