@@ -193,7 +193,7 @@ class Heredocs:
     over lines; scan() raises ValueError on a << it cannot read for certain."""
 
     def __init__(self):
-        self.q, self.frames, self.bt, self.cont = "", [], False, False
+        self.q, self.frames, self.bt, self.cont, self.pd = "", [], False, False, 0   # pd: lib.sh's hpd
         self.subseen = self.insub = False
         self.hbq, self.hbdep, self.tail = "", 0, ""   # hd_body's HB_Q, HB_DEP, HB_TAIL
 
@@ -240,7 +240,11 @@ class Heredocs:
         return False
 
     def scan(self, s: str):
-        found, n, esc, i = None, len(s), -2, 0
+        found, n, esc, i, pd0, sp0 = None, len(s), -2, 0, 0, 0
+
+        def after():   # lib.sh's hd_after: inside a substitution opened after this line's <<
+            return bool(found) and (self.pd > pd0 or len(self.frames) > sp0 or self.bt)
+
         if self.tail and self.tail in s:   # a quote a body left open flips this line
             raise ValueError(s)
         while i < n:
@@ -257,21 +261,30 @@ class Heredocs:
                 i += 1
                 continue
             if c == "\\":
+                if after():
+                    raise ValueError(s)
                 esc, i = i + 1, i + 2
                 continue
             if c == "$" and s[i + 1:i + 2] == "{":
                 j = s.find("}", i + 2)
                 if j < 0 or re.search(r"['\"`{]|<<|\$\(", s[i + 2:j]):
                     raise ValueError(s)
+                if "(" in s[i + 2:j] or ")" in s[i + 2:j]:   # bash 3.2 counts it inside a $( )
+                    if after() or (self.frames and not self.frames[-1][2]):
+                        raise ValueError(s)
                 i = j + 1
                 continue
             if self.q == '"':
                 if c == '"':
                     self.q = ""
                 elif c == "`":
+                    if after():
+                        raise ValueError(s)
                     self.frames.append(['"', 0, True])
                     self.q = ""
                 elif c == "$" and s[i + 1:i + 3] == "((":
+                    if after():
+                        raise ValueError(s)
                     i = _arith(s, i + 1)
                     if i < 0:
                         raise ValueError(s)
@@ -291,11 +304,19 @@ class Heredocs:
                 while j >= 0 and s[j] == "$" and esc != j:
                     j -= 1
                 self.q = "A" if (i - 1 - j) % 2 else "'"
+                if self.q == "A" and after():
+                    raise ValueError(s)
             elif c == '"':
                 self.q = '"'
             elif c == "`":
+                if not self.bt and after():
+                    raise ValueError(s)
                 self.bt = not self.bt
             elif c == "#" and esc != i - 1 and (not self.cont if i == 0 else s[i - 1] in " \t;&|()"):
+                # in a $( ) frame bash 3.2 reads a comment as text, zsh skips it
+                if after() or (not self.bt and self.frames and not self.frames[-1][2]
+                               and re.search(r"[()'\"`\\]", s[i + 1:])):
+                    raise ValueError(s)
                 if not self.bt and not (self.frames and self.frames[-1][2]):
                     break
                 j = s.find("`", i + 1)      # inside backticks the comment ends there
@@ -304,6 +325,8 @@ class Heredocs:
                 i = j
                 continue
             elif c == "(" and s[i + 1:i + 2] == "(":
+                if after():
+                    raise ValueError(s)
                 i = _arith(s, i)
                 if i < 0:
                     raise ValueError(s)
@@ -313,13 +336,20 @@ class Heredocs:
                     raise ValueError(s)
             elif found and self.insub and c == ")":   # x=$(cat <<EOF) ends it here, in zsh too
                 raise ValueError(s)
+            elif c in "()" and found and (self.bt or (len(self.frames) > sp0 and self.frames[-1][2])):
+                raise ValueError(s)
             elif self.frames and not self.frames[-1][2] and c in "()":
                 self.frames[-1][1] += 1 if c == "(" else -1
                 if self.frames[-1][1] == 0:
                     self.q = self.frames.pop()[0]
-            elif (self.frames and not self.frames[-1][2] and s.startswith("case", i) and s[i + 4:i + 5] in (" ", "\t")
-                  and (i == 0 or s[i - 1] in " \t;&|(")):
+            elif (((self.frames and not self.frames[-1][2]) or after()) and s.startswith("case", i)
+                  and s[i + 4:i + 5] in (" ", "\t") and (i == 0 or s[i - 1] in " \t;&|(")):
                 raise ValueError(s)
+            elif not self.frames and not self.bt and c == "(" and (
+                    self.pd or (i > 0 and s[i - 1] in "$<>" and esc != i - 1)):
+                self.pd += 1
+            elif not self.frames and not self.bt and c == ")" and self.pd:
+                self.pd -= 1
             elif c == "<" and s[i + 1:i + 2] == "<":
                 if s[i + 2:i + 3] == "<":
                     i += 2
@@ -327,7 +357,7 @@ class Heredocs:
                     w = None if self.bt or found or (self.frames and self.frames[-1][2]) else _word(s, i)
                     if not w:
                         raise ValueError(s)
-                    found = w
+                    found, pd0, sp0 = w, self.pd, len(self.frames)
                     self.hbq, self.hbdep = "", 0
                     self.insub = self.subseen or bool(HD_SUB.search(s, 0, i + 1))
                     if self.insub and (re.search(r"[()'\"`\\]", w[1]) or self.body(s[i + w[0]:])):
@@ -336,8 +366,8 @@ class Heredocs:
             i += 1
         self.cont = esc == n
         self.subseen = self.subseen or bool(HD_SUB.search(s)) or (self.cont and s[-2:-1] in ("$", "<", ">"))
-        if found and (self.q or self.cont):
-            raise ValueError(s)
+        if found and (self.q or self.cont or self.pd > pd0 or len(self.frames) > sp0 or self.bt):
+            raise ValueError(s)   # a substitution left open past the <<: the next line is code
         return found
 
 
