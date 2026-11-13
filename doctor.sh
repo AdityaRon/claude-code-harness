@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs every test in tests/ and reports totals.
-# Exit code = number of suites that failed, were killed or timed out.
+# Exit code = number of suites that failed, were killed or timed out (at most 100).
 #   bash doctor.sh --skill comms-hub   that skill's prerequisites instead
 #   bash doctor.sh --hosts             running claude processes whose binary is gone
 #   bash doctor.sh --latency [ARGS]    hook wall times from the transcripts (tools/hook-latency.py)
@@ -52,37 +52,52 @@ NOTES="" NK=0 NT=0 TIMES=""
 # --smoke runs the suites tests/smoke.list names, one or more per wired hook
 # (repo-layout.test.sh holds it to that); install.sh runs it, the rest run all.
 SUITES=(tests/*.test.sh)
+# A list that names none (missing, emptied, CRLF line ends unstripped) would run
+# nothing and read green, so it stops here instead.
 if [[ "${1:-}" == "--smoke" ]]; then
   SUITES=()
-  while IFS= read -r s || [[ -n "$s" ]]; do
-    [[ "$s" == tests/*.test.sh ]] && SUITES+=("$s")
-  done < tests/smoke.list
+  if [[ -f tests/smoke.list ]]; then
+    while IFS= read -r s || [[ -n "$s" ]]; do
+      s=${s%$'\r'}
+      [[ "$s" == tests/*.test.sh ]] && SUITES+=("$s")
+    done < tests/smoke.list
+  fi
+  [[ ${#SUITES[@]} -gt 0 ]] || { echo "doctor.sh --smoke: tests/smoke.list names no tests/*.test.sh suite" >&2; exit 2; }
 fi
 
-# A suite gets SUITE_TIMEOUT seconds in its own process group, then SIGALRM:
-# status 142, read as TIMEOUT. A suite killed by any other signal, with no
-# Results line, is KILLED: a restart or an OOM, not a failing test.
+# A suite gets SUITE_TIMEOUT seconds in its own process group. Then a watchdog
+# marks it and sends the group SIGALRM, and it reads TIMEOUT. A suite killed by
+# any other signal, with no Results line, is KILLED: a restart or an OOM, not a
+# failing test. Its own group means a SIGKILL of doctor, which nothing can trap,
+# leaves the suite running until the watchdog stops it at the limit.
 SUITE_TIMEOUT=${CCH_SUITE_TIMEOUT:-1800}
 set -m
-run_bounded() {  # suite out-file: returns the suite's status
-  local pid wd st
-  bash "$1" > "$2" 2>&1 &
-  pid=$!; CUR_PID=$pid
+CUR_PID="" CUR_WD="" CUR_SUITE=""
+run_bounded() {  # suite out-file alarm-marker: returns the suite's status
+  local st
+  bash "$1" > "$2" 2>&1 < /dev/null &
+  CUR_PID=$!
   ( trap 'kill "$s" 2>/dev/null; exit 0' TERM
-    sleep "$SUITE_TIMEOUT" & s=$!; wait "$s" && kill -ALRM -- -"$pid" 2>/dev/null ) &
-  wd=$!
-  wait "$pid"; st=$?
-  kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
+    sleep "$SUITE_TIMEOUT" & s=$!; wait "$s" && : > "$3" && kill -ALRM -- -"$CUR_PID" 2>/dev/null ) &
+  CUR_WD=$!
+  # With set -m, bash reports a job a signal ended ("Alarm clock") on stderr.
+  wait "$CUR_PID" 2>/dev/null; st=$?
+  kill "$CUR_WD" 2>/dev/null; wait "$CUR_WD" 2>/dev/null
+  CUR_PID="" CUR_WD=""
   return "$st"
 }
 
 # Stopped itself (a session restart sends TERM to the group): the summary says
-# so, and the suite that was running reads KILLED, not failed.
-CUR_PID="" CUR_SUITE=""
+# so, and the suite that was running and its watchdog are stopped too.
 stopped() {
-  [[ -n "$CUR_PID" ]] && kill -TERM -- -"$CUR_PID" 2>/dev/null
+  local at="after suite $TOTAL_SUITES of ${#SUITES[@]}" so="so far"
+  [[ -n "$CUR_WD" ]] && kill "$CUR_WD" 2>/dev/null
+  if [[ -n "$CUR_PID" ]]; then
+    kill -TERM -- -"$CUR_PID" 2>/dev/null
+    at="while running suite $TOTAL_SUITES of ${#SUITES[@]} ($CUR_SUITE)" so="before it"
+  fi
   echo ""
-  echo "SUMMARY: KILLED by SIG$1 while running suite $TOTAL_SUITES of ${#SUITES[@]} ($CUR_SUITE); nothing after it ran ($TOTAL_PASS passed, $TOTAL_FAIL failed before it)"
+  echo "SUMMARY: KILLED by SIG$1 $at; nothing after it ran ($TOTAL_PASS passed, $TOTAL_FAIL failed $so)"
   exit $((128 + $2))
 }
 trap 'stopped TERM 15' TERM
@@ -97,7 +112,7 @@ for f in "${SUITES[@]}"; do
   echo "▶ $f"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   T0=$SECONDS CUR_SUITE=$f
-  run_bounded "$f" "$AUDIT_TMP/suite.out"
+  run_bounded "$f" "$AUDIT_TMP/suite.out" "$AUDIT_TMP/alarm.$TOTAL_SUITES"
   STATUS=$?
   TIMES="$TIMES$((SECONDS - T0)) $f"$'\n'
   OUTPUT=$(cat "$AUDIT_TMP/suite.out")
@@ -117,10 +132,10 @@ for f in "${SUITES[@]}"; do
   TOTAL_TIMED=$((TOTAL_TIMED + ${tt:-0}))
   if [[ "$STATUS" -eq 0 ]]; then
     :
-  elif [[ -z "$line" && "$STATUS" -eq 142 ]]; then
+  elif [[ -e "$AUDIT_TMP/alarm.$TOTAL_SUITES" ]]; then
     NT=$((NT+1)); NOTES="${NOTES}TIMEOUT: $f ran past doctor's ${SUITE_TIMEOUT} s limit"$'\n'
-  elif [[ -z "$line" && "$STATUS" -ge 128 ]]; then
-    NK=$((NK+1)); NOTES="${NOTES}KILLED: $f by SIG$(kill -l $((STATUS - 128)) 2>/dev/null || echo $((STATUS - 128))), no Results line: not a test result"$'\n'
+  elif [[ -z "$line" && "$STATUS" -gt 128 ]] && SIG=$(kill -l $((STATUS - 128)) 2>/dev/null); then
+    NK=$((NK+1)); NOTES="${NOTES}KILLED: $f by SIG$SIG, no Results line: not a test result"$'\n'
   elif [[ "${ff:-0}" -eq 0 && "${tt:-0}" -gt 0 ]]; then
     NT=$((NT+1)); NOTES="${NOTES}TIMEOUT: $f, ${tt} case(s) past their limit, none failed"$'\n'
   else
@@ -145,4 +160,6 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 STALE=$(stale_hosts)
 [[ -z "$STALE" ]] || echo "HOSTS: $(printf '%s\n' "$STALE" | wc -l | tr -d ' ') running claude process(es) have lost their binary to an upgrade (not counted above): bash doctor.sh --hosts"
 
-exit $((FAILED_SUITES + NK + NT))
+# An exit status is a byte: 256 suites would read 0.
+N=$((FAILED_SUITES + NK + NT)); [[ $N -gt 100 ]] && N=100
+exit "$N"
