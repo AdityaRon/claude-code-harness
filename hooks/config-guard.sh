@@ -24,11 +24,12 @@ require_parsable_or_deny
 H=$HOME
 # Most commands name none of these and are not run from inside ~/.claude. A
 # symlink into ~/.claude/hooks has to be made first, and ln is checked below.
-# Case-folded, as level_of matches: macOS formats APFS case-insensitive, so
-# ~/.CLAUDE/HOOKS is ~/.claude/hooks there.
+# Library/ lets a glob there in (~/Library/LaunchAgen*). Case-folded, as
+# level_of matches: macOS formats APFS case-insensitive, so ~/.CLAUDE/HOOKS is
+# ~/.claude/hooks there.
 shopt -s nocasematch
 [[ "$TOOL" == Bash || "$TOOL" == Monitor ]] && case "$TARGET" in
-  *.claude*|*.zsh*|*.zprofile*|*.zlog*|*.bashrc*|*.bash_profile*|*.bash_login*|*.profile*|*gitconfig*|*git/config*|*LaunchAgents*|*--global*) ;;
+  *.claude*|*.zsh*|*.zprofile*|*.zlog*|*.bashrc*|*.bash_profile*|*.bash_login*|*.profile*|*gitconfig*|*git/config*|*LaunchAgents*|*Library/*|*--global*) ;;
   *) case "$CWD" in "$H/.claude"|"$H/.claude/"*|*/.claude|*/.claude/skills/*|"$H/Library/LaunchAgents") ;; *) exit 0 ;; esac ;;
 esac
 shopt -u nocasematch
@@ -65,6 +66,12 @@ abs_path() {
     '$HOME'|'${HOME}') p=$H ;;
     '$HOME/'*) p="$H/${p#\$HOME/}" ;;
     '${HOME}/'*) p="$H/${p#\$\{HOME\}/}" ;;
+    # The session's folder and the project's, read only in a command with no cd.
+    '$PWD'|'$PWD/'*|'${PWD}'|'${PWD}/'*|'$CLAUDE_PROJECT_DIR'|'$CLAUDE_PROJECT_DIR/'*|'${CLAUDE_PROJECT_DIR}'|'${CLAUDE_PROJECT_DIR}/'*)
+      if [[ ${#BASES[@]} -eq 0 ]]; then
+        part=${p#\$}; part=${part#\{}; part=${part#PWD}; part=${part#CLAUDE_PROJECT_DIR}; part=${part#\}}
+        case "$p" in '$PWD'*|'${PWD}'*) p="${CWD:-$PWD}$part" ;; *) p="${CLAUDE_PROJECT_DIR:-${CWD:-$PWD}}$part" ;; esac
+      else p="${CWD:-$PWD}/$p"; fi ;;
     /*) ;;
     *) p="${CWD:-$PWD}/$p" ;;
   esac
@@ -155,6 +162,11 @@ classify_one() {   # classify_one ABS DESTRUCTIVE [TREE]
 under_home() {   # under_home WORD
   local u=${1//\"/}
   u=${u//\'/}; UNDER_HOME=""
+  # $PWD and $CLAUDE_PROJECT_DIR at the start of a word abs_path resolved.
+  [[ ${#BASES[@]} -eq 0 ]] && case "$u" in
+    '$PWD'|'$PWD/'*|'${PWD}'|'${PWD}/'*|'$CLAUDE_PROJECT_DIR'|'$CLAUDE_PROJECT_DIR/'*|'${CLAUDE_PROJECT_DIR}'|'${CLAUDE_PROJECT_DIR}/'*)
+      [[ "${u#?}" != *'$'* ]] && return ;;
+  esac
   # shellcheck disable=SC2088  # '~' is the tilde as typed
   case "$u" in
     *'$'*) u=${u##*\$}
@@ -192,24 +204,50 @@ check_word() {   # check_word WORD DESTRUCTIVE [TREE]
 }
 
 # A copy or move into folder DEST writes DEST/NAME for each source. A source
-# given as its contents (dir/, dir/., a glob) writes names the command does not
-# show, so DEST itself is the target. Either way the target is checked as a tree:
-# `cp -R x/.claude ~/` merges into ~/.claude. One source to a name that is not a
-# folder yet (no trailing /) is copied to that name: `mv .claude .claude.bak`.
+# whose names the command does not show (dir/, dir/., a glob, $f, {a,b}) can
+# write any name there, so DEST itself is the target. Either way the target is
+# checked as a tree: `cp -R x/.claude ~/` merges into ~/.claude. One source to a
+# name that is not a folder yet (no trailing /) is copied to that name
+# (`mv .claude .claude.bak`), but only where the guard knows that name: no
+# expansion, ~user, glob or brace in it, and no cd in the command.
 check_into() {   # check_into DEST SOURCE...
-  local dest=$1 s b
+  local dest=$1 s b m
   shift
   s=${dest//\"/}; s=${s//\'/}
-  if [[ $# -eq 1 && "$s" != */ && ! -d "$(abs_path "$s")" ]]; then check_word "$dest" 0 tree; return; fi
+  # shellcheck disable=SC2088  # '~' is the tilde as typed
+  case "$s" in
+    *'$'*|*'{'*|*'*'*|*'?'*|*'['*|'~'[!/]*) ;;
+    *) if [[ $# -eq 1 && "$s" != */ && ${#BASES[@]} -eq 0 && ! -d "$(abs_path "$s")" ]]; then
+         check_word "$dest" 0 tree; return
+       fi ;;
+  esac
+  case "$s" in *'*'*|*'?'*|*'['*)   # a folder a glob matches now
+    while IFS= read -r m; do [[ -d "$m" ]] && check_into "$m/" "$@"; done < <(compgen -G "$(abs_path "$s")" 2>/dev/null) ;;
+  esac
   for s in "$@"; do
     s=${s//\"/}; s=${s//\'/}
     case "$s" in [!/]*:*) s=${s#*:} ;; esac   # host:path, as scp and rsync take it
     b=${s##*/}
+    case "$s" in *'$'*|*'{'*) b='*' ;; esac
     case "$b" in
       ''|.|..|*'*'*|*'?'*|*'['*) check_word "$dest" 0 tree ;;
       *) check_word "$dest/$b" 0 tree ;;
     esac
   done
+}
+
+# A later relative -C is read from the one before it, as bsdtar does:
+# `-C ~ -C .claude/hooks` extracts into ~/.claude/hooks. An absolute or ~ one
+# starts again. Each is also kept as written. It sets scan_segment's xdirs, xcur.
+add_xdir() {   # add_xdir DIR
+  local u=${1//\"/}
+  u=${u//\'/}
+  xdirs+=("$1")
+  # shellcheck disable=SC2088  # '~' is the tilde as typed
+  case "$u" in
+    /*|'~'*|'$HOME'|'$HOME/'*|'${HOME}'|'${HOME}/'*) xcur=$1 ;;
+    *) if [[ -n "$xcur" ]]; then xcur="$xcur/$1"; xdirs+=("$xcur"); else xcur=$1; fi ;;
+  esac
 }
 
 # git config writes ~/.gitconfig with --global, or the file after --file.
@@ -245,29 +283,40 @@ opt_bundle() {   # opt_bundle LETTERS [old]
     case "$c:$l" in
       tar:x) extract=1 ;;
       unzip:[ltpvzZ]) listing=1 ;;
-      tar:[CbfTXs]|unzip:[dP])
+      tar:[CbfgTXs]|unzip:[dP])
         if [[ "$l" == C || "$l" == d ]]; then l=x; else l=s; fi
-        if [[ -n "$b" && -z "${2:-}" ]]; then [[ "$l" == x ]] && xdirs+=("$b"); return; fi
+        if [[ -n "$b" && -z "${2:-}" ]]; then [[ "$l" == x ]] && add_xdir "$b"; return; fi
         argq="$argq$l" ;;
     esac
   done
 }
 
 scan_segment() {
-  local words=() ops=() xdirs=() w i c n destr=0 inplace=0 tdir="" next="" sub="" extract="" listing="" argq=""
+  local words=() ops=() xdirs=() w i c n r destr=0 inplace=0 tdir="" next="" sub="" extract="" listing="" argq="" xcur=""
   set -f; read -ra words <<<"$1"; set +f
   [[ ${#words[@]} -eq 0 ]] && return
   c=${words[0]##*/}
   case "$c" in gtar|bsdtar) c=tar ;; esac
   for ((i = 1; i < ${#words[@]}; i++)); do
     w=${words[$i]}
-    if [[ -n "$argq" ]]; then [[ "${argq:0:1}" == x ]] && xdirs+=("$w"); argq=${argq:1}; continue; fi
+    if [[ -n "$argq" ]]; then [[ "${argq:0:1}" == x ]] && add_xdir "$w"; argq=${argq:1}; continue; fi
     if [[ -n "$next" ]]; then
-      case "$next" in t) tdir=$w ;; o) check_word "$w" 0 ;; x) xdirs+=("$w") ;; esac
-      next=""; continue
+      if [[ "$next" == x && "$w" == -* ]]; then next=""   # a --di... that takes no folder
+      else
+        case "$next" in t) tdir=$w ;; o) check_word "$w" 0 ;; x) add_xdir "$w" ;; esac
+        next=""; continue
+      fi
     fi
     case "$c:$w" in
-      cp:-t|mv:-t|install:-t|ln:-t) next=t; continue ;;
+      cp:-t|mv:-t|install:-t|ln:-t|cp:--target-directory|mv:--target-directory|install:--target-directory|ln:--target-directory) next=t; continue ;;
+      cp:-t?*|mv:-t?*|ln:-t?*) tdir=${w#-t}; continue ;;
+      cp:-[!-]*t*|mv:-[!-]*t*|ln:-[!-]*t*)   # -vt DIR, -vtDIR
+        r=${w#*t}; if [[ -n "$r" ]]; then tdir=$r; else next=t; fi; continue ;;
+      # rsync's options that take a value: the value is no source or destination.
+      rsync:--exclude|rsync:--include|rsync:--filter|rsync:-f|rsync:-e|rsync:--rsh|rsync:--exclude-from|rsync:--include-from|rsync:--files-from|\
+      rsync:--log-file|rsync:--chmod|rsync:-T|rsync:--temp-dir|rsync:--compare-dest|rsync:--copy-dest|rsync:--link-dest|rsync:--backup-dir|\
+      rsync:--partial-dir|rsync:--suffix|rsync:--max-size|rsync:--min-size|rsync:--timeout|rsync:--port|rsync:--password-file|rsync:--out-format|\
+      rsync:--bwlimit|rsync:-[!-]*[efT]) next=s; continue ;;
       *:--target-directory=*) tdir=${w#*=}; continue ;;
       curl:-[a-zA-Z]*o|curl:--output|wget:-[a-zA-Z]*O|wget:--output-document) next=o; continue ;;
       curl:--output=*|wget:--output-document=*) check_word "${w#*=}" 0; continue ;;
@@ -275,9 +324,9 @@ scan_segment() {
       dd:of=*) check_word "${w#of=}" 1; continue ;;
       sed:-i*|sed:-I*|sed:--in-place*|gsed:-i*|gsed:--in-place*|perl:-*i*|ruby:-*i*) inplace=1 ;;
       # Where tar and unzip extract to, and whether they do.
-      tar:--cd|tar:--directory) next=x; continue ;;
-      tar:--cd=*|tar:--directory=*) xdirs+=("${w#*=}"); continue ;;
-      tar:--extract|tar:--get) extract=1 ;;
+      tar:--cd=*|tar:--di*=*) add_xdir "${w#*=}"; continue ;;   # bsdtar takes --dir for --directory
+      tar:--cd|tar:--di*) next=x; continue ;;
+      tar:--extr*|tar:--get) extract=1 ;;
       tar:--*|unzip:--*) ;;
       tar:-?*|unzip:-?*) opt_bundle "${w#-}"; continue ;;
       tar:*) [[ $i == 1 ]] && { opt_bundle "$w" old; continue; } ;;   # tar xfC a.tar dir

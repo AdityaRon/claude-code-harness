@@ -8,6 +8,7 @@ HOOK=hooks/config-guard.sh
 PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cfg.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home" CLAUDE_AUDIT_LOG=/dev/null
+unset CLAUDE_PROJECT_DIR   # rows below set it where they read it
 mkdir -p "$HOME/.claude/hooks" "$HOME/.claude/plugins/cache/p/hooks" "$HOME/Library/LaunchAgents" "$TMP/proj"
 touch "$HOME/.claude/hooks/env-guard.sh" "$HOME/.claude/hooks/lib.sh" "$HOME/.claude/statusline.sh"
 ln -s "$HOME/.claude/hooks" "$TMP/link"
@@ -259,6 +260,48 @@ bash_is allow 'cp *.md ~/.claude/jobs/j/tmp/'
 bash_is allow 'cp ~/.claude/settings.json ~/.claude/settings.json.bak'
 bash_is allow 'rsync -a ~/.claude/ /srv/backup/'
 bash_is allow 'cp -R ~/.claude/hooks /srv/backup/'
+
+echo "=== review of #223: a destination or option the guard cannot read as one name ==="
+bash_is ask 'cp evil/.zshrc ~someone'
+bash_is ask 'cp evil/.zshrc $d'
+bash_is ask 'cp evil/.zshrc "$d"'
+bash_is ask 'cp evil/.zshrc /Users/$USER'
+bash_is ask 'mv evil/.zshrc ~someone'
+bash_is ask 'cd ~/Library && cp evil.plist LaunchAgents'
+bash_is ask 'cp evil.plist ~/Library/LaunchAgen*'
+bash_is allow 'cp evil/.zshrc /srv/newname'
+bash_is allow 'cp x ~/Library/Caches/y'
+bash_is ask 'tar -xf a.tar -C ~ -C .claude/hooks'
+bash_is allow 'tar -xf a.tar -C ~ -C /tmp/x'
+bash_is allow 'tar -xf a.tar -C /tmp -C x'
+bash_is ask 'tar --dir=~/.claude -xf a.tar'
+bash_is ask 'tar --dir ~/.claude -xf a.tar'
+bash_is ask 'tar --extr -f a.tar -C ~/.claude'
+bash_is ask 'tar --disable-copyfile -C ~/.claude -xf a.tar'
+bash_is allow 'tar --dir=/tmp/x -xf a.tar'
+bash_is ask 'rsync -a dir/ ~/.claude/ --exclude foo'
+bash_is ask 'rsync -a --delete /empty/ ~/.claude/hooks/ --exclude x'
+bash_is ask 'rsync -a --exclude-from=list dir/ ~/.claude/'
+bash_is allow 'rsync -a dir/ ~/Downloads/ --exclude .claude'
+bash_is allow 'rsync -avz -e ssh dir/ host:backup/ --exclude .claude'
+bash_is ask 'cp --target-directory ~/.claude settings.json'
+bash_is ask 'cp -vt ~/.claude settings.json'
+bash_is ask 'cp -t~/.claude settings.json'
+bash_is ask 'cp -Rvt ~/.claude dir/'
+bash_is allow 'cp -vt ~/.claude notes.md'
+bash_is ask 'cp "$f" ~/.claude/'
+bash_is ask 'cp ~/dotfiles/{settings.json,x} ~/.claude/'
+bash_is allow 'cp "$f" ~/.claude/jobs/j/tmp/'
+bash_is ask 'tar xgfC snar a.tar ~/.claude'
+bash_is allow 'tar xgfC snar a.tar /tmp/x'
+bash_is allow 'echo x > $PWD/.claude/hooks/pre.sh'
+bash_is allow 'echo x > "$CLAUDE_PROJECT_DIR/.claude/hooks/pre.sh"'
+bash_is allow 'cp pre.sh "$CLAUDE_PROJECT_DIR/.claude/hooks/"'
+bash_is ask 'echo x > ${PWD}/.claude/settings.json'
+bash_is ask 'cd ~ && echo x > $PWD/.claude/hooks/lib.sh'
+bash_is ask 'echo x > $PWD/$d/.claude/hooks/lib.sh'
+bash_is ask 'echo x > $PWD/.claude/hooks/lib.sh' "$HOME"
+CLAUDE_PROJECT_DIR=$HOME bash_is ask 'echo x > "$CLAUDE_PROJECT_DIR/.claude/hooks/lib.sh"'
 
 echo "=== a monitor's command is checked as a Bash command ==="
 monitor_is ask '{"command":"sleep 300; cp /srv/x.sh ~/.claude/hooks/env-guard.sh"}'
