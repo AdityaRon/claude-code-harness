@@ -43,7 +43,8 @@ def load_masks():
         (re.compile(r'(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+'), 'Bearer <MASKED>'),
         (re.compile(r'(?i)(password|passwd|secret|token|api[_-]?key|access[_-]?key|authorization)(["\']?\s*[:=]\s*["\']?)[^\s"\'&,;]+'), r'\1\2<MASKED>'),
         (re.compile(r'(://)[^/\s:@]+:[^/\s@]+@'), r'\1<MASKED>@'),
-        (re.compile(r'\b(?:gh[opusr]_|github_pat_|glpat-|npm_|xox[abprs]-|xapp-|sk[-_]|AKIA|ASIA|AIza)[-_A-Za-z0-9]{12,}'), '<TOKEN>'),
+        (re.compile(r'\b(?:gh[opusr]_|github_pat_|glpat-|xox[abprs]-|xapp-|sk[-_]|AKIA|AIza)[-_A-Za-z0-9]{12,}'), '<TOKEN>'),
+        (re.compile(r'\b(?:npm_[A-Za-z0-9]{36}|ASIA[0-9A-Z]{16})\b'), '<TOKEN>'),   # npm_config_x is a variable
         (re.compile(r'\beyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]{10,}'), '<JWT>'),
         (re.compile(r'hooks\.slack\.com/services/[\w/+-]{20,}'), 'hooks.slack.com/services/<MASKED>'),
         (re.compile(r'[\w.+-]+@[\w-]+\.[\w.]+'), '<EMAIL>'),
