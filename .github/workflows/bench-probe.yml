@@ -1,0 +1,31 @@
+# TEMPORARY: re-measures #218 at this head on the release's runner class. Removed before merge.
+name: bench probe
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  probe:
+    if: github.head_ref == 'bench-together'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: "serial v1.3.1 vs head", base: v1.3.1, head: HEAD, mode: "--serial"}
+          - {name: "together v1.3.1 vs head", base: v1.3.1, head: HEAD, mode: ""}
+          - {name: "together head vs head", base: HEAD, head: HEAD, mode: ""}
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: .github/install-apt-deps.sh jq
+      - name: Bench
+        run: |
+          echo "nproc $(nproc)"; bash --version | head -1
+          set +e
+          python3 tools/hook-bench.py --base "${{ matrix.base }}" --head "${{ matrix.head }}" ${{ matrix.mode }} --gate --md bench.md --json bench.json >/dev/null
+          echo "gate exit $?"
+          cat bench.md
+          cat bench.md >> "$GITHUB_STEP_SUMMARY"
