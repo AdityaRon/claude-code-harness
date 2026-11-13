@@ -65,7 +65,7 @@ by `tools/upstream-check.sh`: [docs/upstream-contract.md](docs/upstream-contract
 
 **Testing.** `bash doctor.sh` runs every suite in `tests/`; a new suite sources
 `tests/lib.sh` for `pass` and `fail`. CI runs doctor on Linux and macOS, lints
-the scripts and suites with shellcheck, compiles every Python file under 3.9,
+the scripts and suites with shellcheck, compiles every Python file with macOS's /usr/bin/python3 (3.9),
 and benchmarks each PR's hooks against main. Each skill's mutation list runs
 weekly (`.github/workflows/mutations.yml`).
 

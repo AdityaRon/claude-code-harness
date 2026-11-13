@@ -85,15 +85,15 @@ jobs:
         run: shellcheck -x -S error tests/*.sh
 
   python-compile:
-    # A syntax error in a script no test imports fails nothing else. 3.9 is the
-    # oldest interpreter any of them runs under: macOS's /usr/bin/python3.
+    # A syntax error in a script no test imports fails nothing else. The oldest
+    # interpreter any of them runs under is macOS's /usr/bin/python3 (3.9), so
+    # compile with that one; setup-python has no 3.9 for current Ubuntu.
     name: python compile
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
       - name: Compile every Python file
-        run: git ls-files -z '*.py' | xargs -0 python -m py_compile
+        run: |
+          /usr/bin/python3 --version
+          git ls-files -z '*.py' | xargs -0 /usr/bin/python3 -m py_compile
