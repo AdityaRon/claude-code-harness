@@ -40,6 +40,8 @@ found an approved guard ask held its call 92 to 269 s at the median, by guard.
 | `sensitive-file-guard` | A Grep whose `path` is your home folder or above it, and a Grep `glob` with `?`, `[..]` or more than one brace group, which the credential check cannot read |
 | `mod-gate` | A mod `claude plugin validate` gives no report for, a mod that hooks `settings.read` (it can rewrite the merged settings) or `agent.spawn` (it can rewrite a spawned agent's prompt and model), and a mod that hooks `tool.call` or calls something that runs outside the guards (`$.process`, `$.http`, `$.fs.write`, …) |
 
+A commit-message or PR-body heredoc is text to every guard, except when some line of the command is one the guards cannot read. That is a heredoc opener they cannot parse (two on one line, a delimiter they cannot parse, a quote or `\` left open on the opener line), or any line holding a `${ }` with a quote in it, an unclosed `${` or `$[`, or a `((` that does not close as one `))`. Then the whole command is scanned as typed, message included, so a phrase in the message such as `git push --force` can ask or be denied. That fails closed, and how often it happens has not been measured.
+
 ## Allowlisting a wrapper script bypasses every guard
 
 A PreToolUse hook sees only the top-level Bash command, never the `kubectl` or

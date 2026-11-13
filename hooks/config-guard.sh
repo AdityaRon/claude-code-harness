@@ -206,25 +206,6 @@ scan_segment() {
   esac
 }
 
-# A heredoc body is the data a command reads, unless that command is a shell.
-# Unterminated, it is all kept.
-drop_data_heredocs() {
-  local out
-  case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
-  out=$(printf '%s\n' "$1" | awk '
-    body { t = $0; if (dash) sub(/^\t+/, "", t)
-           if (t == term) { body = 0; print; next }
-           if (shell) print
-           next }
-    { print
-      if (match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/)) {
-        h = substr($0, RSTART + 2, RLENGTH - 2); dash = (h ~ /^-/); sub(/^-?[ \t]*["\047]?/, "", h)
-        shell = (substr($0, 1, RSTART - 1) ~ /(^|[;&|(])[ \t]*(bash|sh|zsh|dash|ksh)([ \t][^;&|]*)?$/)
-        term = h; body = 1 } }
-    END { if (body) exit 3 }') || { printf '%s' "$1"; return; }
-  printf '%s' "$out"
-}
-
 case "$TOOL" in
   Edit|Write|MultiEdit|NotebookEdit) check_word "$TARGET" 0 ;;
   Bash|Monitor)
