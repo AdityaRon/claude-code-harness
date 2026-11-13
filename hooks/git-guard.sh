@@ -452,12 +452,14 @@ SENSITIVE=(
   # Config-shaped secret files only — not secrets.py / secrets.ts (source code).
   'secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)'
 )
-for P in "${SENSITIVE[@]}"; do
-  if printf '%s\n' "$SCAN" | grep -qE "${A}${GIT}add\s.*${P}"; then
-    emit_deny "Blocked: git add targets a sensitive file. Do not stage credentials or secret files."
-    exit 0
-  fi
-done
+# One grep for the whole list, since every name gets the same deny. A grep each
+# was 12 process starts on a git add that stages none of them.
+SENSITIVE_RE=""
+for P in "${SENSITIVE[@]}"; do SENSITIVE_RE="${SENSITIVE_RE:+$SENSITIVE_RE|}($P)"; done
+if printf '%s\n' "$SCAN" | grep -qE "${A}${GIT}add\s.*(${SENSITIVE_RE})"; then
+  emit_deny "Blocked: git add targets a sensitive file. Do not stage credentials or secret files."
+  exit 0
+fi
 
 # --- Git config tampering ----------------------------------------------
 # core.hooksPath redirection, user.name/email spoofing, gpg.signingkey swap.
