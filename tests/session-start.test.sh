@@ -23,6 +23,10 @@ export CLAUDE_HARNESS_LATEST="$TMP/no-latest"
 export CLAUDE_HARNESS_VERSION="$TMP/no-version"
 # And the Bash guards' timing log, which the hook rotates.
 export CLAUDE_GUARD_TIMING_LOG="$TMP/guard-timing.log"
+# Room for every run: a loaded machine can spend the hook's 3 s budget on its
+# first sections, and a case about a later one would then fail for the budget's
+# sake. The cases about the budget set their own, from this machine's speed.
+export CLAUDE_SESSION_START_BUDGET=60
 
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
@@ -380,17 +384,23 @@ NUDGES=(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.281 CLAUDE_HARNESS
 
 echo ""
 echo "=== a slow section: the ones after it are not started, and are named ==="
+# Bounds from this machine, not fixed seconds. B is one ordinary run here, so the
+# sections before the slow one start inside B+1 (whole seconds) and a budget of
+# B+3 leaves them room under a load that grows between the two runs. The slow
+# section sleeps as long as the budget, so each one after it starts past it.
 due
+S0=$SECONDS; run_tree sess-clean "${NUDGES[@]}" STUB_SLEEP=0 >/dev/null; B=$((SECONDS - S0))
+due
+BUD=$((B + 3)); SLOW=$BUD
 S0=$SECONDS
-# Whole seconds: SECONDS can tick over just after the hook starts, so a budget
-# of 2 is between one and two seconds, and the section that takes 3 starts inside it.
-OUT=$(run_tree sess-clean "${NUDGES[@]}" STUB_SLEEP=3 CLAUDE_SESSION_START_BUDGET=2)
+OUT=$(run_tree sess-clean "${NUDGES[@]}" STUB_SLEEP=$SLOW CLAUDE_SESSION_START_BUDGET=$BUD)
 EL=$((SECONDS - S0))
 check_contains "one line names each section it skipped" \
-  "session-start: past its 2 s budget, skipped: worktree-prune contract-nudge release-nudge resume-drift" "$OUT"
+  "session-start: past its $BUD s budget, skipped: worktree-prune contract-nudge release-nudge resume-drift" "$OUT"
 check_not_contains "no nudge from a skipped section" "Harness v1.0.3 is available" "$OUT"
 check_eq "the slow section ran once, started in budget" "1" "$(cat "$RUNS" 2>/dev/null | wc -l | tr -d ' ')"
-[ "$EL" -le 5 ] && pass "back in ${EL}s, not hung" || fail "elapsed" "${EL}s"
+[ "$EL" -le $((B + SLOW + 2)) ] && pass "back in ${EL}s, not hung (an ordinary run here: ${B}s, the slow section ${SLOW}s)" \
+  || fail "elapsed" "${EL}s; an ordinary run here ${B}s, the slow section ${SLOW}s"
 due
 mkdir -p "$TMP/mods/sess-clean/m1/.claude-plugin"; : > "$TMP/mods/sess-clean/m1/.claude-plugin/plugin.json"
 OUT=$(run_tree sess-clean "${NUDGES[@]}" CLAUDE_SESSION_START_BUDGET=0 CLAUDE_DEV_MODS_DIR="$TMP/mods")
@@ -400,12 +410,19 @@ check_contains "and still names a mod loading from this session: no process, a s
   "Mod loading from this session: $TMP/mods/sess-clean/m1" "$OUT"
 due
 OUT=$(run_tree sess-clean "${NUDGES[@]}" SECONDS=100)
+# The file's budget is 60, so a SECONDS of 100 kept from the environment would
+# skip every section; an ordinary run on a loaded machine does not.
 check_not_contains "a SECONDS in the environment does not spend the budget" "past its" "$OUT"
 check_contains "and the sections run" "Harness v1.0.3 is available" "$OUT"
 due
 OUT=$(run_tree sess-clean "${NUDGES[@]}")
 check_not_contains "under budget nothing is named" "past its" "$OUT"
 check_contains "and the sections run" "Harness v1.0.3 is available" "$OUT"
+# The hook's own default, end to end: a 4 s section passes 3 s on a machine of any
+# speed, so the line names the default whether or not the index started in time.
+due
+OUT=$(run_tree sess-clean -u CLAUDE_SESSION_START_BUDGET "${NUDGES[@]}" STUB_SLEEP=4)
+check_contains "with none set, the budget is the hook's own 3 s" "session-start: past its 3 s budget, skipped:" "$OUT"
 check_eq "settings.json stops it at 30 s, not Claude Code's default 10 minutes" "30" \
   "$(jq '.hooks.SessionStart[0].hooks[0].timeout' config/settings.json)"
 
@@ -435,6 +452,24 @@ due
 : > "$CLAUDE_STATE_DIR/contract-nudge.claim.2.1.281_$(date +%Y-%m-%d)"
 OUT=$(run_tree sess-clean "${NUDGES[@]}")
 check_not_contains "today's claim left by a killed run costs that day's nudge, no more" "past the harness contract" "$OUT"
+
+echo ""
+echo "=== a storm past its budget: no session shows the nudge, and the next start does ==="
+# The budget wins over the nudge. A section skipped for time claims nothing, so an
+# old claim stays (a few bytes) and the nudge waits for the next start in budget.
+due
+for f in contract-nudge release-nudge; do : > "$CLAUDE_STATE_DIR/$f.claim.2.1.281_2000-01-01"; done
+for i in $(seq 1 14); do run_tree "storm3-$i" "${NUDGES[@]}" CLAUDE_SESSION_START_BUDGET=0 > "$TMP/storm3-$i.out" & done
+wait
+check_eq "no session showed either nudge" "0 0" \
+  "$(cat "$TMP"/storm3-*.out | grep -c 'past the harness contract') $(cat "$TMP"/storm3-*.out | grep -c 'Harness v1.0.3 is available')"
+# By name: a claim taken for today would also clear the old ones, keeping the count.
+check_eq "none claimed one; the old claims wait" "2 0" \
+  "$(ls "$CLAUDE_STATE_DIR"/*-nudge.claim.*_2000-01-01 2>/dev/null | wc -l | tr -d ' ') $(ls "$CLAUDE_STATE_DIR"/*-nudge.claim.*_"$(date +%Y-%m-%d)" 2>/dev/null | wc -l | tr -d ' ')"
+OUT=$(run_tree sess-clean "${NUDGES[@]}")
+check_contains "the next start in budget shows the release nudge" "Harness v1.0.3 is available" "$OUT"
+check_contains "and the contract nudge" "past the harness contract" "$OUT"
+check_eq "and clears the old claims" "" "$(ls "$CLAUDE_STATE_DIR"/*.claim.*2000-01-01 2>/dev/null)"
 
 echo ""
 echo "=== an unwritable state folder: every session shows the nudge, as before ==="
