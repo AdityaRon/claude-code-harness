@@ -6,12 +6,15 @@
   tools/hook-bench.py --gate --intended id1,id2 --md bench.md --json bench.json
   tools/hook-bench.py --corpus audit          # this machine's audit log; never publish
 
-Every payload in the corpus is fed to each hook that would fire for it under
-that side's config/settings.json (PreToolUse, command hooks, not async), one
-hook at a time, both sides back to back, alternating which side goes first.
-Wait is the slowest hook of a call, since Claude Code runs them in parallel;
-CPU is the sum over the hooks that fired (user+system of the hook and every
-process it waited for). Decisions are compared per payload: a change not named
+Every payload in the corpus is fed to the hooks that would fire for it under
+that side's config/settings.json (PreToolUse, command hooks, not async), both
+sides back to back, alternating which side goes first. A call's hooks are
+launched together, as Claude Code does: wait is from the first launch to the
+last exit, so hooks that share the machine's cores pay for it, and CPU is the
+sum of each hook's own (user+system of the hook and every process it waited
+for). The per-hook table runs each hook alone, so a hook's time there is not
+its siblings'. --serial is the earlier model: each hook alone, and wait the
+slowest of them, which scores separate hooks as if each had a core to itself. Decisions are compared per payload: a change not named
 with --intended fails the gate, as does a p50 or p95 wait that grows past the
 limit AND the floor (both, so a 2 ms wobble on a 5 ms hook is not a failure).
 
@@ -23,7 +26,7 @@ Absolute numbers depend on the machine (process start cost varies 3x between
 laptops), which is why both sides run in the same process on the same corpus
 and only the comparison is reported as a verdict.
 """
-import argparse, hashlib, io, json, os, platform, re, resource, shutil, statistics, subprocess, sys, tarfile, tempfile, time
+import argparse, hashlib, io, json, os, platform, re, resource, shutil, signal, statistics, subprocess, sys, tarfile, tempfile, threading, time
 
 RANK = {'allow': 0, 'ask': 2, 'deny': 3, 'error': 4}
 CLASSES = {'Bash': 'Bash', 'Write': 'Write/Edit', 'Edit': 'Write/Edit', 'MultiEdit': 'Write/Edit',
@@ -84,32 +87,120 @@ def hooks_for(side, tool):
     return out
 
 
-def run_hook(path, payload, env, cwd, timeout=30):
-    """(wall ms, cpu ms, decision) for one hook on one payload."""
+TOGETHER = True   # a call's hooks launched at once, as Claude Code does; --serial turns it off
+HOOK_TIMEOUT = 30.0   # seconds a hook may run; --hook-timeout
+
+
+def decide(rc, stdout):
+    if rc == 2:
+        return 'deny'
+    if rc != 0:
+        return 'error'
+    out = stdout.decode('utf-8', 'replace').strip()
+    if not out:
+        return 'allow'
+    try:
+        dec = (json.loads(out).get('hookSpecificOutput') or {}).get('permissionDecision') or 'allow'
+    except (ValueError, AttributeError):
+        return 'error'
+    return dec if dec in RANK else 'error'
+
+
+def run_together(hooks, payload, env, cwd, timeout=None):
+    """A call's hooks launched at once, as Claude Code does: ({name: (ms to its end, cpu ms, decision)},
+    ms from the first launch to the last end). A hook ends when it has exited and its stdout and stderr
+    have closed, as run_hook counts it, so a background child holding them is waited for. Each hook runs
+    in its own process group and is fed and drained on threads from its launch; past the timeout its
+    whole group is killed and it is an error. CPU is its own wait4 rusage: itself and what it waited for."""
+    timeout = HOOK_TIMEOUT if timeout is None else timeout
+    t0 = time.perf_counter()
+    deadline = t0 + timeout
+    procs, threads, eof, outs, killed, exited = [], {}, {}, {}, set(), {}
+
+    def feed(p):
+        for step in (lambda: p.stdin.write(payload), p.stdin.close):
+            try:
+                step()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+
+    def drain(key, f):
+        outs[key] = f.read()
+        eof[key] = time.perf_counter()
+
+    for name, path in hooks:
+        p = subprocess.Popen(['bash', path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, env=env, cwd=cwd, start_new_session=True)
+        procs.append((name, p))
+        threads[p.pid] = [threading.Thread(target=t, args=a, daemon=True)
+                          for t, a in ((feed, (p,)), (drain, ((p.pid, 1), p.stdout)), (drain, ((p.pid, 2), p.stderr)))]
+        for t in threads[p.pid]:
+            t.start()
+
+    def kill(pids):   # the whole group, and no poll(): only the wait4 below reaps
+        for pid in pids:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+                killed.add(pid)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+    def unfinished():
+        return [p.pid for _, p in procs if p.pid not in exited or any(t.is_alive() for t in threads[p.pid])]
+    killer = threading.Timer(timeout, lambda: kill(unfinished()))
+    killer.start()
+    for _, p in procs:
+        _, status, ru = os.wait4(p.pid, 0)
+        p.returncode = os.waitstatus_to_exitcode(status)
+        exited[p.pid] = (time.perf_counter(), (ru.ru_utime + ru.ru_stime) * 1000.0)
+    for _, p in procs:
+        for t in threads[p.pid]:
+            t.join(max(0.0, deadline - time.perf_counter()))
+    killer.cancel()
+    kill([pid for pid in unfinished()])   # still holding a pipe at the deadline
+    for ts in threads.values():
+        for t in ts:
+            t.join(1.0)
+    per, last = {}, t0
+    for name, p in procs:
+        exit_t, cpu = exited[p.pid]
+        if p.pid in killed or (p.pid, 1) not in eof or (p.pid, 2) not in eof:
+            per[name] = (timeout * 1000.0, cpu, 'error')
+            last = max(last, deadline)
+        else:
+            end = max(exit_t, eof[(p.pid, 1)], eof[(p.pid, 2)])
+            last = max(last, end)
+            per[name] = ((end - t0) * 1000.0, cpu,
+                         'error' if p.returncode < 0 else decide(p.returncode, outs[(p.pid, 1)]))
+        for f in (p.stdout, p.stderr):
+            try:
+                f.close()
+            except OSError:
+                pass
+    return per, (last - t0) * 1000.0
+
+
+def run_hook(path, payload, env, cwd, timeout=None):
+    """(wall ms, cpu ms, decision) for one hook on one payload, to the close of its stdout and stderr.
+    In its own process group, so a timeout kills what it left behind as well."""
+    timeout = HOOK_TIMEOUT if timeout is None else timeout
     r0 = resource.getrusage(resource.RUSAGE_CHILDREN)
     t0 = time.perf_counter()
+    p = subprocess.Popen(['bash', path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         env=env, cwd=cwd, start_new_session=True)
     try:
-        p = subprocess.run(['bash', path], input=payload, capture_output=True, env=env, cwd=cwd, timeout=timeout)
+        out, _ = p.communicate(payload, timeout=timeout)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        p.communicate()
         return timeout * 1000.0, 0.0, 'error'
     t1 = time.perf_counter()
     r1 = resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu = (r1.ru_utime - r0.ru_utime + r1.ru_stime - r0.ru_stime) * 1000.0
-    if p.returncode == 2:
-        dec = 'deny'
-    elif p.returncode != 0:
-        dec = 'error'
-    else:
-        out = p.stdout.decode('utf-8', 'replace').strip()
-        if not out:
-            dec = 'allow'
-        else:
-            try:
-                dec = (json.loads(out).get('hookSpecificOutput') or {}).get('permissionDecision') or 'allow'
-            except (ValueError, AttributeError):
-                dec = 'error'
-    return (t1 - t0) * 1000.0, cpu, dec if dec in RANK else 'error'
-
+    return (t1 - t0) * 1000.0, cpu, decide(p.returncode, out)
 
 def run_call(side, row, env, cwd):
     """All hooks for one payload on one side: wait = max, cpu = sum, worst decision."""
@@ -119,14 +210,21 @@ def run_call(side, row, env, cwd):
     e.update({k: str(v) for k, v in (row.get('env') or {}).items()})
     per = {}
     worst, by = 'allow', ''
-    for name, path in hooks_for(side, row['tool_name']):
+    hooks = hooks_for(side, row['tool_name'])
+    wall = None
+    together = {}
+    if TOGETHER:
+        together, wall = run_together([(n, p) for n, p in hooks if p is not None], payload, e, cwd)
+    for name, path in hooks:
         if path is None:
             per[name] = (0.0, 0.0, 'missing')
             continue
-        w, c, d = run_hook(path, payload, e, cwd)
-        per[name] = (w, c, d)
+        per[name] = run_hook(path, payload, e, cwd)   # alone, for the per-hook table
+        d = together[name][2] if TOGETHER else per[name][2]
         if RANK[d] > RANK[worst]:
             worst, by = d, name
+    if TOGETHER:
+        return {'wait': wall, 'cpu': sum(v[1] for v in together.values()), 'decision': worst, 'by': by, 'hooks': per}
     return {'wait': max((v[0] for v in per.values()), default=0.0),
             'cpu': sum(v[1] for v in per.values()), 'decision': worst, 'by': by, 'hooks': per}
 
@@ -213,8 +311,11 @@ def render_md(r):
              f"Corpus {r['corpus']['name']}{note}: {r['corpus']['count']} payloads ({counts})"
              f"{', x' + str(r['repeat']) if r['repeat'] > 1 else ''}, each run through both sides, "
              'alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in '
-             'config/settings.json, run one at a time. Wait is the slowest hook of a call (Claude Code runs them in '
-             'parallel); CPU is the sum. Process start here: '
+             + ('config/settings.json, launched together as Claude Code does. Wait is from the first launch to the '
+                'last exit, so hooks that share the cores pay for it; CPU is the sum of each hook\'s own. The per-hook '
+                'table runs each hook alone. Process start here: ' if r.get('together') else
+                'config/settings.json, run one at a time. Wait is the slowest hook of a call (Claude Code runs them in '
+                'parallel); CPU is the sum. Process start here: ')
              + ', '.join(f'`{k}` {v:.1f} ms' for k, v in r['process_start_ms'].items())
              + ' (p50 of 20), so only same-run comparisons are meaningful. A machine whose process start is slower '
              'pays it again for each process a hook starts: the last column is a hook\'s p50 past one `bash -c :`.')
@@ -261,6 +362,9 @@ def main():
     ap.add_argument('--corpus', default='tests/bench-corpus.jsonl', help="JSONL file, or 'audit[:PATH]' for this machine's audit log")
     ap.add_argument('--quick', action='store_true', help='every third payload (CI)')
     ap.add_argument('--repeat', type=int, default=1, help='passes over the corpus')
+    ap.add_argument('--hook-timeout', type=float, default=30.0, help='seconds a hook may run (default 30)')
+    ap.add_argument('--serial', action='store_true',
+                    help="the earlier model: each hook alone, wait the slowest (as if each had its own core)")
     ap.add_argument('--gate', action='store_true', help='exit 1 on a regression or an unintended decision change')
     ap.add_argument('--intended', default='', help="payload ids whose decision may change, comma or space separated, or 'all'")
     ap.add_argument('--limit-pct', type=float, default=20.0, help='p50/p95 wait may grow by this much (default 20)')
@@ -269,6 +373,9 @@ def main():
     ap.add_argument('--md', help='write the markdown report here (always printed to stdout)')
     ap.add_argument('--json', help='write the full result here')
     a = ap.parse_args()
+    global TOGETHER, HOOK_TIMEOUT
+    TOGETHER = not a.serial
+    HOOK_TIMEOUT = a.hook_timeout
 
     repo = os.path.abspath(a.repo)
     base = a.base or git(repo, 'describe', '--tags', '--abbrev=0', check=False)
@@ -373,7 +480,7 @@ def main():
                        'sha256': '' if local else hashlib.sha256(open(cpath, 'rb').read()).hexdigest(),
                        'tools': dict(sorted(((t, sum(1 for r in rows if r['tool_name'] == t)) for t in {r['tool_name'] for r in rows}),
                                             key=lambda kv: -kv[1]))},
-            'repeat': a.repeat, 'quick': a.quick, 'elapsed_s': round(elapsed, 1),
+            'repeat': a.repeat, 'together': TOGETHER, 'quick': a.quick, 'elapsed_s': round(elapsed, 1),
             'process_start_ms': start_cost(env, home),
             'classes': class_out, 'hooks': hook_out,
             'decisions': {'same': same, 'changed': changed},

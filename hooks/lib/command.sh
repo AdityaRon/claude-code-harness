@@ -238,6 +238,9 @@ function hd_scan(s,    i, n, c, j, w) {
       # In a $( ) frame, bash 3.2 reads a comment as text where zsh skips it, so one
       # holding a paren, quote, backtick or backslash is unreadable, as in hd_body.
       if (hd_after() || (!hbt && hsp > 0 && !hbtf[hsp] && substr(s, i + 1) ~ /[()\047"`\\]/)) { HD_BAD = 1; return }
+      # In an unquoted $( ), bash 3.2 reads it as a comment only after a blank or at the $( itself.
+      w = substr(s, i - 1, 1)
+      if (hpd && !hsp && !hbt && w ~ /[;&|()]/ && !(w == "(" && substr(s, i - 2, 1) ~ /[$<>]/) && substr(s, i + 1) ~ /[()\047"`\\]/) { HD_BAD = 1; return }
       if (hd_in()) HD_DOUBT = 1
       # Inside backticks a comment ends at the backtick that ends the substitution.
       if (!hbt && !(hsp > 0 && hbtf[hsp])) break
@@ -249,6 +252,9 @@ function hd_scan(s,    i, n, c, j, w) {
     # x=$(cat <<EOF) ends the substitution on the opener line, in zsh too.
     if (HD_POS && HD_INSUB && c == ")") { HD_BAD = 1; return }
     if ((c == "(" || c == ")") && HD_POS && (hbt || (hsp > HD_SP0 && hbtf[hsp]))) { HD_BAD = 1; return }
+    # A $( <( or >( opened after the << in the frame the opener sits in: left open,
+    # the next line is code; closed, its ) ends the frame early in the rule above.
+    if (HD_POS && hsp > 0 && hsp == HD_SP0 && !hbtf[hsp] && c == "(" && substr(s, i - 1, 1) ~ /[$<>]/ && hesc != i - 1) { HD_BAD = 1; return }
     if ((c == "(" || c == ")") && (hbt || (hsp > 0 && hbtf[hsp]))) HD_DOUBT = 1
     if (hsp > 0 && !hbtf[hsp] && c == "(") hdep[hsp]++
     if (hsp > 0 && !hbtf[hsp] && c == ")" && --hdep[hsp] == 0) { hd_span(i, i, hd_ctx(hup[hsp])); hq = hup[hsp--]; continue }

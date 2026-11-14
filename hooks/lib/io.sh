@@ -127,15 +127,20 @@ unreadable_exit() {
 }
 
 # Secret-shaped values out of an audit line: URL credentials, well-known token
-# prefixes, and the value after a key-like word. The line keeps its shape.
+# prefixes, an AWS secret key, a private key's body after its header (to the
+# line's next ` | `, which base64 never holds), and the value after a key-like
+# word. A quote may be escaped (JSON echoed from a command: \"key\":\"v\").
+# The line keeps its shape and its other fields.
 redact_secrets() {
   sed -E \
+    -e "s#((aws_secret_access_key|AWS_SECRET_ACCESS_KEY|[Ss]ecretAccessKey)\\\\?[\"']?[[:space:]]*[:=][[:space:]]*\\\\?[\"']?)[A-Za-z0-9/+=]{40}#\1***#g" \
+    -e 's/(-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----)([^|]*[^| ])?/\1***/g' \
     -e 's#(://[^/@[:space:]:]+):[^/@[:space:]]+@#\1:***@#g' \
     -e 's/((ghp|gho|ghu|ghs|ghr)_|github_pat_|glpat-|xox[abprs]-|xapp-|sk-(ant-|proj-)?|sk_(live|test)_|AKIA|AIza)[A-Za-z0-9_-]{8,}/\1***/g' \
     -e 's/npm_[A-Za-z0-9]{36}/npm_***/g; s/ASIA[0-9A-Z]{16}/ASIA***/g' \
     -e 's/eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/eyJ***/g' \
     -e 's#(hooks\.slack\.com/services/)[A-Za-z0-9/_+-]{20,}#\1***#g' \
-    -e "s/([Aa]uthorization|[Bb]earer|[Tt]oken|TOKEN|[Ss]ecret|SECRET|[Pp]assword|PASSWORD|[Pp]asswd|[Aa]pi[_-]?[Kk]ey|API[_-]?KEY)([\"']?[=:[:space:]]+[\"']?)([Bb]earer[[:space:]]+)?[^[:space:]\"'&]+/\1\2\3***/g"
+    -e "s/([Aa]uthorization|[Bb]earer|[Tt]oken|TOKEN|[Ss]ecret|SECRET|[Pp]assword|PASSWORD|[Pp]asswd|[Aa]pi[_-]?[Kk]ey|API[_-]?KEY)(\\\\?[\"']?[=:[:space:]]+\\\\?[\"']?)([Bb]earer[[:space:]]+)?[^[:space:]\"'&]+/\1\2\3***/g"
 }
 
 # Append to the audit log. Creates parent dir, rotates at 10MB, keeps 5 backups,

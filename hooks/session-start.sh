@@ -23,7 +23,9 @@ fi
 # finer clock, so 3 means between two and three seconds) is skipped and named on
 # one line at exit. A section already running is not stopped, so the hook can
 # overrun by one; settings.json's 30 s timeout is the hard stop (Claude Code's
-# own default is 10 minutes).
+# own default is 10 minutes). A section skipped for time claims and stamps
+# nothing, so the nudge it would have shown waits for the next start that
+# reaches it: on a loaded machine a resume storm defers the nudge, not loses it.
 BUDGET=${CLAUDE_SESSION_START_BUDGET:-3} SECONDS=0
 SKIPPED=""
 in_budget() { (( SECONDS < BUDGET )) && return 0; SKIPPED="$SKIPPED $1"; return 1; }

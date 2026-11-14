@@ -85,7 +85,7 @@ weekly (`.github/workflows/mutations.yml`).
 | `secret-scanner` | file writes | Deny: high-confidence token shapes (AWS, GitHub, Slack, Stripe, Google, Anthropic, OpenAI, PEM) in written content |
 | `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, a broad `git add` that would stage a credential file or that it cannot check. Ask: force-deleting a local branch, or deleting a remote one, whose tip no other ref holds (a plain `git branch -d` runs: git refuses an unmerged branch itself), remote and identity changes |
 | `rm-guard` | Bash | Deny: recursive `rm` of home, root or a top-level folder, and `rm -rf` outside the session's scratch folder |
-| `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, the Bash guards' skip file, shell startup files, `~/.gitconfig`, LaunchAgents, and Bash writes into a mod Claude Code loads by itself. Deny: moving or emptying `~/.claude` |
+| `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, the Bash guards' skip file, shell startup files, `~/.gitconfig`, LaunchAgents, Bash writes into a mod Claude Code loads by itself, and copies or extractions into a `.claude` folder. Deny: moving or emptying `~/.claude` |
 | `network-guard` | Bash, WebFetch | Deny: file uploads and pipe-to-shell. Ask: request bodies, `DELETE`, hosts off the allowlist, `scp`/`rsync`, local servers |
 | `interpreter-guard` | Bash | Ask: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts |
 | `kubectl-guard` | Bash | Ask: every mutating verb wherever it sits, secret reads, and any subcommand it cannot classify |
@@ -252,7 +252,8 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   hook-latency.py        ← each hook's wall time per day, from local transcripts (doctor.sh --latency)
   hooknames.py           ← names the hook a transcript record numbers, for the two above
   session-census.py      ← claude processes, their memory, and idle background jobs (doctor.sh --census)
-  pickup-report.sh       ← after an install, how running sessions pick up each change (install.sh runs it)
+  pickup-report.sh       ← after an install, how running sessions pick up each change; install.sh runs it with
+                           --prune, which removes what install wrote that the clone deleted
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json
 hooks/                   ← one file per hook, plus lib.sh, which sources lib/: command, paths,
                            scratch, io, inline, net and host; bash-guards.sh runs the Bash guards
