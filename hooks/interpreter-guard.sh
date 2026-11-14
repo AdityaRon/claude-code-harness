@@ -203,10 +203,17 @@ fi
 # one-liners like `python -c "print(1)"`.
 # Both spans stay inside the interpreter's own segment: a `grep -c` after && is not its flag.
 # In the hidden-separator reading the flag is reached past a quoted ;, but each
-# length still stops at one (%3B, %7C, %26) as it does in the command as typed,
-# so a payload of short statements measures as it did.
+# length still stops at one as it does in the command as typed, so a payload of
+# short statements measures as it did. There each hidden one is a control byte,
+# and % is escaped before hiding, so a length stops at those and at no % typed.
+hidden_lengths() {
+  local hs=$'\001' q
+  q=$(neutralize_quoted_separators "$(printf '%s' "$CMD" | sed 's/%/%25/g')")
+  printf '%s\n%s\n' "$q" "$(normalize_command "$q")" | sed "s/%3B/$hs/g; s/%7C/$hs/g; s/%26/$hs/g; s/%25/%/g" \
+    | grep -qE "${IB}${INTERP}\b[^|;&$hs]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&$hs]{200,}"
+}
 if printf '%s\n' "$TYPED" | grep -qE "${IB}${INTERP}\b[^|;&]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&]{200,}" \
-   || { [[ -n "$NCMD" ]] && printf '%s\n' "$NCMD" | grep -qE "${IB}${INTERP}\b[^|;&%]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&%]{200,}"; }; then
+   || { [[ -n "$NQS" ]] && hidden_lengths; }; then
   emit_ask "Long inline script passed to an interpreter. Review the payload before running — inline code bypasses file-based review."
   exit 0
 fi
