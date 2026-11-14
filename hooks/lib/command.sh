@@ -200,8 +200,10 @@ function hd_btq(s, i, c,    j, d, n) {
 # HD_DOUBT, set for the rest of the command once where one ends is not sure.
 function hd_after() { return HD_POS && (hpd > HD_PD0 || hsp > HD_SP0 || hbt) }
 function hd_in() { return hpd || hsp || hbt }
+# hpk[d]: the paren at depth d of hpd opened a substitution, not a group. hsubend:
+# where one closed on this line; a # right after it continues the word.
 function hd_scan(s,    i, n, c, j, w) {
-  HD_POS = 0; HD_LEN = 0; HD_BAD = 0; n = length(s); hesc = -1
+  HD_POS = 0; HD_LEN = 0; HD_BAD = 0; n = length(s); hesc = -1; hsubend = -1
   if (HB_TAIL != "" && index(s, HB_TAIL)) { HD_BAD = 1; return }
   if (HD_CLS) { split("", HCLS); HDS = s }
   for (i = 1; i <= n; i++) {
@@ -231,10 +233,11 @@ function hd_scan(s,    i, n, c, j, w) {
     }
     if (hsp > 0 && hbtf[hsp] && c == "`") { hq = hup[hsp--]; continue }
     if ((hbt || (hsp > 0 && hbtf[hsp])) && (c == "\"" || c == "\047") && hd_btq(s, i, c)) { HD_BAD = 1; return }
-    if (c == "\047") { hq = hd_dollars(s, i, hesc) % 2 ? "A" : "\047"; if (hq == "A" && hd_after()) { HD_BAD = 1; return } if (hq == "A" && hd_in()) HD_DOUBT = 1; continue }
+    # In a substitution bash 3.2 reads any run of $ before a quote as $, so $$ counts too.
+    if (c == "\047") { j = hd_dollars(s, i, hesc); hq = j % 2 ? "A" : "\047"; if (j && hd_after()) { HD_BAD = 1; return } if (j && hd_in()) HD_DOUBT = 1; continue }
     if (c == "\"") { hq = "\""; continue }
     if (c == "`") { if (!hbt && hd_after()) { HD_BAD = 1; return } if (!hbt && (hpd || hsp)) HD_DOUBT = 1; hbt = !hbt; continue }
-    if (c == "#" && hesc != i - 1 && (i == 1 ? !hcont : substr(s, i - 1, 1) ~ /[ \t;&|()]/)) {
+    if (c == "#" && hesc != i - 1 && hsubend != i - 1 && (i == 1 ? !hcont : substr(s, i - 1, 1) ~ /[ \t;&|()]/)) {
       # In a $( ) frame, bash 3.2 reads a comment as text where zsh skips it, so one
       # holding a paren, quote, backtick or backslash is unreadable, as in hd_body.
       if (hd_after() || (!hbt && hsp > 0 && !hbtf[hsp] && substr(s, i + 1) ~ /[()\047"`\\]/)) { HD_BAD = 1; return }
@@ -247,7 +250,7 @@ function hd_scan(s,    i, n, c, j, w) {
       j = index(substr(s, i + 1), "`"); if (!j) { HD_BAD = 1; return }
       i += j - 1; continue
     }
-    if (c == "(" && substr(s, i + 1, 1) == "(") { if (hd_after()) { HD_BAD = 1; return } if (hd_in() || substr(s, i - 1, 1) == "$") HD_DOUBT = 1; j = hd_arith(s, i); if (!j) { HD_BAD = 1; return } i = j; continue }
+    if (c == "(" && substr(s, i + 1, 1) == "(") { if (hd_after()) { HD_BAD = 1; return } if (hd_in() || substr(s, i - 1, 1) == "$") HD_DOUBT = 1; j = hd_arith(s, i); if (!j) { HD_BAD = 1; return } if (substr(s, i - 1, 1) == "$" && hesc != i - 1) hsubend = j; i = j; continue }
     if (c == "$" && substr(s, i + 1, 1) == "[") { if (hd_in()) HD_DOUBT = 1; j = index(substr(s, i), "]"); if (!j) { HD_BAD = 1; return } i += j - 1; continue }
     # x=$(cat <<EOF) ends the substitution on the opener line, in zsh too.
     if (HD_POS && HD_INSUB && c == ")") { HD_BAD = 1; return }
@@ -264,8 +267,8 @@ function hd_scan(s,    i, n, c, j, w) {
       if (hd_in()) HD_DOUBT = 1
     }
     if (!hsp && !hbt) {
-      if (c == "(" && (hpd || (substr(s, i - 1, 1) ~ /[$<>]/ && hesc != i - 1))) hpd++
-      else if (c == ")" && hpd) hpd--
+      if (c == "(" && (hpd || (substr(s, i - 1, 1) ~ /[$<>]/ && hesc != i - 1))) { hpd++; hpk[hpd] = substr(s, i - 1, 1) ~ /[$<>]/ && hesc != i - 1 }
+      else if (c == ")" && hpd) { if (hpk[hpd]) hsubend = i; hpd-- }
     }
     if (c == "<" && substr(s, i + 1, 1) == "<") {
       if (substr(s, i + 2, 1) == "<") { i += 2; continue }
