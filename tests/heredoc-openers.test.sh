@@ -613,6 +613,56 @@ done
 
 
 echo ""
+echo "=== join_continued_lines joins the lines bash joins ==="
+# bash prints the marker only where the lines join, so each case checks itself.
+# The joined command has fewer lines and, its \001 put back as newlines, runs as
+# the command did.
+JOINS=(
+  "a \\ at a line's end"           $'echo HD\\\nMARK'
+  "a \\ in double quotes"          $'echo "HD\\\nMARK"'
+  "a \\ in an unquoted body's \$( )" $'cat <<EOF\n$(echo HD\\\nMARK)\nEOF'
+  "a newline in double quotes"     $'echo "a\nb"; echo HDMARK'
+  "a newline in \$'...'"           $'echo $\'a\nb\'; echo HDMARK'
+)
+for ((i = 0; i < ${#JOINS[@]}; i += 2)); do
+  label=${JOINS[$i]}; cmd=${JOINS[$((i + 1))]}
+  runs_in_bash "$cmd" || { fail "$label" "(bash did not print the marker: the case is wrong)"; continue; }
+  out=$(join_continued_lines "$cmd")
+  if [ "$(printf '%s\n' "$out" | wc -l)" -lt "$(printf '%s\n' "$cmd" | wc -l)" ] && runs_in_bash "$(printf '%s' "$out" | tr '\001' '\n')"; then
+    pass "join_continued_lines: $label"
+  else fail "join_continued_lines: $label" "[$out]"; fi
+done
+# A \ in single quotes, in a quoted delimiter's body or in a comment joins nothing.
+NOJOINS=(
+  "a \\ in a quoted delimiter's body" $'cat <<\'EOF\'\nHD\\\nMARK\nEOF'
+  "a \\ in a comment"                 $'true # \\\nMARK'
+)
+for ((i = 0; i < ${#NOJOINS[@]}; i += 2)); do
+  label=${NOJOINS[$i]}; cmd=${NOJOINS[$((i + 1))]}
+  runs_in_bash "$cmd" && { fail "$label" "(bash printed the marker: the case is wrong)"; continue; }
+  out=$(join_continued_lines "$cmd") && fail "join_continued_lines joined $label" "[$out]" || pass "join_continued_lines leaves $label"
+done
+
+echo ""
+echo "=== each guard and bash-guards.sh: its line split by a \\ at a line's end, or behind a newline in quotes ==="
+# Every guard read line by line, where bash joins a line ending in \ to the next
+# and keeps a quoted newline in its word. Held to the line's verdict alone.
+CONT=($'git push origin main \\\n--force' $'cp /dev/null \\\n~/.claude/settings.json' $'kubectl --cache-dir /tmp/x \\\ndelete ns prod'
+      $'cat \\\n.env' $'python3 \\\n-c \'import os; print(os.environ)\'' $'curl -X DELETE \\\nhttps://example.com/x' $'rm \\\n-rf ~/')
+QNL=($'git -c $\'x.y=a\nb\' push origin main --force' $'cp "a\nb" ~/.claude/settings.json' $'kubectl --cache-dir $\'/tmp/a\nb\' delete ns prod'
+     $'cat "a\nb" .env' $'python3 -X $\'a\nb\' -c \'import os; print(os.environ)\'' $'curl -H "a\nb" -X DELETE https://example.com/x' $'rm -rf "a\nb" ~/')
+for g in "${!GUARDS[@]}"; do
+  ctl=$(verdict "${GUARDS[$g]}" "${RISK[$g]}")
+  for c in "${CONT[$g]}" "${QNL[$g]}"; do
+    v=$(verdict "${GUARDS[$g]}" "$c")
+    [ "$v" = "$ctl" ] && pass "${GUARDS[$g]}: ${c//$'\n'/⏎}: $v" || fail "${GUARDS[$g]}: ${c//$'\n'/⏎}" "$v, alone: $ctl"
+    # The dispatcher joins the lines once for all seven.
+    v=$(verdict bash-guards "$c"); w=$(verdict bash-guards "${RISK[$g]}")
+    [ "$v" = "$w" ] && pass "bash-guards.sh: ${c//$'\n'/⏎}: $v" || fail "bash-guards.sh: ${c//$'\n'/⏎}" "$v, alone: $w"
+  done
+done
+
+echo ""
 echo "=== skill-forge's demand.py reads heredocs as bash does ==="
 # demand.py counts the commands a session runs; a body read as commands, or a
 # command read as a body, miscounts them. Same cases, same oracle.

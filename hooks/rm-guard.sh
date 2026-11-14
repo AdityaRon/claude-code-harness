@@ -9,6 +9,7 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # A quote may follow: subprocess.run(['rm', '-rf', x]) in an inline script.
 RM_WORD='(^|[^[:alnum:]_.-])rm([[:space:]"'\'']|$)'
 [[ "$CMD" =~ $RM_WORD ]] || exit 0

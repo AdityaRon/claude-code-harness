@@ -129,5 +129,11 @@ check "a scratch folder in \"\$( )\""         allow 'echo "$(rm -rf build)"' "$S
 check "a blank before the )"                  allow 'echo "$(rm -rf build )"' "$S"
 
 echo ""
+echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
+# bash joins a line ending in \ to the next and keeps a quoted newline in its
+# word, where the guard read each line alone: each row that asks or denies here
+# was allowed.
+check "rm, \\ then -rf ~/"                  deny  $'rm \\\n-rf ~/'
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

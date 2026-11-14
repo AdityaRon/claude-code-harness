@@ -26,6 +26,7 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Every check below names an interpreter. Normalizing drops quotes, backslashes
 # and case but never adds a letter, so a command naming none once those are
 # gone is done before ~20 ms of normalizing. `sh` counts only as its own word:
@@ -212,7 +213,10 @@ hidden_lengths() {
   printf '%s\n%s\n' "$q" "$(normalize_command "$q")" | sed "s/%3B/$hs/g; s/%7C/$hs/g; s/%26/$hs/g; s/%25/%/g" \
     | grep -qE "${IB}${INTERP}\b[^|;&$hs]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&$hs]{200,}"
 }
-if printf '%s\n' "$TYPED" | grep -qE "${IB}${INTERP}\b[^|;&]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&]{200,}" \
+# On the joined lines (joined_pass, lib/io.sh) a quoted newline is the byte \001,
+# and a length stops there as it does at the newline in the command as typed.
+NB=""; [[ -n "${JOINED_PASS:-}" ]] && NB=$'\001'
+if printf '%s\n' "$TYPED" | grep -qE "${IB}${INTERP}\b[^|;&$NB]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&$NB]{200,}" \
    || { [[ -n "$NQS" ]] && hidden_lengths; }; then
   emit_ask "Long inline script passed to an interpreter. Review the payload before running — inline code bypasses file-based review."
   exit 0

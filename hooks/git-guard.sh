@@ -21,6 +21,7 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Every check below names git. Normalizing drops quotes and backslashes, lowers
 # case, and removes paths and prefixes, but never adds a letter, so a command
 # with no git once quotes and backslashes are gone is done, before ~35 ms of it.

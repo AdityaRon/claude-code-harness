@@ -335,5 +335,15 @@ monitor_is allow '{"command":"tail -f ~/.claude/audit.log"}'
 monitor_is allow '{"ws":{"url":"wss://github.com/o/r"}}'
 
 echo ""
+echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
+# bash joins a line ending in \ to the next and keeps a quoted newline in its
+# word, where the guard read each line alone: each row that asks or denies here
+# was allowed.
+bash_is ask $'cat <<EOF > /dev/null\n$(cp /dev/null \\\n~/.claude/settings.json)\nEOF'
+bash_is ask $'cp /dev/null \\\n~/.claude/settings.json'
+bash_is ask $'cp "a\nb" ~/.claude/settings.json'
+bash_is ask $'cp $\'a\nb\' ~/.claude/settings.json'
+bash_is allow $'cp x \\\ny'
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

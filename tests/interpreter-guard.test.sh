@@ -266,5 +266,17 @@ check "one long statement holding %3B, behind a quoted ;" ask "python3 -X \"a;b\
 check "a stream edit on a file named a;b"    allow "perl -pi -e 's/a/b/' \"a;b.md\""
 
 echo ""
+echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
+# bash joins a line ending in \ to the next and keeps a quoted newline in its
+# word, where the guard read each line alone: each row that asks or denies here
+# was allowed.
+check "-X \$'a⏎b' before -c"               ask   $'python3 -X $\'a\nb\' -c "import os; print(os.environ)"'
+check "-X \"a⏎b\" before -c"               ask   $'python3 -X "a\nb" -c "import os; print(os.environ)"'
+check "\\ then -c"                          ask   $'python3 \\\n-c "import os; print(os.environ)"'
+# A length stops at a quoted newline as it does at the newline as typed.
+SHORTL=$(printf 'x = 1\n%.0s' {1..40})
+check "a payload of short lines"            allow "python3 -c \"${SHORTL}print(x)\""
+check "a payload of short lines behind a quoted ;" allow "python3 -X \"a;b\" -c \"${SHORTL}print(x)\""
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

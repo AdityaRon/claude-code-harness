@@ -538,5 +538,13 @@ check "a quoted ; in a selector"         allow 'kubectl get pods -l "a in (b;c)"
 check "echo with a quoted ;, then a read" allow 'echo "a;b"; kubectl get pods'
 
 echo ""
+echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
+# bash joins a line ending in \ to the next and keeps a quoted newline in its
+# word, where the guard read each line alone: each row that asks or denies here
+# was allowed.
+check "--cache-dir \$'a⏎b' before delete"  ask   $'kubectl --cache-dir $\'/tmp/a\nb\' delete ns prod'
+check "--cache-dir \"a⏎b\" before delete"  ask   $'kubectl --cache-dir "/tmp/a\nb" delete ns prod'
+check "a read, \\ then -n"               allow $'kubectl get pods \\\n  -n x'
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

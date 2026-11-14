@@ -667,5 +667,21 @@ check "in double quotes"                     deny  $'echo "$\\\n(git push origin
 check "in an unquoted body"                  deny  $'cat <<EOF > /dev/null\nx $\\\n(git push origin main --force)\nEOF'
 
 echo ""
+echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
+# bash joins a line ending in \ to the next and keeps a quoted newline in its
+# word, where the guard read each line alone: each row that asks or denies here
+# was allowed.
+check "\\ then --force"                       deny  $'git push origin main \\\n--force'
+check "\\ then --force, after a commit"       deny  $'git commit -m x && git push \\\n  origin main --force'
+check "-c \$'a⏎b' before push --force"        deny  $'git -c $\'x.y=a\nb\' push origin main --force'
+check "-c \"a⏎b\" before push --force"        deny  $'git -c "x.y=a\nb" push origin main --force'
+check "\\ then --hard"                        deny  $'git reset \\\n--hard'
+check "\\ then --dry-run"                     allow $'git push origin main \\\n--dry-run'
+check "a commit message over two lines"      allow $'git commit -m "subject\n\nbody; git push --force"'
+echo ""
+echo "=== The joined lines raise a decision, never lift one ==="
+check "a quoted newline in an echo, then a push line" deny $'echo "x\ngit push origin main --force"'
+check "restore ., then --staged across a quoted newline" deny $'git restore .\ngit restore "x\ny" --staged f'
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

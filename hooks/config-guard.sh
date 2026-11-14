@@ -20,6 +20,7 @@ require_parsable_or_deny
   printf '%s' "$INPUT" | jq -j '(.tool_name // ""), "\u0000",
     (.tool_input | .command // .file_path // .notebook_path // ""), "\u0000", (.cwd // ""), "\u0000"' 2>/dev/null)
 [[ -z "$TARGET" ]] && exit 0
+[[ "$TOOL" == Bash || "$TOOL" == Monitor ]] && joined_pass "$TARGET"   # the command as bash joins its lines too (lib/io.sh)
 
 H=$HOME
 # Most commands name none of these and are not run from inside ~/.claude. A
