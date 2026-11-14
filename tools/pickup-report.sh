@@ -1,15 +1,86 @@
 #!/usr/bin/env bash
 # What an install changed since the commit the last one recorded, grouped by how
-# a running session picks it up. install.sh runs it; it reads the clone only.
-#   tools/pickup-report.sh PREV_COMMIT [REPO]
+# a running session picks it up. install.sh runs it with --prune, which removes
+# what prune_why allows; without it, it reads the clone only.
+#   tools/pickup-report.sh [--prune] PREV_COMMIT [REPO]
 set -u
+PRUNE=""
+if [[ "${1:-}" == --prune ]]; then PRUNE=1; shift; fi
 PREV=${1:-}
 REPO=${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 [[ -n "$PREV" && "$PREV" != unknown ]] || exit 0
 if ! git -C "$REPO" cat-file -e "$PREV^{commit}" 2>/dev/null; then
-  echo "  ℹ the last install was at ${PREV:0:12}, which this clone does not have; after a fetch: tools/pickup-report.sh ${PREV:0:12}"
+  echo "  ℹ the last install was at ${PREV:0:12}, which this clone does not have$([[ -n "$PRUNE" ]] && echo ", so nothing deleted from the clone was removed (previous install unknown)"); after a fetch: tools/pickup-report.sh ${PREV:0:12}"
   exit 0
 fi
+CLAUDE_DIR="$HOME/.claude"
+CLAUDE_REAL=$(cd "$CLAUDE_DIR" 2>/dev/null && pwd -P)
+
+# Where install puts F under ~/.claude (REL), and how a session picks it up (G);
+# fails for a file install does not copy. In a case pattern * matches / too, so
+# each pattern is held to install's depth by the number of slashes.
+map() {  # F
+  local n=${1//[^\/]/}; n=${#n}
+  case "$n:$1" in
+    1:hooks/*.sh|2:hooks/lib/*.sh|1:config/settings.json|1:config/merge-settings.jq|1:config/retired-rules.json) G=LIVE ;;
+    1:rules/*.md) G=RULES ;;
+    1:bin/*) G=TOOLS ;;
+    4:skills/*/panel/.claude-plugin/plugin.json|4:skills/*/panel/hooks/*|4:skills/*/panel/types/*) G=PANEL ;;
+    2:skills/*/SKILL.md|2:skills/*/*.example.toml|3:skills/*/bin/*) G=SKILL ;;
+    *) [[ "$1" == skills/* && "${1#skills/*/}" == templates/* ]] || return 1; G=SKILL ;;
+  esac
+  REL=$1
+  if [[ "$G" == TOOLS ]]; then REL=${1#bin/}; fi
+  return 0
+}
+
+# What this install writes, matched without case: on a disk that ignores case,
+# the old name of a file renamed only in case is the copy just written.
+WRITES=$(git -C "$REPO" ls-files -co --exclude-standard 2>/dev/null \
+         | while IFS= read -r p; do [[ -f "$REPO/$p" ]] && map "$p" && printf '%s\n' "$REL"; done)
+# A harness inside another repo would read that repo's history as its own.
+TOP=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null) && TOP=$(cd "$TOP" && pwd -P)
+OWN=""; [[ -n "$TOP" && "$TOP" == "$(cd "$REPO" && pwd -P)" ]] && OWN=1
+COMMITTED=$(git -C "$REPO" diff --no-renames --name-only --diff-filter=D "$PREV" HEAD -- 2>/dev/null)
+
+# FILE:NAME for each basename listed in NAMES that a place which might run or
+# load it names, in one pass over all of them. Text only.
+scan() {  # NAMES
+  local C=$CLAUDE_DIR f
+  { find -H "$C" \( -path "$C/projects" -o -path "$C/logs" -o -path "$C/jobs" -o -path "$C/state" -o -path "$C/todos" \
+                    -o -path "$C/shell-snapshots" \) -prune \
+         -o -type f \( -name '*.sh' -o -name '*.py' -o -name '*.md' -o -name '*.toml' -o -path "$C/commands/*" -o -path "$C/agents/*" \
+                       -o \( -name '*.json' ! -path "$C/*/*" \) \) -print0 2>/dev/null
+    for f in "$HOME/.claude.json" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" \
+             "$HOME"/Library/LaunchAgents/*.plist; do
+      if [[ -f "$f" ]]; then printf '%s\0' "$f"; fi
+    done
+  } | xargs -0 grep -aHoF -f "$1" -- 2>/dev/null
+  crontab -l 2>/dev/null | grep -aoF -f "$1" | sed 's/^/crontab:/'
+}
+
+# Why DEST, the installed copy of F, is kept; empty when it may go, unless a scan names it.
+prune_why() {  # F REL DEST
+  local p
+  if [[ -z "$PREV" || "$PREV" == unknown ]] || ! git -C "$REPO" cat-file -e "$PREV^{commit}" 2>/dev/null; then
+    echo "previous install unknown"
+  elif [[ -z "$OWN" ]]; then
+    echo "the harness is not its own git repo"
+  elif ! git -C "$REPO" merge-base --is-ancestor "$PREV" HEAD 2>/dev/null; then
+    echo "the clone is not ahead of the last install"
+  elif ! grep -qxF -- "$1" <<< "$COMMITTED"; then
+    echo "deleted only in the working tree"
+  elif p=$(grep -ixF -- "$2" <<< "$WRITES" | head -1); [[ -n "$p" ]]; then
+    echo "this install writes $p"
+  elif p=$(cd "$(dirname "$3")" 2>/dev/null && pwd -P); [[ -z "$p" || -z "$CLAUDE_REAL" || ( "$p" != "$CLAUDE_REAL" && "$p" != "$CLAUDE_REAL"/* ) ]]; then
+    echo "outside ~/.claude through a symlink"
+  elif [[ ! -f "$3" || -L "$3" ]]; then
+    echo "not the plain file install wrote"
+  elif [[ "$(git -C "$REPO" hash-object --no-filters -- "$3" 2>/dev/null)" != "$(git -C "$REPO" rev-parse -q --verify "$PREV:$1" 2>/dev/null)" ]]; then
+    echo "edited since install"
+  fi
+}
+
 # The last install's commit against the working tree, as install copies it, and
 # files not yet committed, each with its status so a deleted file is told apart.
 TAB=$'\t'
@@ -17,28 +88,27 @@ CHANGES=$({ git -C "$REPO" diff --no-renames --name-status "$PREV" --
             git -C "$REPO" ls-files --others --exclude-standard | awk '{ print "A\t" $0 }'; } 2>/dev/null \
           | sort -t "$TAB" -k2,2 -u)
 
-LIVE="" RULES="" TOOLS="" PANEL="" SKILLS="" GONE=""
+LIVE="" RULES="" TOOLS="" PANEL="" SKILLS="" GONE="" REMOVED="" CANDS="" DOOMED=""
 while IFS=$TAB read -r st f; do
   [[ -n "${f:-}" ]] || continue
-  # In a case pattern * matches / too, so each pattern is held to the depth
-  # install copies at by the number of slashes in the path.
-  n=${f//[^\/]/}; n=${#n}
-  case "$n:$f" in
-    1:hooks/*.sh|2:hooks/lib/*.sh|1:config/settings.json|1:config/merge-settings.jq|1:config/retired-rules.json) g=LIVE ;;
-    1:rules/*.md) g=RULES ;;
-    1:bin/*) g=TOOLS ;;
-    4:skills/*/panel/.claude-plugin/plugin.json|4:skills/*/panel/hooks/*|4:skills/*/panel/types/*) g=PANEL ;;
-    2:skills/*/SKILL.md|2:skills/*/*.example.toml|3:skills/*/bin/*) g=SKILL ;;
-    *) [[ "$f" == skills/* && "${f#skills/*/}" == templates/* ]] || continue; g=SKILL ;;
-  esac
-  # install copies and never deletes, so a file gone from the clone stays where
-  # an earlier install put it. templates/ is swapped whole; config/ is merged.
+  map "$f" || continue
+  # A file gone from the clone stays where an earlier install put it, unless
+  # --prune removes it. templates/ is swapped whole; config/ is merged.
   if [[ "$st" == D && "$f" != skills/*/templates/* && "$f" != config/* ]]; then
-    [[ "$g" == TOOLS ]] && f=${f#bin/}
-    GONE="$GONE  $HOME/.claude/$f"
+    dest="$CLAUDE_DIR/$REL"
+    # Nothing there to keep or remove: no install wrote it, or it is gone already.
+    [[ -e "$dest" || -L "$dest" ]] || continue
+    w=$(grep -ixF -- "$REL" <<< "$WRITES" | head -1)
+    [[ -n "$w" && "$dest" -ef "$CLAUDE_DIR/$w" ]] && continue
+    if [[ -z "$PRUNE" ]]; then
+      GONE="$GONE  $dest"
+    else
+      why=$(prune_why "$f" "$REL" "$dest")
+      if [[ -z "$why" ]]; then CANDS="$CANDS$dest"$'\n'; else GONE="$GONE  $dest ($why)"; fi
+    fi
     continue
   fi
-  case "$g" in
+  case "$G" in
     LIVE) LIVE="$LIVE  $f" ;;
     RULES) RULES="$RULES  $f" ;;
     TOOLS) TOOLS="$TOOLS  $f" ;;
@@ -47,8 +117,29 @@ while IFS=$TAB read -r st f; do
            case " $SKILLS " in *" /$s "*) ;; *) SKILLS="$SKILLS /$s" ;; esac ;;
   esac
 done <<< "$CHANGES"
+# Every candidate is decided before any is removed, so a file one of them names
+# is kept whatever the order, even when the file naming it goes.
+if [[ -n "$CANDS" ]]; then
+  HITS="" NAMES=$(mktemp "${TMPDIR:-/tmp}/cch-prune.XXXXXX") || NAMES=""
+  if [[ -n "$NAMES" ]]; then
+    while IFS= read -r d; do [[ -n "$d" ]] && printf '%s\n' "${d##*/}"; done <<< "$CANDS" | sort -u > "$NAMES"
+    HITS=$(scan "$NAMES" | sort -u); rm -f "$NAMES"
+  fi
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    [[ -n "$NAMES" ]] || { GONE="$GONE  $d (could not search for what names it)"; continue; }
+    where=$(awk -v n="${d##*/}" -v d="$d" '{ i = length($0) - length(n)
+              if (i > 0 && substr($0, i) == ":" n) { f = substr($0, 1, i - 1); if (f != d && !seen[f]++) print f } }' <<< "$HITS")
+    if [[ -z "$where" ]]; then DOOMED="$DOOMED$d"$'\n'; continue; fi
+    GONE="$GONE  $d (named in $(awk 'NR<=3 { printf "%s%s", (NR>1 ? ", " : ""), $0 } END { if (NR>3) printf " and %d more", NR-3 }' <<< "$where"))"
+  done <<< "$CANDS"
+fi
+while IFS= read -r d; do
+  [[ -n "$d" ]] || continue
+  if rm -f -- "$d"; then REMOVED="$REMOVED  $d"; else GONE="$GONE  $d (could not remove)"; fi
+done <<< "$DOOMED"
 
-if [[ -z "$LIVE$RULES$TOOLS$PANEL$SKILLS$GONE" ]]; then
+if [[ -z "$LIVE$RULES$TOOLS$PANEL$SKILLS$GONE$REMOVED" ]]; then
   echo "  ✓ nothing installed changed since ${PREV:0:12}"
   exit 0
 fi
@@ -58,5 +149,6 @@ echo "How running sessions pick up what changed since ${PREV:0:12}:"
 [[ -n "$TOOLS" ]] && echo "  Tools in ~/.claude, on their next run:$TOOLS"
 [[ -n "$SKILLS" ]] && echo "  Skills, when a running session calls them again:$SKILLS"
 [[ -n "$PANEL" ]] && echo "  A panel, when the session that shows it restarts: type \`! claude respawn <job>\` at your own prompt (from another session the auto-mode classifier denies it):$PANEL"
-[[ -n "$GONE" ]] && echo "  Deleted from the clone; install does not delete, so the earlier copy stays until removed by hand:$GONE"
+[[ -n "$REMOVED" ]] && echo "  Deleted from the clone, and removed here because install wrote it and nothing changed it (each is in git at ${PREV:0:12}):$REMOVED"
+[[ -n "$GONE" ]] && echo "  Deleted from the clone; the earlier copy stays until removed by hand:$GONE"
 exit 0
