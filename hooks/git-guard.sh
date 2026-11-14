@@ -21,6 +21,7 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Every check below names git. Normalizing drops quotes and backslashes, lowers
 # case, and removes paths and prefixes, but never adds a letter, so a command
 # with no git once quotes and backslashes are gone is done, before ~35 ms of it.
@@ -38,6 +39,13 @@ MSG_FREE=$(strip_message_args "$CMD")
 HOOKS_TEXT=""
 [[ "$MSG_FREE" != "$CMD" ]] && HOOKS_TEXT=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
 CMD=$MSG_FREE
+# A quoted or escaped ; | or & is text, but every [^|;&] span below stopped at
+# it: `git push origin "a;b" --force` was allowed. The reading with those hidden
+# (lib.sh) is matched beside the one as typed, never instead of it, since an
+# inner shell does split there (`bash -c "true; git push -f"`).
+NQS=""
+[[ "$CMD" == *[\"\'\\]* && "$CMD" == *[\;\&\|]* ]] && NQS=$(neutralize_quoted_separators "$CMD")
+[[ "$NQS" == "$CMD" ]] && NQS=""
 
 # Strip assignment/wrapper prefixes before anything below matches. The anchor A
 # admits only real command boundaries, so `VAR=1 git push -f`, `env FOO=bar git
@@ -45,6 +53,10 @@ CMD=$MSG_FREE
 # check in this file while the bare form was denied. `/usr/bin/git` and `GIT`
 # did the same. The second line is the fully normalized form; see lib.sh.
 CMD=$(printf '%s\n%s' "$(normalize_wrappers "$(separate_groups "$CMD")")" "$(normalize_command "$CMD")")
+TYPED=$CMD   # for a match that lifts a check rather than raising one
+NQREAD=""
+[[ -n "$NQS" ]] && NQREAD=$(printf '%s\n%s' "$(normalize_wrappers "$(separate_groups "$NQS")")" "$(normalize_command "$NQS")") \
+  && CMD=$(printf '%s\n%s' "$CMD" "$NQREAD")
 
 # Committed template files (.env.example / .sample / .template / .dist / .tpl)
 # are safe to stage; neutralize them so `git add .env.example` isn't blocked.
@@ -62,6 +74,16 @@ GOPT='(-c[= ][^ ]+|-C[= ][^ ]+|--git-dir[= ][^ ]+|--work-tree[= ][^ ]+|--namespa
 # reaches git from behind a word that is not a command boundary.
 XARGS='(xargs(\s+-[A-Za-z0-9]+(\s+\{\})?)*\s+)?'
 GIT="${XARGS}git(\s+${GOPT})*\s+"
+# The checks that lift a decision keep A0 and GIT0, the terms above. The ones
+# that raise one take two more shapes, as bash reads them. An option's value may
+# be quoted, blanks and all (`git -c "user.name=A B" push --force`, `git -C 'a b'
+# reset --hard`): [^ ]+ ended inside it. And the quote that opens a shell's -c
+# string or eval's words starts a command (`bash -c "git push --force"`).
+A0=$A; GIT0=$GIT
+QV='([^ ]+|("[^"]*"|'\''[^'\'']*'\''|[^[:space:]"'\''])+)'   # a value as above, or one with quoted blanks
+GOPT="(-c[= ]${QV}|-C[= ]${QV}|--git-dir[= ]${QV}|--work-tree[= ]${QV}|--namespace[= ]${QV}|--exec-path([= ]${QV})?|--no-pager|--bare|--literal-pathspecs|-p|-P)"
+GIT="${XARGS}git(\s+${GOPT})*\s+"
+A='(^|[|&;]|&&|\|\||\$\(|`)\s*(((ba|z|da|k|fi)?sh\s+(-[-A-Za-z]+\s+)*-[A-Za-z]*c[A-Za-z]*|eval)\s+["'\'']?)?'
 
 # --- A subcommand this cannot read --------------------------------------
 # Every check below names its subcommand, so `X=push; git $X --force origin
@@ -95,8 +117,10 @@ fi
 # boundary) so a branch name ending in "-f" (e.g. `git push origin wip-f`)
 # doesn't trip it. Short options bundle, so the f can sit anywhere in the
 # cluster: `-fu` and `-qf` force-push exactly as `-f` does and matched nothing
-# while the bare form was denied.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]-[A-Za-z]*f[A-Za-z]*([[:space:]]|$)|--force\b|--force-with-lease\b)"; then
+# while the bare form was denied. A separator, the ) closing a $( ) or the quote
+# closing a shell's -c string bounds it too: `git push origin main -f; ls`,
+# "$(git push origin main -f)" and `bash -c "git push origin main -f"` ran.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]-[A-Za-z]*f[A-Za-z]*([[:space:];&|)\"']|$)|--force\b|--force-with-lease\b)"; then
   emit_deny "Blocked: force-push is not allowed. Use regular git push, or ask the user to run this manually."
   exit 0
 fi
@@ -135,9 +159,23 @@ fi
 # and a function's "$@" all become git; the parsers read the command as typed. A
 # segment only the gate saw went unchecked while the one beside it passed the
 # call. Prints how many segments of subcommand $1 match $2 in the gate's view.
+# Each proof parses PROOF_TEXT, one reading of the command, and leaves in
+# PROOF_N how many segments it proved. It runs on the command as typed, as it
+# always has, then on the command with quoted separators hidden (lib.sh), which
+# must prove every segment it shows too: `git branch "a;b" -D x; echo y\;git
+# branch -D z` shows one delete in each reading, a different one in each.
 gate_segments() {
-  normalize_command "$(strip_messages "$(jq_get '.tool_input.command')")" | tr -d '"'\''\\' \
-    | grep -oE "${A}${GIT}$1\s+[^|;&]*" | grep -cE "$2"
+  normalize_command "$PROOF_TEXT" | tr -d '"'\''\\' | grep -oE "${A}${GIT}$1\s+[^|;&]*" | grep -cE "$2"
+}
+PROOF_TEXT=""; PROOF_N=0
+proved_in_each_reading() {   # FN
+  local c q
+  c=$(strip_messages "$(jq_get '.tool_input.command')")
+  PROOF_TEXT=$c; "$1" && [[ $PROOF_N -gt 0 ]] || return 1
+  [[ "$c" == *[\"\'\\]* && "$c" == *[\;\&\|]* ]] || return 0
+  q=$(neutralize_quoted_separators "$c")
+  [[ "$q" == "$c" ]] && return 0
+  PROOF_TEXT=$q; "$1"
 }
 
 # --- Branch deletion ----------------------------------------------------
@@ -156,7 +194,7 @@ branch_on_remote() {
 branch_delete_safe() {
   local raw segs seg t i b repo cwd n=0 names force
   cwd=$(jq_get '.cwd')
-  raw=$(separate_groups "$(strip_messages "$(jq_get '.tool_input.command')")")
+  raw=$(separate_groups "$PROOF_TEXT")
   # xargs appends names the command does not show; normalize_wrappers hides it.
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
   raw=$(normalize_wrappers "$raw")
@@ -200,9 +238,12 @@ branch_delete_safe() {
     done
     n=$((n + 1))
   done <<<"$segs"
-  [[ $n -gt 0 && $n -eq $(gate_segments branch "\s${BRANCH_DEL}") ]]
+  PROOF_N=$n
+  [[ $n -eq $(gate_segments branch "\s${BRANCH_DEL}") ]]
 }
-if printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}branch\s([^|;&]*\s)?${BRANCH_DEL}" && ! branch_delete_safe; then
+# With its quotes, too: `git -C "a b" branch -D x` lost its git once they went.
+if { printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}branch\s([^|;&]*\s)?${BRANCH_DEL}" \
+     || printf '%s\n' "$CMD" | grep -qE "${A}${GIT}branch\s([^|;&]*\s)?${BRANCH_DEL}"; } && ! proved_in_each_reading branch_delete_safe; then
   emit_ask "This deletes a branch whose commits no remote-tracking ref holds, or one this guard could not check. Confirm the work is merged or no longer needed."
   exit 0
 fi
@@ -210,10 +251,24 @@ fi
 # Discarding the whole working tree is reset --hard for uncommitted work, and
 # `Bash(git checkout:*)` is on the allow list, so nothing else stops it.
 # `git restore --staged .` only unstages and stays allowed; `git checkout -`
-# (switch back) is not a pathspec.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?(\.{1,2}/?|:/)([[:space:]]|;|&|\||$)" \
-   && ! { printf '%s\n' "$CMD" | grep -qE "${A}${GIT}restore\s[^|;&]*(--staged|-S)\b" \
-          && ! printf '%s\n' "$CMD" | grep -qE "${A}${GIT}restore\s[^|;&]*(--worktree|-W)\b"; }; then
+# (switch back) is not a pathspec. The command as typed is read as it always
+# was, on main's terms (A0, GIT0). Each segment of every reading is also read
+# on its own, on the wider terms: a --staged in another segment lifts nothing
+# there (`git restore . && git restore "x;y" --staged f`), and one in the same
+# segment does (`git restore "a;b" --staged .`, `git -C "a b" restore --staged
+# .`). A quote may close round the pathspec there (`bash -c "git checkout ."`).
+TREE='(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?(\.{1,2}/?|:/)([[:space:]]|;|&|\||\)|$)'
+TREEQ='(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?["'\'']?(\.{1,2}/?|:/)["'\'']?([[:space:]]|\)|$)'
+tree_segment() {
+  local t
+  t=$(printf '%s\n' "$CMD" | grep -oE "${A}${GIT}(checkout|restore)\s+[^|;&]*" | grep -E "$TREEQ")
+  [[ -n "$t" ]] || return 1
+  printf '%s\n' "$t" | grep -vqE "restore\s[^|;&]*(--staged|-S)\b" || printf '%s\n' "$t" | grep -qE "restore\s[^|;&]*(--worktree|-W)\b"
+}
+if { printf '%s\n' "$TYPED" | grep -qE "${A0}${GIT0}${TREE}" \
+     && ! { printf '%s\n' "$TYPED" | grep -qE "${A0}${GIT0}restore\s[^|;&]*(--staged|-S)\b" \
+            && ! printf '%s\n' "$TYPED" | grep -qE "${A0}${GIT0}restore\s[^|;&]*(--worktree|-W)\b"; }; } \
+   || tree_segment; then
   emit_deny "Blocked: this discards every uncommitted change in the tree with no recovery path. Restore the files you mean by name, or ask the user to run this manually."
   exit 0
 fi
@@ -281,11 +336,10 @@ remote_tips_held() {   # $1 repo  $2 remote  $3 refs to leave out, one per line 
   done
 }
 push_delete_safe() {
-  local cmd raw segs seg t i k r repo cwd n=0 del b fu pu gone=""
+  local raw segs seg t i k r repo cwd n=0 del b fu pu gone=""
   local -a refs names s_repo=() s_remote=() s_names=()
   cwd=$(jq_get '.cwd')
-  cmd=$(strip_messages "$(jq_get '.tool_input.command')")
-  raw=$(separate_groups "$cmd")
+  raw=$(separate_groups "$PROOF_TEXT")
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
   raw=$(normalize_wrappers "$raw")
   printf '%s\n' "$raw" | grep -qE "${A}(cd|pushd)\b" && return 1
@@ -340,7 +394,8 @@ push_delete_safe() {
     s_repo+=("$repo"); s_remote+=("$r"); s_names+=("${names[*]}")
     n=$((n + 1))
   done <<<"$segs"
-  [[ $n -gt 0 && $n -eq $(gate_segments push "\s${PUSH_DEL}") ]] || return 1
+  PROOF_N=$n
+  [[ $n -eq $(gate_segments push "\s${PUSH_DEL}") ]] || return 1
   # Every name in the call is left out of every check, or two branches at one
   # commit would each count the other's tracking ref.
   for ((k = 0; k < n; k++)); do
@@ -348,7 +403,8 @@ push_delete_safe() {
     remote_tips_held "${s_repo[k]}" "${s_remote[k]}" "${gone%$'\n'}" "${names[@]}" || return 1
   done
 }
-if printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}push\s([^|;&]*\s)?${PUSH_DEL}" && ! push_delete_safe; then
+if { printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}push\s([^|;&]*\s)?${PUSH_DEL}" \
+     || printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\s([^|;&]*\s)?${PUSH_DEL}"; } && ! proved_in_each_reading push_delete_safe; then
   emit_ask "This deletes a remote branch whose tip no other ref holds (a local branch, a tag, or another remote-tracking ref), or one this guard could not check. Confirm the work is merged or no longer needed."
   exit 0
 fi
@@ -374,7 +430,7 @@ FOUND=""
 broad_add_safe() {
   local raw segs seg t i repo cwd n=0 p out
   cwd=$(jq_get '.cwd')
-  raw=$(separate_groups "$(strip_messages "$(jq_get '.tool_input.command')")")
+  raw=$(separate_groups "$PROOF_TEXT")
   # xargs appends stdin, which can hold -f; normalize_wrappers would hide it.
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
   raw=$(normalize_wrappers "$raw")
@@ -419,9 +475,10 @@ broad_add_safe() {
     done <<<"$out"
     n=$((n + 1))
   done <<<"$segs"
-  [[ $n -gt 0 && $n -eq $(gate_segments add "\s(--\s+)?${BROAD}([[:space:]]|$)") ]]
+  PROOF_N=$n
+  [[ $n -eq $(gate_segments add "\s(--\s+)?${BROAD}([[:space:]]|$)") ]]
 }
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||$)" && ! broad_add_safe; then
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||\)|$)" && ! proved_in_each_reading broad_add_safe; then
   if [[ -n "$FOUND" ]]; then
     emit_deny "Blocked: this broad git add would stage $FOUND, a credential file. Stage files by name instead."
   else
@@ -456,7 +513,9 @@ SENSITIVE=(
 # was 12 process starts on a git add that stages none of them.
 SENSITIVE_RE=""
 for P in "${SENSITIVE[@]}"; do SENSITIVE_RE="${SENSITIVE_RE:+$SENSITIVE_RE|}($P)"; done
-if printf '%s\n' "$SCAN" | grep -qE "${A}${GIT}add\s.*(${SENSITIVE_RE})"; then
+# Its quotes taken out too: `git add "<name>"` and a shell's -c string ended the
+# name at a quote, where each pattern wants a blank or the line's end.
+if printf '%s\n%s\n' "$SCAN" "$(printf '%s\n' "$SCAN" | tr -d '"'\')" | grep -qE "${A}${GIT}add\s.*(${SENSITIVE_RE})"; then
   emit_deny "Blocked: git add targets a sensitive file. Do not stage credentials or secret files."
   exit 0
 fi

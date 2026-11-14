@@ -9,6 +9,7 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # A quote may follow: subprocess.run(['rm', '-rf', x]) in an inline script.
 RM_WORD='(^|[^[:alnum:]_.-])rm([[:space:]"'\'']|$)'
 [[ "$CMD" =~ $RM_WORD ]] || exit 0
@@ -92,6 +93,9 @@ while IFS= read -r seg; do
       [[ "$a" == *[rR]* ]] && rec=1; [[ "$a" == *f* ]] && force=1; continue
     fi
     targets+=("$a")
+    # A $( ) in double quotes or a heredoc body keeps its ) on the last word, as
+    # ) or, once the segment is normalized alone, ; (lib.sh): `*)` is * too.
+    c=${a%%[\);]*}; [[ "$c" != "$a" && -n "$c" ]] && targets+=("$c")
   done
   [[ $rec -eq 1 ]] || continue
   for t in ${targets[@]+"${targets[@]}"}; do

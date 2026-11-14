@@ -296,7 +296,7 @@ function hd_scan(s,    i, n, c, j, w) {
 function sh_save(   k) { sq = hq; ssp = hsp; sbt = hbt; scont = hcont; spd = hpd; sdoubt = HD_DOUBT; for (k = 1; k <= hsp; k++) { sup[k] = hup[k]; sdep[k] = hdep[k]; sbtf[k] = hbtf[k] } }
 function sh_restore(   k) { hq = sq; hsp = ssp; hbt = sbt; hcont = scont; hpd = spd; HD_DOUBT = sdoubt; for (k = 1; k <= ssp; k++) { hup[k] = sup[k]; hdep[k] = sdep[k]; hbtf[k] = sbtf[k] } }
 function sh_classify(nl,    k, t, i, body, lit, shell, found, insub, nb) {
-  SH_BAD = 0; split("", CLS); split("", DATA); split("", BODY); HD_CLS = 1; HB_TAIL = ""
+  SH_BAD = 0; split("", CLS); split("", DATA); split("", BODY); split("", JN); HD_CLS = 1; HB_TAIL = ""
   hq = ""; hsp = 0; hbt = 0; hcont = 0; hpd = 0; HD_DOUBT = 0
   for (k = 1; k <= nl; k++) {
     if (body) {
@@ -309,11 +309,13 @@ function sh_classify(nl,    k, t, i, body, lit, shell, found, insub, nb) {
       if (!shell) DATA[k] = 1
       if (lit && !shell) continue
       hd_scan(line[k]); for (i in HCLS) CLS[k, i] = HCLS[i]
-      if (HD_BAD || HD_POS) { SH_BAD = 1; return }
+      if (HD_BAD || HD_POS || hd_joins_sub(line[k])) { SH_BAD = 1; return }
+      JN[k] = hd_join_kind()
       continue
     }
     hd_scan(line[k]); for (i in HCLS) CLS[k, i] = HCLS[i]
-    if (HD_BAD) { SH_BAD = 1; return }
+    if (HD_BAD || hd_joins_sub(line[k])) { SH_BAD = 1; return }
+    JN[k] = hd_join_kind()
     if (!HD_POS) continue
     found = 0; for (t = k + 1; t <= nl; t++) if (hd_end(line[t])) { found = 1; break }
     if (!found) continue
@@ -363,6 +365,13 @@ function hd_body(s,    i, n, c) {
 # A body some shell reads: a shell named on the line, $SHELL, or eval, source
 # or . in command position.
 function hd_shell(s) { return s ~ /(^|[^A-Za-z0-9_.-])(ba|z|da|k|fi|s)?sh([^A-Za-z0-9_.-]|$)|\$\{?SHELL([^A-Za-z0-9_]|$)|(^|[;&|(])[ \t]*(eval|source|\.)[ \t]/ }
+# bash joins a line ending in \ to the next, so in double quotes or an unquoted
+# body `$\` then `(` is a $( ) that hd_scan reads as text. Call it after hd_scan.
+function hd_joins_sub(s) { return hcont && (hq == "\"" || hq == "H") && s ~ /\$\\$/ }
+# How bash ends the line hd_scan just read: 1 when a \ outside single quotes
+# joins it to the next, 2 when its newline is inside quotes, part of a word.
+# sh_classify keeps it in JN[k] for each line it scans.
+function hd_join_kind() { return hcont ? 1 : (hq == "\"" || hq == "\047" || hq == "A") ? 2 : 0 }
 '
 
 # A heredoc fed to `git commit -F -` or `gh pr|issue … --body-file -` is a
@@ -489,19 +498,23 @@ strip_inert_heredocs() {
 }
 
 # A heredoc body is the data a command reads, unless its line names a shell
-# anywhere (`| bash`, `sudo bash`, `/bin/sh`): config-guard. Unterminated, or
-# an opener hd_scan cannot read, it is all kept.
-drop_data_heredocs() {
+# anywhere (`| bash`, `sudo bash`, `/bin/sh`): config-guard. An unquoted body
+# holding $( or a backtick, or a line ending in $\ (then `(`, a $( ), stays too:
+# bash runs those as it reads the body. Unterminated, or an opener hd_scan
+# cannot read, it is all kept. With `all`, such a body goes too: a cd in its
+# $( ) does not outlast it, so config-guard follows cds in both readings.
+drop_data_heredocs() {   # TEXT [all]
   local out
   case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
-  out=$(printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+  out=$(printf '%s\n' "$1" | awk -v all="${2:-}" "$HEREDOC_AWK"'
     body && hd_bad_end($0) { bad = 1; exit }
-    body { if (hd_end($0)) { body = 0; print; next }
+    body { if (hd_end($0)) { if (runs && all == "") printf "%s", buf; body = 0; buf = ""; print; next }
            if (shell) print
+           else if (!lit) { buf = buf $0 "\n"; if ($0 ~ /\$\(|`|\$\\$/) runs = 1 }
            next }
     { print; hd_scan($0)
       if (HD_BAD) { bad = 1; exit }
-      if (HD_POS) { shell = hd_shell($0); body = 1 } }
+      if (HD_POS) { shell = hd_shell($0); lit = HD_LIT; runs = 0; buf = ""; body = 1 } }
     END { if (bad || body) exit 3 }') || { printf '%s' "$1"; return; }
   printf '%s' "$out"
 }
@@ -516,6 +529,30 @@ drop_data_heredocs() {
 # A body no shell reads may be a script run later, where a quote spans lines:
 # the reading carried from the body's first line is printed after the command
 # where it differs, so the lines a guard replays in order (cd) stay in order.
+# The command with its lines joined as bash joins them: a \ that ends a line
+# goes with its newline, and a newline inside quotes, part of a word, becomes
+# the byte \001. Guards read line by line, so `git push origin main \` then
+# `--force`, or `git -c $'a` then `b' push --force`, read as two commands.
+# sh_classify says which lines bash joins; a body nothing scans is left as it
+# is. Prints nothing and returns 1 when no line joins or the lexer cannot read
+# the command.
+join_continued_lines() {
+  case "$1" in *$'\n'*) ;; *) return 1 ;; esac
+  printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+    { line[NR] = $0 }
+    END {
+      sh_classify(NR)
+      if (SH_BAD) exit 1
+      for (k = 1; k <= NR; k++) if (JN[k]) break
+      if (k > NR) exit 1
+      for (k = 1; k <= NR; k++) {
+        if (JN[k] == 1) printf "%s", substr(line[k], 1, length(line[k]) - 1)
+        else if (JN[k] == 2) printf "%s\001", line[k]
+        else printf "%s%s", line[k], (k < NR ? "\n" : "")
+      }
+    }'
+}
+
 neutralize_quoted_separators() {
   case "$1" in *'&'*|*';'*|*'|'*) ;; *) printf '%s' "$1"; return ;; esac
   printf '%s\n' "$1" | awk "$HEREDOC_AWK"'

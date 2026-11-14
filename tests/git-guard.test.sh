@@ -397,6 +397,13 @@ check_wt "-D, then one spelled \"git\""        ask   "git branch -D b-pushed; \"
 check_wt "-D, then one spelled GIT"          ask   "git branch -D b-pushed && GIT branch -D b-local" "$M"
 check_wt "-D, then one spelled \\git"         ask   "git branch -D b-pushed && \\git branch -D b-local" "$M"
 check_wt "-D, then one a function runs"      ask   "f() { \"\$@\"; }; git branch -D b-pushed; f git branch -D b-local" "$M"
+# The parser reads the command as typed, where `"a;b"` cuts the second -D off:
+# one segment parsed, one counted, and b-local went with nothing asking.
+check_wt "-D, then one behind a quoted ;"     ask   'git branch -D b-pushed; git branch "a;b" -D b-local' "$M"
+check_wt "-D, then a quoted ; in an echo"     allow 'git branch -D b-pushed; echo "a;b"' "$M"
+# Each reading showed one delete, a different one, and each count matched its
+# own: the parse proved b-pushed, which echo prints, and b-local went unchecked.
+check_wt "-D in each reading, a different one" ask 'git branch "a;b" -D b-local; echo x\;git branch -D b-pushed' "$M"
 check_wt "-D, xargs adds a name"             ask   "echo b-local | xargs git branch -D b-pushed" "$M"
 check_wt "-qD bundle, commits only local"    ask   "git branch -qD b-local" "$M"
 check_wt "-Dq bundle, commits only local"    ask   "git branch -Dq b-local" "$M"
@@ -469,6 +476,7 @@ check_wt "--delete, a URL"                     ask   "git push $R/remote.git --d
 check_wt "--delete, push URL differs"          ask   "git push pu --delete b-pushed" "$M"
 check_wt "--delete, remote HEAD names no branch" ask "git push det --delete b-pushed" "$M"
 check_wt "--delete, name in a variable"        ask   "B=b-pushed; git push origin --delete \$B" "$M"
+check_wt "--delete in each reading, a different one" ask 'git push origin "a;b" --delete b-orphan; echo x\;git push origin --delete b-pushed' "$M"
 check_wt "--delete, quoted name"               ask   "git push origin --delete 'b-pushed'" "$M"
 check_wt "--delete, after a cd"                ask   "cd $M && git push origin --delete b-pushed" "/tmp"
 check_wt "--delete, names from xargs"          ask   "echo b-pushed | xargs git push origin --delete" "$M"
@@ -503,6 +511,7 @@ check_wt "-A -- ."                           allow "git add -v -A -- ." "$G"
 G2="$R/addrepo2"; git init -q "$G2" && echo s > "$G2/.env"
 check_wt "clean add, then one spelled /usr/bin/git" deny "git add -A && /usr/bin/git -C $G2 add -A" "$G"
 check_wt "clean add, then one spelled \"git\""        deny "git add -A && \"git\" -C $G2 add -A" "$G"
+check_wt "add -A in each reading, a different one" deny "git add \"a;b\" -A; echo x\\;git -C $G add -A" "$G2"
 # Every credential file sensitive-file-guard knows, not a shorter list of its own.
 for f in id_ecdsa id_dsa .npmrc .pypirc credentials.json service_account.json certs/client.p12 keys/app.jks \
          prod.tfvars terraform.tfstate kubeconfig .claude.json .kube/config .ssh/deploy_key .docker/config.json; do
@@ -598,6 +607,122 @@ while IFS= read -r p; do for s in "${SENSITIVE[@]}"; do [[ "$p" == *"$s"* ]] && 
 if (( N == 1 )); then echo "  OK: 1 grep holds the list"; PASS=$((PASS+1))
 else echo "  FAIL: $N greps hold a name from the list (want 1; $(wc -l < "$PATS" | tr -d ' ') greps in all)"; FAIL=$((FAIL+1)); fi
 
+echo ""
+echo "=== A quoted or escaped ; | & inside a word ends no span ==="
+# Each [^|;&] span stopped at the quoted ; and never reached the flag after it:
+# all of these were allowed. The reading with those hidden is matched beside the
+# one as typed, so an inner shell's real ; still splits.
+check "quoted ; before --force"              deny  'git push origin "a;b" --force'
+check "single-quoted ; before --force"       deny  "git push origin 'a;b' --force"
+check "quoted | before --force"              deny  'git push origin "a|b" --force'
+check "quoted & before --force"              deny  'git push origin "a&b" --force'
+check "escaped ; before --force"             deny  'git push origin a\;b --force'
+check "quoted ; before -f"                   deny  'git push origin "a;b" -f'
+check "quoted ; before --force-with-lease"   deny  'git push origin "a;b" --force-with-lease'
+check "quoted ; before a + refspec"          deny  'git push origin "x;y" +main:main'
+check "quoted ; before --mirror"             deny  'git push origin "a;b" --mirror'
+check "quoted ; before reset --hard"         deny  'git reset "a;b" --hard'
+check "quoted ; before clean -f"             deny  'git clean "a;b" -fd'
+check "quoted ; before -c core.hooksPath"    deny  'git -c "a;b" -c core.hooksPath=/x status'
+check "quoted ; before a ! alias"            deny  "git config \"a;b\" alias.x '!sh'"
+check "quoted ; before push --delete"        ask   'git push origin "a;b" --delete nosuchbranch'
+check "quoted ; before branch -D"            ask   'git branch "a;b" -D nosuchbranch'
+check "after bash x.sh"                      deny  'bash x.sh; git push origin "a;b" --force'
+check "after a \$( )"                        deny  'd=$(pwd); git push origin "a;b" --force'
+check "in a script bash runs"                deny  $'cat > x.sh <<\'EOF\'\ngit push origin "a;b" --force\nEOF\nbash x.sh'
+check "in an unquoted body's \$( )"          deny  $'cat <<EOF > /dev/null\n$(git push origin "a;b" --force)\nEOF'
+# Held as main holds it: the reading as typed is still read, so an inner
+# shell's real ; splits.
+check "an inner shell's ; still splits"      deny  'bash -c "true; git push origin main --force"'
+check "a quoted ; in a commit message"       allow 'git commit -m "fix; tests" && git push origin main'
+check "echo with a quoted ;"                 allow 'echo "a;b"; git push origin main'
+check "a quoted ; in a branch name"          allow 'git push origin "a;b"'
+check "a quoted ; in a format"               allow 'git log --format="%h;%s" | head'
+check "a plain -d behind a quoted ; (a name the parser cannot read)" ask 'git branch "a;b" -d nosuchbranch'
+
+echo ""
+echo "=== A separator, or the ) that ends a \$( ), ends a short flag ==="
+# -f had to meet a blank or the line's end: `-f; ls` and a "$( )" or heredoc
+# body's `-f)` were allowed while `-f ; ls` was denied.
+check "-f, then ;"                           deny  'git push origin main -f; ls'
+check "-f, then &&"                          deny  'git push origin main -f&&ls'
+check "-f in a subshell"                     deny  '(git push origin main -f)'
+check "-f in \"\$( )\""                      deny  'echo "$(git push origin main -f)"'
+check "-f in an unquoted body's \$( )"       deny  $'cat <<EOF > /dev/null\n$(git push origin main -f)\nEOF'
+# The quote that closes a string another program runs ends it too. --force was
+# denied in each of these on main, and -f was allowed. A quoted word that only
+# spells `;git push -f` as data is now denied, as `;git push --force` was.
+check "-f, then an inner shell's quote"      deny  'bash -c "true; git push origin main -f"'
+check "-f in su -c"                          deny  'su -c "true; git push origin main -f"'
+check "-f in watch"                          deny  'watch -n 5 "true; git push origin main -f"'
+check "-f in ssh's command"                  deny  "ssh host 'true; git push origin main -f'"
+check "add . in \"\$( )\""                   deny  'echo "$(git add .)"'
+check "checkout . in \"\$( )\""              deny  'echo "$(git checkout .)"'
+# The reading with the quote hidden is read segment by segment: a --staged in
+# the same segment lifts the deny, and one in another segment does not.
+check "restore . behind a quoted ;"          deny  'git restore "a;b" .'
+check "--staged . behind a quoted ;"         allow 'git restore "a;b.txt" --staged .'
+check "restore --staged ."                   allow 'git restore --staged .'
+# Held as main holds them: the first head of this change lifted the first.
+check "restore ., then --staged behind a quoted ;" deny 'git restore . && git restore "x;y" --staged f'
+check "--staged . behind a quoted ;, then restore ." deny 'git restore "a;b" --staged x && git restore .'
+check "a branch ending in -f, then ;"        allow 'git push origin wip-f; ls'
+check "a quoted-delimiter body holding \$( )" allow $'cat <<\'EOF\' > notes.md\n$(git push origin main -f)\nEOF'
+
+echo ""
+echo "=== \$\\ then ( on the next line is a \$( ) ==="
+# bash joins the lines, in double quotes and in an unquoted body, where hd_scan
+# read the ( as text: the line is unreadable, and a group in it is opened.
+check "in double quotes"                     deny  $'echo "$\\\n(git push origin main --force)"'
+check "in an unquoted body"                  deny  $'cat <<EOF > /dev/null\nx $\\\n(git push origin main --force)\nEOF'
+
+echo ""
+echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
+# bash joins a line ending in \ to the next and keeps a quoted newline in its
+# word, where the guard read each line alone: each row that asks or denies here
+# was allowed.
+check "\\ then --force"                       deny  $'git push origin main \\\n--force'
+check "\\ then --force, after a commit"       deny  $'git commit -m x && git push \\\n  origin main --force'
+check "-c \$'a⏎b' before push --force"        deny  $'git -c $\'x.y=a\nb\' push origin main --force'
+check "-c \"a⏎b\" before push --force"        deny  $'git -c "x.y=a\nb" push origin main --force'
+check "\\ then --hard"                        deny  $'git reset \\\n--hard'
+check "\\ then --dry-run"                     allow $'git push origin main \\\n--dry-run'
+check "a commit message over two lines"      allow $'git commit -m "subject\n\nbody; git push --force"'
+echo ""
+echo "=== The joined lines raise a decision, never lift one ==="
+check "a quoted newline in an echo, then a push line" deny $'echo "x\ngit push origin main --force"'
+check "restore ., then --staged across a quoted newline" deny $'git restore .\ngit restore "x\ny" --staged f'
+echo ""
+echo "=== A quoted option value, or a shell's -c string, hides no git command ==="
+# git's -c and -C values ended at a blank, inside the quotes, and a shell's -c
+# string or eval's words started at no command boundary: each was allowed.
+check '-c "user.name=A B", push --force'      deny  'git -c "user.name=A B" push origin main --force'
+check "-C 'a b', push --force"                deny  "git -C 'a b' push origin main --force"
+check '-c user.name="A B", push --force'      deny  'git -c user.name="A B" push origin main --force'
+check '-C "a b", reset --hard'                deny  'git -C "a b" reset --hard'
+check '-C "a b", clean -fd'                   deny  'git -C "a b" clean -fd'
+check '-C "a b", checkout .'                  deny  'git -C "a b" checkout .'
+check '-C "a b", add .'                       deny  'git -C "a b" add .'
+check '-C "a b", filter-branch'               deny  'git -C "a b" filter-branch HEAD'
+check '-C "a b", config core.hooksPath'       deny  'git -C "a b" config core.hooksPath /x'
+check '-C "a b", branch -D'                   ask   'git -C "a b" branch -D x'
+check '-C "a b", push --delete'               ask   'git -C "a b" push origin --delete x'
+check '-C "a b", stash drop'                  ask   'git -C "a b" stash drop'
+check 'bash -c "git push --force"'            deny  'bash -c "git push origin main --force"'
+check "sh -c 'git push -f'"                   deny  "sh -c 'git push origin main -f'"
+check 'bash -lc "git reset --hard"'           deny  'bash -lc "git reset --hard"'
+check 'eval "git push --force"'               deny  'eval "git push origin main --force"'
+check 'bash -c "git checkout ."'              deny  'bash -c "git checkout ."'
+check 'bash -c "git add .env"'                  deny  'bash -c "git add .env"'
+check 'git add ".env"'                          deny  'git add ".env"'
+check 'bash -c "git filter-branch"'           deny  'bash -c "git filter-branch HEAD"'
+check 'bash -c "git branch -D x"'             ask   'bash -c "git branch -D x"'
+# A check that lifts a decision keeps main's terms.
+check '--staged behind -c "a b" lifts nothing' deny 'git restore . ; git -c "a b" restore --staged f'
+check '-C "a b", restore --staged .'          allow 'git -C "a b" restore --staged .'
+check '-c "user.name=A B", commit'            allow 'git -c "user.name=A B" commit -m x'
+check 'bash -c "git status"'                  allow 'bash -c "git status"'
+check '-C "a b", log'                         allow 'git -C "a b" log --oneline'
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

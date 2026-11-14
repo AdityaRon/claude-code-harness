@@ -119,5 +119,19 @@ check "rm -f of one file, not recursive"     allow $'python3 -c "import os; os.s
 check "a script appends a note naming rm -rf" allow $'python3 - <<\'EOF\'\np = \'notes.md\'\ns = open(p).read() + \'- `rm -rf "$(pwd)"` now asks\\n\'\nopen(p, \'w\').write(s)\nEOF'
 
 echo ""
+echo "=== a \"\$( )\" or heredoc body's \$( ) keeps its ) on the target ==="
+# `*)` and `.)` were no catastrophic target, and in scratch they ran.
+check "* in \"\$( )\", from scratch"          deny  'echo "$(rm -rf *)"' "$S"
+check ". in a body's \$( ), from scratch"     deny  $'cat <<EOF > /dev/null\n$(rm -rf .)\nEOF' "$S"
+check "a scratch folder in \"\$( )\""         allow 'echo "$(rm -rf build)"' "$S"
+check "a blank before the )"                  allow 'echo "$(rm -rf build )"' "$S"
+
+echo ""
+echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
+# bash joins a line ending in \ to the next and keeps a quoted newline in its
+# word, where the guard read each line alone: each row that asks or denies here
+# was allowed.
+check "rm, \\ then -rf ~/"                  deny  $'rm \\\n-rf ~/'
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

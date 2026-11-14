@@ -75,6 +75,7 @@ head_utf8() {
 # path or URL, never file content: secret-scanner denies on content.
 log_decision() {
   local target=""
+  [[ -n "${JOINED_PASS:-}" ]] && return 0   # the run that reads the lines joined: the first run logs
   command -v jq &>/dev/null && target=$(printf '%s' "$INPUT" \
     | jq -j '.tool_input | .command // .file_path // .path // .notebook_path // .url // .ws.url // ""' 2>/dev/null \
     | tr '\n\t' '  ' | head_utf8 200)
@@ -113,17 +114,56 @@ emit_ask() {
 # A command hd_scan cannot read: the guard goes on with its old reading, so a
 # deny or ask stands, and an allow becomes an ask, since which ; & | run there
 # is unknown. Each guard calls this in its own shell once the command concerns
-# it; only text holding what can make it unreadable pays for the awk.
+# it; only text holding what can make it unreadable pays for the awk: a line
+# ending in $\ is one, a $( once bash joins the next line on (hd_joins_sub).
 unreadable_check() {  # guard text
-  case "$2" in *'<<'*|*'${'*|*'(('*|*'$['*|*'`'*|*'$('*) ;; *) return 0 ;; esac
+  case "$2" in *'<<'*|*'${'*|*'(('*|*'$['*|*'`'*|*'$('*|*'$\'$'\n'*) ;; *) return 0 ;; esac
   printf '%s\n' "$2" | awk "$HEREDOC_AWK"'{ line[NR] = $0 } END { sh_classify(NR); exit SH_BAD ? 3 : 0 }' || unreadable_floor "$1"
 }
 
 unreadable_floor() { UNREADABLE_GUARD=$1; trap unreadable_exit EXIT; }
 
+# Also the floor joined_pass sets: an ask on the joined lines stands where this run allows.
 unreadable_exit() {
   [[ $? -eq 0 && -z "${HOOK_DECIDED:-}" ]] || return 0
+  if [[ -n "${JOINED_ASK:-}" ]]; then emit_ask "$JOINED_ASK"; return 0; fi
+  [[ -n "${UNREADABLE_GUARD:-}" ]] || return 0
   emit_ask "$UNREADABLE_GUARD: this command's quoting is more than the guard can read for certain (a \${ } holding quotes, a heredoc opener it cannot parse, or a quote inside backticks), so it cannot tell which ; & | separate commands. Check what it runs."
+}
+
+# bash joins a line ending in \ to the next, and a newline inside quotes is
+# part of its word, but every guard reads line by line: `git push origin main \`
+# then `--force` on the next line, or `git -c $'a` then `b' push origin main
+# --force`, was allowed. When the command joins (join_continued_lines), the
+# guard runs once more on it joined, and the stricter of the two decisions
+# stands, so the first run, which reads the command as it always has, still
+# counts. Call it as soon as the command is read. Under bash-guards.sh the
+# joined command and its payload are made once, for all the guards.
+joined_pass() {   # command
+  [[ -z "${JOINED_PASS:-}" ]] || return 0
+  local j in out st
+  if [[ -n "${HARNESS_PRESET:-}" ]]; then
+    j=${PRESET_JOINED:-}; in=${PRESET_JINPUT:-}
+  else
+    [[ "$1" == *$'\n'* && "$1" == *[\"\'\\]* ]] || return 0
+    j=$(join_continued_lines "$1") || return 0
+    in=$(printf '%s' "$INPUT" | jq -c --arg c "$j" '.tool_input.command = $c' 2>/dev/null) || return 0
+  fi
+  [[ -n "$j" && -n "$in" ]] || return 0
+  # The guard again, in a subshell: JOINED_PASS holds this shell's $$, which
+  # lib.sh keeps only there, and keeps that run from logging or recursing.
+  # shellcheck disable=SC1090,SC2030  # the file is the guard; the values are the subshell's own
+  out=$(JOINED_PASS=$$; INPUT=$in; PRESET_CMD=$j; . "${GUARD_SELF:-$0}" <<<"$in"); st=$?
+  if [[ $st -ne 0 ]]; then printf '%s' "$out"; exit "$st"; fi
+  case "$out" in
+    *'"permissionDecision":"deny"'*)
+      emit_deny "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null | tail -n 1)"
+      exit 0 ;;
+    *'"permissionDecision":"ask"'*)
+      JOINED_ASK=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null | tail -n 1)
+      [[ -n "$JOINED_ASK" ]] || JOINED_ASK="This command reads differently once its lines are joined as bash joins them. Check what it runs."
+      trap unreadable_exit EXIT ;;
+  esac
 }
 
 # Secret-shaped values out of an audit line: URL credentials, well-known token

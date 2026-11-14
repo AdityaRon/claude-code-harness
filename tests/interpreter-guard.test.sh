@@ -242,5 +242,44 @@ if (( N >= 1 && N <= 2 )); then echo "  OK: $N greps hold a token"; PASS=$((PASS
 else echo "  FAIL: $N greps hold a token (want 1 or 2; $(wc -l < "$PATS" | tr -d ' ') greps in all)"; FAIL=$((FAIL+1)); fi
 
 echo ""
+echo "=== A quoted or escaped ; | & inside a word ends no span ==="
+# The interpreter's [^|;&] span stopped at a quoted ; before its -c or -e, so
+# the payload was never scanned: each of these was allowed.
+check "quoted ; before -c"                   ask   'python3 -X "a;b" -c "import os; print(os.environ)"'
+check "escaped ; before -c"                  ask   'python3 -X a\;b -c "import os; print(os.environ)"'
+check "quoted ; before node -e"              ask   'node --title "a;b" -e "console.log(process.env)"'
+check "behind bash x.sh"                     ask   'bash x.sh; python3 -X "a;b" -c "import os; print(os.environ)"'
+check "in an unquoted body's \$( )"          ask   $'cat <<EOF > /dev/null\n$(python3 -X "a;b" -c "import os; print(os.environ)")\nEOF'
+check "a stream edit, then a long -c behind a quoted ;" ask "perl -pi -e 's/a/b/' f.md; python3 -X \"a;b\" -c \"print('$PAD')\""
+# Held as main holds it: the reading as typed is still read, so an inner
+# shell's real ; splits.
+check "an inner shell's ; still splits"      ask   'bash -c "true; python3 -c \"import os; print(os.environ)\""'
+check "a quoted ; before a script"           allow 'python3 -X "a;b" script.py'
+# The length rule measures to a ; in either reading, so 40 short statements are
+# not one long script there, as they were not before.
+SHORT=$(printf 'x = 1; %.0s' {1..40})
+check "a payload of short statements"        allow "python3 -c \"${SHORT}print(x)\""
+check "short statements behind a quoted ;"   allow "python3 -X \"a;b\" -c \"${SHORT}print(x)\""
+# There only a hidden separator ends a length: a % typed every 90 characters, or
+# a %3B, ended it too, and one statement of 380 characters was allowed.
+CHUNK='1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12 + 13 + 14 + 15 + 16 + 17 + 18 + 19 + 20 + 21 + 22'
+check "one long statement holding %, behind a quoted ;"   ask "python3 -X \"a;b\" -c \"x = $CHUNK % 7 + $CHUNK % 7 + $CHUNK % 7 + $CHUNK\""
+# Not after a ( : the normalizer lowercases there, and a %3b would not test the escape.
+check "one long statement holding %3B, behind a quoted ;" ask "python3 -X \"a;b\" -c \"x = $CHUNK + 0 * '%3B' + $CHUNK + 0 * '%3B' + $CHUNK + 0 * '%3B' + $CHUNK\""
+check "a stream edit on a file named a;b"    allow "perl -pi -e 's/a/b/' \"a;b.md\""
+
+echo ""
+echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
+# bash joins a line ending in \ to the next and keeps a quoted newline in its
+# word, where the guard read each line alone: each row that asks or denies here
+# was allowed.
+check "-X \$'a⏎b' before -c"               ask   $'python3 -X $\'a\nb\' -c "import os; print(os.environ)"'
+check "-X \"a⏎b\" before -c"               ask   $'python3 -X "a\nb" -c "import os; print(os.environ)"'
+check "\\ then -c"                          ask   $'python3 \\\n-c "import os; print(os.environ)"'
+# A length stops at a quoted newline as it does at the newline as typed.
+SHORTL=$(printf 'x = 1\n%.0s' {1..40})
+check "a payload of short lines"            allow "python3 -c \"${SHORTL}print(x)\""
+check "a payload of short lines behind a quoted ;" allow "python3 -X \"a;b\" -c \"${SHORTL}print(x)\""
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

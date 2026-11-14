@@ -521,5 +521,32 @@ check "glued & before sh -c, two lines"  ask   $'grep x a.txt&sh -c \'true;kubec
 check "escaped & stays in the word"      allow $'echo a\\&kubectl delete pod x\necho done'
 
 echo ""
+echo "=== A quoted ; | & inside a word, where more than text commands run ==="
+# Only a command of text commands and kubectl was read with quoted separators
+# hidden. Behind bash x.sh or a $( ), or in a script bash runs, `-n "a;b"` cut
+# kubectl off before its verb, and each of these was allowed.
+check "behind bash x.sh"                 ask   'bash x.sh; kubectl -n "a;b" delete ns prod'
+check "behind a \$( )"                   ask   'd=$(pwd); kubectl -n "a;b" delete ns prod'
+check "a quoted |, behind bash x.sh"     ask   "bash x.sh; kubectl -n 'a|b' delete ns prod"
+check "an escaped ;"                     ask   'kubectl -n a\;b delete ns prod'
+check "in a script bash runs"            ask   $'cat > x.sh <<\'EOF\'\nkubectl -n "a;b" delete ns prod\nEOF\nbash x.sh'
+check "in a body fed to bash"            ask   $'bash <<\'EOF\'\nkubectl -n "a;b" delete ns prod\nEOF'
+check "in an unquoted body's \$( )"      ask   $'cat <<EOF > /dev/null\n$(kubectl -n "a;b" delete ns prod)\nEOF'
+# Held as main holds it: the reading as typed is still read, so an inner
+# shell's real ; splits.
+check "an inner shell's ; still splits"  ask   'ssh h "kubectl get pods;kubectl delete ns prod"'
+check "a read behind a quoted ;, after bash x.sh" allow 'bash x.sh; kubectl -n "a;b" get pods'
+check "a quoted ; in a selector"         allow 'kubectl get pods -l "a in (b;c)"'
+check "echo with a quoted ;, then a read" allow 'echo "a;b"; kubectl get pods'
+
+echo ""
+echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
+# bash joins a line ending in \ to the next and keeps a quoted newline in its
+# word, where the guard read each line alone: each row that asks or denies here
+# was allowed.
+check "--cache-dir \$'a⏎b' before delete"  ask   $'kubectl --cache-dir $\'/tmp/a\nb\' delete ns prod'
+check "--cache-dir \"a⏎b\" before delete"  ask   $'kubectl --cache-dir "/tmp/a\nb" delete ns prod'
+check "a read, \\ then -n"               allow $'kubectl get pods \\\n  -n x'
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
