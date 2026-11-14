@@ -644,6 +644,9 @@ check "-f in \"\$( )\""                      deny  'echo "$(git push origin main
 check "-f in an unquoted body's \$( )"       deny  $'cat <<EOF > /dev/null\n$(git push origin main -f)\nEOF'
 check "add . in \"\$( )\""                   deny  'echo "$(git add .)"'
 check "checkout . in \"\$( )\""              deny  'echo "$(git checkout .)"'
+# The --staged exemption lifts a deny, so it reads the command as typed only.
+check "restore ., then --staged behind a quoted ;" deny 'git restore . && git restore "x;y" --staged f'
+check "restore --staged ."                   allow 'git restore --staged .'
 check "a branch ending in -f, then ;"        allow 'git push origin wip-f; ls'
 check "a quoted-delimiter body holding \$( )" allow $'cat <<\'EOF\' > notes.md\n$(git push origin main -f)\nEOF'
 

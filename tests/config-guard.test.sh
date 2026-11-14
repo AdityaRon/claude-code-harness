@@ -322,6 +322,11 @@ bash_is allow $'cat <<\'EOF\' > notes.md\n$(cp /dev/null ~/.claude/settings.json
 bash_is allow $'cat <<EOF > notes.md\nwritten $(date), see ~/.claude/settings.json\nEOF'
 bash_is allow $'cat <<EOF > notes.md\nsee $HOME/.claude/settings.json\nEOF'
 bash_is allow 'echo "a (b) ~/.claude/settings.json" > notes.md'
+# A cd in a kept body's $( ) runs in a subshell: the cd after the body is still
+# read from the session's folder, and one inside the $( ) is followed there.
+bash_is ask $'cat <<EOF > /dev/null\n$(cd /tmp)\nEOF\ncd .claude && cp x hooks/lib.sh' "$HOME"
+bash_is ask $'cat <<EOF > /dev/null\n$(cd /tmp; true)\nEOF\ncd .claude && cp x hooks/lib.sh' "$HOME"
+bash_is ask $'cat <<EOF > /dev/null\n$(cd .claude && cp x hooks/lib.sh)\nEOF' "$HOME"
 
 echo "=== a monitor's command is checked as a Bash command ==="
 monitor_is ask '{"command":"sleep 300; cp /srv/x.sh ~/.claude/hooks/env-guard.sh"}'

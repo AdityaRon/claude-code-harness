@@ -483,13 +483,14 @@ strip_inert_heredocs() {
 # anywhere (`| bash`, `sudo bash`, `/bin/sh`): config-guard. An unquoted body
 # holding $( or a backtick, or a line ending in $\ (then `(`, a $( ), stays too:
 # bash runs those as it reads the body. Unterminated, or an opener hd_scan
-# cannot read, it is all kept.
-drop_data_heredocs() {
+# cannot read, it is all kept. With `all`, such a body goes too: a cd in its
+# $( ) does not outlast it, so config-guard follows cds in both readings.
+drop_data_heredocs() {   # TEXT [all]
   local out
   case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
-  out=$(printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+  out=$(printf '%s\n' "$1" | awk -v all="${2:-}" "$HEREDOC_AWK"'
     body && hd_bad_end($0) { bad = 1; exit }
-    body { if (hd_end($0)) { if (runs) printf "%s", buf; body = 0; buf = ""; print; next }
+    body { if (hd_end($0)) { if (runs && all == "") printf "%s", buf; body = 0; buf = ""; print; next }
            if (shell) print
            else if (!lit) { buf = buf $0 "\n"; if ($0 ~ /\$\(|`|\$\\$/) runs = 1 }
            next }

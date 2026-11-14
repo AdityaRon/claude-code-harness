@@ -52,6 +52,7 @@ NQS=""
 # check in this file while the bare form was denied. `/usr/bin/git` and `GIT`
 # did the same. The second line is the fully normalized form; see lib.sh.
 CMD=$(printf '%s\n%s' "$(normalize_wrappers "$(separate_groups "$CMD")")" "$(normalize_command "$CMD")")
+TYPED=$CMD   # for a match that lifts a check rather than raising one
 [[ -n "$NQS" ]] && CMD=$(printf '%s\n%s\n%s' "$CMD" "$(normalize_wrappers "$(separate_groups "$NQS")")" "$(normalize_command "$NQS")")
 
 # Committed template files (.env.example / .sample / .template / .dist / .tpl)
@@ -230,9 +231,11 @@ fi
 # Discarding the whole working tree is reset --hard for uncommitted work, and
 # `Bash(git checkout:*)` is on the allow list, so nothing else stops it.
 # `git restore --staged .` only unstages and stays allowed; `git checkout -`
-# (switch back) is not a pathspec.
+# (switch back) is not a pathspec. The --staged exemption reads the command as
+# typed only: in the hidden-separator reading `git restore "x;y" --staged f`
+# reached --staged and lifted the deny on a `git restore .` beside it.
 if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?(\.{1,2}/?|:/)([[:space:]]|;|&|\||\)|$)" \
-   && ! { printf '%s\n' "$CMD" | grep -qE "${A}${GIT}restore\s[^|;&]*(--staged|-S)\b" \
+   && ! { printf '%s\n' "$TYPED" | grep -qE "${A}${GIT}restore\s[^|;&]*(--staged|-S)\b" \
           && ! printf '%s\n' "$CMD" | grep -qE "${A}${GIT}restore\s[^|;&]*(--worktree|-W)\b"; }; then
   emit_deny "Blocked: this discards every uncommitted change in the tree with no recovery path. Restore the files you mean by name, or ask the user to run this manually."
   exit 0

@@ -33,7 +33,7 @@ shopt -s nocasematch
   *) case "$CWD" in "$H/.claude"|"$H/.claude/"*|*/.claude|*/.claude/skills/*|"$H/Library/LaunchAgents") ;; *) exit 0 ;; esac ;;
 esac
 shopt -u nocasematch
-WORST=""; REASON=""; REMOVING=""; BASES=()
+WORST=""; REASON=""; REMOVING=""; BASES=(); CD_BASES=""
 
 note() {   # note LEVEL WORD
   local why
@@ -68,7 +68,7 @@ abs_path() {
     '${HOME}/'*) p="$H/${p#\$\{HOME\}/}" ;;
     # The session's folder and the project's, read only in a command with no cd.
     '$PWD'|'$PWD/'*|'${PWD}'|'${PWD}/'*|'$CLAUDE_PROJECT_DIR'|'$CLAUDE_PROJECT_DIR/'*|'${CLAUDE_PROJECT_DIR}'|'${CLAUDE_PROJECT_DIR}/'*)
-      if [[ ${#BASES[@]} -eq 0 ]]; then
+      if [[ ${CD_BASES:-${#BASES[@]}} -eq 0 ]]; then
         part=${p#\$}; part=${part#\{}; part=${part#PWD}; part=${part#CLAUDE_PROJECT_DIR}; part=${part#\}}
         case "$p" in '$PWD'*|'${PWD}'*) p="${CWD:-$PWD}$part" ;; *) p="${CLAUDE_PROJECT_DIR:-${CWD:-$PWD}}$part" ;; esac
       else p="${CWD:-$PWD}/$p"; fi ;;
@@ -163,7 +163,7 @@ under_home() {   # under_home WORD
   local u=${1//\"/}
   u=${u//\'/}; UNDER_HOME=""
   # $PWD and $CLAUDE_PROJECT_DIR at the start of a word abs_path resolved.
-  [[ ${#BASES[@]} -eq 0 ]] && case "$u" in
+  [[ ${CD_BASES:-${#BASES[@]}} -eq 0 ]] && case "$u" in
     '$PWD'|'$PWD/'*|'${PWD}'|'${PWD}/'*|'$CLAUDE_PROJECT_DIR'|'$CLAUDE_PROJECT_DIR/'*|'${CLAUDE_PROJECT_DIR}'|'${CLAUDE_PROJECT_DIR}/'*)
       [[ "${u#?}" != *'$'* ]] && return ;;
   esac
@@ -217,7 +217,7 @@ check_into() {   # check_into DEST SOURCE...
   # shellcheck disable=SC2088  # '~' is the tilde as typed
   case "$s" in
     *'$'*|*'{'*|*'*'*|*'?'*|*'['*|'~'[!/]*) ;;
-    *) if [[ $# -eq 1 && "$s" != */ && ${#BASES[@]} -eq 0 && ! -d "$(abs_path "$s")" ]]; then
+    *) if [[ $# -eq 1 && "$s" != */ && ${CD_BASES:-${#BASES[@]}} -eq 0 && ! -d "$(abs_path "$s")" ]]; then
          check_word "$dest" 0 tree; return
        fi ;;
   esac
@@ -376,23 +376,43 @@ case "$TOOL" in
     NQS=$(neutralize_quoted_separators "$DD")
     NORM=$(normalize_command "$NQS")
     REDIR='[0-9&]*>>?\|?[[:space:]]*[^[:space:];&|<>()]+'
+    segments_of() {   # segments_of NORM: one segment a line, redirects out
+      printf '%s\n' "$1" | sed -E "s/$REDIR//g; s/<[[:space:]]*[^[:space:];&|<>()]+//g" \
+        | tr '\n' ';' | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;&]/\n/g'
+    }
+    # Each cd adds the folder it reaches to BASES. hh follows the same cds from ~,
+    # once one went to an unresolved $d or ~user.
+    follow_cds() {   # follow_cds SEGMENT...
+      local seg words w here=${CWD:-$PWD} hh=""
+      for seg in "$@"; do
+        set -f; read -ra words <<<"$seg"; set +f
+        case "${words[0]:-}" in
+          cd|pushd) if [[ ${#words[@]} -gt 1 ]]; then
+                      w=${words[$((${#words[@]} - 1))]}; here=$(CWD=$here; abs_path "$w"); under_home "$w"
+                      if [[ -n "$UNDER_HOME" ]]; then hh=$UNDER_HOME
+                      elif [[ -n "$hh" ]]; then case "$w" in /*|'~'*|'$'*) hh="" ;; *) hh=$(CWD=$hh; abs_path "$w") ;; esac; fi
+                    else here=$H; hh=""; fi
+                    BASES+=("$here"); [[ -n "$hh" ]] && BASES+=("$hh") ;;
+        esac
+      done
+    }
     SEGS=()
-    while IFS= read -r seg; do SEGS+=("$seg"); done < <(
-      printf '%s\n' "$NORM" | sed -E "s/$REDIR//g; s/<[[:space:]]*[^[:space:];&|<>()]+//g" \
-        | tr '\n' ';' | sed -E 's/\$\(/;/g; s/`/;/g; s/\|\||&&/;/g; s/[|;&]/\n/g')
-    # hh follows the same cds from ~, once one went to an unresolved $d or ~user.
-    here=${CWD:-$PWD}; hh=""
-    for seg in ${SEGS[@]+"${SEGS[@]}"}; do
-      set -f; read -ra words <<<"$seg"; set +f
-      case "${words[0]:-}" in
-        cd|pushd) if [[ ${#words[@]} -gt 1 ]]; then
-                    w=${words[$((${#words[@]} - 1))]}; here=$(CWD=$here; abs_path "$w"); under_home "$w"
-                    if [[ -n "$UNDER_HOME" ]]; then hh=$UNDER_HOME
-                    elif [[ -n "$hh" ]]; then case "$w" in /*|'~'*|'$'*) hh="" ;; *) hh=$(CWD=$hh; abs_path "$w") ;; esac; fi
-                  else here=$H; hh=""; fi
-                  BASES+=("$here"); [[ -n "$hh" ]] && BASES+=("$hh") ;;
-      esac
-    done
+    while IFS= read -r seg; do SEGS+=("$seg"); done < <(segments_of "$NORM")
+    # A cd in a kept body's $( ) runs in a subshell and does not outlast it. The
+    # cds are followed with every data body dropped first, and only those count
+    # as the command's own (CD_BASES: abs_path, under_home, check_into); the
+    # body's are followed after, for the relative words read in each base.
+    DD0=$(drop_data_heredocs "$TARGET" all)
+    if [[ "$DD0" != "$DD" ]]; then
+      S0=()
+      while IFS= read -r seg; do S0+=("$seg"); done < <(segments_of "$(normalize_command "$(neutralize_quoted_separators "$DD0")")")
+      follow_cds ${S0[@]+"${S0[@]}"}
+      CD_BASES=${#BASES[@]}
+      follow_cds ${SEGS[@]+"${SEGS[@]}"}
+    else
+      follow_cds ${SEGS[@]+"${SEGS[@]}"}
+      CD_BASES=${#BASES[@]}
+    fi
     while IFS= read -r w; do
       [[ "$w" == '&'* ]] || check_word "$w" 0
     done < <(printf '%s\n' "$NORM" | grep -oE "$REDIR" | sed -E 's/^[0-9&]*>>?\|?[[:space:]]*//')
