@@ -196,9 +196,14 @@ function hd_btq(s, i, c,    j, d, n) {
 # Open substitutions: hsp frames, hbt, and hpd (parens of an unquoted $(, <( or >(
 # and inside it). One left open past the << of an opener line makes the next line code.
 # hd_after: inside one opened after the <<, where its end is not sure to be read.
+# HD_INSUB, an opener inside a substitution: one is open at its << (hd_in), or
+# HD_DOUBT, set for the rest of the command once where one ends is not sure.
 function hd_after() { return HD_POS && (hpd > HD_PD0 || hsp > HD_SP0 || hbt) }
+function hd_in() { return hpd || hsp || hbt }
+# hpk[d]: the paren at depth d of hpd opened a substitution, not a group. hsubend:
+# where one closed on this line; a # right after it continues the word.
 function hd_scan(s,    i, n, c, j, w) {
-  HD_POS = 0; HD_LEN = 0; HD_BAD = 0; n = length(s); hesc = -1
+  HD_POS = 0; HD_LEN = 0; HD_BAD = 0; n = length(s); hesc = -1; hsubend = -1
   if (HB_TAIL != "" && index(s, HB_TAIL)) { HD_BAD = 1; return }
   if (HD_CLS) { split("", HCLS); HDS = s }
   for (i = 1; i <= n; i++) {
@@ -206,7 +211,7 @@ function hd_scan(s,    i, n, c, j, w) {
     if (HD_CLS) hd_cls(i, hd_ctx(hq))
     if (hq == "\047") { if (c == "\047") hq = ""; continue }
     if (hq == "A") { if (c == "\\") { i++; hd_span(i, i, "q") } else if (c == "\047") hq = ""; continue }
-    if (c == "\\") { if (hd_after()) { HD_BAD = 1; return } hesc = i + 1; i++; hd_span(i, i, hq == "H" ? "d" : "q"); continue }
+    if (c == "\\") { if (hd_after()) { HD_BAD = 1; return } if (hd_in()) HD_DOUBT = 1; hesc = i + 1; i++; hd_span(i, i, hq == "H" ? "d" : "q"); continue }
     # A ${ } is one word: a ; ( or | inside it separates nothing, except in a
     # <( ) or >( ) there, which bash runs. Inside a $( ), bash 3.2 counts a paren
     # in it and zsh does not, so the substitution may end there or not.
@@ -215,55 +220,62 @@ function hd_scan(s,    i, n, c, j, w) {
       w = substr(s, i + 2, j - 1)
       if (hq == "H" ? (w ~ /`|\$\(/) : (w ~ /[\047"`{]|<<|\$\(/)) { HD_BAD = 1; return }
       if (w ~ /[()]/ && (hd_after() || (hsp > 0 && !hbtf[hsp]))) { HD_BAD = 1; return }
+      if (w ~ /[(){}\047"`$\\<>]/) HD_DOUBT = 1
       hd_span(i, i + j + 1, hq == "H" ? "d" : (hq == "" && w ~ /[<>]\(/) ? "c" : "q"); i += j + 1; continue
     }
     # In double quotes or a heredoc body, $( ) and backticks start code again.
     if (hq == "\"" || hq == "H") {
       if (c == "\"" && hq == "\"") hq = ""
-      else if (c == "`") { if (hd_after()) { HD_BAD = 1; return } hup[++hsp] = hq; hdep[hsp] = 0; hbtf[hsp] = 1; hq = "" }
-      else if (c == "$" && substr(s, i + 1, 2) == "((") { if (hd_after()) { HD_BAD = 1; return } j = hd_arith(s, i + 1); if (!j) { HD_BAD = 1; return } i = j }
+      else if (c == "`") { if (hd_after()) { HD_BAD = 1; return } HD_DOUBT = 1; hup[++hsp] = hq; hdep[hsp] = 0; hbtf[hsp] = 1; hq = "" }
+      else if (c == "$" && substr(s, i + 1, 2) == "((") { if (hd_after()) { HD_BAD = 1; return } HD_DOUBT = 1; j = hd_arith(s, i + 1); if (!j) { HD_BAD = 1; return } i = j }
       else if (c == "$" && substr(s, i + 1, 1) == "(") { hup[++hsp] = hq; hdep[hsp] = 1; hbtf[hsp] = 0; hq = ""; i++ }
       continue
     }
     if (hsp > 0 && hbtf[hsp] && c == "`") { hq = hup[hsp--]; continue }
     if ((hbt || (hsp > 0 && hbtf[hsp])) && (c == "\"" || c == "\047") && hd_btq(s, i, c)) { HD_BAD = 1; return }
-    if (c == "\047") { hq = hd_dollars(s, i, hesc) % 2 ? "A" : "\047"; if (hq == "A" && hd_after()) { HD_BAD = 1; return } continue }
+    # In a substitution bash 3.2 reads any run of $ before a quote as $, so $$ counts too.
+    if (c == "\047") { j = hd_dollars(s, i, hesc); hq = j % 2 ? "A" : "\047"; if (j && hd_after()) { HD_BAD = 1; return } if (j && hd_in()) HD_DOUBT = 1; continue }
     if (c == "\"") { hq = "\""; continue }
-    if (c == "`") { if (!hbt && hd_after()) { HD_BAD = 1; return } hbt = !hbt; continue }
-    if (c == "#" && hesc != i - 1 && (i == 1 ? !hcont : substr(s, i - 1, 1) ~ /[ \t;&|()]/)) {
+    if (c == "`") { if (!hbt && hd_after()) { HD_BAD = 1; return } if (!hbt && (hpd || hsp)) HD_DOUBT = 1; hbt = !hbt; continue }
+    if (c == "#" && hesc != i - 1 && hsubend != i - 1 && (i == 1 ? !hcont : substr(s, i - 1, 1) ~ /[ \t;&|()]/)) {
       # In a $( ) frame, bash 3.2 reads a comment as text where zsh skips it, so one
       # holding a paren, quote, backtick or backslash is unreadable, as in hd_body.
       if (hd_after() || (!hbt && hsp > 0 && !hbtf[hsp] && substr(s, i + 1) ~ /[()\047"`\\]/)) { HD_BAD = 1; return }
       # In an unquoted $( ), bash 3.2 reads it as a comment only after a blank or at the $( itself.
       w = substr(s, i - 1, 1)
       if (hpd && !hsp && !hbt && w ~ /[;&|()]/ && !(w == "(" && substr(s, i - 2, 1) ~ /[$<>]/) && substr(s, i + 1) ~ /[()\047"`\\]/) { HD_BAD = 1; return }
+      if (hd_in()) HD_DOUBT = 1
       # Inside backticks a comment ends at the backtick that ends the substitution.
       if (!hbt && !(hsp > 0 && hbtf[hsp])) break
       j = index(substr(s, i + 1), "`"); if (!j) { HD_BAD = 1; return }
       i += j - 1; continue
     }
-    if (c == "(" && substr(s, i + 1, 1) == "(") { if (hd_after()) { HD_BAD = 1; return } j = hd_arith(s, i); if (!j) { HD_BAD = 1; return } i = j; continue }
-    if (c == "$" && substr(s, i + 1, 1) == "[") { j = index(substr(s, i), "]"); if (!j) { HD_BAD = 1; return } i += j - 1; continue }
+    if (c == "(" && substr(s, i + 1, 1) == "(") { if (hd_after()) { HD_BAD = 1; return } if (hd_in() || substr(s, i - 1, 1) == "$") HD_DOUBT = 1; j = hd_arith(s, i); if (!j) { HD_BAD = 1; return } if (substr(s, i - 1, 1) == "$" && hesc != i - 1) hsubend = j; i = j; continue }
+    if (c == "$" && substr(s, i + 1, 1) == "[") { if (hd_in()) HD_DOUBT = 1; j = index(substr(s, i), "]"); if (!j) { HD_BAD = 1; return } i += j - 1; continue }
     # x=$(cat <<EOF) ends the substitution on the opener line, in zsh too.
     if (HD_POS && HD_INSUB && c == ")") { HD_BAD = 1; return }
     if ((c == "(" || c == ")") && HD_POS && (hbt || (hsp > HD_SP0 && hbtf[hsp]))) { HD_BAD = 1; return }
     # A $( <( or >( opened after the << in the frame the opener sits in: left open,
     # the next line is code; closed, its ) ends the frame early in the rule above.
     if (HD_POS && hsp > 0 && hsp == HD_SP0 && !hbtf[hsp] && c == "(" && substr(s, i - 1, 1) ~ /[$<>]/ && hesc != i - 1) { HD_BAD = 1; return }
+    if ((c == "(" || c == ")") && (hbt || (hsp > 0 && hbtf[hsp]))) HD_DOUBT = 1
     if (hsp > 0 && !hbtf[hsp] && c == "(") hdep[hsp]++
     if (hsp > 0 && !hbtf[hsp] && c == ")" && --hdep[hsp] == 0) { hd_span(i, i, hd_ctx(hup[hsp])); hq = hup[hsp--]; continue }
     # A case pattern ) would close the $( ) early (bash 3.2 rejects it, zsh runs on).
-    if ((hsp > 0 && !hbtf[hsp] || hd_after()) && c == "c" && substr(s, i, 5) ~ /^case[ \t]/ && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;&|(]/)) { HD_BAD = 1; return }
+    if (c == "c" && substr(s, i, 5) ~ /^case[ \t]/ && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;&|(]/)) {
+      if (hsp > 0 && !hbtf[hsp] || hd_after()) { HD_BAD = 1; return }
+      if (hd_in()) HD_DOUBT = 1
+    }
     if (!hsp && !hbt) {
-      if (c == "(" && (hpd || (substr(s, i - 1, 1) ~ /[$<>]/ && hesc != i - 1))) hpd++
-      else if (c == ")" && hpd) hpd--
+      if (c == "(" && (hpd || (substr(s, i - 1, 1) ~ /[$<>]/ && hesc != i - 1))) { hpd++; hpk[hpd] = substr(s, i - 1, 1) ~ /[$<>]/ && hesc != i - 1 }
+      else if (c == ")" && hpd) { if (hpk[hpd]) hsubend = i; hpd-- }
     }
     if (c == "<" && substr(s, i + 1, 1) == "<") {
       if (substr(s, i + 2, 1) == "<") { i += 2; continue }
       if (hbt || HD_POS || (hsp > 0 && hbtf[hsp])) { HD_BAD = 1; return }
       if (!hd_word(s, i)) { HD_BAD = 1; return }
       HD_PD0 = hpd; HD_SP0 = hsp
-      HD_INSUB = HD_SUBSEEN || substr(s, 1, i) ~ /\$\(|`|[<>]\(/
+      HD_INSUB = hd_in() || HD_DOUBT; if (HD_INSUB) HD_DOUBT = 1
       # In a substitution its scanner reads the delimiter and the rest of this line
       # too: a paren, quote or backslash in either is read as the body lines are.
       if (HD_INSUB && (HD_TERM ~ /[()\047"`\\]/ || hd_body(substr(s, i + HD_LEN)))) { HD_BAD = 1; return }
@@ -272,7 +284,7 @@ function hd_scan(s,    i, n, c, j, w) {
   }
   hcont = (hesc == n + 1)
   # $\ then ( on the next line is $( once bash joins them.
-  if (s ~ /\$\(|`|[<>]\(/ || (hcont && s ~ /[$<>]\\$/)) HD_SUBSEEN = 1
+  if (hcont && s ~ /[$<>]\\$/) HD_DOUBT = 1
   if (HD_POS && (hq != "" || hcont || hpd > HD_PD0 || hsp > HD_SP0 || hbt)) HD_BAD = 1
 }
 # The classes of a whole command held in line[1..nl]: CLS[k, i] for line k, and
@@ -281,11 +293,11 @@ function hd_scan(s,    i, n, c, j, w) {
 # (`-m "$(cat <<EOF` ... `)"`); a body fed to a shell starts fresh. An opener with
 # no terminator line (a caller dropped the body) leaves the lines after it code.
 # BODY[k] numbers the lines of each body no shell reads, data or not scanned.
-function sh_save(   k) { sq = hq; ssp = hsp; sbt = hbt; scont = hcont; spd = hpd; for (k = 1; k <= hsp; k++) { sup[k] = hup[k]; sdep[k] = hdep[k]; sbtf[k] = hbtf[k] } }
-function sh_restore(   k) { hq = sq; hsp = ssp; hbt = sbt; hcont = scont; hpd = spd; for (k = 1; k <= ssp; k++) { hup[k] = sup[k]; hdep[k] = sdep[k]; hbtf[k] = sbtf[k] } }
+function sh_save(   k) { sq = hq; ssp = hsp; sbt = hbt; scont = hcont; spd = hpd; sdoubt = HD_DOUBT; for (k = 1; k <= hsp; k++) { sup[k] = hup[k]; sdep[k] = hdep[k]; sbtf[k] = hbtf[k] } }
+function sh_restore(   k) { hq = sq; hsp = ssp; hbt = sbt; hcont = scont; hpd = spd; HD_DOUBT = sdoubt; for (k = 1; k <= ssp; k++) { hup[k] = sup[k]; hdep[k] = sdep[k]; hbtf[k] = sbtf[k] } }
 function sh_classify(nl,    k, t, i, body, lit, shell, found, insub, nb) {
   SH_BAD = 0; split("", CLS); split("", DATA); split("", BODY); HD_CLS = 1; HB_TAIL = ""
-  hq = ""; hsp = 0; hbt = 0; hcont = 0; hpd = 0
+  hq = ""; hsp = 0; hbt = 0; hcont = 0; hpd = 0; HD_DOUBT = 0
   for (k = 1; k <= nl; k++) {
     if (body) {
       if (hd_bad_end(line[k])) { SH_BAD = 1; return }
