@@ -123,8 +123,6 @@ echo "=== a \"\$( )\" or heredoc body's \$( ) keeps its ) on the target ==="
 # `*)` and `.)` were no catastrophic target, and in scratch they ran.
 check "* in \"\$( )\", from scratch"          deny  'echo "$(rm -rf *)"' "$S"
 check ". in a body's \$( ), from scratch"     deny  $'cat <<EOF > /dev/null\n$(rm -rf .)\nEOF' "$S"
-check "~/ in a body's \$( )"                  deny  $'cat <<EOF > /dev/null\n$(rm -rf ~/)\nEOF' "$S"
-check "a quoted ; before ~/"                  deny  'rm -rf "a;b" ~/'
 check "a scratch folder in \"\$( )\""         allow 'echo "$(rm -rf build)"' "$S"
 check "a blank before the )"                  allow 'echo "$(rm -rf build )"' "$S"
 

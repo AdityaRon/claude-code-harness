@@ -532,6 +532,8 @@ check "an escaped ;"                     ask   'kubectl -n a\;b delete ns prod'
 check "in a script bash runs"            ask   $'cat > x.sh <<\'EOF\'\nkubectl -n "a;b" delete ns prod\nEOF\nbash x.sh'
 check "in a body fed to bash"            ask   $'bash <<\'EOF\'\nkubectl -n "a;b" delete ns prod\nEOF'
 check "in an unquoted body's \$( )"      ask   $'cat <<EOF > /dev/null\n$(kubectl -n "a;b" delete ns prod)\nEOF'
+# Held as main holds it: the reading as typed is still read, so an inner
+# shell's real ; splits.
 check "an inner shell's ; still splits"  ask   'ssh h "kubectl get pods;kubectl delete ns prod"'
 check "a read behind a quoted ;, after bash x.sh" allow 'bash x.sh; kubectl -n "a;b" get pods'
 check "a quoted ; in a selector"         allow 'kubectl get pods -l "a in (b;c)"'

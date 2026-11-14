@@ -631,6 +631,8 @@ check "after bash x.sh"                      deny  'bash x.sh; git push origin "
 check "after a \$( )"                        deny  'd=$(pwd); git push origin "a;b" --force'
 check "in a script bash runs"                deny  $'cat > x.sh <<\'EOF\'\ngit push origin "a;b" --force\nEOF\nbash x.sh'
 check "in an unquoted body's \$( )"          deny  $'cat <<EOF > /dev/null\n$(git push origin "a;b" --force)\nEOF'
+# Held as main holds it: the reading as typed is still read, so an inner
+# shell's real ; splits.
 check "an inner shell's ; still splits"      deny  'bash -c "true; git push origin main --force"'
 check "a quoted ; in a commit message"       allow 'git commit -m "fix; tests" && git push origin main'
 check "echo with a quoted ;"                 allow 'echo "a;b"; git push origin main'
@@ -649,12 +651,13 @@ check "-f in \"\$( )\""                      deny  'echo "$(git push origin main
 check "-f in an unquoted body's \$( )"       deny  $'cat <<EOF > /dev/null\n$(git push origin main -f)\nEOF'
 check "add . in \"\$( )\""                   deny  'echo "$(git add .)"'
 check "checkout . in \"\$( )\""              deny  'echo "$(git checkout .)"'
-# The --staged exemption lifts a deny, so it reads the command as typed only.
-check "restore ., then --staged behind a quoted ;" deny 'git restore . && git restore "x;y" --staged f'
-check "restore --staged ."                   allow 'git restore --staged .'
-# The reading with the quote hidden is read segment by segment.
+# The reading with the quote hidden is read segment by segment: a --staged in
+# the same segment lifts the deny, and one in another segment does not.
 check "restore . behind a quoted ;"          deny  'git restore "a;b" .'
 check "--staged . behind a quoted ;"         allow 'git restore "a;b.txt" --staged .'
+check "restore --staged ."                   allow 'git restore --staged .'
+# Held as main holds them: the first head of this change lifted the first.
+check "restore ., then --staged behind a quoted ;" deny 'git restore . && git restore "x;y" --staged f'
 check "--staged . behind a quoted ;, then restore ." deny 'git restore "a;b" --staged x && git restore .'
 check "a branch ending in -f, then ;"        allow 'git push origin wip-f; ls'
 check "a quoted-delimiter body holding \$( )" allow $'cat <<\'EOF\' > notes.md\n$(git push origin main -f)\nEOF'

@@ -251,6 +251,8 @@ check "quoted ; before node -e"              ask   'node --title "a;b" -e "conso
 check "behind bash x.sh"                     ask   'bash x.sh; python3 -X "a;b" -c "import os; print(os.environ)"'
 check "in an unquoted body's \$( )"          ask   $'cat <<EOF > /dev/null\n$(python3 -X "a;b" -c "import os; print(os.environ)")\nEOF'
 check "a stream edit, then a long -c behind a quoted ;" ask "perl -pi -e 's/a/b/' f.md; python3 -X \"a;b\" -c \"print('$PAD')\""
+# Held as main holds it: the reading as typed is still read, so an inner
+# shell's real ; splits.
 check "an inner shell's ; still splits"      ask   'bash -c "true; python3 -c \"import os; print(os.environ)\""'
 check "a quoted ; before a script"           allow 'python3 -X "a;b" script.py'
 # The length rule measures to a ; in either reading, so 40 short statements are

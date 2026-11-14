@@ -313,7 +313,6 @@ bash_is ask $'tee /dev/null <<EOF\n$(cp /dev/null ~/.claude/settings.json)\nEOF'
 bash_is ask $'cat <<EOF > /dev/null\nx $\\\n(cp /dev/null ~/.claude/settings.json)\nEOF'
 bash_is ask $'cat <<EOF > /dev/null\n$(cp "a;b" ~/.claude/settings.json)\nEOF'
 bash_is ask 'echo "$(cp /dev/null ~/.claude/settings.json)"'
-bash_is ask 'd=$(pwd); cp "a;b" ~/.claude/settings.json'
 # $\ then ( is a $( ) once bash joins the lines; in double quotes the old reading
 # hid its ; as quoted text, so the unreadable floor is what asks.
 bash_is ask $'echo "$\\\n(cp /dev/null ~/.claude/settings.json)"'
@@ -322,11 +321,14 @@ bash_is allow $'cat <<\'EOF\' > notes.md\n$(cp /dev/null ~/.claude/settings.json
 bash_is allow $'cat <<EOF > notes.md\nwritten $(date), see ~/.claude/settings.json\nEOF'
 bash_is allow $'cat <<EOF > notes.md\nsee $HOME/.claude/settings.json\nEOF'
 bash_is allow 'echo "a (b) ~/.claude/settings.json" > notes.md'
-# A cd in a kept body's $( ) runs in a subshell: the cd after the body is still
-# read from the session's folder, and one inside the $( ) is followed there.
+# A cd inside a kept body's $( ) is followed there.
+bash_is ask $'cat <<EOF > /dev/null\n$(cd .claude && cp x hooks/lib.sh)\nEOF' "$HOME"
+# Held as main holds them. A cd in a kept body's $( ) runs in a subshell, so the
+# cd after the body is still read from the session's folder; the first head of
+# this change allowed the first.
 bash_is ask $'cat <<EOF > /dev/null\n$(cd /tmp)\nEOF\ncd .claude && cp x hooks/lib.sh' "$HOME"
 bash_is ask $'cat <<EOF > /dev/null\n$(cd /tmp; true)\nEOF\ncd .claude && cp x hooks/lib.sh' "$HOME"
-bash_is ask $'cat <<EOF > /dev/null\n$(cd .claude && cp x hooks/lib.sh)\nEOF' "$HOME"
+bash_is ask 'd=$(pwd); cp "a;b" ~/.claude/settings.json'
 
 echo "=== a monitor's command is checked as a Bash command ==="
 monitor_is ask '{"command":"sleep 300; cp /srv/x.sh ~/.claude/hooks/env-guard.sh"}'
