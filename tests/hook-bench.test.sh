@@ -61,12 +61,15 @@ echo "=== A/A: same ref on both sides passes the gate ==="
 run --base v0.1.0 --head v0.1.0 --gate --floor-ms 100000; RC=$?
 [ "$RC" = 0 ] && pass "exit 0" || fail "exit 0" "rc=$RC $(cat "$TMP/err")"
 [ "$(jqo '.classes.Bash.base.wait.n')" = 7 ] && pass "7 Bash calls counted" || fail "Bash calls" "$(jqo '.classes.Bash.base.wait.n')"
-# second.sh is 5x slower than fast.sh so the max is clearly second.sh: with equal
+# second.sh sleeps 150 ms and fast.sh 30 ms, launched together: the call cannot end
+# before second.sh's sleep, and stays well short of the two one after the other. The
+# floor is the sleep, not second.sh's measured time alone: that is a separate run, and
+# on a loaded macOS runner the two differed by 15 ms (run 43522592163). With equal
 # hooks, noisy medians on macOS put the median of the max at the sum (run 39076417023).
-jq -e '.classes.Bash.base.wait.p50 < (.hooks["fast.sh"].base.wall.p50 + .hooks["second.sh"].base.wall.p50 - 10)
-       and .classes.Bash.base.wait.p50 >= ([.hooks["fast.sh"].base.wall.p50, .hooks["second.sh"].base.wall.p50] | max) - 5' \
+jq -e '.classes.Bash.base.wait.p50 >= 150
+       and .classes.Bash.base.wait.p50 < (.hooks["fast.sh"].base.wall.p50 + .hooks["second.sh"].base.wall.p50 - 10)' \
   "$TMP/out.json" >/dev/null \
-  && pass "wait is the slowest hook of a call, not the sum" \
+  && pass "wait is about the slowest hook of a call, not the sum" \
   || fail "wait is a max" "$(jqo '[.classes.Bash.base.wait.p50, .hooks["fast.sh"].base.wall.p50, .hooks["second.sh"].base.wall.p50]')"
 [ "$(jqo '.together')" = true ] && grep -q 'launched together as Claude Code does' "$TMP/out.md" \
   && pass "a call's hooks are launched together by default" || fail "together by default" "$(jqo '.together')"

@@ -116,15 +116,20 @@ fi
 # Yes — scan the payload for sensitive tokens.
 # `templates.env.filters` or `self.env["X"]` is an attribute, not the .env file.
 ICMD_NOATTR=$(printf '%s\n' "$ICMD" | sed -E 's/([]A-Za-z0-9_)])\.env(\.[A-Za-z_]|\[|\()/\1_envattr\2/g')
+# One grep for the whole list, since every token gets the same ask. A grep each
+# was 28 process starts on inline code holding none, ~88 ms apiece on a laptop
+# whose endpoint agent inspects every exec. `.env` reads ICMD_NOATTR, the rest ICMD.
+TOKENS_RE="" NOATTR_RE=""
 for T in "${SENSITIVE_TOKENS[@]}"; do
-  S=$ICMD; [[ "$T" == '\.env\b' ]] && S=$ICMD_NOATTR
-  if printf '%s\n' "$S" | grep -qE "$T"; then
-    # Asks rather than denies (#72): a deny had Claude rewrite routine glue as a
-    # script file: 15 unique commands in the 16 days to 2026-10-15.
-    emit_ask "Inline code passed to an interpreter references env vars, dotfiles, sockets, or an env-dumping command. Review the payload before running it."
-    exit 0
-  fi
+  if [[ "$T" == '\.env\b' ]]; then NOATTR_RE="${NOATTR_RE:+$NOATTR_RE|}($T)"; else TOKENS_RE="${TOKENS_RE:+$TOKENS_RE|}($T)"; fi
 done
+if printf '%s\n' "$ICMD" | grep -qE "$TOKENS_RE" \
+   || { [[ -n "$NOATTR_RE" ]] && printf '%s\n' "$ICMD_NOATTR" | grep -qE "$NOATTR_RE"; }; then
+  # Asks rather than denies (#72): a deny had Claude rewrite routine glue as a
+  # script file: 15 unique commands in the 16 days to 2026-10-15.
+  emit_ask "Inline code passed to an interpreter references env vars, dotfiles, sockets, or an env-dumping command. Review the payload before running it."
+  exit 0
+fi
 
 # A perl/ruby one-liner in stream-edit mode whose payload is one substitution
 # is `sed -i`, which this harness does not guard at all, so the length test

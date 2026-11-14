@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from heredocs import SHELL_CMD, Heredocs  # noqa: E402
 from mask import config_path, emit, header, read_toml  # noqa: E402
 
 # Copied into a skill by forge.py draft, each with the test copied beside it (None: no test).
@@ -217,24 +218,42 @@ def parse(src: str) -> ast.Module:
         return ast.parse(src)
 
 
-HEREDOC = re.compile(r"""(?<!<)<<(?!<)-?\s*(['"]?)([A-Za-z_]\w*)\1""")
+class Unreadable(ValueError):
+    """A shell script whose quoting or heredocs heredocs.Heredocs cannot read for certain:
+    the lint cannot tell its code from its comments and heredoc data there."""
+
+    def __init__(self, name: str, line: int):
+        super().__init__(f"{name}: line {line}: the lint cannot tell its code from its comments and heredoc data here")
+        self.name, self.line = name, line
 
 
-def shell_code(src: str) -> str:
+def bash_lines(src: str) -> list:
+    """A script's lines as bash reads them: split on \\n only (no form feed or \\x85), \\r kept."""
+    lines = src.split("\n")
+    return lines[:-1] if lines and lines[-1] == "" else lines
+
+
+def shell_code(src: str, name: str = "script") -> str:
     """The script with comment lines blanked, so line numbers still hold. A heredoc's
-    body is data: a line in it that starts with # is printed, not a comment, so it stays."""
-    out, ends = [], []
-    for line in src.splitlines():
-        if ends:
-            out.append(line)
-            if line.strip() == ends[0]:
-                ends.pop(0)
-            continue
-        if line.lstrip().startswith("#"):
-            out.append("")
-            continue
-        out.append(line)
-        ends += [m.group(2) for m in HEREDOC.finditer(line)]
+    body is data: a line in it that starts with # is printed, not a comment, so it stays,
+    unless a shell runs the body. Openers and terminators are read as bash reads them (heredocs.py); a line read
+    otherwise raises Unreadable, since a presence check and an absence check would
+    each take the wrong side of a guess."""
+    out, hd, term, dash, shell = [], Heredocs(), None, False, False
+    for n, line in enumerate(bash_lines(src), 1):
+        try:
+            if term is not None:
+                out.append("" if shell and line.lstrip().startswith("#") else line)
+                if hd.body_line(line, term, dash):
+                    term = None
+                continue
+            found = hd.scan(line)
+        except ValueError:
+            raise Unreadable(name, n) from None
+        out.append("" if line.lstrip().startswith("#") else line)
+        if found:
+            _, term, dash, _ = found
+            shell = bool(SHELL_CMD.search(line))
     return "\n".join(out)
 
 
@@ -283,7 +302,7 @@ def call_name(node: ast.Call) -> str:
 
 def has_apply(name: str, src: str) -> bool:
     if is_shell(name):
-        return "--apply" in shell_code(src)
+        return "--apply" in shell_code(src, name)
     return '"--apply"' in src or "'--apply'" in src
 
 
@@ -292,7 +311,7 @@ def check_readonly(sk: Skill, opts) -> Result:
     writers = {}
     for name, src in sk.own_scripts().items():
         verbs = custom or (SHELL_WRITE_VERBS if is_shell(name) else DEFAULT_WRITE_VERBS)
-        text = shell_code(src) if is_shell(name) else src
+        text = shell_code(src, name) if is_shell(name) else src
         for v in verbs:
             m = re.search(v, text)
             if m:
@@ -314,7 +333,7 @@ def check_sql_layers(sk: Skill, opts) -> Result:
     if not (declared or sk.manifest.get("archetype") == "sql-readonly" or users):
         return Result("N/A", "no SQL client in the scripts")
     selftest = [n for n, s in sk.own_scripts().items()
-                if (SH_SELF_TEST.search(shell_code(s)) if is_shell(n) else SELF_TEST_OPT.search(s))]
+                if (SH_SELF_TEST.search(shell_code(s, n)) if is_shell(n) else SELF_TEST_OPT.search(s))]
     if not selftest:
         return Result("FAIL", f"runs SQL ({', '.join(users) or 'forge.toml sql = true'}) but no script has --self-test")
     if opts.no_exec:
@@ -373,7 +392,7 @@ def check_guards(sk: Skill, opts) -> Result:
 
 def has_header(name: str, src: str) -> bool:
     if is_shell(name):
-        return "# target:" in shell_code(src)
+        return "# target:" in shell_code(src, name)
     return any(call_name(c).split(".")[-1] == "header" for c in calls(src))
 
 
@@ -397,7 +416,7 @@ def check_masker(sk: Skill, opts) -> Result:
     for e in engines:
         src = sk.scripts[e]
         if is_shell(e):
-            if not SH_MASKED.search(shell_code(src)):
+            if not SH_MASKED.search(shell_code(src, e)):
                 bad.append(f"{e} prints without the masker: no line pipes its output through the skill's mask.py --filter")
             continue
         raw = [c.lineno for c in calls(src) if call_name(c) in ("print", "sys.stdout.write", "sys.stderr.write", "stdout.write", "stderr.write")]
@@ -587,9 +606,9 @@ def check_self_contained(sk: Skill, opts) -> Result:
     bad = []
     files = {**sk.scripts, **sk.tests, **sk.shell_tests}
     for path, src in files.items():
-        lines = src.splitlines()
+        lines = bash_lines(src) if is_shell(path) else src.splitlines()
         hits = set()
-        strings = enumerate(shell_code(src).splitlines(), 1) if is_shell(path) else code_strings(src)
+        strings = enumerate(bash_lines(shell_code(src, path)), 1) if is_shell(path) else code_strings(src)
         for i, value in strings:
             names = [m.group(1) for m in CLAUDE_SKILL.finditer(value)] + [m.group(1) for m in SIBLING.finditer(value)]
             if CLIMB.search(value) or any(n not in (sk.name, sk.root.name) for n in names):
@@ -685,7 +704,10 @@ def report(root: Path, budget: int | None = None, no_exec: bool = False) -> dict
 def run_checks(sk: Skill, opts) -> dict:
     results = {}
     for cid, fn in CHECKS:
-        results[cid] = fn(sk, opts)
+        try:
+            results[cid] = fn(sk, opts)
+        except Unreadable as e:   # every check that reads the script fails on it
+            results[cid] = Result("FAIL", str(e))
     for cid, w in sk.waivers.items():
         reason = (w or {}).get("reason", "").strip() if isinstance(w, dict) else ""
         r = results.get(cid)
