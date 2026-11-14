@@ -6,6 +6,74 @@ the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
 installed machine to the newest tag.
 
+## v1.4.0 (2026-11-13)
+
+Merged since v1.3.1: 23 PRs.
+
+### Security
+- pr-review: an ask can block the approval (#226)
+- config-guard: case variants, unresolved prefixes, and copies into .claude ask (#223)
+- token shapes: the test's roster is secret-scanner's own; four shapes caught everywhere (#221)
+- hooks: one bash-guards hook runs the seven Bash and Monitor guards (#215)
+- fix(guards): bash 3.2 ends a $( ) at a ) its heredoc body did not open (#208)
+- skill-forge: demand.py reads heredocs as bash does, held to the guards' oracle (#206)
+- Copies parity: five token-shape lists checked against secret-scanner; one run.py (#204)
+- fix(guards): one quote reading for separators and groups; awk reads bytes (#202)
+- fix: guards no longer skip a line bash runs after a false heredoc, a group or an escaped $' (#197)
+
+### Speed
+- hook-bench: launch a call's hooks together, as Claude Code does (#218) (#225)
+- hook-latency: each Bash guard inside bash-guards, from its timing log (#220)
+- tests/doctor.test.sh: slowest-first check holds when whole-second times tie (#214)
+- tools: hook latency and session census reports; name "command hook N" records (#210)
+
+### Compatibility
+- install: say how running sessions pick up each change (#213)
+- doctor: KILLED and TIMEOUT apart from failures, wall times, --smoke; install runs the smoke set (#212)
+
+### Other
+- session-start tests: bounds from this machine, not a fast one (#224)
+- comms-hub panel: type section() and two() for 2.1.323's validate type check (#219)
+- refactor: split hooks/lib.sh into hooks/lib/, one file per concern (#216)
+- tests: a case past its time limit is a timeout, not a failure (#211)
+- session-start: a 3 s budget, one session per machine for nudges and the index, a 30 s timeout (#209)
+- Test infra: one pass/fail helper, shellcheck on tests/, a Python compile check, weekly mutations (#205)
+- comms-hub: peers send through a slack-draft skill; one panel fixture (#203)
+- feat(skill-forge): C10 fails an installed script SKILL.md runs undeclared (#198)
+
+### Benchmark vs v1.3.1
+
+
+2026-11-13T22:50:52Z, Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V45 96-Core Processor, python 3.14.4. Corpus tests/bench-corpus.jsonl: 492 payloads (372 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 MultiEdit, 2 NotebookEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, launched together as Claude Code does. Wait is from the first launch to the last exit, so hooks that share the cores pay for it; CPU is the sum of each hook's own. The per-hook table runs each hook alone. Process start here: `true` 0.5 ms, `bash -c :` 1.1 ms, `jq -n 1` 1.8 ms (p50 of 20), so only same-run comparisons are meaningful. A machine whose process start is slower pays it again for each process a hook starts: the last column is a hook's p50 past one `bash -c :`.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 372 | 77.0 → 63.6 ms (-17%) | 77.3 → 63.9 ms (-17%) | 121.6 → 108.1 ms (-11%) | 204.3 → 135.2 ms (-34%) |
+| WebFetch | 11 | 16.7 → 17.3 ms (+4%) | 22.5 → 23.3 ms (+4%) | 37.9 → 39.3 ms (+4%) | 33.3 → 34.6 ms (+4%) |
+| Read/Grep | 41 | 36.5 → 37.2 ms (+2%) | 41.2 → 41.5 ms (+1%) | 55.5 → 56.0 ms (+1%) | 52.1 → 52.8 ms (+1%) |
+| Write/Edit | 63 | 44.0 → 44.8 ms (+2%) | 46.4 → 47.3 ms (+2%) | 68.4 → 69.6 ms (+2%) | 110.1 → 113.9 ms (+3%) |
+| Monitor | 5 | 57.8 → 36.6 ms (-37%) | 67.4 → 47.9 ms (-29%) | 112.9 → 96.8 ms (-14%) | 171.1 → 96.1 ms (-44%) |
+| All | 492 | 63.2 → 55.7 ms (-12%) | 69.0 → 58.8 ms (-15%) | 118.1 → 106.5 ms (-10%) | 175.4 → 123.0 ms (-30%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean | p50 past bash start |
+|---|---:|---|---|---|---|
+| bash-guards.sh | 377 | 62.6 ms (head only) | 107.5 ms | 126.4 ms | 61.6 ms |
+| config-guard.sh | 440 | 10.7 → 15.1 ms (+41%) | 31.5 → 34.3 ms (+9%) | 11.8 → 21.4 ms (+82%) | 9.7 → 14.0 ms |
+| env-guard.sh | 377 | 13.6 ms (base only) | 74.5 ms | 29.2 ms | 12.5 ms |
+| git-guard.sh | 377 | 13.6 ms (base only) | 80.2 ms | 27.1 ms | 12.6 ms |
+| interpreter-guard.sh | 377 | 13.4 ms (base only) | 73.5 ms | 30.5 ms | 12.3 ms |
+| kubectl-guard.sh | 377 | 13.4 ms (base only) | 58.5 ms | 26.2 ms | 12.3 ms |
+| mod-gate.sh | 63 | 3.4 → 3.4 ms (-1%) | 11.2 → 11.8 ms (+5%) | 3.9 → 3.9 ms (+0%) | 2.4 → 2.4 ms |
+| network-guard.sh | 388 | 16.1 → 17.1 ms (+6%) | 67.7 → 39.5 ms (-42%) | 27.6 → 27.4 ms (-1%) | 15.1 → 16.1 ms |
+| rm-guard.sh | 377 | 11.0 ms (base only) | 11.5 ms | 14.3 ms | 9.9 ms |
+| secret-scanner.sh | 63 | 19.4 → 19.9 ms (+3%) | 60.1 → 61.4 ms (+2%) | 24.3 → 24.6 ms (+1%) | 18.4 → 18.9 ms |
+| sensitive-file-guard.sh | 104 | 36.2 → 36.9 ms (+2%) | 53.6 → 55.1 ms (+3%) | 41.3 → 42.0 ms (+2%) | 35.2 → 35.8 ms |
+| subagent-cache-guard.sh | 492 | 6.4 → 7.0 ms (+9%) | 6.6 → 7.2 ms (+9%) | 6.4 → 6.8 ms (+7%) | 5.3 → 5.9 ms |
+
+Decisions: 492 of 492 payloads got the same answer on both sides.
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended).
+
 ## v1.3.1 (2026-11-13)
 
 Merged since v1.3.0: 2 PRs.
