@@ -397,8 +397,8 @@ case "$TOOL" in
       [[ "$w" == '&'* ]] || check_word "$w" 0
     done < <(printf '%s\n' "$NORM" | grep -oE "$REDIR" | sed -E 's/^[0-9&]*>>?\|?[[:space:]]*//')
     # A $( ) in double quotes or in a heredoc body keeps its `)`, since only an
-    # unquoted one becomes `;` (lib.sh), so `"$(cp x ~/.claude/settings.json)"`
-    # named settings.json). The words before a `)` are read as a command too.
+    # unquoted one becomes `;` (lib.sh): in `"$(cp x ~/.claude/settings.json)"`
+    # the target read as `settings.json)`. The words before a `)` are read too.
     for seg in ${SEGS[@]+"${SEGS[@]}"}; do
       scan_segment "$seg"
       [[ "$seg" == *')'* ]] && scan_segment "${seg%%)*}"

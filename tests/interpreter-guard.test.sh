@@ -253,6 +253,10 @@ check "in an unquoted body's \$( )"          ask   $'cat <<EOF > /dev/null\n$(py
 check "a stream edit, then a long -c behind a quoted ;" ask "perl -pi -e 's/a/b/' f.md; python3 -X \"a;b\" -c \"print('$PAD')\""
 check "an inner shell's ; still splits"      ask   'bash -c "true; python3 -c \"import os; print(os.environ)\""'
 check "a quoted ; before a script"           allow 'python3 -X "a;b" script.py'
+# The length rule measures to a ; in either reading, so 40 short statements are
+# not one long script there, as they were not before.
+SHORT=$(printf 'x = 1; %.0s' {1..40})
+check "a payload of short statements"        allow "python3 -c \"${SHORT}print(x)\""
 check "a stream edit on a file named a;b"    allow "perl -pi -e 's/a/b/' \"a;b.md\""
 
 echo ""

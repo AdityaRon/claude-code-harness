@@ -40,11 +40,11 @@ ICMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
 # A quoted or escaped ; | or & ended the [^|;&] spans below, so `python3 -X "a;b"
 # -c …` never reached its -c. The reading with those hidden (lib.sh) is added,
 # not swapped in: `bash -c "true; python3 -c …"` does split there. The
-# stream-edit exemption below reads both.
-NQS=""
+# stream-edit exemption and the length rule below read both.
+NQS=""; NCMD=""; TYPED=$ICMD
 [[ "$CMD" == *[\"\'\\]* && "$CMD" == *[\;\&\|]* ]] && NQS=$(neutralize_quoted_separators "$CMD")
 [[ "$NQS" == "$CMD" ]] && NQS=""
-[[ -n "$NQS" ]] && ICMD=$(printf '%s\n%s\n%s' "$ICMD" "$NQS" "$(normalize_command "$NQS")")
+[[ -n "$NQS" ]] && NCMD=$(printf '%s\n%s' "$NQS" "$(normalize_command "$NQS")") && ICMD=$(printf '%s\n%s' "$ICMD" "$NCMD")
 
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
@@ -202,7 +202,11 @@ fi
 # This catches novel payloads without producing false positives on trivial
 # one-liners like `python -c "print(1)"`.
 # Both spans stay inside the interpreter's own segment: a `grep -c` after && is not its flag.
-if printf '%s\n' "$ICMD" | grep -qE "${IB}${INTERP}\b[^|;&]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&]{200,}"; then
+# In the hidden-separator reading the flag is reached past a quoted ;, but each
+# length still stops at one (%3B, %7C, %26) as it does in the command as typed,
+# so a payload of short statements measures as it did.
+if printf '%s\n' "$TYPED" | grep -qE "${IB}${INTERP}\b[^|;&]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&]{200,}" \
+   || { [[ -n "$NCMD" ]] && printf '%s\n' "$NCMD" | grep -qE "${IB}${INTERP}\b[^|;&%]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&%]{200,}"; }; then
   emit_ask "Long inline script passed to an interpreter. Review the payload before running — inline code bypasses file-based review."
   exit 0
 fi

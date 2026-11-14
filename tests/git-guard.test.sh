@@ -397,6 +397,10 @@ check_wt "-D, then one spelled \"git\""        ask   "git branch -D b-pushed; \"
 check_wt "-D, then one spelled GIT"          ask   "git branch -D b-pushed && GIT branch -D b-local" "$M"
 check_wt "-D, then one spelled \\git"         ask   "git branch -D b-pushed && \\git branch -D b-local" "$M"
 check_wt "-D, then one a function runs"      ask   "f() { \"\$@\"; }; git branch -D b-pushed; f git branch -D b-local" "$M"
+# The parser reads the command as typed, where `"a;b"` cuts the second -D off:
+# one segment parsed, one counted, and b-local went with nothing asking.
+check_wt "-D, then one behind a quoted ;"     ask   'git branch -D b-pushed; git branch "a;b" -D b-local' "$M"
+check_wt "-D, then a quoted ; in an echo"     allow 'git branch -D b-pushed; echo "a;b"' "$M"
 check_wt "-D, xargs adds a name"             ask   "echo b-local | xargs git branch -D b-pushed" "$M"
 check_wt "-qD bundle, commits only local"    ask   "git branch -qD b-local" "$M"
 check_wt "-Dq bundle, commits only local"    ask   "git branch -Dq b-local" "$M"
@@ -618,7 +622,6 @@ check "quoted ; before -c core.hooksPath"    deny  'git -c "a;b" -c core.hooksPa
 check "quoted ; before a ! alias"            deny  "git config \"a;b\" alias.x '!sh'"
 check "quoted ; before push --delete"        ask   'git push origin "a;b" --delete nosuchbranch'
 check "quoted ; before branch -D"            ask   'git branch "a;b" -D nosuchbranch'
-check "a plain -d, then -D behind a quoted ;" ask  'git branch -d foo; git branch "a;b" -D bar'
 check "after bash x.sh"                      deny  'bash x.sh; git push origin "a;b" --force'
 check "after a \$( )"                        deny  'd=$(pwd); git push origin "a;b" --force'
 check "in a script bash runs"                deny  $'cat > x.sh <<\'EOF\'\ngit push origin "a;b" --force\nEOF\nbash x.sh'
