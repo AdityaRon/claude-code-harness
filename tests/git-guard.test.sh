@@ -599,5 +599,58 @@ if (( N == 1 )); then echo "  OK: 1 grep holds the list"; PASS=$((PASS+1))
 else echo "  FAIL: $N greps hold a name from the list (want 1; $(wc -l < "$PATS" | tr -d ' ') greps in all)"; FAIL=$((FAIL+1)); fi
 
 echo ""
+echo "=== A quoted or escaped ; | & inside a word ends no span ==="
+# Each [^|;&] span stopped at the quoted ; and never reached the flag after it:
+# all of these were allowed. The reading with those hidden is matched beside the
+# one as typed, so an inner shell's real ; still splits.
+check "quoted ; before --force"              deny  'git push origin "a;b" --force'
+check "single-quoted ; before --force"       deny  "git push origin 'a;b' --force"
+check "quoted | before --force"              deny  'git push origin "a|b" --force'
+check "quoted & before --force"              deny  'git push origin "a&b" --force'
+check "escaped ; before --force"             deny  'git push origin a\;b --force'
+check "quoted ; before -f"                   deny  'git push origin "a;b" -f'
+check "quoted ; before --force-with-lease"   deny  'git push origin "a;b" --force-with-lease'
+check "quoted ; before a + refspec"          deny  'git push origin "x;y" +main:main'
+check "quoted ; before --mirror"             deny  'git push origin "a;b" --mirror'
+check "quoted ; before reset --hard"         deny  'git reset "a;b" --hard'
+check "quoted ; before clean -f"             deny  'git clean "a;b" -fd'
+check "quoted ; before -c core.hooksPath"    deny  'git -c "a;b" -c core.hooksPath=/x status'
+check "quoted ; before a ! alias"            deny  "git config \"a;b\" alias.x '!sh'"
+check "quoted ; before push --delete"        ask   'git push origin "a;b" --delete nosuchbranch'
+check "quoted ; before branch -D"            ask   'git branch "a;b" -D nosuchbranch'
+check "a plain -d, then -D behind a quoted ;" ask  'git branch -d foo; git branch "a;b" -D bar'
+check "after bash x.sh"                      deny  'bash x.sh; git push origin "a;b" --force'
+check "after a \$( )"                        deny  'd=$(pwd); git push origin "a;b" --force'
+check "in a script bash runs"                deny  $'cat > x.sh <<\'EOF\'\ngit push origin "a;b" --force\nEOF\nbash x.sh'
+check "in an unquoted body's \$( )"          deny  $'cat <<EOF > /dev/null\n$(git push origin "a;b" --force)\nEOF'
+check "an inner shell's ; still splits"      deny  'bash -c "true; git push origin main --force"'
+check "a quoted ; in a commit message"       allow 'git commit -m "fix; tests" && git push origin main'
+check "echo with a quoted ;"                 allow 'echo "a;b"; git push origin main'
+check "a quoted ; in a branch name"          allow 'git push origin "a;b"'
+check "a quoted ; in a format"               allow 'git log --format="%h;%s" | head'
+check "a plain -d behind a quoted ; (a name the parser cannot read)" ask 'git branch "a;b" -d nosuchbranch'
+
+echo ""
+echo "=== A separator, or the ) that ends a \$( ), ends a short flag ==="
+# -f had to meet a blank or the line's end: `-f; ls` and a "$( )" or heredoc
+# body's `-f)` were allowed while `-f ; ls` was denied.
+check "-f, then ;"                           deny  'git push origin main -f; ls'
+check "-f, then &&"                          deny  'git push origin main -f&&ls'
+check "-f in a subshell"                     deny  '(git push origin main -f)'
+check "-f in \"\$( )\""                      deny  'echo "$(git push origin main -f)"'
+check "-f in an unquoted body's \$( )"       deny  $'cat <<EOF > /dev/null\n$(git push origin main -f)\nEOF'
+check "add . in \"\$( )\""                   deny  'echo "$(git add .)"'
+check "checkout . in \"\$( )\""              deny  'echo "$(git checkout .)"'
+check "a branch ending in -f, then ;"        allow 'git push origin wip-f; ls'
+check "a quoted-delimiter body holding \$( )" allow $'cat <<\'EOF\' > notes.md\n$(git push origin main -f)\nEOF'
+
+echo ""
+echo "=== \$\\ then ( on the next line is a \$( ) ==="
+# bash joins the lines, in double quotes and in an unquoted body, where hd_scan
+# read the ( as text: the line is unreadable, and a group in it is opened.
+check "in double quotes"                     deny  $'echo "$\\\n(git push origin main --force)"'
+check "in an unquoted body"                  deny  $'cat <<EOF > /dev/null\nx $\\\n(git push origin main --force)\nEOF'
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

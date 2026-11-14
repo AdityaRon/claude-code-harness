@@ -37,6 +37,14 @@ unreadable_check interpreter-guard "$CMD"
 # `/usr/bin/python3` and `PYTHON3` run python too. ICMD adds the normalized form
 # (lib.sh) as a second line; the stream-edit exemption below keeps to CMD.
 ICMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
+# A quoted or escaped ; | or & ended the [^|;&] spans below, so `python3 -X "a;b"
+# -c …` never reached its -c. The reading with those hidden (lib.sh) is added,
+# not swapped in: `bash -c "true; python3 -c …"` does split there. The
+# stream-edit exemption below reads both.
+NQS=""
+[[ "$CMD" == *[\"\'\\]* && "$CMD" == *[\;\&\|]* ]] && NQS=$(neutralize_quoted_separators "$CMD")
+[[ "$NQS" == "$CMD" ]] && NQS=""
+[[ -n "$NQS" ]] && ICMD=$(printf '%s\n%s\n%s' "$ICMD" "$NQS" "$(normalize_command "$NQS")")
 
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
@@ -180,7 +188,7 @@ if [ "${STREAM_EDIT_CANDIDATE:-yes}" = "yes" ] \
     # would read the `-file` in `my-file.md` as an inline flag and kill the
     # exemption for any target whose name happens to end a hyphenated segment
     # in c or e.
-    REST=$(printf '%s\n' "$CMD" \
+    REST=$(printf '%s\n%s\n' "$CMD" "$NQS" \
       | sed "s/[[:space:]]-[A-Za-z0-9]*e[[:space:]]*'[^']*'/ /")
     OTHER_INLINE="${IB}${INTERP}[^|;&]*[[:space:]](-[A-Za-z0-9]*[ce]|--eval|--exec|-r)([[:space:]]|$)"
     if ! printf '%s\n' "$REST" | grep -qE "$OTHER_INLINE" \

@@ -113,9 +113,10 @@ emit_ask() {
 # A command hd_scan cannot read: the guard goes on with its old reading, so a
 # deny or ask stands, and an allow becomes an ask, since which ; & | run there
 # is unknown. Each guard calls this in its own shell once the command concerns
-# it; only text holding what can make it unreadable pays for the awk.
+# it; only text holding what can make it unreadable pays for the awk: a line
+# ending in $\ is one, a $( once bash joins the next line on (hd_joins_sub).
 unreadable_check() {  # guard text
-  case "$2" in *'<<'*|*'${'*|*'(('*|*'$['*|*'`'*|*'$('*) ;; *) return 0 ;; esac
+  case "$2" in *'<<'*|*'${'*|*'(('*|*'$['*|*'`'*|*'$('*|*'$\'$'\n'*) ;; *) return 0 ;; esac
   printf '%s\n' "$2" | awk "$HEREDOC_AWK"'{ line[NR] = $0 } END { sh_classify(NR); exit SH_BAD ? 3 : 0 }' || unreadable_floor "$1"
 }
 

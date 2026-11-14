@@ -276,11 +276,11 @@ function sh_classify(nl,    k, t, i, body, lit, shell, found, insub, nb) {
       if (!shell) DATA[k] = 1
       if (lit && !shell) continue
       hd_scan(line[k]); for (i in HCLS) CLS[k, i] = HCLS[i]
-      if (HD_BAD || HD_POS) { SH_BAD = 1; return }
+      if (HD_BAD || HD_POS || hd_joins_sub(line[k])) { SH_BAD = 1; return }
       continue
     }
     hd_scan(line[k]); for (i in HCLS) CLS[k, i] = HCLS[i]
-    if (HD_BAD) { SH_BAD = 1; return }
+    if (HD_BAD || hd_joins_sub(line[k])) { SH_BAD = 1; return }
     if (!HD_POS) continue
     found = 0; for (t = k + 1; t <= nl; t++) if (hd_end(line[t])) { found = 1; break }
     if (!found) continue
@@ -330,6 +330,9 @@ function hd_body(s,    i, n, c) {
 # A body some shell reads: a shell named on the line, $SHELL, or eval, source
 # or . in command position.
 function hd_shell(s) { return s ~ /(^|[^A-Za-z0-9_.-])(ba|z|da|k|fi|s)?sh([^A-Za-z0-9_.-]|$)|\$\{?SHELL([^A-Za-z0-9_]|$)|(^|[;&|(])[ \t]*(eval|source|\.)[ \t]/ }
+# bash joins a line ending in \ to the next, so in double quotes or an unquoted
+# body `$\` then `(` is a $( ) that hd_scan reads as text. Call it after hd_scan.
+function hd_joins_sub(s) { return hcont && (hq == "\"" || hq == "H") && s ~ /\$\\$/ }
 '
 
 # A heredoc fed to `git commit -F -` or `gh pr|issue … --body-file -` is a
@@ -456,19 +459,22 @@ strip_inert_heredocs() {
 }
 
 # A heredoc body is the data a command reads, unless its line names a shell
-# anywhere (`| bash`, `sudo bash`, `/bin/sh`): config-guard. Unterminated, or
-# an opener hd_scan cannot read, it is all kept.
+# anywhere (`| bash`, `sudo bash`, `/bin/sh`): config-guard. An unquoted body
+# holding $( or a backtick, or a line ending in $\ (then `(`, a $( ), stays too:
+# bash runs those as it reads the body. Unterminated, or an opener hd_scan
+# cannot read, it is all kept.
 drop_data_heredocs() {
   local out
   case "$1" in *'<<'*) ;; *) printf '%s' "$1"; return ;; esac
   out=$(printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
     body && hd_bad_end($0) { bad = 1; exit }
-    body { if (hd_end($0)) { body = 0; print; next }
+    body { if (hd_end($0)) { if (runs) printf "%s", buf; body = 0; buf = ""; print; next }
            if (shell) print
+           else if (!lit) { buf = buf $0 "\n"; if ($0 ~ /\$\(|`|\$\\$/) runs = 1 }
            next }
     { print; hd_scan($0)
       if (HD_BAD) { bad = 1; exit }
-      if (HD_POS) { shell = hd_shell($0); body = 1 } }
+      if (HD_POS) { shell = hd_shell($0); lit = HD_LIT; runs = 0; buf = ""; body = 1 } }
     END { if (bad || body) exit 3 }') || { printf '%s' "$1"; return; }
   printf '%s' "$out"
 }

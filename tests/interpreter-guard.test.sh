@@ -242,5 +242,19 @@ if (( N >= 1 && N <= 2 )); then echo "  OK: $N greps hold a token"; PASS=$((PASS
 else echo "  FAIL: $N greps hold a token (want 1 or 2; $(wc -l < "$PATS" | tr -d ' ') greps in all)"; FAIL=$((FAIL+1)); fi
 
 echo ""
+echo "=== A quoted or escaped ; | & inside a word ends no span ==="
+# The interpreter's [^|;&] span stopped at a quoted ; before its -c or -e, so
+# the payload was never scanned: each of these was allowed.
+check "quoted ; before -c"                   ask   'python3 -X "a;b" -c "import os; print(os.environ)"'
+check "escaped ; before -c"                  ask   'python3 -X a\;b -c "import os; print(os.environ)"'
+check "quoted ; before node -e"              ask   'node --title "a;b" -e "console.log(process.env)"'
+check "behind bash x.sh"                     ask   'bash x.sh; python3 -X "a;b" -c "import os; print(os.environ)"'
+check "in an unquoted body's \$( )"          ask   $'cat <<EOF > /dev/null\n$(python3 -X "a;b" -c "import os; print(os.environ)")\nEOF'
+check "a stream edit, then a long -c behind a quoted ;" ask "perl -pi -e 's/a/b/' f.md; python3 -X \"a;b\" -c \"print('$PAD')\""
+check "an inner shell's ; still splits"      ask   'bash -c "true; python3 -c \"import os; print(os.environ)\""'
+check "a quoted ; before a script"           allow 'python3 -X "a;b" script.py'
+check "a stream edit on a file named a;b"    allow "perl -pi -e 's/a/b/' \"a;b.md\""
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

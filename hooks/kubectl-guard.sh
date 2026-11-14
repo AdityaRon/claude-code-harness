@@ -572,9 +572,15 @@ done < <(printf '%s\n' "$CMD" | tr '\n' ';' | sed -E "s/'[^']*'//g; s/\"[^\"]*\"
 
 # When only text commands and kubectl run, a quoted `|` or `;` is text (lib.sh).
 # Not with a substitution: the `;` in "$(a; b)" is real.
+# Anything else is read both ways: a quoted `;` an inner shell splits on is real,
+# and one inside a word is not. Read only as typed, `kubectl -n "a;b" delete ns
+# prod` lost its verb behind `bash x.sh` or a $( ), in a script bash runs too.
 SRC=$CMD
 if [[ $TEXT_ONLY -eq 1 && "$CMD" == *[\"\']* && "$CMD" != *'$('* && "$CMD" != *'`'* ]]; then
   SRC=$(neutralize_quoted_separators "$CMD")
+elif [[ "$CMD" == *[\"\'\\]* && "$CMD" == *[\;\&\|]* ]]; then
+  NQ=$(neutralize_quoted_separators "$CMD")
+  [[ "$NQ" != "$CMD" ]] && SRC=$(printf '%s\n%s' "$CMD" "$NQ")
 fi
 
 # Normalise BEFORE the bail-out, not after. The bail-out's own pattern requires

@@ -235,6 +235,54 @@ for p in "${PREFIXES[@]}"; do
   [ "$v" = "$GCTL" ] && pass "kubectl-guard, a group after '$p': $v" || fail "kubectl-guard, a group after '$p'" "$v, alone: $GCTL"
 done
 
+echo ""
+echo "=== an unquoted body's \$( ) and backticks run: lib.sh's strippers keep them ==="
+# bash runs these as it reads the body (the marker prints), so the body is code.
+# drop_data_heredocs dropped each as data, and config-guard allowed what ran.
+BODYSUB=(
+  "\$( ) in an unquoted body"       $'cat <<EOF\n$(\n'"$M"$'\n)\nEOF'
+  "backticks in an unquoted body"   $'cat <<EOF\n`\n'"$M"$'\n`\nEOF'
+  "\$\\ then ( in an unquoted body" $'cat <<EOF\n$\\\n(\n'"$M"$'\n)\nEOF'
+  "\$( ) in a body tee writes"      $'tee /dev/null <<EOF\n$(\n'"$M"$'\n)\nEOF'
+)
+for ((i = 0; i < ${#BODYSUB[@]}; i += 2)); do
+  label=${BODYSUB[$i]}; cmd=${BODYSUB[$((i + 1))]}
+  if ! runs_in_bash "$cmd"; then fail "$label" "(bash did not run the marker: the case is wrong)"; continue; fi
+  for fn in strip_message_heredocs strip_inert_heredocs drop_data_heredocs; do
+    out=$("$fn" "$cmd")
+    keeps "$out" && pass "$label: $fn keeps it" || fail "$label: $fn dropped a line bash runs" "[$out]"
+  done
+done
+# A quoted delimiter's body is data, $( ) and all: bash prints it as text.
+cmd=$'cat <<\'EOF\'\n$(\n'"$M"$'\n)\nEOF'
+if runs_in_bash "$cmd"; then fail "a quoted delimiter's \$( )" "(bash ran the marker: the case is wrong)"
+else keeps "$(drop_data_heredocs "$cmd")" && fail "drop_data_heredocs kept a quoted delimiter's \$( )" "" \
+  || pass "drop_data_heredocs still drops a quoted delimiter's \$( )"; fi
+
+echo ""
+echo "=== each guard: its line in an unquoted body's \$( ), or after a quoted ; | & in a word ==="
+# Held to the line's verdict alone. A quoted separator inside a word is text, so
+# no span ends there; a body's $( ), backticks and $\ then ( are code.
+wrap() { printf '%s%s%s' "${1%%@*}" "$2" "${1#*@}"; }   # not ${1//@/$2}: bash 5.2 reads & in it
+QSEP=("git push origin \"a;b\" --force" "cp \"a;b\" ~/.claude/settings.json" "kubectl -n \"a;b\" delete ns prod"
+      "cat \"a;b\" .env" "python3 -X \"a;b\" -c 'import os; print(os.environ)'"
+      "curl \"https://example.com/?a=1&b=2\" -X DELETE" "rm -rf \"a;b\" ~/")
+BODYW=($'cat <<EOF > /dev/null\n$(@)\nEOF' $'cat <<EOF > /dev/null\n`@`\nEOF' $'cat <<EOF > /dev/null\nx $\\\n(@)\nEOF')
+QSEPW=('@' 'bash x.sh; @' 'd=$(pwd); @' $'cat > x.sh <<\'EOF\'\n@\nEOF\nbash x.sh' $'cat <<EOF > /dev/null\n$(@)\nEOF')
+for g in "${!GUARDS[@]}"; do
+  ctl=$(verdict "${GUARDS[$g]}" "${RISK[$g]}")
+  for w in "${BODYW[@]}"; do
+    v=$(verdict "${GUARDS[$g]}" "$(wrap "$w" "${RISK[$g]}")")
+    [ "$v" = "$ctl" ] && pass "${GUARDS[$g]} in '${w%%@*}': $v" || fail "${GUARDS[$g]} in '${w%%@*}'" "$v, alone: $ctl"
+  done
+  for w in "${QSEPW[@]}"; do
+    # config-guard drops a quoted body no shell on its line reads, even one bash x.sh runs later.
+    [[ "${GUARDS[$g]}" == config-guard && "$w" == *'bash x.sh' ]] && continue
+    v=$(verdict "${GUARDS[$g]}" "$(wrap "$w" "${QSEP[$g]}")")
+    [ "$v" = "$ctl" ] && pass "${GUARDS[$g]}, '${QSEP[$g]}' in '$w': $v" || fail "${GUARDS[$g]}, '${QSEP[$g]}' in '$w'" "$v, alone: $ctl"
+  done
+done
+
 
 echo ""
 echo "=== skill-forge's demand.py reads heredocs as bash does ==="

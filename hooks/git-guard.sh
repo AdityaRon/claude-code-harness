@@ -38,6 +38,13 @@ MSG_FREE=$(strip_message_args "$CMD")
 HOOKS_TEXT=""
 [[ "$MSG_FREE" != "$CMD" ]] && HOOKS_TEXT=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
 CMD=$MSG_FREE
+# A quoted or escaped ; | or & is text, but every [^|;&] span below stopped at
+# it: `git push origin "a;b" --force` was allowed. The reading with those hidden
+# (lib.sh) is matched beside the one as typed, never instead of it, since an
+# inner shell does split there (`bash -c "true; git push -f"`).
+NQS=""
+[[ "$CMD" == *[\"\'\\]* && "$CMD" == *[\;\&\|]* ]] && NQS=$(neutralize_quoted_separators "$CMD")
+[[ "$NQS" == "$CMD" ]] && NQS=""
 
 # Strip assignment/wrapper prefixes before anything below matches. The anchor A
 # admits only real command boundaries, so `VAR=1 git push -f`, `env FOO=bar git
@@ -45,6 +52,7 @@ CMD=$MSG_FREE
 # check in this file while the bare form was denied. `/usr/bin/git` and `GIT`
 # did the same. The second line is the fully normalized form; see lib.sh.
 CMD=$(printf '%s\n%s' "$(normalize_wrappers "$(separate_groups "$CMD")")" "$(normalize_command "$CMD")")
+[[ -n "$NQS" ]] && CMD=$(printf '%s\n%s\n%s' "$CMD" "$(normalize_wrappers "$(separate_groups "$NQS")")" "$(normalize_command "$NQS")")
 
 # Committed template files (.env.example / .sample / .template / .dist / .tpl)
 # are safe to stage; neutralize them so `git add .env.example` isn't blocked.
@@ -95,8 +103,9 @@ fi
 # boundary) so a branch name ending in "-f" (e.g. `git push origin wip-f`)
 # doesn't trip it. Short options bundle, so the f can sit anywhere in the
 # cluster: `-fu` and `-qf` force-push exactly as `-f` does and matched nothing
-# while the bare form was denied.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]-[A-Za-z]*f[A-Za-z]*([[:space:]]|$)|--force\b|--force-with-lease\b)"; then
+# while the bare form was denied. A separator or the ) closing a $( ) bounds it
+# too: `git push origin main -f; ls` and "$(git push origin main -f)" ran.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]-[A-Za-z]*f[A-Za-z]*([[:space:];&|)]|$)|--force\b|--force-with-lease\b)"; then
   emit_deny "Blocked: force-push is not allowed. Use regular git push, or ask the user to run this manually."
   exit 0
 fi
@@ -135,9 +144,20 @@ fi
 # and a function's "$@" all become git; the parsers read the command as typed. A
 # segment only the gate saw went unchecked while the one beside it passed the
 # call. Prints how many segments of subcommand $1 match $2 in the gate's view.
+# The gate also reads the command with quoted separators hidden; where the two
+# counts differ, a segment sits behind one of them, and -1 matches no parse.
 gate_segments() {
-  normalize_command "$(strip_messages "$(jq_get '.tool_input.command')")" | tr -d '"'\''\\' \
-    | grep -oE "${A}${GIT}$1\s+[^|;&]*" | grep -cE "$2"
+  local c r q
+  c=$(strip_messages "$(jq_get '.tool_input.command')")
+  r=$(gate_count "$c" "$1" "$2")
+  if [[ "$c" == *[\"\'\\]* && "$c" == *[\;\&\|]* ]]; then
+    q=$(gate_count "$(neutralize_quoted_separators "$c")" "$1" "$2")
+    [[ "$q" == "$r" ]] || r=-1
+  fi
+  printf '%s\n' "$r"
+}
+gate_count() {   # gate_count TEXT SUBCOMMAND PATTERN
+  normalize_command "$1" | tr -d '"'\''\\' | grep -oE "${A}${GIT}$2\s+[^|;&]*" | grep -cE "$3"
 }
 
 # --- Branch deletion ----------------------------------------------------
@@ -211,7 +231,7 @@ fi
 # `Bash(git checkout:*)` is on the allow list, so nothing else stops it.
 # `git restore --staged .` only unstages and stays allowed; `git checkout -`
 # (switch back) is not a pathspec.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?(\.{1,2}/?|:/)([[:space:]]|;|&|\||$)" \
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?(\.{1,2}/?|:/)([[:space:]]|;|&|\||\)|$)" \
    && ! { printf '%s\n' "$CMD" | grep -qE "${A}${GIT}restore\s[^|;&]*(--staged|-S)\b" \
           && ! printf '%s\n' "$CMD" | grep -qE "${A}${GIT}restore\s[^|;&]*(--worktree|-W)\b"; }; then
   emit_deny "Blocked: this discards every uncommitted change in the tree with no recovery path. Restore the files you mean by name, or ask the user to run this manually."
@@ -421,7 +441,7 @@ broad_add_safe() {
   done <<<"$segs"
   [[ $n -gt 0 && $n -eq $(gate_segments add "\s(--\s+)?${BROAD}([[:space:]]|$)") ]]
 }
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||$)" && ! broad_add_safe; then
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||\)|$)" && ! broad_add_safe; then
   if [[ -n "$FOUND" ]]; then
     emit_deny "Blocked: this broad git add would stage $FOUND, a credential file. Stage files by name instead."
   else
