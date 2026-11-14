@@ -649,6 +649,13 @@ check "-f, then &&"                          deny  'git push origin main -f&&ls'
 check "-f in a subshell"                     deny  '(git push origin main -f)'
 check "-f in \"\$( )\""                      deny  'echo "$(git push origin main -f)"'
 check "-f in an unquoted body's \$( )"       deny  $'cat <<EOF > /dev/null\n$(git push origin main -f)\nEOF'
+# The quote that closes a string another program runs ends it too. --force was
+# denied in each of these on main, and -f was allowed. A quoted word that only
+# spells `;git push -f` as data is now denied, as `;git push --force` was.
+check "-f, then an inner shell's quote"      deny  'bash -c "true; git push origin main -f"'
+check "-f in su -c"                          deny  'su -c "true; git push origin main -f"'
+check "-f in watch"                          deny  'watch -n 5 "true; git push origin main -f"'
+check "-f in ssh's command"                  deny  "ssh host 'true; git push origin main -f'"
 check "add . in \"\$( )\""                   deny  'echo "$(git add .)"'
 check "checkout . in \"\$( )\""              deny  'echo "$(git checkout .)"'
 # The reading with the quote hidden is read segment by segment: a --staged in
