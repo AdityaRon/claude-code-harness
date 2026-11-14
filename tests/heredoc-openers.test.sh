@@ -306,6 +306,10 @@ CLOSED=(
   "a closed \"\$( )\""         'd="$(pwd)"; '
   "\"\$( )\" in a closed \$( )" 'd=$(cd "$(dirname "$0")" && pwd); '
   "\$( in single quotes"       "echo '\$(' >/dev/null; "
+  "backticks in single quotes" $'echo \'a `pwd` b\' >/dev/null; '
+  "a backtick in single quotes" $'echo \'`\' >/dev/null; '
+  "an escaped \$( in double quotes" 'echo "\$(" >/dev/null; '
+  "an escaped \$( in double quotes over two lines" $'echo "a \\$(\nb" >/dev/null; '
   "\$( in a comment"           $'true # $(\n'
   "two closed \$( )"           'a=$(echo a); b=$(echo b); '
   "an earlier unquoted body, a backslash in its \$( )" $'cat >/dev/null <<E1\n$(echo \\( )\nE1\n'
@@ -326,7 +330,7 @@ for ((i = 0; i < ${#CLOSED[@]}; i += 2)); do
 done
 for ((i = 0; i < ${#CLOSED_ROWS[@]}; i += 3)); do
   label=${CLOSED_ROWS[$i]}; p=${CLOSED_ROWS[$((i + 1))]}; c=${CLOSED_ROWS[$((i + 2))]}
-  out=$(cd "$TMP/run" && env -i HOME="$TMP/home" PATH="$TMP/stub:/usr/bin:/bin" /bin/bash -c "$p$c" 2>/dev/null)
+  oracle /bin/bash "$p$c"; out=$(cat "$TMP/oracle.out" 2>/dev/null)
   if printf '%s\n' "$out" | grep -qx HDMARK || ! printf '%s\n' "$out" | grep -qx HDLIVE; then
     fail "$label: [${c%%$'\n'EOF*}]" "(bash ran the marker or stopped early: the case is wrong)"; continue
   fi
