@@ -74,6 +74,16 @@ GOPT='(-c[= ][^ ]+|-C[= ][^ ]+|--git-dir[= ][^ ]+|--work-tree[= ][^ ]+|--namespa
 # reaches git from behind a word that is not a command boundary.
 XARGS='(xargs(\s+-[A-Za-z0-9]+(\s+\{\})?)*\s+)?'
 GIT="${XARGS}git(\s+${GOPT})*\s+"
+# The checks that lift a decision keep A0 and GIT0, the terms above. The ones
+# that raise one take two more shapes, as bash reads them. An option's value may
+# be quoted, blanks and all (`git -c "user.name=A B" push --force`, `git -C 'a b'
+# reset --hard`): [^ ]+ ended inside it. And the quote that opens a shell's -c
+# string or eval's words starts a command (`bash -c "git push --force"`).
+A0=$A; GIT0=$GIT
+QV='([^ ]+|("[^"]*"|'\''[^'\'']*'\''|[^[:space:]"'\''])+)'   # a value as above, or one with quoted blanks
+GOPT="(-c[= ]${QV}|-C[= ]${QV}|--git-dir[= ]${QV}|--work-tree[= ]${QV}|--namespace[= ]${QV}|--exec-path([= ]${QV})?|--no-pager|--bare|--literal-pathspecs|-p|-P)"
+GIT="${XARGS}git(\s+${GOPT})*\s+"
+A='(^|[|&;]|&&|\|\||\$\(|`)\s*(((ba|z|da|k|fi)?sh\s+(-[-A-Za-z]+\s+)*-[A-Za-z]*c[A-Za-z]*|eval)\s+["'\'']?)?'
 
 # --- A subcommand this cannot read --------------------------------------
 # Every check below names its subcommand, so `X=push; git $X --force origin
@@ -107,9 +117,10 @@ fi
 # boundary) so a branch name ending in "-f" (e.g. `git push origin wip-f`)
 # doesn't trip it. Short options bundle, so the f can sit anywhere in the
 # cluster: `-fu` and `-qf` force-push exactly as `-f` does and matched nothing
-# while the bare form was denied. A separator or the ) closing a $( ) bounds it
-# too: `git push origin main -f; ls` and "$(git push origin main -f)" ran.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]-[A-Za-z]*f[A-Za-z]*([[:space:];&|)]|$)|--force\b|--force-with-lease\b)"; then
+# while the bare form was denied. A separator, the ) closing a $( ) or the quote
+# closing a shell's -c string bounds it too: `git push origin main -f; ls`,
+# "$(git push origin main -f)" and `bash -c "git push origin main -f"` ran.
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]-[A-Za-z]*f[A-Za-z]*([[:space:];&|)\"']|$)|--force\b|--force-with-lease\b)"; then
   emit_deny "Blocked: force-push is not allowed. Use regular git push, or ask the user to run this manually."
   exit 0
 fi
@@ -230,7 +241,9 @@ branch_delete_safe() {
   PROOF_N=$n
   [[ $n -eq $(gate_segments branch "\s${BRANCH_DEL}") ]]
 }
-if printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}branch\s([^|;&]*\s)?${BRANCH_DEL}" && ! proved_in_each_reading branch_delete_safe; then
+# With its quotes, too: `git -C "a b" branch -D x` lost its git once they went.
+if { printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}branch\s([^|;&]*\s)?${BRANCH_DEL}" \
+     || printf '%s\n' "$CMD" | grep -qE "${A}${GIT}branch\s([^|;&]*\s)?${BRANCH_DEL}"; } && ! proved_in_each_reading branch_delete_safe; then
   emit_ask "This deletes a branch whose commits no remote-tracking ref holds, or one this guard could not check. Confirm the work is merged or no longer needed."
   exit 0
 fi
@@ -239,22 +252,23 @@ fi
 # `Bash(git checkout:*)` is on the allow list, so nothing else stops it.
 # `git restore --staged .` only unstages and stays allowed; `git checkout -`
 # (switch back) is not a pathspec. The command as typed is read as it always
-# was. The reading with quoted separators hidden is read segment by segment: a
-# --staged in another segment lifts nothing there (`git restore . && git restore
-# "x;y" --staged f`), and one in the same segment does (`git restore "a;b"
-# --staged .`).
+# was, on main's terms (A0, GIT0). Each segment of every reading is also read
+# on its own, on the wider terms: a --staged in another segment lifts nothing
+# there (`git restore . && git restore "x;y" --staged f`), and one in the same
+# segment does (`git restore "a;b" --staged .`, `git -C "a b" restore --staged
+# .`). A quote may close round the pathspec there (`bash -c "git checkout ."`).
 TREE='(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?(\.{1,2}/?|:/)([[:space:]]|;|&|\||\)|$)'
-tree_in_hidden_reading() {
+TREEQ='(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?["'\'']?(\.{1,2}/?|:/)["'\'']?([[:space:]]|\)|$)'
+tree_segment() {
   local t
-  [[ -n "$NQREAD" ]] || return 1
-  t=$(printf '%s\n' "$NQREAD" | grep -oE "${A}${GIT}(checkout|restore)\s+[^|;&]*" | grep -E "$TREE")
+  t=$(printf '%s\n' "$CMD" | grep -oE "${A}${GIT}(checkout|restore)\s+[^|;&]*" | grep -E "$TREEQ")
   [[ -n "$t" ]] || return 1
   printf '%s\n' "$t" | grep -vqE "restore\s[^|;&]*(--staged|-S)\b" || printf '%s\n' "$t" | grep -qE "restore\s[^|;&]*(--worktree|-W)\b"
 }
-if { printf '%s\n' "$TYPED" | grep -qE "${A}${GIT}${TREE}" \
-     && ! { printf '%s\n' "$TYPED" | grep -qE "${A}${GIT}restore\s[^|;&]*(--staged|-S)\b" \
-            && ! printf '%s\n' "$TYPED" | grep -qE "${A}${GIT}restore\s[^|;&]*(--worktree|-W)\b"; }; } \
-   || tree_in_hidden_reading; then
+if { printf '%s\n' "$TYPED" | grep -qE "${A0}${GIT0}${TREE}" \
+     && ! { printf '%s\n' "$TYPED" | grep -qE "${A0}${GIT0}restore\s[^|;&]*(--staged|-S)\b" \
+            && ! printf '%s\n' "$TYPED" | grep -qE "${A0}${GIT0}restore\s[^|;&]*(--worktree|-W)\b"; }; } \
+   || tree_segment; then
   emit_deny "Blocked: this discards every uncommitted change in the tree with no recovery path. Restore the files you mean by name, or ask the user to run this manually."
   exit 0
 fi
@@ -389,7 +403,8 @@ push_delete_safe() {
     remote_tips_held "${s_repo[k]}" "${s_remote[k]}" "${gone%$'\n'}" "${names[@]}" || return 1
   done
 }
-if printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}push\s([^|;&]*\s)?${PUSH_DEL}" && ! proved_in_each_reading push_delete_safe; then
+if { printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}push\s([^|;&]*\s)?${PUSH_DEL}" \
+     || printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\s([^|;&]*\s)?${PUSH_DEL}"; } && ! proved_in_each_reading push_delete_safe; then
   emit_ask "This deletes a remote branch whose tip no other ref holds (a local branch, a tag, or another remote-tracking ref), or one this guard could not check. Confirm the work is merged or no longer needed."
   exit 0
 fi
@@ -498,7 +513,9 @@ SENSITIVE=(
 # was 12 process starts on a git add that stages none of them.
 SENSITIVE_RE=""
 for P in "${SENSITIVE[@]}"; do SENSITIVE_RE="${SENSITIVE_RE:+$SENSITIVE_RE|}($P)"; done
-if printf '%s\n' "$SCAN" | grep -qE "${A}${GIT}add\s.*(${SENSITIVE_RE})"; then
+# Its quotes taken out too: `git add "<name>"` and a shell's -c string ended the
+# name at a quote, where each pattern wants a blank or the line's end.
+if printf '%s\n%s\n' "$SCAN" "$(printf '%s\n' "$SCAN" | tr -d '"'\')" | grep -qE "${A}${GIT}add\s.*(${SENSITIVE_RE})"; then
   emit_deny "Blocked: git add targets a sensitive file. Do not stage credentials or secret files."
   exit 0
 fi

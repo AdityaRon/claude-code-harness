@@ -683,5 +683,36 @@ echo "=== The joined lines raise a decision, never lift one ==="
 check "a quoted newline in an echo, then a push line" deny $'echo "x\ngit push origin main --force"'
 check "restore ., then --staged across a quoted newline" deny $'git restore .\ngit restore "x\ny" --staged f'
 echo ""
+echo "=== A quoted option value, or a shell's -c string, hides no git command ==="
+# git's -c and -C values ended at a blank, inside the quotes, and a shell's -c
+# string or eval's words started at no command boundary: each was allowed.
+check '-c "user.name=A B", push --force'      deny  'git -c "user.name=A B" push origin main --force'
+check "-C 'a b', push --force"                deny  "git -C 'a b' push origin main --force"
+check '-c user.name="A B", push --force'      deny  'git -c user.name="A B" push origin main --force'
+check '-C "a b", reset --hard'                deny  'git -C "a b" reset --hard'
+check '-C "a b", clean -fd'                   deny  'git -C "a b" clean -fd'
+check '-C "a b", checkout .'                  deny  'git -C "a b" checkout .'
+check '-C "a b", add .'                       deny  'git -C "a b" add .'
+check '-C "a b", filter-branch'               deny  'git -C "a b" filter-branch HEAD'
+check '-C "a b", config core.hooksPath'       deny  'git -C "a b" config core.hooksPath /x'
+check '-C "a b", branch -D'                   ask   'git -C "a b" branch -D x'
+check '-C "a b", push --delete'               ask   'git -C "a b" push origin --delete x'
+check '-C "a b", stash drop'                  ask   'git -C "a b" stash drop'
+check 'bash -c "git push --force"'            deny  'bash -c "git push origin main --force"'
+check "sh -c 'git push -f'"                   deny  "sh -c 'git push origin main -f'"
+check 'bash -lc "git reset --hard"'           deny  'bash -lc "git reset --hard"'
+check 'eval "git push --force"'               deny  'eval "git push origin main --force"'
+check 'bash -c "git checkout ."'              deny  'bash -c "git checkout ."'
+check 'bash -c "git add .env"'                  deny  'bash -c "git add .env"'
+check 'git add ".env"'                          deny  'git add ".env"'
+check 'bash -c "git filter-branch"'           deny  'bash -c "git filter-branch HEAD"'
+check 'bash -c "git branch -D x"'             ask   'bash -c "git branch -D x"'
+# A check that lifts a decision keeps main's terms.
+check '--staged behind -c "a b" lifts nothing' deny 'git restore . ; git -c "a b" restore --staged f'
+check '-C "a b", restore --staged .'          allow 'git -C "a b" restore --staged .'
+check '-c "user.name=A B", commit'            allow 'git -c "user.name=A B" commit -m x'
+check 'bash -c "git status"'                  allow 'bash -c "git status"'
+check '-C "a b", log'                         allow 'git -C "a b" log --oneline'
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
