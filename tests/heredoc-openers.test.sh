@@ -314,6 +314,7 @@ CLOSED=(
   "two closed \$( )"           'a=$(echo a); b=$(echo b); '
   "an earlier unquoted body, a backslash in its \$( )" $'cat >/dev/null <<E1\n$(echo \\( )\nE1\n'
   "an earlier body fed to a shell, a \$( ) left open in it" $'bash >/dev/null 2>&1 <<\'E1\'\necho $(echo\nE1\n'
+  "an earlier body fed to a shell, a closed \$( ) in it" $'bash >/dev/null 2>&1 <<\'E1\'\nd=$(echo a); echo "$(pwd)"\nE1\n'
 )
 HAZARD=(   # body | the line after the terminator; each runs to its end after a closed prefix
   ") ; $M|"   ")\" ; $M ; echo \"|"   "') ; $M ; echo '|"
