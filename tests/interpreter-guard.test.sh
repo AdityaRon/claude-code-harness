@@ -264,7 +264,8 @@ check "short statements behind a quoted ;"   allow "python3 -X \"a;b\" -c \"${SH
 # a %3B, ended it too, and one statement of 380 characters was allowed.
 CHUNK='1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12 + 13 + 14 + 15 + 16 + 17 + 18 + 19 + 20 + 21 + 22'
 check "one long statement holding %, behind a quoted ;"   ask "python3 -X \"a;b\" -c \"x = $CHUNK % 7 + $CHUNK % 7 + $CHUNK % 7 + $CHUNK\""
-check "one long statement holding %3B, behind a quoted ;" ask "python3 -X \"a;b\" -c \"x = $CHUNK + len('%3B') + $CHUNK + len('%3B') + $CHUNK + len('%3B') + $CHUNK\""
+# Not after a ( : the normalizer lowercases there, and a %3b would not test the escape.
+check "one long statement holding %3B, behind a quoted ;" ask "python3 -X \"a;b\" -c \"x = $CHUNK + 0 * '%3B' + $CHUNK + 0 * '%3B' + $CHUNK + 0 * '%3B' + $CHUNK\""
 check "a stream edit on a file named a;b"    allow "perl -pi -e 's/a/b/' \"a;b.md\""
 
 echo ""
