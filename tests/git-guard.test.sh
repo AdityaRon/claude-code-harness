@@ -401,6 +401,9 @@ check_wt "-D, then one a function runs"      ask   "f() { \"\$@\"; }; git branch
 # one segment parsed, one counted, and b-local went with nothing asking.
 check_wt "-D, then one behind a quoted ;"     ask   'git branch -D b-pushed; git branch "a;b" -D b-local' "$M"
 check_wt "-D, then a quoted ; in an echo"     allow 'git branch -D b-pushed; echo "a;b"' "$M"
+# Each reading showed one delete, a different one, and each count matched its
+# own: the parse proved b-pushed, which echo prints, and b-local went unchecked.
+check_wt "-D in each reading, a different one" ask 'git branch "a;b" -D b-local; echo x\;git branch -D b-pushed' "$M"
 check_wt "-D, xargs adds a name"             ask   "echo b-local | xargs git branch -D b-pushed" "$M"
 check_wt "-qD bundle, commits only local"    ask   "git branch -qD b-local" "$M"
 check_wt "-Dq bundle, commits only local"    ask   "git branch -Dq b-local" "$M"
@@ -473,6 +476,7 @@ check_wt "--delete, a URL"                     ask   "git push $R/remote.git --d
 check_wt "--delete, push URL differs"          ask   "git push pu --delete b-pushed" "$M"
 check_wt "--delete, remote HEAD names no branch" ask "git push det --delete b-pushed" "$M"
 check_wt "--delete, name in a variable"        ask   "B=b-pushed; git push origin --delete \$B" "$M"
+check_wt "--delete in each reading, a different one" ask 'git push origin "a;b" --delete b-orphan; echo x\;git push origin --delete b-pushed' "$M"
 check_wt "--delete, quoted name"               ask   "git push origin --delete 'b-pushed'" "$M"
 check_wt "--delete, after a cd"                ask   "cd $M && git push origin --delete b-pushed" "/tmp"
 check_wt "--delete, names from xargs"          ask   "echo b-pushed | xargs git push origin --delete" "$M"
@@ -507,6 +511,7 @@ check_wt "-A -- ."                           allow "git add -v -A -- ." "$G"
 G2="$R/addrepo2"; git init -q "$G2" && echo s > "$G2/.env"
 check_wt "clean add, then one spelled /usr/bin/git" deny "git add -A && /usr/bin/git -C $G2 add -A" "$G"
 check_wt "clean add, then one spelled \"git\""        deny "git add -A && \"git\" -C $G2 add -A" "$G"
+check_wt "add -A in each reading, a different one" deny "git add \"a;b\" -A; echo x\\;git -C $G add -A" "$G2"
 # Every credential file sensitive-file-guard knows, not a shorter list of its own.
 for f in id_ecdsa id_dsa .npmrc .pypirc credentials.json service_account.json certs/client.p12 keys/app.jks \
          prod.tfvars terraform.tfstate kubeconfig .claude.json .kube/config .ssh/deploy_key .docker/config.json; do
@@ -647,6 +652,10 @@ check "checkout . in \"\$( )\""              deny  'echo "$(git checkout .)"'
 # The --staged exemption lifts a deny, so it reads the command as typed only.
 check "restore ., then --staged behind a quoted ;" deny 'git restore . && git restore "x;y" --staged f'
 check "restore --staged ."                   allow 'git restore --staged .'
+# The reading with the quote hidden is read segment by segment.
+check "restore . behind a quoted ;"          deny  'git restore "a;b" .'
+check "--staged . behind a quoted ;"         allow 'git restore "a;b.txt" --staged .'
+check "--staged . behind a quoted ;, then restore ." deny 'git restore "a;b" --staged x && git restore .'
 check "a branch ending in -f, then ;"        allow 'git push origin wip-f; ls'
 check "a quoted-delimiter body holding \$( )" allow $'cat <<\'EOF\' > notes.md\n$(git push origin main -f)\nEOF'
 

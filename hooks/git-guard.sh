@@ -53,7 +53,9 @@ NQS=""
 # did the same. The second line is the fully normalized form; see lib.sh.
 CMD=$(printf '%s\n%s' "$(normalize_wrappers "$(separate_groups "$CMD")")" "$(normalize_command "$CMD")")
 TYPED=$CMD   # for a match that lifts a check rather than raising one
-[[ -n "$NQS" ]] && CMD=$(printf '%s\n%s\n%s' "$CMD" "$(normalize_wrappers "$(separate_groups "$NQS")")" "$(normalize_command "$NQS")")
+NQREAD=""
+[[ -n "$NQS" ]] && NQREAD=$(printf '%s\n%s' "$(normalize_wrappers "$(separate_groups "$NQS")")" "$(normalize_command "$NQS")") \
+  && CMD=$(printf '%s\n%s' "$CMD" "$NQREAD")
 
 # Committed template files (.env.example / .sample / .template / .dist / .tpl)
 # are safe to stage; neutralize them so `git add .env.example` isn't blocked.
@@ -145,20 +147,23 @@ fi
 # and a function's "$@" all become git; the parsers read the command as typed. A
 # segment only the gate saw went unchecked while the one beside it passed the
 # call. Prints how many segments of subcommand $1 match $2 in the gate's view.
-# The gate also reads the command with quoted separators hidden; where the two
-# counts differ, a segment sits behind one of them, and -1 matches no parse.
+# Each proof parses PROOF_TEXT, one reading of the command, and leaves in
+# PROOF_N how many segments it proved. It runs on the command as typed, as it
+# always has, then on the command with quoted separators hidden (lib.sh), which
+# must prove every segment it shows too: `git branch "a;b" -D x; echo y\;git
+# branch -D z` shows one delete in each reading, a different one in each.
 gate_segments() {
-  local c r q
-  c=$(strip_messages "$(jq_get '.tool_input.command')")
-  r=$(gate_count "$c" "$1" "$2")
-  if [[ "$c" == *[\"\'\\]* && "$c" == *[\;\&\|]* ]]; then
-    q=$(gate_count "$(neutralize_quoted_separators "$c")" "$1" "$2")
-    [[ "$q" == "$r" ]] || r=-1
-  fi
-  printf '%s\n' "$r"
+  normalize_command "$PROOF_TEXT" | tr -d '"'\''\\' | grep -oE "${A}${GIT}$1\s+[^|;&]*" | grep -cE "$2"
 }
-gate_count() {   # gate_count TEXT SUBCOMMAND PATTERN
-  normalize_command "$1" | tr -d '"'\''\\' | grep -oE "${A}${GIT}$2\s+[^|;&]*" | grep -cE "$3"
+PROOF_TEXT=""; PROOF_N=0
+proved_in_each_reading() {   # FN
+  local c q
+  c=$(strip_messages "$(jq_get '.tool_input.command')")
+  PROOF_TEXT=$c; "$1" && [[ $PROOF_N -gt 0 ]] || return 1
+  [[ "$c" == *[\"\'\\]* && "$c" == *[\;\&\|]* ]] || return 0
+  q=$(neutralize_quoted_separators "$c")
+  [[ "$q" == "$c" ]] && return 0
+  PROOF_TEXT=$q; "$1"
 }
 
 # --- Branch deletion ----------------------------------------------------
@@ -177,7 +182,7 @@ branch_on_remote() {
 branch_delete_safe() {
   local raw segs seg t i b repo cwd n=0 names force
   cwd=$(jq_get '.cwd')
-  raw=$(separate_groups "$(strip_messages "$(jq_get '.tool_input.command')")")
+  raw=$(separate_groups "$PROOF_TEXT")
   # xargs appends names the command does not show; normalize_wrappers hides it.
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
   raw=$(normalize_wrappers "$raw")
@@ -221,9 +226,10 @@ branch_delete_safe() {
     done
     n=$((n + 1))
   done <<<"$segs"
-  [[ $n -gt 0 && $n -eq $(gate_segments branch "\s${BRANCH_DEL}") ]]
+  PROOF_N=$n
+  [[ $n -eq $(gate_segments branch "\s${BRANCH_DEL}") ]]
 }
-if printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}branch\s([^|;&]*\s)?${BRANCH_DEL}" && ! branch_delete_safe; then
+if printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}branch\s([^|;&]*\s)?${BRANCH_DEL}" && ! proved_in_each_reading branch_delete_safe; then
   emit_ask "This deletes a branch whose commits no remote-tracking ref holds, or one this guard could not check. Confirm the work is merged or no longer needed."
   exit 0
 fi
@@ -231,12 +237,23 @@ fi
 # Discarding the whole working tree is reset --hard for uncommitted work, and
 # `Bash(git checkout:*)` is on the allow list, so nothing else stops it.
 # `git restore --staged .` only unstages and stays allowed; `git checkout -`
-# (switch back) is not a pathspec. The --staged exemption reads the command as
-# typed only: in the hidden-separator reading `git restore "x;y" --staged f`
-# reached --staged and lifted the deny on a `git restore .` beside it.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?(\.{1,2}/?|:/)([[:space:]]|;|&|\||\)|$)" \
-   && ! { printf '%s\n' "$TYPED" | grep -qE "${A}${GIT}restore\s[^|;&]*(--staged|-S)\b" \
-          && ! printf '%s\n' "$CMD" | grep -qE "${A}${GIT}restore\s[^|;&]*(--worktree|-W)\b"; }; then
+# (switch back) is not a pathspec. The command as typed is read as it always
+# was. The reading with quoted separators hidden is read segment by segment: a
+# --staged in another segment lifts nothing there (`git restore . && git restore
+# "x;y" --staged f`), and one in the same segment does (`git restore "a;b"
+# --staged .`).
+TREE='(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?(\.{1,2}/?|:/)([[:space:]]|;|&|\||\)|$)'
+tree_in_hidden_reading() {
+  local t
+  [[ -n "$NQREAD" ]] || return 1
+  t=$(printf '%s\n' "$NQREAD" | grep -oE "${A}${GIT}(checkout|restore)\s+[^|;&]*" | grep -E "$TREE")
+  [[ -n "$t" ]] || return 1
+  printf '%s\n' "$t" | grep -vqE "restore\s[^|;&]*(--staged|-S)\b" || printf '%s\n' "$t" | grep -qE "restore\s[^|;&]*(--worktree|-W)\b"
+}
+if { printf '%s\n' "$TYPED" | grep -qE "${A}${GIT}${TREE}" \
+     && ! { printf '%s\n' "$TYPED" | grep -qE "${A}${GIT}restore\s[^|;&]*(--staged|-S)\b" \
+            && ! printf '%s\n' "$TYPED" | grep -qE "${A}${GIT}restore\s[^|;&]*(--worktree|-W)\b"; }; } \
+   || tree_in_hidden_reading; then
   emit_deny "Blocked: this discards every uncommitted change in the tree with no recovery path. Restore the files you mean by name, or ask the user to run this manually."
   exit 0
 fi
@@ -304,11 +321,10 @@ remote_tips_held() {   # $1 repo  $2 remote  $3 refs to leave out, one per line 
   done
 }
 push_delete_safe() {
-  local cmd raw segs seg t i k r repo cwd n=0 del b fu pu gone=""
+  local raw segs seg t i k r repo cwd n=0 del b fu pu gone=""
   local -a refs names s_repo=() s_remote=() s_names=()
   cwd=$(jq_get '.cwd')
-  cmd=$(strip_messages "$(jq_get '.tool_input.command')")
-  raw=$(separate_groups "$cmd")
+  raw=$(separate_groups "$PROOF_TEXT")
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
   raw=$(normalize_wrappers "$raw")
   printf '%s\n' "$raw" | grep -qE "${A}(cd|pushd)\b" && return 1
@@ -363,7 +379,8 @@ push_delete_safe() {
     s_repo+=("$repo"); s_remote+=("$r"); s_names+=("${names[*]}")
     n=$((n + 1))
   done <<<"$segs"
-  [[ $n -gt 0 && $n -eq $(gate_segments push "\s${PUSH_DEL}") ]] || return 1
+  PROOF_N=$n
+  [[ $n -eq $(gate_segments push "\s${PUSH_DEL}") ]] || return 1
   # Every name in the call is left out of every check, or two branches at one
   # commit would each count the other's tracking ref.
   for ((k = 0; k < n; k++)); do
@@ -371,7 +388,7 @@ push_delete_safe() {
     remote_tips_held "${s_repo[k]}" "${s_remote[k]}" "${gone%$'\n'}" "${names[@]}" || return 1
   done
 }
-if printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}push\s([^|;&]*\s)?${PUSH_DEL}" && ! push_delete_safe; then
+if printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}push\s([^|;&]*\s)?${PUSH_DEL}" && ! proved_in_each_reading push_delete_safe; then
   emit_ask "This deletes a remote branch whose tip no other ref holds (a local branch, a tag, or another remote-tracking ref), or one this guard could not check. Confirm the work is merged or no longer needed."
   exit 0
 fi
@@ -397,7 +414,7 @@ FOUND=""
 broad_add_safe() {
   local raw segs seg t i repo cwd n=0 p out
   cwd=$(jq_get '.cwd')
-  raw=$(separate_groups "$(strip_messages "$(jq_get '.tool_input.command')")")
+  raw=$(separate_groups "$PROOF_TEXT")
   # xargs appends stdin, which can hold -f; normalize_wrappers would hide it.
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
   raw=$(normalize_wrappers "$raw")
@@ -442,9 +459,10 @@ broad_add_safe() {
     done <<<"$out"
     n=$((n + 1))
   done <<<"$segs"
-  [[ $n -gt 0 && $n -eq $(gate_segments add "\s(--\s+)?${BROAD}([[:space:]]|$)") ]]
+  PROOF_N=$n
+  [[ $n -eq $(gate_segments add "\s(--\s+)?${BROAD}([[:space:]]|$)") ]]
 }
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||\)|$)" && ! broad_add_safe; then
+if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||\)|$)" && ! proved_in_each_reading broad_add_safe; then
   if [[ -n "$FOUND" ]]; then
     emit_deny "Blocked: this broad git add would stage $FOUND, a credential file. Stage files by name instead."
   else
