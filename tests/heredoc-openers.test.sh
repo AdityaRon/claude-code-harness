@@ -423,6 +423,13 @@ for ((i = 0; i < ${#WORDR[@]}; i += 2)); do
   out=$(separate_groups "${cmd//"$M"/$GM}")
   [[ "$out" == *";echo HDMARK;"* ]] && pass "$label: separate_groups opens the group" || fail "$label: separate_groups left a group bash runs" "[$out]"
 done
+# The string after the # is quoted, so neutralize hides its separators.
+for ((i = 1; i < ${#WORD[@]}; i += 2)); do
+  cmd="${WORD[$i]} ; $M ; echo \""
+  runs_in_bash "$cmd" && { fail "${WORD[$((i - 1))]} ; $M" "(bash ran the marker: the case is wrong)"; continue; }
+  out=$(neutralize_quoted_separators "$cmd")
+  [[ "$out" == *"%3B $M %3B"* ]] && pass "${WORD[$((i - 1))]}: neutralize hides the ; in the string" || fail "${WORD[$((i - 1))]}: neutralize kept a quoted ;" "[$out]"
+done
 for p in "${WORD_CONTROL[@]}"; do
   cmd=$(word_row "$p")
   runs_in_bash "$cmd" && { fail "$p" "(bash ran the marker: the control is wrong)"; continue; }
@@ -666,6 +673,12 @@ try:
 except ValueError:
     print("unreadable")' 'echo "`echo "x`"; true')
   [ "$r" = unreadable ] && pass "demand.py: a backtick-holding quote inside backticks is unreadable" || fail "demand.py read a backtick-holding quote inside backticks" "$r"
+  # After a # right after a substitution's ), a quote opens: the << on the next line is in the string.
+  r=$("$DPY" -c '
+import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
+for p in sys.argv[1:]:
+    h = demand.Heredocs(); h.scan(p); print(int(h.scan("cat <<EOF") is None))' 'echo $(pwd)#"' 'echo $((1))#"' 'cat <(echo a)#"' | tr '\n' ' ')
+  [ "$r" = "1 1 1 " ] && pass "demand.py: after \$(pwd)#\", \$((1))#\" and <(echo a)#\", a << is in the string" || fail "demand.py read # after a substitution's ) as a comment" "[$r]"
   DKEEP=()
   while IFS= read -r k; do DKEEP+=("$k"); done < <(for ((i = 1; i < ${#DROPS[@]}; i += 2)); do printf '%s\0' "${DROPS[$i]}"; done | demand_keeps)
   for ((i = 0; i < ${#DROPS[@]}; i += 2)); do
