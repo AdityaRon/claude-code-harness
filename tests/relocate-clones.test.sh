@@ -15,7 +15,7 @@ TMP=$(cd "$TMP" && pwd)
 export HOME="$TMP/home"
 export CLAUDE_MEMORY_PROJECTS_DIR="$HOME/.claude/projects"
 export CLAUDE_STATE_DIR="$TMP/state" CLAUDE_AUDIT_LOG="$TMP/audit.log"
-export CLAUDE_CONTRACT_PIN="$TMP/no-pin" CLAUDE_HARNESS_LATEST="$TMP/no-latest" CLAUDE_HARNESS_VERSION="$TMP/no-version"
+export CLAUDE_HARNESS_LATEST="$TMP/no-latest" CLAUDE_HARNESS_VERSION="$TMP/no-version"
 export CLAUDE_HOST_BIN=/bin/sh    # the host check in session-start: a binary that exists
 P="$CLAUDE_MEMORY_PROJECTS_DIR"; D="$HOME/Desktop"
 mkdir -p "$D" "$P" "$TMP/bin" "$CLAUDE_STATE_DIR" "$HOME/.claude"

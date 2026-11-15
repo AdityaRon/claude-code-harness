@@ -154,5 +154,3 @@ So: write it yourself, in your own store, where it carries your date and your in
 - `bin/session-route.sh` — the PR → session lookup, and `tests/session-route.test.sh`
 - [Cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging) — `ListAgents`,
   `SendMessage`, `crossSessionInbound`, and the project-root scoping rule
-- `config/upstream-contract.json` → `acknowledged_surface` — the recorded decision about the
-  messaging tools and settings keys this harness deliberately does not set

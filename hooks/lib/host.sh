@@ -15,23 +15,6 @@ store_slug() {
   printf '%s' "${1//[^$alnum]/-}"
 }
 
-# The installed CLI's version from the path `claude` resolves to, when the path
-# names it (.../claude-code@latest/2.1.322/claude, .../claude/versions/2.1.322):
-# one readlink, where `claude --version` starts the CLI (16 ms on an M-series Mac).
-# CLAUDE_CLI_PATH stands in for `command -v claude` in tests (PATH is reset above).
-cli_version() {
-  local p d v
-  p=${CLAUDE_CLI_PATH:-$(command -v claude 2>/dev/null)}
-  [[ -n "$p" ]] || return 0
-  p=$(readlink -f "$p" 2>/dev/null || printf '%s' "$p")
-  d=${p%/*}; d=${d##*/}
-  for v in "${p##*/}" "$d"; do
-    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] && { printf '%s\n' "$v"; return 0; }
-  done
-  v=$("$p" --version 2>/dev/null)
-  [[ -n "$v" ]] && printf '%s\n' "${v%% *}"
-}
-
 host_ps_snapshot() {   # pid ppid comm, one process per line
   if [[ -n "${CLAUDE_HOST_PS:-}" ]]; then cat "$CLAUDE_HOST_PS" 2>/dev/null
   else ps -axo pid=,ppid=,comm= 2>/dev/null; fi

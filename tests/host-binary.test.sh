@@ -15,7 +15,7 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"
 mkdir -p "$HOME/Desktop" "$HOME/.claude/state" "$TMP/repo"
 export CLAUDE_STATE_DIR="$TMP/state" CLAUDE_MEMORY_PROJECTS_DIR="$TMP/projects"
-export CLAUDE_CONTRACT_PIN="$TMP/no-pin" CLAUDE_HARNESS_LATEST="$TMP/no-latest" CLAUDE_HARNESS_VERSION="$TMP/no-version"
+export CLAUDE_HARNESS_LATEST="$TMP/no-latest" CLAUDE_HARNESS_VERSION="$TMP/no-version"
 export CLAUDE_CLI_UPGRADED="$TMP/cli-upgraded" CLAUDE_AUDIT_LOG="$TMP/audit.log"
 mkdir -p "$CLAUDE_STATE_DIR" "$CLAUDE_MEMORY_PROJECTS_DIR"
 

@@ -68,8 +68,8 @@ says so. The 2026-08 research this supersedes is in `history/`.
 | the three memory-hygiene documents | **History** | Moved to `history/`. The 200-line cap folklore, the withdrawn heuristics and the measured corpora are still cited by the skills, as history. |
 
 Nothing the harness does writes a store while auto-dream's lock is fresh, and
-nothing re-implements consolidation: the contract entry "auto-dream memory
-consolidation" in `config/upstream-contract.json` says do not rebuild it.
+nothing re-implements consolidation: Claude Code's auto-dream does it, so do not
+rebuild it here.
 
 ## `autoDreamEnabled` is set
 

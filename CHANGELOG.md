@@ -6,6 +6,45 @@ the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
 installed machine to the newest tag.
 
+## v1.4.3 (2026-11-15)
+
+Merged since v1.4.2: 1 PR.
+
+### Security
+- fix(guards): quoted separators and heredoc-body substitutions no longer hide commands (#233)
+
+### Benchmark vs v1.4.2
+
+
+2026-11-15T14:12:37Z, Linux 7.0.0-1019-azure x86_64, INTEL(R) XEON(R) PLATINUM 8573C, python 3.14.4. Corpus tests/bench-corpus.jsonl: 492 payloads (372 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 MultiEdit, 2 NotebookEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, launched together as Claude Code does. Wait is from the first launch to the last exit, so hooks that share the cores pay for it; CPU is the sum of each hook's own. The per-hook table runs each hook alone. Process start here: `true` 0.5 ms, `bash -c :` 1.1 ms, `jq -n 1` 1.9 ms (p50 of 20), so only same-run comparisons are meaningful. A machine whose process start is slower pays it again for each process a hook starts: the last column is a hook's p50 past one `bash -c :`.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 372 | 72.6 → 78.5 ms (+8%) | 73.0 → 76.9 ms (+5%) | 125.2 → 131.5 ms (+5%) | 155.9 → 164.9 ms (+6%) |
+| WebFetch | 11 | 21.1 → 21.3 ms (+1%) | 27.4 → 27.6 ms (+1%) | 44.5 → 45.1 ms (+1%) | 40.7 → 41.0 ms (+1%) |
+| Read/Grep | 41 | 46.6 → 46.7 ms (+0%) | 51.2 → 51.3 ms (+0%) | 71.0 → 72.2 ms (+2%) | 64.9 → 65.1 ms (+0%) |
+| Write/Edit | 63 | 55.6 → 56.0 ms (+1%) | 58.4 → 58.8 ms (+1%) | 80.8 → 79.4 ms (-2%) | 141.2 → 141.8 ms (+0%) |
+| Monitor | 5 | 43.0 → 43.0 ms (+0%) | 56.6 → 57.3 ms (+1%) | 110.2 → 111.4 ms (+1%) | 115.1 → 117.6 ms (+2%) |
+| All | 492 | 64.5 → 66.1 ms (+2%) | 68.1 → 71.2 ms (+5%) | 122.5 → 128.5 ms (+5%) | 143.5 → 150.4 ms (+5%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean | p50 past bash start |
+|---|---:|---|---|---|---|
+| bash-guards.sh | 377 | 71.7 → 77.6 ms (+8%) | 122.8 → 129.6 ms (+6%) | 145.0 → 153.6 ms (+6%) | 70.6 → 76.5 ms |
+| config-guard.sh | 63 | 18.7 → 18.9 ms (+1%) | 39.4 → 40.1 ms (+2%) | 25.5 → 25.8 ms (+1%) | 17.6 → 17.8 ms |
+| mod-gate.sh | 63 | 4.0 → 4.0 ms (-0%) | 14.4 → 14.7 ms (+2%) | 4.5 → 4.6 ms (+1%) | 2.9 → 2.9 ms |
+| network-guard.sh | 11 | 20.6 → 20.6 ms (-0%) | 44.0 → 44.8 ms (+2%) | 31.8 → 32.1 ms (+1%) | 19.5 → 19.5 ms |
+| secret-scanner.sh | 63 | 24.7 → 24.9 ms (+1%) | 69.4 → 69.6 ms (+0%) | 29.9 → 30.1 ms (+1%) | 23.6 → 23.8 ms |
+| sensitive-file-guard.sh | 104 | 45.8 → 46.0 ms (+0%) | 64.0 → 64.0 ms (+0%) | 51.3 → 51.4 ms (+0%) | 44.7 → 44.9 ms |
+| subagent-cache-guard.sh | 492 | 8.4 → 8.5 ms (+2%) | 8.9 → 9.0 ms (+2%) | 8.2 → 8.3 ms (+1%) | 7.3 → 7.4 ms |
+
+Decisions: 491 of 492 payloads got the same answer on both sides.
+
+| Payload | base | head |
+|---|---|---|
+| friction-gap-git-push-inside-sh-c `sh -c 'git push --force origin main'` | allow (silent) | deny (bash-guards.sh) |
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended).
+
 ## v1.4.2 (2026-11-14)
 
 Merged since v1.4.1: 5 PRs.

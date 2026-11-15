@@ -68,12 +68,8 @@ for f in "$REPO"/bin/*; do
   echo "  ✓ $b"
 done
 
-# ---- Contract pin -----------------------------------------------------
-# session-start.sh compares this with `claude --version`, so a session says when
-# the CLI has moved past the release the harness was checked against.
-sed -n 's/.*"last_verified_version": *"\([^ "]*\).*/\1/p' "$REPO/config/upstream-contract.json" \
-  > ~/.claude/harness-contract.version
-echo "  ✓ harness-contract.version"
+# Nothing reads the contract pin an older install wrote.
+rm -f ~/.claude/harness-contract.version
 
 # The commit the last install recorded: the report at the end diffs from it, and
 # removes what it wrote that the clone has since deleted. A first install has
