@@ -26,13 +26,13 @@ awk() { LC_ALL=C command awk "$@"; }
 # hooks source. A part that cannot be read (an install half done) ends the hook
 # with exit 2, which blocks, rather than letting a guard run without its checks.
 _lib_dir=${BASH_SOURCE[0]%/*}; [[ "$_lib_dir" == "${BASH_SOURCE[0]}" ]] && _lib_dir=.
-for _lib_part in command paths scratch io inline net host; do
+for _lib_part in command paths scratch io inline net host shadow; do
   # shellcheck source=/dev/null
   source "$_lib_dir/lib/$_lib_part.sh" || { echo "hooks/lib.sh: cannot read $_lib_dir/lib/$_lib_part.sh; run install.sh again" >&2; exit 2; }
 done
 # A part that reads but defines less (empty, or cut short at a function's end)
 # would leave a guard without its checks: the last function of each must be
 # here. tests/fail-closed.test.sh holds this list to the parts.
-declare -F neutralize_quoted_separators canonical_path in_scratch log_audit check_inline_shellouts local_net_hosts stale_claude_hosts >/dev/null \
+declare -F neutralize_quoted_separators canonical_path in_scratch log_audit check_inline_shellouts local_net_hosts stale_claude_hosts shadow_note >/dev/null \
   || { echo "hooks/lib.sh: a part in $_lib_dir/lib/ is incomplete; run install.sh again" >&2; exit 2; }
 unset _lib_dir _lib_part

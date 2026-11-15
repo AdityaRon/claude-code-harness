@@ -110,13 +110,13 @@ while IFS= read -r seg; do
   for t in ${targets[@]+"${targets[@]}"}; do
     in_scratch "$(expand_var "$t")" "$SCRATCH" "$BASE" >/dev/null || { ok=0; break; }
   done
+  # Shadowed (lib/shadow.sh): the loop goes on, so a later catastrophic target still denies.
   if [[ $ok -eq 0 ]]; then
     if [[ -n "$SCRATCH" ]]; then
-      emit_deny "Blocked: rm -rf outside this session's scratch folders (\$CLAUDE_JOB_DIR/tmp, or \$TMPDIR/<job id> under the sandbox), where it runs freely. Remove files by name, or ask the user to run it."
+      decide deny rf-outside-scratch "Blocked: rm -rf outside this session's scratch folders (\$CLAUDE_JOB_DIR/tmp, or \$TMPDIR/<job id> under the sandbox), where it runs freely. Remove files by name, or ask the user to run it."
     else
-      emit_deny "Blocked: rm -rf with no session scratch folder to confine it. Remove files by name, or ask the user to run it."
+      decide deny rf-outside-scratch "Blocked: rm -rf with no session scratch folder to confine it. Remove files by name, or ask the user to run it."
     fi
-    exit 0
   fi
 done <<<"$SEGS"
 exit 0

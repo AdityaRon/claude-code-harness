@@ -39,10 +39,10 @@ if ! command -v jq &>/dev/null; then
   exit 1
 fi
 
-# Guards write every deny and ask to the audit log. A suite that forgets to
-# point it elsewhere would fill the real log with test decisions.
+# Guards write every deny and ask to the audit log, and a shadowed one to the
+# shadow log. A suite that forgets to point them elsewhere would fill the real logs.
 AUDIT_TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$AUDIT_TMP"' EXIT
-export CLAUDE_AUDIT_LOG="$AUDIT_TMP/audit.log" CLAUDE_GUARD_TIMING_LOG="$AUDIT_TMP/guard-timing.log"
+export CLAUDE_AUDIT_LOG="$AUDIT_TMP/audit.log" CLAUDE_GUARD_TIMING_LOG="$AUDIT_TMP/guard-timing.log" CLAUDE_SHADOW_LOG="$AUDIT_TMP/shadow.log"
 
 TOTAL_SUITES=0
 FAILED_SUITES=0

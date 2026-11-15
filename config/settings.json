@@ -202,7 +202,23 @@
       "Bash(kubectl exec *)",
       "Bash(kubectl * exec *)",
       "Bash(kubectl cp *)",
-      "Bash(kubectl * cp *)"
+      "Bash(kubectl * cp *)",
+      "Bash(kubectl get secret:*)",
+      "Bash(kubectl get secrets:*)",
+      "Bash(kubectl *get *secret)",
+      "Bash(kubectl *get *secret *)",
+      "Bash(kubectl *get *secret/*)",
+      "Bash(kubectl *get *secret,*)",
+      "Bash(kubectl *get *secret.*)",
+      "Bash(kubectl *get *secrets)",
+      "Bash(kubectl *get *secrets *)",
+      "Bash(kubectl *get *secrets/*)",
+      "Bash(kubectl *get *secrets,*)",
+      "Bash(kubectl *get *secrets.*)",
+      "Bash(kubectl config view --raw:*)",
+      "Bash(kubectl *config view*--raw*)",
+      "Bash(kubectl config view --flatten:*)",
+      "Bash(kubectl *config view*--flatten*)"
     ]
   },
   "hooks": {

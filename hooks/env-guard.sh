@@ -202,7 +202,9 @@ DOTFILES="${DOTFILES}|secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|
 # counts anywhere in a chain. The old form anchored each to ^ inside the
 # alternation, so `cd /tmp && env` and `set | head` were allowed.
 ENV_END='\s*($|[|;&>)`])'
-ENV_DUMP="(printenv|env(\s+-[0-9A-Za-z]+)*${ENV_END}|export(\s+-p)?${ENV_END}|set${ENV_END}|declare\s+-(p|x)\b|compgen\s+-e)"
+ENV_DUMP="(printenv|export(\s+-p)?${ENV_END}|set${ENV_END}|declare\s+-(p|x)\b|compgen\s+-e)"
+# A bare `env` is its own rule, so shadow mode (lib/shadow.sh) can hold it alone.
+ENV_BARE="env(\s+-[0-9A-Za-z]+)*${ENV_END}"
 
 # jq's env builtin and $ENV, and awk's ENVIRON, print variables with no dotfile
 # or $VAR in the command. A key (.env, .["env"]) is not the builtin, and nor is a
@@ -237,8 +239,8 @@ SOCKETS='\b(nc|ncat|socat)\b'
 EVAL_ENV='\beval\b[^|;&]*\$\(.*(printenv|env\b|cat\b)'
 
 # Each pattern with what it means, so a deny can say what it matched and why.
-BLOCKED=(); WHY=()
-add() { WHY+=("$1"); BLOCKED+=("$2"); }
+BLOCKED=(); WHY=(); RULE=()
+add() { WHY+=("$1"); BLOCKED+=("$2"); RULE+=("${3:-}"); }   # WHY PATTERN [RULE, for lib/shadow.sh]
 add "reads a credential file"               "${A}${WRAP}${READERS}\s+[^|;&]*${DOTFILES}"
 add "copies a credential file"              "${A}${WRAP}${COPIERS}\s+[^|;&]*${DOTFILES}"
 # find hands its matches to -exec, and a pipe hands them to xargs, so the
@@ -250,6 +252,7 @@ add "reads a credential file through xargs" "${DOTFILES}[^;&]*\|\s*xargs\b[^|;&]
 add "reads a credential file through xargs" "${A}${WRAP}xargs\b[^|;&]*\s(-a|--arg-file)(=|\s*)['\"]?[^|;&[:space:]'\"]*${DOTFILES}"
 add "sources a credential file"             "${A}${DOTSOURCE}\s+[^|;&]*${DOTFILES}"
 add "prints the environment"                "${A}${ENV_DUMP}"
+add "prints the environment"                "${A}${ENV_BARE}" bare-env
 add "prints the environment"                "${A}${JQ_ENV}"
 add "prints the environment"                "${A}${AWK_ENV}"
 add "prints a secret variable"              "(echo|printf)\b[^|;&]*${SECRET_VAR_CONTAINS}"
@@ -262,11 +265,10 @@ add "sends a secret variable"               "(curl|wget)\b[^|;&]*${SECRET_VAR_SU
 add "opens a raw socket"                    "${A}${SOCKETS}"
 add "evaluates an environment dump"         "${A}${EVAL_ENV}"
 
-block() {   # block WHY MATCH
+block() {   # block WHY MATCH [RULE]: a shadowed RULE returns, and the scan goes on
   local m
   m=$(printf '%s' "$2" | head -1 | sed -E 's/^[|&;`$([:space:]]+//; s/[|&;`)>[:space:]]+$//' | cut -c1-80)
-  emit_deny "Blocked: \`$m\` $1. Reference variables by name in code; do not print, dump, or transmit their values."
-  exit 0
+  decide deny "${3:-}" "Blocked: \`$m\` $1. Reference variables by name in code; do not print, dump, or transmit their values."
 }
 
 # One grep over every pattern first: SCAN_LC holds the other two texts (the
@@ -282,7 +284,7 @@ if printf '%s\n' "$SCAN_LC" | grep -qE "$ALLP"; then
       [[ -n "$SCAN_R_LC" ]] || drop_text_operands
       T=$SCAN_R_LC
     fi
-    M=$(printf '%s\n' "$T" | grep -oE "$P") && block "${WHY[$i]}" "$M"
+    M=$(printf '%s\n' "$T" | grep -oE "$P") && block "${WHY[$i]}" "$M" "${RULE[$i]}"
   done
 fi
 

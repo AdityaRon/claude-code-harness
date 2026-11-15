@@ -6,6 +6,7 @@ HOOK="hooks/audit.sh"
 PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"
+export CLAUDE_SHADOW_LOG="$TMP/shadow.log"  # shadow mode lines (hooks/lib/shadow.sh), out of the real log too
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 run(){ printf '%s' "$1" | bash "$HOOK" >/dev/null 2>&1; }
@@ -60,20 +61,26 @@ echo ""
 echo "=== PermissionDenied records the verdict, not just the attempt ==="
 # The whole point of this arm: a refused command must be distinguishable from
 # one that ran. Falling through to the catch-all would log the same shape.
-run '{"hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"kubectl delete pod foo"},"denial_reason":"Blocked by classifier"}'
-grep -qF "| DENIED | Bash | kubectl delete pod foo | Blocked by classifier |" "$CLAUDE_AUDIT_LOG" \
-  && pass "denied bash command logged with reason" \
-  || fail "denied bash command logged with reason" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+# The documented payload: `reason`, with the call's tool_use_id and permission mode,
+# which tools/shadow-report.py joins on. They sit before the command, which can hold ` | `.
+run '{"hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"kubectl delete pod foo"},"tool_use_id":"toolu_d1","permission_mode":"auto","reason":"[Shared Cluster Mutation]"}'
+grep -qF "| DENIED | Bash | id=toolu_d1 mode=auto | kubectl delete pod foo | [Shared Cluster Mutation] |" "$CLAUDE_AUDIT_LOG" \
+  && pass "denied bash command logged with its id, mode and reason" \
+  || fail "denied bash command logged with its id, mode and reason" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+run '{"hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"echo a | tee b"},"tool_use_id":"toolu_d2","permission_mode":"default","denial_reason":"Blocked by classifier"}'
+grep -qF "| DENIED | Bash | id=toolu_d2 mode=default | echo a | tee b | Blocked by classifier |" "$CLAUDE_AUDIT_LOG" \
+  && pass "an older payload's denial_reason is still read" \
+  || fail "an older payload's denial_reason is still read" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
 
 run '{"hook_event_name":"PermissionDenied","tool_name":"Write","tool_input":{"file_path":"/tmp/blocked.txt"},"denial_reason":"Blocked by classifier"}'
-grep -qF "| DENIED | Write | /tmp/blocked.txt |" "$CLAUDE_AUDIT_LOG" \
+grep -qF "| DENIED | Write | id= mode= | /tmp/blocked.txt |" "$CLAUDE_AUDIT_LOG" \
   && pass "denied file write logged" \
   || fail "denied file write logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
 
 run '{"hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/x"}}'
-grep -qF "| DENIED | Bash | rm -rf /tmp/x | no reason given |" "$CLAUDE_AUDIT_LOG" \
-  && pass "missing denial_reason does not drop the record" \
-  || fail "missing denial_reason does not drop the record" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
+grep -qF "| DENIED | Bash | id= mode= | rm -rf /tmp/x | no reason given |" "$CLAUDE_AUDIT_LOG" \
+  && pass "a missing reason, id or mode does not drop the record" \
+  || fail "a missing reason, id or mode does not drop the record" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
 
 # A denial must never be mistaken for a successful call. Anchor on the FIELD
 # POSITION, not a substring: an ordinary call logs `<ts> | Bash | <cmd> |`,
@@ -168,12 +175,19 @@ guard(){ printf '%s' "$2" | bash "hooks/$1" >/dev/null 2>&1; }
 guard env-guard.sh '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}'
 grep -qF "| GUARD | deny | env-guard | cat .env |" "$CLAUDE_AUDIT_LOG" \
   && pass "deny logged with hook and command" || fail "deny logged with hook and command" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
-guard network-guard.sh '{"tool_name":"Bash","tool_input":{"command":"curl -s https://evil.example/x"}}'
-grep -qF "| GUARD | ask | network-guard | curl -s https://evil.example/x |" "$CLAUDE_AUDIT_LOG" \
+guard git-guard.sh '{"tool_name":"Bash","tool_input":{"command":"git stash drop"}}'
+grep -qF "| GUARD | ask | git-guard | git stash drop |" "$CLAUDE_AUDIT_LOG" \
   && pass "ask logged with the command" || fail "ask logged with the command" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
-guard network-guard.sh '{"tool_name":"Monitor","tool_input":{"ws":{"url":"wss://evil.example/feed"}}}'
+# No live guard asks on a monitor's ws URL now (network-guard's ask is shadowed), so ask through lib.sh.
+printf '%s' '{"tool_name":"Monitor","tool_input":{"ws":{"url":"wss://evil.example/feed"}}}' \
+  | bash -c 'source hooks/lib.sh; read_input; emit_ask x' network-guard >/dev/null 2>&1
 grep -qF "| GUARD | ask | network-guard | wss://evil.example/feed |" "$CLAUDE_AUDIT_LOG" \
   && pass "a monitor's ask logged with its ws URL" || fail "a monitor's ask logged with its ws URL" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
+# A shadowed ask is no prompt, so permission-friction.py must not count one: no GUARD line.
+BEFORE=$(wc -l < "$CLAUDE_AUDIT_LOG")
+guard network-guard.sh '{"tool_name":"Bash","tool_input":{"command":"curl -s https://evil.example/x"}}'
+[[ $(wc -l < "$CLAUDE_AUDIT_LOG") -eq $BEFORE ]] && grep -q '"rule":"host-unlisted"' "$CLAUDE_SHADOW_LOG" \
+  && pass "a shadowed ask writes a shadow line and no GUARD line" || fail "a shadowed ask writes no GUARD line" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
 SECRET="AKIA""Q3EGW7PZJ4XN2KHM"
 guard secret-scanner.sh "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/k.ts\",\"content\":\"$SECRET\"}}"
 grep -qF "| GUARD | deny | secret-scanner | /tmp/k.ts |" "$CLAUDE_AUDIT_LOG" \
@@ -232,10 +246,10 @@ grep -qF "| Monitor | ws wss://feed.example/events |" "$CLAUDE_AUDIT_LOG" && pas
 run '{"hook_event_name":"PostToolUse","tool_name":"Monitor","tool_input":{}}'
 grep -qF "| Monitor | unknown |" "$CLAUDE_AUDIT_LOG" && pass "sourceless monitor still recorded" || fail "sourceless monitor still recorded" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
 run '{"hook_event_name":"PermissionDenied","tool_name":"Monitor","tool_input":{"command":"sleep 9; rm -rf /tmp/x"},"denial_reason":"Blocked by classifier"}'
-grep -qF "| DENIED | Monitor | sleep 9; rm -rf /tmp/x | Blocked by classifier |" "$CLAUDE_AUDIT_LOG" \
+grep -qF "| DENIED | Monitor | id= mode= | sleep 9; rm -rf /tmp/x | Blocked by classifier |" "$CLAUDE_AUDIT_LOG" \
   && pass "denied monitor command logged" || fail "denied monitor command logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
 run '{"hook_event_name":"PermissionDenied","tool_name":"Monitor","tool_input":{"ws":{"url":"wss://feed.example/x"}}}'
-grep -qF "| DENIED | Monitor | wss://feed.example/x |" "$CLAUDE_AUDIT_LOG" \
+grep -qF "| DENIED | Monitor | id= mode= | wss://feed.example/x |" "$CLAUDE_AUDIT_LOG" \
   && pass "denied monitor ws URL logged" || fail "denied monitor ws URL logged" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
 grep -qF DESCSECRET3 "$CLAUDE_AUDIT_LOG" && fail "monitor description stays out of the log" "" || pass "monitor description stays out of the log"
 jq -e '[.hooks.PostToolUse[] | select(any(.hooks[]; .command | test("audit.sh"))) | .matcher] | any(. as $m | "Monitor" | test("^(" + $m + ")$"))' \

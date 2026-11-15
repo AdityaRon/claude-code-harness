@@ -397,7 +397,7 @@ def main():
         env = dict(os.environ)
         # Out of the real audit log and blind to this machine's allowlists, local
         # settings and tunnels, so both sides decide on the payload alone.
-        env.update({'HOME': home, 'CLAUDE_AUDIT_LOG': os.devnull, 'CLAUDE_NET_ALLOWLIST': '',
+        env.update({'HOME': home, 'CLAUDE_AUDIT_LOG': os.devnull, 'CLAUDE_SHADOW_LOG': os.devnull, 'CLAUDE_NET_ALLOWLIST': '',
                     'CLAUDE_LOCAL_SETTINGS_DIR': os.path.join(tmp, 'no-local-settings'),
                     'CLAUDE_NET_TUNNEL_RE': '^cch-no-tunnel$', 'CLAUDE_STATE_DIR': os.path.join(tmp, 'state')})
         env.pop('CLAUDE_JOB_DIR', None)

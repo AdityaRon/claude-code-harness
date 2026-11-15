@@ -15,6 +15,7 @@ source tests/lib.sh
 source hooks/lib.sh
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/run" "$TMP/home/.claude" "$TMP/stub"
+export CLAUDE_SHADOW_LOG="$TMP/shadow.log"
 M='echo HDMARK'
 
 # The oracle runs each case for real, so nothing it names may reach a repo, a
@@ -518,10 +519,10 @@ done
 
 echo ""
 echo "=== the six heredoc-aware guards: a line after a false opener is judged as typed ==="
-verdict() {  # hook command: deny, ask or allow
+verdict() {  # hook command: deny, ask or allow; in shadow mode, what it would have decided
   local out rc d
   out=$(jq -nc --arg c "$2" --arg d "$TMP/run" '{tool_name:"Bash", hook_event_name:"PreToolUse", tool_input:{command:$c}, cwd:$d, session_id:"hd"}' \
-        | HOME="$TMP/home" bash "hooks/$1.sh" 2>/dev/null); rc=$?
+        | HOME="$TMP/home" shadow_run bash "hooks/$1.sh" 2>/dev/null); rc=$?
   d=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
   [ -n "$d" ] || { [ "$rc" = 2 ] && d=deny || d=allow; }
   printf '%s' "$d"

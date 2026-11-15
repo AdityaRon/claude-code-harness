@@ -361,8 +361,7 @@ cached_value() {
 }
 
 ask_ambiguous() {
-  emit_ask "kubectl is reached through \$$1, which this command sets to more than one value, so the guard cannot tell which runs. Run kubectl by name."
-  exit 0
+  decide ask ambiguous-var "kubectl is reached through \$$1, which this command sets to more than one value, so the guard cannot tell which runs. Run kubectl by name."
 }
 
 # Put each expansion's value in place, in one walk over the text split at `$`: a
@@ -501,8 +500,7 @@ if [[ "$CMD" == *xargs* || "$CMD" == *parallel* ]]; then
     [[ "$w" == kubectl || "$w" == */kubectl ]] || continue
     next_bare_token $((k + 1)); verb=${NB//[\"\']/}
     if [[ -z "$verb" ]]; then
-      emit_ask "${TOKENS[$j]##*/} hands kubectl its subcommand from its input, which this guard cannot read. Put the subcommand on the command line."
-      exit 0
+      decide ask input-verb "${TOKENS[$j]##*/} hands kubectl its subcommand from its input, which this guard cannot read. Put the subcommand on the command line."
     fi
     [[ "$verb" == get ]] || continue
     next_bare_token $((NB_IDX + 1)) get; kind=${NB%%/*}
@@ -510,8 +508,7 @@ if [[ "$CMD" == *xargs* || "$CMD" == *parallel* ]]; then
     # Fed by `kubectl get pods -o name`, the input names pods only.
     s0=$((j - 2)); while (( s0 > 0 )) && { [[ "${TOKENS[$((s0 - 1))]}" == '|' ]] || ! is_separator "${TOKENS[$((s0 - 1))]}"; }; do (( s0-- )); done
     if [[ "${TOKENS[$((j - 1))]:-}" == '|' ]] && (( s0 >= 0 )) && name_kind "$s0" $((j - 1)) && ! is_secret_target "$NK"; then continue; fi
-    emit_ask "${TOKENS[$j]##*/} hands kubectl get its resource kind from its input, which this guard cannot read, and a Secret's data would land in the transcript. Put the kind on the command line."
-    exit 0
+    decide ask input-get-kind "${TOKENS[$j]##*/} hands kubectl get its resource kind from its input, which this guard cannot read, and a Secret's data would land in the transcript. Put the kind on the command line."
   done
 fi
 
@@ -638,8 +635,8 @@ while (( i < n )); do
     verb=${verb//[\"\']/}
     case "$verb" in
       '$('*|'`'*|'$'*)
-        emit_ask "kubectl's subcommand comes from a variable or a substitution ($verb …), which this guard cannot read. Put the subcommand on the command line."
-        exit 0 ;;
+        decide ask dynamic-verb "kubectl's subcommand comes from a variable or a substitution ($verb …), which this guard cannot read. Put the subcommand on the command line."
+        ;;
     esac
     # Inside quotes a substitution keeps its `)` on the last word (lib.sh's
     # separate_groups splits only unquoted ones): "$(kubectl config current-context)".
@@ -656,13 +653,11 @@ while (( i < n )); do
           ok=0
           if [[ "$sub" == '$(' ]]; then K=$si; skip_value; name_kind $((si + 1)) "$K" && ! is_secret_target "$NK" && ok=1; fi
           if (( ok == 0 )); then
-            emit_ask "kubectl get's resource kind comes from a variable or a substitution (${sub//[\"\']/} …), which this guard cannot read, and a Secret's data would land in the transcript. Put the kind on the command line."
-            exit 0
+            decide ask dynamic-get-kind "kubectl get's resource kind comes from a variable or a substitution (${sub//[\"\']/} …), which this guard cannot read, and a Secret's data would land in the transcript. Put the kind on the command line."
           fi
         fi
         if is_secret_target "$sub"; then
-          emit_ask "kubectl $verb $sub puts Secret data into the transcript (values for get; key names and annotations for describe). Confirm this is intended and scoped to the secret you need."
-          exit 0
+          decide ask secret-read "kubectl $verb $sub puts Secret data into the transcript (values for get; key names and annotations for describe). Confirm this is intended and scoped to the secret you need."
         fi
         # --raw=<path> is self-contained, so next_bare_token skips it entirely
         # and the API path behind it never got looked at. Scan this command's
@@ -674,8 +669,7 @@ while (( i < n )); do
           case "${TOKENS[$k]}" in
             --raw=*)
               if is_secret_target "${TOKENS[$k]#--raw=}"; then
-                emit_ask "kubectl get --raw reads the secrets API directly, which returns the same credential data. Confirm this is intended and scoped to the secret you need."
-                exit 0
+                decide ask secret-raw "kubectl get --raw reads the secrets API directly, which returns the same credential data. Confirm this is intended and scoped to the secret you need."
               fi
               ;;
             -o|--output|-l|--selector|-L|--label-columns|--field-selector|--sort-by|--template)
@@ -684,8 +678,7 @@ while (( i < n )); do
             -*) if is_value_flag "${TOKENS[$k]}"; then K=$((k + 1)); skip_value; k=$((K - 1)); fi ;;
             *)
               if is_secret_target "${TOKENS[$k]}"; then
-                emit_ask "kubectl $verb ${TOKENS[$k]} puts Secret data into the transcript (values for get; key names and annotations for describe). Confirm this is intended and scoped to the secret you need."
-                exit 0
+                decide ask secret-read "kubectl $verb ${TOKENS[$k]} puts Secret data into the transcript (values for get; key names and annotations for describe). Confirm this is intended and scoped to the secret you need."
               fi
               ;;
           esac
@@ -723,8 +716,7 @@ while (( i < n )); do
           for a in "${remote[@]}"; do case "$a" in *'$'*|*'`'*|*'>'*|*'<'*) ok=0 ;; esac; done
           [[ $ok -eq 1 ]] && continue
         fi
-        emit_ask "kubectl exec runs a command inside a pod; only a non-interactive version probe or ls, id, df and similar run without asking. Name the pod and the command."
-        exit 0
+        decide ask exec "kubectl exec runs a command inside a pod; only a non-interactive version probe or ls, id, df and similar run without asking. Name the pod and the command."
         ;;
       rollout|auth|config)
         next_bare_token "$a"; sub=${NB//[\"\']/}; sub=${sub%%)*}
@@ -740,12 +732,10 @@ while (( i < n )); do
                 k=$((k + 1))
               done
               [[ $raw -eq 0 ]] && continue
-              emit_ask "kubectl config view --raw puts the kubeconfig's tokens and client keys into the transcript. Confirm this is intended."
-              exit 0
+              decide ask config-raw "kubectl config view --raw puts the kubeconfig's tokens and client keys into the transcript. Confirm this is intended."
             fi ;;
         esac
-        emit_ask "kubectl $verb ${sub:-<subcommand>} changes cluster or kubeconfig state. Name the target context/namespace and the specific change."
-        exit 0
+        decide ask subverb-change "kubectl $verb ${sub:-<subcommand>} changes cluster or kubeconfig state. Name the target context/namespace and the specific change."
         ;;
     esac
 
@@ -754,12 +744,10 @@ while (( i < n )); do
     fi
 
     if in_list "$verb" "${MUTATING_VERBS[@]}"; then
-      emit_ask "kubectl $verb mutates the cluster. Name the specific target (context, namespace, resource) — a permission rule cannot gate this verb, because kubectl takes its global flags before the verb."
-      exit 0
+      decide ask mutating-verb "kubectl $verb mutates the cluster. Name the specific target (context, namespace, resource) — a permission rule cannot gate this verb, because kubectl takes its global flags before the verb."
     fi
 
-    emit_ask "kubectl subcommand '$verb' is not on the read-only list, so it is treated as potentially mutating. Confirm before running."
-    exit 0
+    decide ask unknown-verb "kubectl subcommand '$verb' is not on the read-only list, so it is treated as potentially mutating. Confirm before running."
   fi
   (( i++ ))
 done
