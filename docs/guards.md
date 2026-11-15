@@ -15,7 +15,7 @@ classifier decides only what no guard or rule names; see
 found an approved guard ask held its call 92 to 269 s at the median, by guard.
 
 Until step 9 of #237, some of what follows is in shadow mode: kubectl-guard and
-interpreter-guard whole, network-guard's asks, rm-guard's `rm -rf` outside the
+interpreter-guard whole, network-guard's asks but the allowlist edit, rm-guard's `rm -rf` outside the
 scratch folders and env-guard's bare `env`. Each still finds what it would
 decide, logs it to `~/.claude/logs/shadow.log`, and decides nothing; every deny
 not named there stays live. See [shadow-mode.md](shadow-mode.md).

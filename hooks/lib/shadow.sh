@@ -3,12 +3,12 @@
 # An entry logs what it would have decided to shadow.log and decides nothing.
 # A guard name covers all its rules; guard:rule one. Delete a line to restore it.
 SHADOW=(
-  kubectl-guard                    # read verbs are allowed by prefix, mutating verbs ask natively (#241)
+  kubectl-guard                    # read verbs are allowed by prefix; mutating verbs and secret reads ask natively
   interpreter-guard                # auto mode drops Bash(python3:*), so the classifier sees inline code
-  network-guard:monitor-ws-host    # the asks below: no network allow rule, so the classifier sees each
+  network-guard:monitor-ws-host    # the asks below: no network allow rule, so the classifier sees each.
+                                   # Not allowlist-edit: a cp or echo into local-settings is allow-ruled.
   network-guard:remote-copy
   network-guard:http-server
-  network-guard:allowlist-edit
   network-guard:curl-reroute
   network-guard:proxy-unlisted
   network-guard:sends-body

@@ -16,15 +16,19 @@ covers one rule.
 
 | Entry | Cover while it is shadowed |
 |---|---|
-| `kubectl-guard` | #241 narrowed `Bash(kubectl:*)` to read verbs and added native ask rules for mutating verbs in both orders (`kubectl delete *`, `kubectl * delete *`). Anything else reaches the classifier. A `get secret` or `config view --raw` with the verb first matches a read prefix and has no ask rule, so no prompt covers it; the report's "Ran: allow rule" column shows whether the classifier saw it. |
+| `kubectl-guard` | #241 narrowed `Bash(kubectl:*)` to read verbs and added native ask rules for mutating verbs in both orders (`kubectl delete *`, `kubectl * delete *`). Credential reads the read prefixes would allow also ask natively: `get secret` and `get secrets` (bare, named, `secret/<name>`, in a comma list, `secrets.v1`), and `config view --raw` or `--flatten`, verb first or behind flags. Anything else reaches the classifier. A 2.1.325 headless probe matched each of those forms; an upper-case kind (`get Secret`) matched none. |
 | `interpreter-guard` | Auto mode drops interpreter allow wildcards such as `Bash(python3:*)`, so the classifier sees inline code. |
-| `network-guard:` each ask | No allow rule covers curl, wget, scp, rsync or sftp, so the classifier sees each call. `allowlist-edit` is the exception: a lone `cp`, `mv`, `sed` or `echo` into `~/.claude/local-settings` matches an allow rule, so nothing else sees it. The allowlist feeds only network-guard's asks, all shadowed, so a host added meanwhile weakens no live deny, but it hides later asks for that host from this log. |
+| `network-guard:` each ask but one | No allow rule covers curl, wget, scp, rsync or sftp, so the classifier sees each call. |
 | `rm-guard:rf-outside-scratch` | `rm` has no allow rule, so the classifier sees it. |
 | `env-guard:bare-env` | `env` has no allow rule, so the classifier sees it. |
 
 These stay live:
 
 - every network-guard deny (curl or wget into a shell, file uploads);
+- network-guard's ask on a change to this machine's network allowlist. A lone
+  `cp`, `mv`, `sed` or `echo` into `~/.claude/local-settings` matches an allow
+  rule, so nothing else would read it, and a widened allowlist would also hide
+  later asks from the shadow log;
 - rm-guard's denies on catastrophic targets (`/`, `~`, `.`, a top-level folder);
 - every other env-guard deny (`printenv`, `export -p`, reading `.env`, `nc`, …);
 - git-guard's broad `git add` deny. `Bash(git add:*)` is allowed, so nothing

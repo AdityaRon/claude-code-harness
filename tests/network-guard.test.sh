@@ -24,8 +24,9 @@ check_bash() {
   fi
   # A hook that crashes prints nothing, which would otherwise read as allow.
   [[ $rc -ne 0 ]] && got="exit $rc"
-  # Its asks are in shadow mode (hooks/lib/shadow.sh), its denies live.
-  [[ "$got" == ask && "$result" != *'"shadow":'* ]] && got="live ask"
+  # Its asks are in shadow mode (hooks/lib/shadow.sh), its denies and its allowlist-edit ask live.
+  [[ "$got" == ask && "$result" != *'"shadow":'* && "$result" != *'machine-local network allowlist'* ]] && got="live ask"
+  [[ "$got" == ask && "$result" == *'"shadow":"allowlist-edit"'* ]] && got="shadowed allowlist ask"
   [[ "$got" == deny && "$result" == *'"shadow":'* ]] && got="shadowed deny"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"

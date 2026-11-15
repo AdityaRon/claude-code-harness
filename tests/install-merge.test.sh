@@ -407,6 +407,13 @@ done
 EXTRA=$(jq -r '.permissions.ask[] | select(test("port-forward|rollout \\*|rollout (status|history)"))' config/settings.json)
 [[ -n "$EXTRA" ]] && MISSING="$MISSING extra:$EXTRA"
 [[ -z "$MISSING" ]] && pass "each read verb is allowed; every mutating verb asks in both orders, and none is allowed" || fail "kubectl ask rules" "$MISSING"
+# A credential read the read prefixes allow asks: get secret(s) in every order and
+# form a 2.1.325 headless probe matched, and config view --raw or --flatten (#237).
+MISSING=""
+for r in "Bash(kubectl get secret:*)" "Bash(kubectl get secrets:*)" "Bash(kubectl *get *secret)" "Bash(kubectl *get *secret *)" "Bash(kubectl *get *secret/*)" "Bash(kubectl *get *secret,*)" "Bash(kubectl *get *secret.*)" "Bash(kubectl *get *secrets)" "Bash(kubectl *get *secrets *)" "Bash(kubectl *get *secrets/*)" "Bash(kubectl *get *secrets,*)" "Bash(kubectl *get *secrets.*)" "Bash(kubectl config view --raw:*)" "Bash(kubectl *config view*--raw*)" "Bash(kubectl config view --flatten:*)" "Bash(kubectl *config view*--flatten*)"; do
+  jq -e --arg r "$r" '.permissions.ask | index($r)' config/settings.json >/dev/null || MISSING="$MISSING $r"
+done
+[[ -z "$MISSING" ]] && pass "secret reads and config view --raw/--flatten ask, behind flags too" || fail "credential-read ask rules" "$MISSING"
 unset RETIRED
 
 echo ""
