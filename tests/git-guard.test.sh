@@ -71,6 +71,13 @@ check "read with --get"        allow "git config --get user.name"
 check "read in a substitution" allow 'NAME=$(git config user.name)'
 check "read, stderr dropped"   allow "git config user.email 2>/dev/null || echo unset"
 check "git config get"         allow "git config get user.name"
+# A read lifts the ask only for its own command. Main asks on each of these; the
+# wider terms for a quoted -c value or a shell's -c string once made one match
+# of the read and the setter, and the setter went unread.
+check "a setter in a read's \$( ), after -c \"a b\"" ask 'git -c "a b" config --get user.name $(git config user.name x)'
+check "a setter behind escaped quotes"       ask 'git -c \"x; git config user.name x; \" config --get user.name'
+check "a setter in a shell's -c read"        ask 'bash -c "git config --get user.name $(git config user.name x)"'
+check "a read after -c \"a b\""              allow 'git -c "a b" config --get user.name'
 
 echo ""
 echo "=== .git/hooks writes (expect: deny) ==="
@@ -365,6 +372,9 @@ check_wt "--force, relative after a cd"      ask   'cd /tmp && git worktree remo
 check_wt "--force, a path in a variable"     ask   "W=$R/clean; git worktree remove --force \$W"
 check_wt "--force, clean then dirty"         ask   "git worktree remove --force $R/clean && git worktree remove --force $R/dirty"
 check_wt "--force, no such path"             ask   "git worktree remove --force $R/gone"
+# Main asks here too; a wide match of the second remove once swallowed the first.
+check_wt "--force, a dirty one behind escaped quotes" ask "git -c \\\"x; git worktree remove --force $R/dirty; \\\" worktree remove --force $R/clean"
+check_wt "--force, clean, after -c 'a b'"    allow "git -c 'a b' worktree remove --force $R/clean"
 
 echo ""
 echo "=== branch delete: runs only when a remote-tracking ref holds the tip ==="

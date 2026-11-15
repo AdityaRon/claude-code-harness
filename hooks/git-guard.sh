@@ -300,8 +300,12 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}worktree\s+remove\s[^|;&]*(--force
   # A relative path means the session's cwd only when nothing moves it first.
   RELBASE=$(jq_get '.cwd')
   printf '%s\n' "$CMD" | grep -qE "${A}(cd|pushd)\b|\s(-C|--git-dir|--work-tree)\b" && RELBASE=""
-  PATHS=$(printf '%s\n' "$CMD" | grep -oE "${GIT}worktree\s+remove\s[^|;&]*" | sed -E 's/^.*worktree[[:space:]]+remove[[:space:]]+//' \
-    | tr -s ' \t' '\n' | grep -vE '^-' | grep -v '^$')
+  # A clean path lifts the ask, so its segments are cut on main's terms as well
+  # as the wider ones: grep -o matches do not overlap, and a wide match can
+  # swallow a second remove (`git -c \"x; git worktree remove -f /wt; \" …`).
+  PATHS=$({ printf '%s\n' "$CMD" | grep -oE "${GIT}worktree\s+remove\s[^|;&]*"
+            printf '%s\n' "$CMD" | grep -oE "${GIT0}worktree\s+remove\s[^|;&]*"; } \
+    | sed -E 's/^.*worktree[[:space:]]+remove[[:space:]]+//' | tr -s ' \t' '\n' | grep -vE '^-' | grep -v '^$')
   ALL=1
   while IFS= read -r wp; do
     in_scratch "$wp" "$SCRATCH" "$BASE" >/dev/null || clean_worktree "$wp" || { ALL=0; break; }
@@ -538,7 +542,10 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}config\s+[^|;&]*alias\."; then
 fi
 # Identity and signing keys: setting one asks, reading one does not (`git config
 # --global user.name`, `--get`, `--list`, `git config get …`). Judged one command at
-# a time: a `.*` here once spanned the `;` in `git config user.name; ls`.
+# a time: a `.*` here once spanned the `;` in `git config user.name; ls`. A read
+# lifts the ask, so the commands are cut on main's terms as well as the wider
+# ones: grep -o matches do not overlap, and a wide one can swallow a setter
+# (`git -c "a b" config --get user.name $(git config user.name x)`).
 ID_KEY='(user\.(name|email|signingkey)|gpg\.signingkey|commit\.gpgsign|tag\.gpgsign)'
 while IFS= read -r seg; do
   printf '%s\n' "$seg" | grep -qE "$ID_KEY" || continue
@@ -549,7 +556,7 @@ while IFS= read -r seg; do
   fi
   emit_ask "git config is changing identity or signing settings. Confirm this is intended."
   exit 0
-done < <(printf '%s\n' "$CMD" | grep -oE "${A}${GIT}config\s+[^|;&]*")
+done < <(printf '%s\n' "$CMD" | grep -oE "${A}${GIT}config\s+[^|;&]*"; printf '%s\n' "$CMD" | grep -oE "${A0}${GIT0}config\s+[^|;&]*")
 
 # --- Writes into .git/hooks/* ------------------------------------------
 # The directory counts, not just a path through it: `cd .git/hooks && cat >
