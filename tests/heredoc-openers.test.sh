@@ -647,6 +647,10 @@ echo ""
 echo "=== each guard and bash-guards.sh: its line split by a \\ at a line's end, or behind a newline in quotes ==="
 # Every guard read line by line, where bash joins a line ending in \ to the next
 # and keeps a quoted newline in its word. Held to the line's verdict alone.
+# Main already asks on network-guard's two rows (any curl to an unknown host) and
+# on kubectl-guard's \ row (a kubectl it cannot read), so those three rows, each
+# run alone and through bash-guards.sh, hold a decision rather than test the
+# join; network-guard's suite has a row that does.
 CONT=($'git push origin main \\\n--force' $'cp /dev/null \\\n~/.claude/settings.json' $'kubectl --cache-dir /tmp/x \\\ndelete ns prod'
       $'cat \\\n.env' $'python3 \\\n-c \'import os; print(os.environ)\'' $'curl -X DELETE \\\nhttps://example.com/x' $'rm \\\n-rf ~/')
 QNL=($'git -c $\'x.y=a\nb\' push origin main --force' $'cp "a\nb" ~/.claude/settings.json' $'kubectl --cache-dir $\'/tmp/a\nb\' delete ns prod'
