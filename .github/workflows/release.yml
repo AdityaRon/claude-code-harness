@@ -6,7 +6,7 @@ name: Release
 # body. CHANGELOG.md follows by a PR merged here once CI passes: main is
 # protected, so github.token cannot push it.
 on:
-  # After each Upstream drift run, which lands contract bumps on main. The link
+  # After each Upstream drift run, so a fix merged since the last tag is released. The link
   # is by name: renaming that workflow breaks it silently, and the cron below
   # then covers it a day late. workflow_run fires only once this file is on main.
   workflow_run:

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Tests for upstream-check.sh — the scheduled guard that catches Claude Code
-# changing under the harness.
+# breaking something the harness relies on.
 #
-# A drift detector that only ever passes is worthless, so these tests simulate
+# A breakage detector that only ever passes is worthless, so these tests simulate
 # upstream actually moving: an event the harness depends on disappearing, the
-# shipped permission mode becoming invalid, a new event appearing, and doctor's
+# shipped permission mode becoming invalid, a memory limit moving, and doctor's
 # output format changing. No Claude Code install needed — CLAUDE_DOCTOR_CMD
 # substitutes a stub that behaves like `claude doctor`.
 set -u
@@ -23,11 +23,10 @@ check_absent(){   case "$3" in *"$2"*) fail "$1" "unexpected: $2" ;; *) pass "$1
 # The real list as of 2.1.280 (PreModelSwitch/PostModelSwitch arrived in 2.1.251).
 #
 # This models what UPSTREAM offers, so it is deliberately hardcoded rather than
-# read from upstream-contract.json: the contract is what this harness has
-# acknowledged, and a check cannot supply its own expected input. The cost is
-# that the two lists drift by hand — when the harness starts hooking an event
-# this stub has never heard of, section 2 reports it as vanished upstream and
-# every exit-code assertion below fails at once. That is what happened when
+# read from config/settings.json: a check cannot supply its own expected input.
+# The cost is that the list drifts by hand — when the harness starts hooking an
+# event this stub has never heard of, section 2 reports it as vanished upstream
+# and every exit-code assertion below fails at once. That is what happened when
 # PostModelSwitch was adopted.
 ALL_EVENTS="PreToolUse, PostToolUse, PostToolUseFailure, PostToolBatch, Notification, UserPromptSubmit, UserPromptExpansion, SessionStart, SessionEnd, Stop, StopFailure, SubagentStart, SubagentStop, PreCompact, PostCompact, PreModelSwitch, PostModelSwitch, PermissionRequest, PermissionDenied, Setup, TeammateIdle, TaskCreated, TaskCompleted, Elicitation, ElicitationResult, ConfigChange, WorktreeCreate, WorktreeRemove, InstructionsLoaded, CwdChanged, FileChanged, DirectoryAdded, MessageDisplay"
 ALL_MODES='Expected one of: "acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"'
@@ -60,31 +59,21 @@ echo "No installation issues found."
 STUB
 chmod +x "$TMP/stub.sh"
 export CLAUDE_DOCTOR_CMD="bash $TMP/stub.sh"
-# Section 6 would otherwise read this machine's cached changelog.
-export CLAUDE_CHANGELOG_PATH="$TMP/no-changelog.md"
-
-# A stand-in for the CLI file that check 4b greps. Without this the tests would
+# A stand-in for the CLI file that check 4 greps. Without this the tests would
 # scan the real ~150MB binary once per settings key per invocation — slow, and it
 # would make results depend on the machine's Claude install rather than fixtures.
+ALL_TOOLS=$(jq -r '[.hooks[][]?.matcher // empty | split("|")[] | select(test("^[A-Za-z]+$"))] | unique[]' config/settings.json)
 ALL_KEYS=$(jq -r 'keys[] | select(. != "hooks" and . != "permissions" and . != "env" and . != "sandbox" and . != "statusLine")' config/settings.json)
 
-# 4c greps the same file for every capability in acknowledged_surface, so a
-# "complete CLI" fixture has to carry those too. Without them every test using
-# this fixture trips 4c, and the failure reads as if it came from the section
-# under test rather than from the fixture.
-ALL_SURFACE=$(jq -r '(.acknowledged_surface // {})
-                     | (((.tools // {}) | keys[]?), ((.settings_keys // {}) | keys[]?))' \
-              config/upstream-contract.json | grep -v '^_comment$')
-
-# 4d reads the two memory-index limits out of the CLI rather than trusting the
+# Section 5 reads the two memory-index limits out of the CLI rather than trusting the
 # contract, so a "complete CLI" fixture has to carry that expression too. The
 # identifiers are deliberately NOT the ones the real bundle happens to use: the
 # check resolves them from the expression, and a fixture that reused the real
 # names would pass even if the check had them hardcoded.
-mkcli(){  # mkcli <path> [capability-to-omit]
+mkcli(){  # mkcli <path> [key-to-omit]
   local out="$1" omit="${2:-}" k
   : > "$out"
-  for k in $ALL_KEYS $ALL_SURFACE; do
+  for k in $ALL_KEYS $ALL_TOOLS; do
     [ "$k" = "$omit" ] && continue
     echo "$k" >> "$out"
   done
@@ -96,12 +85,12 @@ mkcli "$TMP/fullcli"
 
 run(){ STUB_EVENTS="$1" STUB_MODES="$2" CLAUDE_CLI_BIN="${CLAUDE_CLI_BIN:-$TMP/fullcli}" bash "$CHECK" 2>&1; }
 
-echo "=== Contract holds when upstream matches (exit 0) ==="
+echo "=== Nothing relied on has moved (exit 0) ==="
 OUT=$(run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
 [ "$ST" -eq 0 ] && pass "clean run exits 0" || fail "clean run exits 0" "exit=$ST
 $OUT"
-printf '%s' "$OUT" | grep -q "RESULT: contract holds" \
-  && pass "reports contract holds" || fail "reports contract holds" "$OUT"
+printf '%s' "$OUT" | grep -q "RESULT: nothing the harness relies on has moved" \
+  && pass "reports nothing moved" || fail "reports nothing moved" "$OUT"
 
 echo ""
 echo "=== BREAKAGE: an event the harness registers disappears upstream ==="
@@ -121,13 +110,18 @@ printf '%s' "$OUT" | grep -q 'no longer a valid defaultMode' \
   && pass "flags the mode" || fail "flags the mode" "$OUT"
 
 echo ""
-echo "=== ADVISORY: upstream adds an event nobody has acknowledged (exit 2) ==="
+echo "=== An event upstream adds is not a signal: this checks breakage only ==="
 OUT=$(run "$ALL_EVENTS, BrandNewEvent" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 2 ] && pass "new event exits 2" || fail "new event exits 2" "exit=$ST"
-printf '%s' "$OUT" | grep -q "BrandNewEvent" \
-  && pass "names the new event" || fail "names the new event" "$OUT"
-printf '%s' "$OUT" | grep -q "RESULT: upstream grew" \
-  && pass "distinguishes growth from breakage" || fail "distinguishes growth from breakage" "$OUT"
+[ "$ST" -eq 0 ] && pass "a new event exits 0" || fail "a new event exits 0" "exit=$ST
+$OUT"
+check_absent "and is not named" "BrandNewEvent" "$OUT"
+
+echo ""
+echo "=== BREAKAGE: the shipped defaultMode and the contract's expected one disagree ==="
+jq '.expected_default_mode="plan"' config/upstream-contract.json > "$TMP/c.json"
+OUT=$(CLAUDE_UPSTREAM_CONTRACT="$TMP/c.json" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 1 ] && pass "a disagreeing mode exits 1" || fail "a disagreeing mode exits 1" "exit=$ST"
+check_contains "and names both" 'sets defaultMode "auto" but upstream-contract.json expects "plan"' "$OUT"
 
 echo ""
 echo "=== BREAKAGE: the CLI rejects the shipped settings.json ==="
@@ -179,42 +173,6 @@ OUT=$(CLAUDE_CLI_BIN="$TMP/fullcli" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
 $OUT"
 
 echo ""
-echo "=== 4c: the acknowledged non-hook surface ==="
-# The gap this section exists for: cross-session messaging shipped two tools and
-# two settings keys in 2.1.224, and the check said "contract holds" throughout,
-# because hook events were the only population it could enumerate.
-OUT=$(CLAUDE_CLI_BIN="$TMP/fullcli" run "$ALL_EVENTS" "$ALL_MODES")
-printf '%s' "$OUT" | grep -q "4c\. acknowledged tools and settings keys" \
-  && pass "4c runs" || fail "4c runs" "$OUT"
-printf '%s' "$OUT" | grep -qE "all [0-9]+ acknowledged capabilities still present" \
-  && pass "reports all acknowledged capabilities present" || fail "reports all present" "$OUT"
-# The denominator must be printed. A bare tick reads as "we checked everything",
-# which is the exact misreading that let 2.1.224 through.
-printf '%s' "$OUT" | grep -qE "verified [0-9]+ acknowledged capabilit" \
-  && pass "prints the denominator" || fail "prints the denominator" "$OUT"
-printf '%s' "$OUT" | grep -q "CANNOT" \
-  && pass "states it cannot discover unacknowledged capabilities" \
-  || fail "states the discovery limitation" "$OUT"
-
-# A capability upstream dropped must strand loudly, not pass quietly.
-GONE_CAP=$(printf '%s\n' $ALL_SURFACE | head -1)
-mkcli "$TMP/nocap" "$GONE_CAP"
-OUT=$(CLAUDE_CLI_BIN="$TMP/nocap" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 2 ] && pass "a vanished acknowledged capability exits 2" \
-  || fail "vanished capability exits 2" "exit=$ST"
-printf '%s' "$OUT" | grep -q "$GONE_CAP" \
-  && pass "names the vanished capability" || fail "names the vanished capability" "$OUT"
-printf '%s' "$OUT" | grep -q "stranded" \
-  && pass "says the recorded decision is stranded" || fail "says stranded" "$OUT"
-
-# Every messaging capability must actually be acknowledged — this is the
-# regression guard for the specific miss that motivated the section.
-for cap in SendMessage ListAgents crossSessionInbound isolatePeerMachines; do
-  printf '%s\n' $ALL_SURFACE | grep -qx "$cap" \
-    && pass "contract acknowledges $cap" || fail "contract acknowledges $cap" "absent"
-done
-
-echo ""
 echo "=== An unlocatable CLI file is skipped, not failed ==="
 OUT=$(CLAUDE_CLI_BIN="$TMP/does-not-exist" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
 [ "$ST" -eq 0 ] && pass "absent CLI file skips" || fail "absent CLI file skips" "exit=$ST"
@@ -222,27 +180,7 @@ printf '%s' "$OUT" | grep -q "cannot locate the CLI files" \
   && pass "says it skipped" || fail "says it skipped" "$OUT"
 
 echo ""
-echo "=== The contract file is well-formed and covers every live event ==="
-jq -e '.acknowledged_hook_events | length > 0' config/upstream-contract.json >/dev/null 2>&1 \
-  && pass "contract lists acknowledged events" || fail "contract lists acknowledged events" "bad json"
-MISSING=""
-for ev in $(printf '%s' "$ALL_EVENTS" | tr -d ' ' | tr ',' '\n'); do
-  jq -e --arg e "$ev" '.acknowledged_hook_events | index($e) != null' config/upstream-contract.json >/dev/null 2>&1 \
-    || MISSING="$MISSING $ev"
-done
-[ -z "$MISSING" ] && pass "every 2.1.228 event is acknowledged" || fail "every 2.1.228 event is acknowledged" "missing:$MISSING"
-
-echo ""
-echo "=== Every event the harness hooks is acknowledged in the contract ==="
-UNACK=""
-while IFS= read -r ev; do
-  jq -e --arg e "$ev" '.acknowledged_hook_events | index($e) != null' config/upstream-contract.json >/dev/null 2>&1 \
-    || UNACK="$UNACK $ev"
-done < <(jq -r '.hooks | keys[]' config/settings.json)
-[ -z "$UNACK" ] && pass "settings.json events all acknowledged" || fail "settings.json events all acknowledged" "unacked:$UNACK"
-
-echo ""
-echo "=== 4d: the memory index limits are READ from the CLI, not asserted ==="
+echo "=== 5: the memory index limits are READ from the CLI, not asserted ==="
 # memory-lint and memory-verify gate on 200 lines / 25,000 bytes. Those numbers
 # were folklore here for a while -- the research doc called the line cap
 # "unsubstantiated" while two tools enforced it as fact -- and a wrong threshold
@@ -268,7 +206,7 @@ printf '%s' "$OUT" | grep -qF "contract says 200" \
   && pass "and names what the contract claims" || fail "and names what the contract claims" "$OUT"
 printf '%s' "$OUT" | grep -qF "gating on the wrong number" \
   && pass "and says which tools are wrong" || fail "and says which tools are wrong" "$OUT"
-[ "$ST" != "0" ] && pass "a moved limit is not exit 0" || fail "a moved limit is not exit 0" "exit=$ST"
+[ "$ST" -eq 1 ] && pass "a moved limit is a breakage (exit 1)" || fail "a moved limit is a breakage" "exit=$ST"
 
 MEMLIMIT_BYTES=30000 mkcli "$TMP/movedbytes"
 OUT=$(CLAUDE_CLI_BIN="$TMP/movedbytes" run "$ALL_EVENTS" "$ALL_MODES")
@@ -309,114 +247,22 @@ printf '%s' "$OUT" | grep -qF "index line limit 200 matches" \
   || fail "a minified name holding \$ still resolves" "$OUT"
 
 
-echo "=== 6. releases since last_verified_version (exit 2) ==="
-PIN=$(jq -r '.last_verified_version' config/upstream-contract.json); PIN=${PIN%% *}
-cat > "$TMP/changelog.md" <<EOF
-# Changelog
-
-## 9.9.2
-
-- Added a \`NewShinyTool\` tool for doing things
-- Added mouse support to more lists in fullscreen mode
-- Added \`someNewKey\` to opt out of syncing
-- Fixed a subagent spinner flicker
-- Fixed the mouse wheel in fullscreen mode
-- [VSCode] Added a hooks dialog
-- Changed SendMessage to accept attachments
-- Fixed rules symlinked into \`.claude/rules\` being skipped
-- Improved auto-memory loading: markup is neutralized in \`MEMORY.md\`
-- Fixed a dangerous \`rm\` losing its always-ask safeguard with a redirect
-- Changed a shell write through a symlink onto a sensitive file to ask first
-- Added Claude Mods: plugins may now modify deeper behavior
-- Fixed plugin marketplace listing order
-- Fixed a mod reloading twice after one save
-- Fixed modal dialogs flickering
-
-## 9.9.1
-
-- Fixed a typo in /help
-
-## $PIN
-
-- Added something already assessed
-EOF
-OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION=9.9.2 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 2 ] && pass "unassessed releases exit 2" || fail "unassessed releases exit 2" "exit=$ST"
-check_contains "counts both releases" "2 release(s) since $PIN" "$OUT"
-check_contains "surfaces an Added line" "NewShinyTool" "$OUT"
-check_contains "surfaces a line naming an acknowledged tool" "SendMessage to accept" "$OUT"
-check_absent "drops unrelated fixes" "mouse wheel" "$OUT"
-check_contains "keeps a Fixed line about installed rules" "symlinked into" "$OUT"
-check_contains "keeps an Improved line about MEMORY.md" "auto-memory loading" "$OUT"
-check_contains "keeps a dangerous rm line with the rm in backticks" "always-ask safeguard" "$OUT"
-check_contains "keeps a line about writes onto a sensitive file" "through a symlink" "$OUT"
-check_contains "keeps an Added line about plugins" "Claude Mods" "$OUT"
-check_absent "drops a Fixed line that only mentions plugins" "marketplace listing order" "$OUT"
-check_contains "keeps a Fixed line that names a mod" "reloading twice after one save" "$OUT"
-check_absent "does not read modal as mod" "modal dialogs" "$OUT"
-check_absent "drops an Added line with no feature term" "mouse support" "$OUT"
-check_contains "keeps an Added line naming a camelCase key" "someNewKey" "$OUT"
-check_absent "drops a Fixed line that only mentions subagents" "spinner flicker" "$OUT"
-check_absent "drops editor-only lines" "[VSCode]" "$OUT"
-check_absent "drops a release with no hits" "## 9.9.1" "$OUT"
-check_absent "stops at the verified release" "already assessed" "$OUT"
-check_absent "a release with hits does not read as unmatched" "no entry matched the harness filter" "$OUT"
-
-# upstream-drift.yml bumps the pin itself on this line, so a release with hits
-# must never print it, and a release without any must still exit 2: the pin is
-# behind either way, and the workflow is what moves it.
-cat > "$TMP/quiet.md" <<EOF
-# Changelog
-
-## 9.9.1
-
-- Fixed a typo in /help
-- Fixed the mouse wheel in fullscreen mode
-
-## $PIN
-
-- Added something already assessed
-EOF
-OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/quiet.md" CLAUDE_CLI_VERSION=9.9.1 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 2 ] && pass "a release with no matching entry still exits 2" || fail "no matching entry exits 2" "exit=$ST"
-check_contains "and says nothing matched" "no entry matched the harness filter" "$OUT"
-check_contains "and names the release to record" 'last_verified_version to "9.9.1 (Claude Code)"' "$OUT"
-check_absent "and does not ask for an assessment" "Assess each" "$OUT"
-
-OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION="$PIN" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 0 ] && pass "verified at the installed version exits 0" || fail "verified at installed version exits 0" "exit=$ST"
-
-# Under test VERSION is "(stubbed)": fall back to the changelog's newest release.
-OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 2 ] && pass "unknown CLI version uses the newest release" || fail "unknown version falls back" "exit=$ST"
-
-# 2.1.279 shipped with no heading: an unlisted version must not read as "nothing new".
-OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION=9.9.3 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 2 ] && pass "unlisted CLI version still reports" || fail "unlisted CLI version still reports" "exit=$ST"
-check_contains "from the newest listed release" "2 release(s) since" "$OUT"
-
-# The next release often ships before its changelog heading. With the pin at the
-# newest heading, that must still warn rather than read as verified.
-OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION=9.9.3 run "$ALL_EVENTS" "$ALL_MODES")
-check_contains "an unlisted newer CLI says so" "CLI 9.9.3 has no changelog heading" "$OUT"
-jq '.last_verified_version="9.9.2 (Claude Code)"' config/upstream-contract.json > "$TMP/c.json"
-OUT=$(CLAUDE_UPSTREAM_CONTRACT="$TMP/c.json" CLAUDE_CHANGELOG_PATH="$TMP/changelog.md" CLAUDE_CLI_VERSION=9.9.3 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 2 ] && pass "pin at newest heading, CLI ahead: exits 2" || fail "pin at newest, CLI ahead exits 2" "exit=$ST"
-check_absent "and does not claim verified" "contract verified" "$OUT"
-
-grep -v "^## $PIN\$" "$TMP/changelog.md" > "$TMP/nopin.md"
-OUT=$(CLAUDE_CHANGELOG_PATH="$TMP/nopin.md" CLAUDE_CLI_VERSION=9.9.2 run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 2 ] && pass "unlisted pin exits 2" || fail "unlisted pin exits 2" "exit=$ST"
-check_contains "and names the problem" "has no changelog heading" "$OUT"
-check_absent "without dumping the whole changelog" "already assessed" "$OUT"
-check_absent "and does not claim verified" "contract verified" "$OUT"
-
-OUT=$(run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 0 ] && pass "absent changelog skips" || fail "absent changelog skips" "exit=$ST"
-check_contains "and says so" "skipped: no changelog" "$OUT"
+echo ""
+echo "=== 7: a tool a hook matcher names must still exist in the CLI ==="
+OUT=$(run "$ALL_EVENTS" "$ALL_MODES")
+check_contains "tool names are read from the matchers" "✓ ExitPlanMode" "$OUT"
+check_absent "the regex matcher is not a tool name" "mcp__" "$OUT"
+mkcli "$TMP/notool" ExitPlanMode
+OUT=$(CLAUDE_CLI_BIN="$TMP/notool" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 1 ] && pass "a renamed tool exits 1" || fail "a renamed tool exits 1" "exit=$ST"
+check_contains "and is named" "ExitPlanMode is named in a hook matcher" "$OUT"
+jq '.hooks.PreToolUse += [{"matcher":"MadeUpTool","hooks":[{"type":"command","command":"true"}]}]' config/settings.json > "$TMP/s.json"
+OUT=$(CLAUDE_UPSTREAM_SETTINGS="$TMP/s.json" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 1 ] && pass "a made-up tool in a matcher exits 1" || fail "a made-up tool in a matcher exits 1" "exit=$ST"
+check_contains "and names it" "MadeUpTool is named in a hook matcher" "$OUT"
 
 echo ""
-echo "=== 4e: the mods the harness ships pass claude plugin test ==="
+echo "=== 6: the mods the harness ships pass claude plugin test ==="
 # Stands in for `claude plugin test <folder>`: logs what it was given, then
 # passes, or fails the way a moved mod API would when STUB_MOD_FAIL is set.
 cat > "$TMP/ptstub.sh" <<'STUB'
