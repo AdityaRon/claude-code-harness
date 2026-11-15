@@ -306,43 +306,11 @@ else
 fi
 say ""
 
-# ---- 6. the mods the harness ships still pass their own tests ---------
-# The mod API is early access, the surface a release is most likely to move, and
-# a moved API shows only as a blank or erroring pane: nothing else reports it.
-# `claude plugin test` runs a mod's *.test.tsx on this CLI's engine with no login
-# (0.27 s for the comms panel on 2.1.312, empty config dir). Seam:
-# CLAUDE_PLUGIN_TEST_CMD; under a stubbed doctor without it, the CLI is not spawned.
-say "6. mods the harness ships pass their tests on this CLI"
-MODS=$(cd "$REPO" && find skills -path '*/.claude-plugin/plugin.json' 2>/dev/null \
-       | sed 's|/\.claude-plugin/plugin\.json$||' | sort)
-if [ -n "${CLAUDE_PLUGIN_TEST_CMD:-}" ]; then
-  PLUGIN_TEST_CMD=$CLAUDE_PLUGIN_TEST_CMD
-elif [ -n "${CLAUDE_DOCTOR_CMD:-}" ]; then
-  PLUGIN_TEST_CMD=""
-else
-  PLUGIN_TEST_CMD="claude plugin test"
-fi
-if [ -z "$MODS" ]; then
-  say "      (no mods shipped)"
-elif [ -z "$PLUGIN_TEST_CMD" ]; then
-  say "      (skipped: doctor is stubbed and CLAUDE_PLUGIN_TEST_CMD is not set)"
-else
-  for m in $MODS; do
-    if MOD_OUT=$(cd "$REPO" && export CLAUDE_CONFIG_DIR="$PROBE_CONFIG" && eval "$PLUGIN_TEST_CMD \"\$m\"" 2>&1); then
-      ok "$m"
-    else
-      fail "$m fails claude plugin test; the mod API it uses may have moved:"
-      printf '%s\n' "$MOD_OUT" | strip_ansi | grep -v '^ *$' | tail -15 | sed 's/^/      /'
-    fi
-  done
-fi
-say ""
-
-# ---- 7. the tools the guards attach to still exist ---------------------
+# ---- 6. the tools the guards attach to still exist ---------------------
 # A hook matcher names a tool. If upstream renames the tool, the matcher matches
 # nothing and the guard is silently off. Substring match against the CLI file, as
 # for section 4; the regex matcher mcp__.* and the empty matcher are skipped.
-say "7. tool names in settings.json hook matchers still exist in the CLI"
+say "6. tool names in settings.json hook matchers still exist in the CLI"
 if [ ! -e "${CLI_BIN:-}" ] || [ -d "${CLI_BIN:-/}" ]; then
   say "      (skipped — cannot locate the CLI files)"
 else

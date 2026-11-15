@@ -94,6 +94,18 @@ OUT=$(bash "$UPD" 2>&1); RC=$?
 [ "$(ls "$HOME/.claude" | grep -c '^installed-')" = 1 ] && pass "install.sh not run again" || fail "reinstalled" ""
 
 echo ""
+echo "=== up to date, a skills fetch an install left behind is retried from the installed pin ==="
+# A stand-in skills-sync.sh where install.sh puts the real one: it logs its arguments and fails.
+printf 'url=x\ntag=v1.0.0\ncommit=%s\n' "$(printf '0%.0s' $(seq 1 40))" > "$HOME/.claude/skills.pin"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s"\necho "  ⚠ skills: stand-in failure"; exit 1\n' "$TMP/sync.log" > "$HOME/.claude/skills-sync.sh"
+OUT=$(bash "$UPD" 2>&1); RC=$?
+[ "$RC" = 0 ] && [ "$(cat "$TMP/sync.log" 2>/dev/null)" = "--if-behind" ] && [[ "$OUT" == *"skills: still behind the pin; the next run retries:"*"stand-in failure"* ]] \
+  && pass "an up-to-date run retries the skills; a failure there is named and still exit 0" || fail "skills retry" "rc=$RC $OUT"
+bash "$UPD" --check >/dev/null 2>&1
+[ "$(wc -l < "$TMP/sync.log" | tr -d ' ')" = 1 ] && pass "--check retries nothing" || fail "--check retried" "$(cat "$TMP/sync.log")"
+rm -f "$HOME/.claude/skills.pin" "$HOME/.claude/skills-sync.sh"
+
+echo ""
 echo "=== --check reports and installs nothing ==="
 push_tag v1.0.2 1   # doctor goes red on it, for the next case
 OUT=$(bash "$UPD" --check 2>&1); RC=$?
