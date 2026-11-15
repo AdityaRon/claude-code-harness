@@ -175,8 +175,14 @@
       "Bash(kubectl * edit *)",
       "Bash(kubectl scale *)",
       "Bash(kubectl * scale *)",
-      "Bash(kubectl rollout *)",
-      "Bash(kubectl * rollout *)",
+      "Bash(kubectl rollout restart *)",
+      "Bash(kubectl * rollout restart *)",
+      "Bash(kubectl rollout undo *)",
+      "Bash(kubectl * rollout undo *)",
+      "Bash(kubectl rollout pause *)",
+      "Bash(kubectl * rollout pause *)",
+      "Bash(kubectl rollout resume *)",
+      "Bash(kubectl * rollout resume *)",
       "Bash(kubectl drain *)",
       "Bash(kubectl * drain *)",
       "Bash(kubectl cordon *)",
@@ -196,9 +202,7 @@
       "Bash(kubectl exec *)",
       "Bash(kubectl * exec *)",
       "Bash(kubectl cp *)",
-      "Bash(kubectl * cp *)",
-      "Bash(kubectl port-forward *)",
-      "Bash(kubectl * port-forward *)"
+      "Bash(kubectl * cp *)"
     ]
   },
   "hooks": {
