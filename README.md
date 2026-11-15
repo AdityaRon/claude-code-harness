@@ -65,9 +65,9 @@ main after each daily Upstream drift run when anything but `CHANGELOG.md`
 changed, gated on `doctor.sh` and, when `hooks/` or `config/settings.json`
 changed, the hook benchmark: [docs/releases.md](docs/releases.md).
 
-**Keeping up with Claude Code.** Claude Code auto-updates, so the facts the
-harness relies on are pinned in `config/upstream-contract.json` and checked daily
-by `tools/upstream-check.sh`: [docs/upstream-contract.md](docs/upstream-contract.md).
+**Keeping up with Claude Code.** Claude Code auto-updates, so what the harness
+relies on (hook events, the permission mode, memory index limits) is checked daily
+for breakage by `tools/upstream-check.sh`: [docs/upstream-contract.md](docs/upstream-contract.md).
 
 **Testing.** `bash doctor.sh` runs every suite in `tests/`; a new suite sources
 `tests/lib.sh` for `pass` and `fail`. `--smoke` runs the few in `tests/smoke.list`
@@ -179,7 +179,7 @@ memory-archive. Their protocols, tests and changelog are there.
 - Guards fail closed: no jq or unparsable input denies (`tests/fail-closed.test.sh`), and a crash or timeout blocks through `"onFailure": "block"` (Claude Code 2.1.295 and later). Inside `bash-guards`, a guard that dies is a deny naming it, and an early exit of the hook itself is made exit 2 (`tests/bash-guards.test.sh`).
 - No `autoMode` block ships: setting a category appears to replace Claude Code's own rules for it, 65 `soft_deny` rules by the `claude auto-mode defaults` count in [docs/auto-mode.md](docs/auto-mode.md).
 - Every deny and ask is an audit line; MCP calls are logged, not guarded ([docs/hooks.md](docs/hooks.md)).
-- The memory tools propose and never delete ([docs/memory.md](docs/memory.md)), and the upstream facts are a contract checked daily ([docs/upstream-contract.md](docs/upstream-contract.md)).
+- The memory tools propose and never delete ([docs/memory.md](docs/memory.md)), and what it relies on in Claude Code is checked daily for breakage ([docs/upstream-contract.md](docs/upstream-contract.md)).
 
 ## Known limitations
 
@@ -207,7 +207,7 @@ bin/                     ← every file installed flat to ~/.claude by install.s
   relocate-clones.sh     ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads (docs/known-limitations.md)
   spend-report.py        ← what sessions, subagents and loop ticks cost, from local transcripts
 tools/                   ← run from the clone only, by CI, releases and whoever maintains a fork
-  upstream-check.sh      ← the daily drift check
+  upstream-check.sh      ← the daily breakage check
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts

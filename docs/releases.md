@@ -6,9 +6,9 @@ the benchmark. Moved from the README.
 ## Releases
 
 Releases are tags `vMAJOR.MINOR.PATCH`, each with a GitHub Release and a
-`CHANGELOG.md` entry, and they follow Claude Code with no manual step. When
-Claude Code ships, the daily Upstream drift run lands the contract bump. The
-Release workflow runs when that run completes (and on
+`CHANGELOG.md` entry, and are cut with no manual step. When
+Claude Code breaks something the harness relies on, the daily Upstream drift run
+opens a draft fix for you to read. The Release workflow runs when that run completes (and on
 `gh workflow run release.yml`, which takes `-f version=v1.2.0` or
 `-f bump=minor`) and tags main whenever anything but `CHANGELOG.md` changed
 since the previous tag, after `doctor.sh` and, when `hooks/` or

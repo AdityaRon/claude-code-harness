@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# Detects when Claude Code has drifted away from what this harness assumes.
+# Detects when Claude Code has changed something this harness relies on.
 #
 # The harness hard-codes upstream facts: which hook events exist, which
-# permission modes are valid, what the CLI accepts in settings.json. Claude Code
-# auto-updates and those facts move. A push-triggered CI run can never catch it,
-# because upstream changes when this repo does not — so this is built to run on a
-# schedule (.github/workflows/upstream-drift.yml) and to fail loudly when reality
-# and upstream-contract.json disagree.
+# permission modes are valid, what the CLI accepts in settings.json, how large a
+# memory index it loads. Claude Code auto-updates and those facts move. A
+# push-triggered CI run can never catch it, because upstream changes when this
+# repo does not, so this runs on a schedule (.github/workflows/upstream-drift.yml).
+# Breakage only: it does not assess what a release added.
 #
 # Auth-free by design: `claude doctor` and `claude --version` need no login, so
 # CI runs them without credentials.
 #
 # Usage:  bash upstream-check.sh
-# Exit:   0 contract holds · 1 BREAKAGE · 2 upstream grew (needs acknowledging)
-#         3 could not run the checks
+# Exit:   0 nothing relied on has moved · 1 BREAKAGE · 2 could not confirm
+#         something (a settings key the CLI no longer mentions, memory limits
+#         unreadable) · 3 could not run the checks
 #
 # Testing seam: CLAUDE_DOCTOR_CMD overrides how doctor is invoked so
 # tests/upstream-check.test.sh can feed canned output with no CLI installed.
@@ -22,7 +23,7 @@
 set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SETTINGS="$REPO/config/settings.json"
+SETTINGS=${CLAUDE_UPSTREAM_SETTINGS:-$REPO/config/settings.json}  # test seam
 CONTRACT=${CLAUDE_UPSTREAM_CONTRACT:-$REPO/config/upstream-contract.json}  # test seam
 DOCTOR_CMD=${CLAUDE_DOCTOR_CMD:-"claude doctor"}
 SENTINEL_EVENT="HarnessDriftSentinel"
@@ -104,7 +105,7 @@ live_modes(){
     | grep -o '"[a-zA-Z]*"' | tr -d '"' | sort -u
 }
 
-say "Claude Code upstream drift check"
+say "Claude Code breakage check"
 say ""
 
 # When doctor is stubbed we are under test: don't spawn the real CLI just to read
@@ -117,9 +118,7 @@ elif command -v claude >/dev/null 2>&1; then
 else
   VERSION="(stubbed)"
 fi
-PINNED=$(jq -r '.last_verified_version // "unknown"' "$CONTRACT")
 say "CLI now:       $VERSION"
-say "Last verified: $PINNED"
 say ""
 
 # ---- 1. the shipped settings.json still validates ----------------------
@@ -158,14 +157,17 @@ fi
 say ""
 
 # ---- 3. the permission mode we ship is still accepted ------------------
-say "3. shipped permissions.defaultMode is still valid"
+say "3. shipped permissions.defaultMode is the expected one and still valid"
 WANT_MODE=$(jq -r '.permissions.defaultMode // empty' "$SETTINGS")
+EXPECT_MODE=$(jq -r '.expected_default_mode // empty' "$CONTRACT")
 MODES=$(live_modes)
 MODES_ONELINE=$(printf '%s\n' "$MODES" | tr '\n' ' ')
 if [ -z "$MODES" ]; then
   warn "could not read the valid-mode list from doctor"
 elif [ -z "$WANT_MODE" ]; then
   warn "settings.json sets no defaultMode"
+elif [ "$WANT_MODE" != "$EXPECT_MODE" ]; then
+  fail "settings.json sets defaultMode \"$WANT_MODE\" but upstream-contract.json expects \"${EXPECT_MODE:-unset}\""
 elif printf '%s\n' "$MODES" | grep -qxF "$WANT_MODE"; then
   ok "\"$WANT_MODE\" accepted (upstream offers: $MODES_ONELINE)"
 else
@@ -173,32 +175,13 @@ else
 fi
 say ""
 
-# ---- 4. did upstream grow capabilities we have not looked at? ----------
-say "4. upstream capabilities not yet acknowledged in upstream-contract.json"
-if [ -n "$LIVE" ]; then
-  KNOWN=$(jq -r '.acknowledged_hook_events[]' "$CONTRACT" | sort -u)
-  NEW=$(comm -23 <(printf '%s\n' "$LIVE") <(printf '%s\n' "$KNOWN") || true)
-  GONE=$(comm -13 <(printf '%s\n' "$LIVE") <(printf '%s\n' "$KNOWN") || true)
-  if [ -n "$NEW" ]; then
-    warn "new hook events exist upstream — adopt them, or record them as considered:"
-    printf '%s\n' "$NEW" | sed 's/^/      + /'
-  else
-    ok "no unacknowledged events"
-  fi
-  if [ -n "$GONE" ]; then
-    warn "events in the contract are no longer offered upstream (contract is stale):"
-    printf '%s\n' "$GONE" | sed 's/^/      - /'
-  fi
-fi
-say ""
-
-# ---- 4b. do the settings keys the harness sets still exist? ------------
+# ---- 4. do the settings keys the harness sets still exist? ------------
 # `claude doctor` validates hook events and enumerated values, but it does NOT
 # flag unknown top-level keys — a renamed setting silently becomes a no-op with
 # no warning anywhere. There is no oracle for this, so fall back to asking
 # whether the CLI still mentions the key at all. Advisory only: a bundled build
 # could legitimately mangle a string, so this must never be a hard failure.
-say "4b. settings keys the harness sets are still known to the CLI"
+say "4. settings keys the harness sets are still known to the CLI"
 CLI_BIN=""
 if [ -n "${CLAUDE_CLI_BIN:-}" ]; then
   CLI_BIN=$CLAUDE_CLI_BIN            # testing seam, mirrors CLAUDE_DOCTOR_CMD
@@ -234,45 +217,7 @@ else
 fi
 say ""
 
-# ---- 4c. does the acknowledged non-hook surface still exist? -----------
-# Section 4 can catch an unacknowledged hook EVENT because `claude doctor`
-# enumerates them. Nothing enumerates tools or settings keys, so cross-session
-# messaging — two tools and two settings keys — shipped in 2.1.224 while this
-# check reported "contract holds". This section closes the verification half of
-# that gap: every capability a human wrote into acknowledged_surface is
-# confirmed to still exist, so a rename cannot silently strand a recorded
-# decision. It does NOT close the discovery half, and says so, because a green
-# section that implies coverage it does not have is worse than no section.
-say "4c. acknowledged tools and settings keys still exist upstream"
-if [ ! -e "${CLI_BIN:-}" ] || [ -d "${CLI_BIN:-/}" ]; then
-  say "      (skipped — cannot locate the CLI files)"
-else
-  SURFACE=$(jq -r '(.acknowledged_surface // {})
-                   | (((.tools // {}) | keys[]?), ((.settings_keys // {}) | keys[]?))' \
-            "$CONTRACT" 2>/dev/null | grep -v '^_comment$' || true)
-  if [ -z "$SURFACE" ]; then
-    warn "acknowledged_surface is empty — nothing outside hook events is being tracked."
-  else
-    SURFACE_N=0; SURFACE_GONE=""
-    for cap in $SURFACE; do
-      SURFACE_N=$((SURFACE_N+1))
-      grep -qF "$cap" "$CLI_BIN" 2>/dev/null || SURFACE_GONE="$SURFACE_GONE $cap"
-    done
-    if [ -n "$SURFACE_GONE" ]; then
-      warn "acknowledged but no longer present in the CLI — renamed or removed?$SURFACE_GONE"
-      warn "the recorded decision for each is now stranded; re-read it before trusting it."
-    else
-      ok "all $SURFACE_N acknowledged capabilities still present"
-    fi
-    # Print the denominator. A count a human can compare against the docs is the
-    # difference between "we checked everything" and "we checked these N".
-    say "      verified $SURFACE_N acknowledged capabilit$([ "$SURFACE_N" = 1 ] && echo y || echo ies); this section CANNOT"
-    say "      discover an unacknowledged one — nothing enumerates tools or settings keys."
-  fi
-fi
-say ""
-
-# ---- 4d. are the memory index limits still what we enforce? ------------
+# ---- 5. are the memory index limits still what we enforce? ------------
 # memory-lint and memory-verify both gate on 200 lines / 25,000 bytes, and for a
 # while those numbers were folklore: this repo's own research doc said the line
 # cap was "unsubstantiated" while two tools enforced it as fact. Both readings
@@ -284,7 +229,7 @@ say ""
 # extracts the two identifiers from that expression and then resolves their
 # values, so a minifier rename moves the check with the code rather than
 # stranding it.
-say "4d. memory index limits match the CLI"
+say "5. memory index limits match the CLI"
 if [ ! -e "${CLI_BIN:-}" ] || [ -d "${CLI_BIN:-/}" ]; then
   say "      (skipped — cannot locate the CLI files)"
 else
@@ -348,10 +293,10 @@ else
     else
       [ "$GOT_LINES" = "$WANT_LINES" ] \
         && ok "index line limit $GOT_LINES matches the contract" \
-        || warn "index LINE limit is $GOT_LINES upstream, contract says ${WANT_LINES:-unset} — memory-lint and memory-verify are gating on the wrong number."
+        || fail "index LINE limit is $GOT_LINES upstream, contract says ${WANT_LINES:-unset} — memory-lint and memory-verify are gating on the wrong number."
       [ "$GOT_BYTES" = "$WANT_BYTES" ] \
         && ok "index byte limit $GOT_BYTES matches the contract" \
-        || warn "index BYTE limit is $GOT_BYTES upstream, contract says ${WANT_BYTES:-unset} — memory-lint and memory-verify are gating on the wrong number."
+        || fail "index BYTE limit is $GOT_BYTES upstream, contract says ${WANT_BYTES:-unset} — memory-lint and memory-verify are gating on the wrong number."
       # The unit, not just the number. "byteCount" is why this harness reports
       # bytes; if upstream ever switched to a character count, every threshold
       # here would be measuring the wrong thing while still matching on value.
@@ -361,84 +306,22 @@ else
 fi
 say ""
 
-# ---- 5. informational: which live events the harness leaves unused -----
-if [ -n "$LIVE" ]; then
-  say "5. valid events the harness does not hook (informational)"
-  UNUSED=$(comm -23 <(printf '%s\n' "$LIVE") <(printf '%s\n' "$USED") || true)
-  if [ -n "$UNUSED" ]; then
-    printf '%s\n' "$UNUSED" | tr '\n' ' ' | fold -s -w 74 | sed 's/^/      /'
-  else
-    say "      (none — the harness hooks everything)"
-  fi
-  say ""
-fi
-
-# ---- 6. releases nobody has assessed ------------------------------------
-# Sections 1-4 only see what doctor and the binary enumerate, so new tools and
-# settings keys arrive silently and the job stays green. The changelog is the one
-# source that names them. This was a NOTE until 2026-09; the contract then sat 13
-# releases behind while every scheduled run passed.
-# Seams: CLAUDE_CHANGELOG_PATH (CI downloads it; no network here), CLAUDE_CLI_VERSION.
-say "6. changelog entries since last verification"
-CHANGELOG=${CLAUDE_CHANGELOG_PATH:-$HOME/.claude/cache/changelog.md}
-CUR=${CLAUDE_CLI_VERSION:-${VERSION%% *}}
-PIN=${PINNED%% *}
-if [ ! -f "$CHANGELOG" ]; then
-  if [ "$VERSION" != "(stubbed)" ] && [ "$CUR" != "$PIN" ]; then
-    warn "CLI $CUR is ahead of the contract ($PIN); no changelog at $CHANGELOG to list what changed."
-  else
-    say "      (skipped: no changelog at $CHANGELOG)"
-  fi
+# ---- 6. the tools the guards attach to still exist ---------------------
+# A hook matcher names a tool. If upstream renames the tool, the matcher matches
+# nothing and the guard is silently off. Substring match against the CLI file, as
+# for section 4; the regex matcher mcp__.* and the empty matcher are skipped.
+say "6. tool names in settings.json hook matchers still exist in the CLI"
+if [ ! -e "${CLI_BIN:-}" ] || [ -d "${CLI_BIN:-/}" ]; then
+  say "      (skipped — cannot locate the CLI files)"
 else
-  # Not every release gets a heading. An unlisted CLI version starts at the newest
-  # entry (over-report, never skip); an unlisted pin cannot bound the slice at all.
-  if ! grep -qxF "## $CUR" "$CHANGELOG"; then
-    NEWEST=$(grep -m1 '^## [0-9]' "$CHANGELOG" | sed 's/^## //')
-    # Without this, a release newer than its changelog entry reads as verified.
-    if [ "$CUR" != "$NEWEST" ] && { [ "$VERSION" != "(stubbed)" ] || [ -n "${CLAUDE_CLI_VERSION:-}" ]; }; then
-      warn "CLI $CUR has no changelog heading; listing from $NEWEST. Re-check once it is published."
-      UNLISTED=1
-    fi
-    CUR=$NEWEST
-  fi
-  if ! grep -qxF "## $PIN" "$CHANGELOG"; then
-    warn "last_verified_version $PIN has no changelog heading; set it to a listed release."
-  else
-  SLICE=$(awk -v cur="## $CUR" -v pin="## $PIN" '$0==pin{exit} $0==cur{p=1} p' "$CHANGELOG")
-  RELEASES=$(printf '%s\n' "$SLICE" | grep -c '^## ' || true)
-  if [ "$CUR" = "$PIN" ]; then
-    [ -z "${UNLISTED:-}" ] && ok "contract verified at the installed version ($CUR)"
-  elif [ "$RELEASES" -eq 0 ]; then
-    say "      CLI $CUR is not newer than the contract ($PIN) in this changelog; nothing to assess."
-  else
-    # Names the contract already has a decision for: a hit means that decision may be stale.
-    NAMES=$(jq -r '[(.acknowledged_hook_events//[])[], ((.acknowledged_surface.tools//{})|keys[]),
-                    ((.acknowledged_surface.settings_keys//{})|keys[])] | map(select(. != "_comment")) | join("|")' "$CONTRACT")
-    # Security terms match anywhere; feature terms only on Added/Changed lines,
-    # which cut 123 lines to 88 on 2.1.267-2.1.280 without losing an assessed item.
-    # Memory and rules files are what install.sh ships; 2.1.284 fixes for both
-    # were Fixed/Improved lines and only the reviewer's full read caught them.
-    # 2.1.287 wrote "dangerous `rm`", and its sensitive-file and plugin (Mods)
-    # lines were caught the same way; a mod runs above every guard, so any line naming one.
-    STRONG="hook|permission rule|allow rule|deny|dangerous.{1,3}rm|sensitive file|[Mm]ods?([^a-z]|$)|sandbox|secret|autoMode|settings[.]json|MEMORY[.]md|CLAUDE[.]md|[.]claude/rules${NAMES:+|$NAMES}"
-    BROAD="tool|setting|effort|plugin|\`CLAUDE_|subagent|auto mode|now the default|\`[a-z]+[A-Z][A-Za-z]+\`"
-    HITS=$(printf '%s\n' "$SLICE" | grep -v -E '^- (\[[A-Za-z ]+\]|Self-hosted runner:|Windows:)' \
-           | awk -v s="$STRONG" -v b="$BROAD" '/^## /{h=$0; next}
-               $0 ~ s || ($0 ~ /^- (Added|Changed|Removed|Reverted)/ && $0 ~ b) {if(h){print h; h=""} print}')
-    warn "$RELEASES release(s) since $PIN have not been assessed; harness-relevant entries:"
-    if [ -z "$HITS" ]; then
-      # upstream-drift.yml greps this line and moves the pin itself; it then
-      # re-runs the check to prove nothing else warned. Rare: 1 of the 21
-      # releases 2.1.280-2.1.302 (2.1.291, two entries) matched nothing.
-      say "      (no entry matched the harness filter)"
-      say "      Nothing to assess: set last_verified_version to \"$CUR (Claude Code)\"."
-    else
-      printf '%s\n' "$HITS" | cut -c1-200 | sed 's/^/      /'
-      say "      Assess each, record decisions in upstream-contract.json, then set"
-      say "      last_verified_version to \"$CUR (Claude Code)\"."
-    fi
-  fi
-  fi
+  TOOLS=$(jq -r '[.hooks[][]?.matcher // empty | split("|")[] | select(test("^[A-Za-z]+$"))] | unique[]' "$SETTINGS")
+  TOOLS_N=0
+  for t in $TOOLS; do
+    TOOLS_N=$((TOOLS_N+1))
+    if grep -qF "$t" "$CLI_BIN" 2>/dev/null; then ok "$t"
+    else fail "$t is named in a hook matcher but the CLI no longer mentions it; the guard on it is off"; fi
+  done
+  [ "$TOOLS_N" -gt 0 ] || fail "found no tool names in the hook matchers (settings.json layout changed?)"
 fi
 say ""
 
@@ -446,8 +329,8 @@ if [ "$BREAKAGE" -eq 1 ]; then
   say "RESULT: BREAKAGE — the harness relies on something upstream changed."
   finish 1
 elif [ "$ADVISORY" -eq 1 ]; then
-  say "RESULT: upstream grew. Review, then acknowledge in upstream-contract.json."
+  say "RESULT: could not confirm everything the harness relies on. Verify by hand."
   finish 2
 fi
-say "RESULT: contract holds."
+say "RESULT: nothing the harness relies on has moved."
 finish 0

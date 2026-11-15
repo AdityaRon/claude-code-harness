@@ -45,7 +45,6 @@ repo layout is for reading the repo, not for the installed tree.
   harness-update.conf      ← with_cli=1 or 0, from --with-cli or --no-cli
   harness-src/             ← harness-update.sh's own clone, made on its first run
   harness.version          ← version, commit, the clone it came from and its origin, install time
-  harness-contract.version ← last_verified_version from config/upstream-contract.json
   skills-sync.sh           ← installs the claude-code-skills release skills.pin names
   skills.pin               ← that release's URL, tag and commit, from config/skills.pin
   skills-src/              ← skills-sync.sh's clone of claude-code-skills, at that tag
