@@ -14,8 +14,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    # macOS takes about 4 minutes. Without a limit a hung step waits 6 hours.
-    timeout-minutes: 20
+    # Without a limit a hung step waits 6 hours. macOS took 17m51s to 18m34s
+    # on main's runs of 2026-11-13 and 11-14, so 20 cut off the next suite added.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
