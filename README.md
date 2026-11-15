@@ -3,11 +3,14 @@
 Hooks, settings and rules for Claude Code, and the skills from
 [claude-code-skills](https://github.com/AdityaRon/claude-code-skills) at a pinned
 release, installed into `~/.claude` once per machine, so they apply in every project without touching repo files.
-PreToolUse guards stop actions that are hard to undo or that leak secrets
-(force pushes, `rm -rf` outside scratch, reading `.env`, writing a token to
-disk), ask you about a short list (cluster writes, request bodies to unknown
-hosts, inline code that reads the environment), and let everything else run
-under auto mode. Every deny and ask is a line in `~/.claude/logs/audit.log`.
+PreToolUse guards deny what is hard to undo or leaks secrets (force pushes,
+`rm -rf` of home or root, reading `.env`, writing a token to disk), and a few
+asks remain where shared state changes (cluster writes and secret reads, through
+native ask rules; writes to this harness's own config). Everything else is left
+to Claude Code's auto mode and its classifier. The guards that auto mode may now
+cover run in shadow mode until 2026-11-29: they log what they would have decided
+and decide nothing ([docs/shadow-mode.md](docs/shadow-mode.md), #237). Every deny
+and ask is a line in `~/.claude/logs/audit.log`.
 
 What the guards cost: `python3 tools/hook-bench.py --base v1.0.0 --head HEAD`, run
 at 4f4dae0 on an Apple M2 with macOS 26.6.2 on 2026-10-17 UTC, measured a Bash
@@ -18,6 +21,9 @@ a same-run table against the previous tag (`.github/workflows/release.yml`).
 Asks cost more time: in 49 days of one machine's transcripts
 (`docs/permission-friction.md`), 849 of 872 guard asks were approved, and the
 median approved ask held its call 133 s, against 5 s for a Bash call with no prompt.
+In the 30 days to 2026-11-15 (`tools/permission-friction.py --days 30`), 476
+guard asks drew 1 rejection, a `kubectl delete`; the asks that were always
+approved are gone and the kubectl one is a native ask rule (#237).
 On your own machine, `bash doctor.sh --latency` reads each hook's wall time per day from
 Claude Code's transcripts, and `bash doctor.sh --census` counts claude processes and their memory.
 
@@ -87,15 +93,15 @@ skip, except in CI, which clones it.
 | Hook | Runs on | Behaviour |
 |---|---|---|
 | `bash-guards` | Bash, Monitor | Runs the seven Bash guards below as one hook: one parse of the call, each guard a fork, deny over ask over allow. A guard that dies is a deny naming it. `~/.claude/hooks/bash-guards.skip` switches one off ([docs/guards.md](docs/guards.md)) |
-| `env-guard` | Bash | Deny: reading, dumping, copying or sending env values and dotfiles (`cat .env`, `printenv`, `nc`) |
+| `env-guard` | Bash | Deny: reading, dumping, copying or sending env values and dotfiles (`cat .env`, `printenv`, `nc`). Shadow: a bare `env` |
 | `sensitive-file-guard` | Read, Grep, file writes | Deny: `.env`, keys, SSH and cloud credentials, credential folders. Ask: a Grep at or above your home folder |
 | `secret-scanner` | file writes | Deny: high-confidence token shapes (AWS, GitHub, Slack, Stripe, Google, Anthropic, OpenAI, PEM) in written content |
 | `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, a broad `git add` that would stage a credential file or that it cannot check. Ask: deleting a remote branch whose tip no other ref holds, remote changes, stash drop. Runs: local branch deletes, `worktree remove --force`, identity and signing config |
-| `rm-guard` | Bash | Deny: recursive `rm` of home, root or a top-level folder, and `rm -rf` outside the session's scratch folder |
+| `rm-guard` | Bash | Deny: recursive `rm` of home, root or a top-level folder. Shadow: `rm -rf` outside the session's scratch folder |
 | `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, the Bash guards' skip file, shell startup files, `~/.gitconfig`, LaunchAgents, Bash writes into a mod Claude Code loads by itself, and copies or extractions into a `.claude` folder. Deny: moving or emptying `~/.claude` |
-| `network-guard` | Bash | Deny: file uploads and pipe-to-shell. Ask: request bodies, `DELETE`, `curl`/`wget` to hosts off the allowlist, `scp`/`rsync`, local servers. WebFetch is not guarded |
-| `interpreter-guard` | Bash | Ask: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts |
-| `kubectl-guard` | Bash | Ask: every mutating verb wherever it sits, secret reads, and any subcommand it cannot classify |
+| `network-guard` | Bash | Deny: file uploads and pipe-to-shell. Ask: edits to the machine-local network allowlist. Shadow: request bodies, `DELETE`, `curl`/`wget` to hosts off the allowlist, `scp`/`rsync`, local servers. WebFetch is not guarded |
+| `interpreter-guard` | Bash | Shadow: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts. Auto mode drops `Bash(python3:*)`, so its classifier sees them |
+| `kubectl-guard` | Bash | Shadow. Read verbs are allowed by prefix; native ask rules in `config/settings.json` ask before every mutating verb and secret read, verb first or flags first |
 | `subagent-cache-guard` | a subagent's tool calls, SubagentStop | Deny: a subagent's tool calls once its prompt cache went cold 5 times in one run (`CLAUDE_SUBAGENT_MAX_COLD_STARTS`), until it replies with where it got to. Main sessions are left alone |
 | `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review. Anything else it hooks or calls, outside the guards included, is shown in a notice |
 | `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
@@ -113,7 +119,10 @@ A guard's deny runs before the permission system, so it holds in every
 permission mode (a loaded mod is the exception). A guard's ask still comes to
 you in auto mode: Claude Code's [permission-modes doc](https://code.claude.com/docs/en/permission-modes)
 says auto mode "still shows you those prompts". The auto-mode classifier
-decides only what no guard or rule names. Every row in full:
+decides only what no guard or rule names. "Shadow" above means the guard or rule
+logs what it would have decided to `~/.claude/logs/shadow.log` and decides
+nothing; the list is `hooks/lib/shadow.sh`, and `tools/shadow-report.py` shows
+what the classifier or a native rule did instead. Every row in full:
 [docs/guards.md](docs/guards.md), [docs/hooks.md](docs/hooks.md),
 [docs/auto-mode.md](docs/auto-mode.md).
 
@@ -175,15 +184,15 @@ memory-archive. Their protocols, tests and changelog are there.
 
 ## Design choices
 
-- A hook sees the whole command and a permission rule sees only a prefix, so enforcement lives in the guards and the deny list is a backstop ([docs/permissions.md](docs/permissions.md)).
+- The guards keep what auto mode cannot see or should not judge: file reads it never classifies, commands an allow rule may pass before the classifier, and actions that cannot be undone. A hook sees the whole command and a permission rule sees a prefix or a space-wildcard pattern, so those checks live in the guards; native ask rules cover kubectl writes and secret reads, and the classifier judges the rest ([docs/permissions.md](docs/permissions.md)).
 - Guards fail closed: no jq or unparsable input denies (`tests/fail-closed.test.sh`), and a crash or timeout blocks through `"onFailure": "block"` (Claude Code 2.1.295 and later). Inside `bash-guards`, a guard that dies is a deny naming it, and an early exit of the hook itself is made exit 2 (`tests/bash-guards.test.sh`).
-- No `autoMode` block ships: setting a category appears to replace Claude Code's own rules for it, 65 `soft_deny` rules by the `claude auto-mode defaults` count in [docs/auto-mode.md](docs/auto-mode.md).
+- No `autoMode` block ships: setting a category appears to replace Claude Code's own rules for it, 72 `soft_deny` rules by `claude auto-mode defaults` on 2.1.325 ([docs/auto-mode.md](docs/auto-mode.md)).
 - Every deny and ask is an audit line; MCP calls are logged, not guarded ([docs/hooks.md](docs/hooks.md)).
 - The memory tools propose and never delete ([docs/memory.md](docs/memory.md)), and what it relies on in Claude Code is checked daily for breakage ([docs/upstream-contract.md](docs/upstream-contract.md)).
 
 ## Known limitations
 
-- Regex guards can be evaded by a determined agent; the OS sandbox is the real containment.
+- Regex guards can be evaded by a determined agent; the OS sandbox is the real containment. Guard hardening is frozen as of 2026-11-15, so a bypass of a guard's regex is a known limitation rather than a fix.
 - A Claude Code mod (2.1.287+) can override the guards; `mod-gate` reviews only mods written through the file tools, and `config-guard` asks before a Bash write into one Claude Code loads by itself.
 - MCP connectors are logged, not guarded.
 - In auto mode the classifier, by judgment, decides everything no guard or rule names.
