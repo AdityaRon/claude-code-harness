@@ -4,7 +4,9 @@ Releases are tagged `vMAJOR.MINOR.PATCH`. The release workflow
 (`.github/workflows/release.yml`) writes each entry from the PRs merged since
 the previous tag and the hook benchmark against it (`bin/hook-bench.py`); the
 GitHub Release carries the same text. `bin/harness-update.sh` moves an
-installed machine to the newest tag.
+installed machine to the newest tag. After v1.4.2 the skills live in
+[claude-code-skills](https://github.com/AdityaRon/claude-code-skills), with their
+own changelog; `config/skills.pin` names the release each version installs.
 
 ## v1.4.2 (2026-11-14)
 

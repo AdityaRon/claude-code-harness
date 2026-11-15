@@ -48,13 +48,10 @@ OUT=$(report "$PREV")
 [[ "$OUT" == *"Hooks and settings, on each session's next tool call:  config/settings.json  hooks/a.sh  hooks/lib/l.sh  hooks/new.sh"$'\n'* ]] \
   && pass "hooks and settings, a part of lib.sh and a file not yet committed included" || fail "live group" "$OUT"
 [[ "$OUT" == *"Rules, when a session starts or resumes:  rules/r.md"$'\n'* ]] && pass "rules" || fail "rules" "$OUT"
-[[ "$OUT" == *"Tools in ~/.claude, on their next run:  bin/t.sh"$'\n'* ]] && pass "tools" || fail "tools" "$OUT"
-[[ "$OUT" == *"Skills, when a running session calls them again: /s1 /s2 /s3"$'\n'* ]] \
-  && pass "skills by name, once each; a template at any depth counts" || fail "skills" "$OUT"
-[[ "$OUT" == *'type `! claude respawn <job>` at your own prompt'*"skills/c/panel/hooks/register.tsx" ]] \
-  && pass "a panel: the respawn command, at the user's own prompt" || fail "panel" "$OUT"
-[[ "$OUT" != *"/c "* && "$OUT" != *"/c"$'\n'* && "$OUT" != *"docs/d.md"* ]] \
-  && pass "a panel change does not list its skill; clone-only files stay out" || fail "extra lines" "$OUT"
+[[ "$OUT" == *"Tools in ~/.claude, on their next run:  bin/t.sh" ]] && pass "tools" || fail "tools" "$OUT"
+[[ "$OUT" != *skills* && "$OUT" != *Skills* && "$OUT" != *respawn* ]] \
+  && pass "a skills/ in the clone is not reported: claude-code-skills' install.sh reports its own" || fail "skills reported" "$OUT"
+[[ "$OUT" != *"docs/d.md"* ]] && pass "clone-only files stay out" || fail "extra lines" "$OUT"
 
 echo ""
 echo "=== by hand, a deleted file is named where its installed copy stays ==="
@@ -182,8 +179,38 @@ done
   || fail "references, wider" "missed:$MISSED; $OUT"
 [[ ! -e "$I4/t-free.sh" && "$OUT" == *"removed here"*"$I4/t-free.sh"* ]] \
   && pass "and one named nowhere is removed" || fail "unnamed removed" "$OUT"
-[[ -f "$OUTSIDE/bin/helper.py" && "$OUT" == *"$I4/skills/sk/bin/helper.py (outside ~/.claude through a symlink)"* ]] \
-  && pass "a copy in a skill linked from outside ~/.claude stays" || fail "symlinked skill" "$OUT"
+[[ -f "$OUTSIDE/bin/helper.py" && "$OUT" != *helper.py* ]] \
+  && pass "a skill's file the clone dropped is neither removed nor named, linked from outside or not" || fail "symlinked skill" "$OUT"
+
+echo ""
+echo "=== --prune removes nothing under ~/.claude/skills: claude-code-skills' install.sh owns it ==="
+# The upgrade from a release that shipped skills/ deletes all of it from the
+# clone, unchanged since install; tests/skills-sync.test.sh runs that upgrade.
+R6="$TMP/clone6"; H6="$TMP/rhome6"; I6="$H6/.claude"
+SK6="skills/a/SKILL.md skills/a/x.example.toml skills/a/bin/x.py skills/a/panel/hooks/r.tsx skills/a/panel/.claude-plugin/plugin.json"
+mkdir -p "$R6/bin" "$R6/skills/a/bin" "$R6/skills/a/panel/hooks" "$R6/skills/a/panel/.claude-plugin"
+for f in bin/gone.sh $SK6; do echo v1 > "$R6/$f"; done
+g6() { git -C "$R6" -c user.name=t -c user.email=t@example.com "$@"; }
+g6 init -q; g6 add -A; g6 commit -q -m A; A6=$(g6 rev-parse HEAD)
+g6 rm -rq skills bin/gone.sh; g6 commit -q -m B
+seed6() { rm -rf "$H6"; mkdir -p "$I6"; ( cd "$R6" && git archive "$A6" | tar -xf - -C "$I6" ); mv "$I6/bin/gone.sh" "$I6/gone.sh"; }
+seed6
+OUT=$(HOME="$H6" PATH="$FAKEBIN:$PATH" bash "$REPO/tools/pickup-report.sh" --prune "$A6" "$R6")
+LEFT=0; for f in $SK6; do [[ -f "$I6/$f" ]] && LEFT=$((LEFT+1)); done
+[[ "$LEFT" == 5 && "$OUT" != *"$I6/skills"* ]] \
+  && pass "each of 5 skill files the clone dropped stays, unnamed" || fail "skills pruned or named" "$LEFT of 5 left; $OUT"
+[[ ! -e "$I6/gone.sh" && "$OUT" == *"removed here"*"$I6/gone.sh"* ]] \
+  && pass "while a dropped tool in the same run is removed" || fail "prune ran" "$OUT"
+# The arms this repo had before the split, put back: this case must see them prune.
+sed '/^    \*:skills\/\*) return 1 ;;$/c\
+    4:skills/*/panel/.claude-plugin/plugin.json|4:skills/*/panel/hooks/*|4:skills/*/panel/types/*) G=PANEL ;;\
+    2:skills/*/SKILL.md|2:skills/*/*.example.toml|3:skills/*/bin/*) G=SKILL ;;' "$REPO/tools/pickup-report.sh" > "$TMP/mutant-pickup.sh"
+seed6
+OUT=$(HOME="$H6" PATH="$FAKEBIN:$PATH" bash "$TMP/mutant-pickup.sh" --prune "$A6" "$R6")
+LEFT=0; for f in $SK6; do [[ -f "$I6/$f" ]] && LEFT=$((LEFT+1)); done
+! cmp -s "$REPO/tools/pickup-report.sh" "$TMP/mutant-pickup.sh" && [[ "$LEFT" -lt 5 ]] \
+  && pass "with the old skills arms put back, $((5 - LEFT)) of them are removed: the check above can fail" \
+  || fail "the mutant" "$((5 - LEFT)) of 5 removed: it must differ from pickup-report.sh and remove some, or the check above cannot fail"
 
 echo ""
 echo "=== --prune decides every candidate before removing any, so order does not matter ==="

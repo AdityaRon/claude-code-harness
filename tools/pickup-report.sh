@@ -22,12 +22,13 @@ CLAUDE_REAL=$(cd "$CLAUDE_DIR" 2>/dev/null && pwd -P)
 map() {  # F
   local n=${1//[^\/]/}; n=${#n}
   case "$n:$1" in
+    # claude-code-skills' install.sh owns ~/.claude/skills (#237): a skills/ an
+    # older release held is neither reported nor removed from there.
+    *:skills/*) return 1 ;;
     1:hooks/*.sh|2:hooks/lib/*.sh|1:config/settings.json|1:config/merge-settings.jq|1:config/retired-rules.json) G=LIVE ;;
     1:rules/*.md) G=RULES ;;
     1:bin/*) G=TOOLS ;;
-    4:skills/*/panel/.claude-plugin/plugin.json|4:skills/*/panel/hooks/*|4:skills/*/panel/types/*) G=PANEL ;;
-    2:skills/*/SKILL.md|2:skills/*/*.example.toml|3:skills/*/bin/*) G=SKILL ;;
-    *) [[ "$1" == skills/* && "${1#skills/*/}" == templates/* ]] || return 1; G=SKILL ;;
+    *) return 1 ;;
   esac
   REL=$1
   if [[ "$G" == TOOLS ]]; then REL=${1#bin/}; fi
@@ -88,13 +89,13 @@ CHANGES=$({ git -C "$REPO" diff --no-renames --name-status "$PREV" --
             git -C "$REPO" ls-files --others --exclude-standard | awk '{ print "A\t" $0 }'; } 2>/dev/null \
           | sort -t "$TAB" -k2,2 -u)
 
-LIVE="" RULES="" TOOLS="" PANEL="" SKILLS="" GONE="" REMOVED="" CANDS="" DOOMED=""
+LIVE="" RULES="" TOOLS="" GONE="" REMOVED="" CANDS="" DOOMED=""
 while IFS=$TAB read -r st f; do
   [[ -n "${f:-}" ]] || continue
   map "$f" || continue
   # A file gone from the clone stays where an earlier install put it, unless
-  # --prune removes it. templates/ is swapped whole; config/ is merged.
-  if [[ "$st" == D && "$f" != skills/*/templates/* && "$f" != config/* ]]; then
+  # --prune removes it. config/ is merged.
+  if [[ "$st" == D && "$f" != config/* ]]; then
     dest="$CLAUDE_DIR/$REL"
     # Nothing there to keep or remove: no install wrote it, or it is gone already.
     [[ -e "$dest" || -L "$dest" ]] || continue
@@ -112,9 +113,6 @@ while IFS=$TAB read -r st f; do
     LIVE) LIVE="$LIVE  $f" ;;
     RULES) RULES="$RULES  $f" ;;
     TOOLS) TOOLS="$TOOLS  $f" ;;
-    PANEL) PANEL="$PANEL  $f" ;;
-    SKILL) s=${f#skills/}; s=${s%%/*}
-           case " $SKILLS " in *" /$s "*) ;; *) SKILLS="$SKILLS /$s" ;; esac ;;
   esac
 done <<< "$CHANGES"
 # Every candidate is decided before any is removed, so a file one of them names
@@ -139,7 +137,7 @@ while IFS= read -r d; do
   if rm -f -- "$d"; then REMOVED="$REMOVED  $d"; else GONE="$GONE  $d (could not remove)"; fi
 done <<< "$DOOMED"
 
-if [[ -z "$LIVE$RULES$TOOLS$PANEL$SKILLS$GONE$REMOVED" ]]; then
+if [[ -z "$LIVE$RULES$TOOLS$GONE$REMOVED" ]]; then
   echo "  ✓ nothing installed changed since ${PREV:0:12}"
   exit 0
 fi
@@ -147,8 +145,6 @@ echo "How running sessions pick up what changed since ${PREV:0:12}:"
 [[ -n "$LIVE" ]] && echo "  Hooks and settings, on each session's next tool call:$LIVE"
 [[ -n "$RULES" ]] && echo "  Rules, when a session starts or resumes:$RULES"
 [[ -n "$TOOLS" ]] && echo "  Tools in ~/.claude, on their next run:$TOOLS"
-[[ -n "$SKILLS" ]] && echo "  Skills, when a running session calls them again:$SKILLS"
-[[ -n "$PANEL" ]] && echo "  A panel, when the session that shows it restarts: type \`! claude respawn <job>\` at your own prompt (from another session the auto-mode classifier denies it):$PANEL"
 [[ -n "$REMOVED" ]] && echo "  Deleted from the clone, and removed here because install wrote it and nothing changed it (each is in git at ${PREV:0:12}):$REMOVED"
 [[ -n "$GONE" ]] && echo "  Deleted from the clone; the earlier copy stays until removed by hand:$GONE"
 exit 0

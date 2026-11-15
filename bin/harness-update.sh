@@ -82,6 +82,20 @@ make_clone() {
 
 installed_version() { recorded version; }
 
+# The harness is current, but a skills fetch that failed when it installed left
+# ~/.claude/skills behind its pin: retried here, from the installed pin.
+skills_retry() {
+  [[ "$CHECK" == 1 || ! -f "$HOME/.claude/skills.pin" || ! -f "$HOME/.claude/skills-sync.sh" ]] && return 0
+  local out
+  if out=$(bash "$HOME/.claude/skills-sync.sh" --if-behind 2>&1); then
+    [[ -n "$out" ]] && say "skills: installed the pinned release on retry"
+  else
+    say "skills: still behind the pin; the next run retries: $(printf '%s\n' "$out" | grep -m1 '⚠')"
+  fi
+  [[ -n "$out" ]] && printf '%s\n' "$out"
+  return 0
+}
+
 # Before the harness, so a release that needs a newer CLI finds it. Never
 # fails the run. CLAUDE_CLI_BIN is a testing seam, as in upstream-check.sh.
 cli_update() {
@@ -134,7 +148,7 @@ update() {
   mkdir -p "$(dirname "$LATEST_FILE")" && printf '%s %s\n' "$LATEST" "$(date -u +%Y-%m-%d)" > "$LATEST_FILE"
   INSTALLED=$(installed_version)
   if [[ "$INSTALLED" =~ $RE ]] && ! newer "$LATEST" "$INSTALLED"; then
-    say "up to date: $INSTALLED"; exit 0
+    say "up to date: $INSTALLED"; skills_retry; exit 0
   fi
   # An install past the tag (v1.0.0-11-gabc1234) already holds LATEST. One from
   # another clone may hold what LATEST lacks: unpushed or unmerged commits, or
@@ -148,7 +162,7 @@ update() {
       say "installed from $SHORT, which origin does not have; not changing it"; exit 0
     fi
     if git -C "$REPO" merge-base --is-ancestor "$LATEST" "$INSTALLED_COMMIT" 2>/dev/null; then
-      say "up to date: $INSTALLED already includes $LATEST"; exit 0
+      say "up to date: $INSTALLED already includes $LATEST"; skills_retry; exit 0
     fi
     if ! git -C "$REPO" merge-base --is-ancestor "$INSTALLED_COMMIT" "$LATEST" 2>/dev/null; then
       say "installed from $SHORT, which $LATEST does not include; not changing it"; exit 0

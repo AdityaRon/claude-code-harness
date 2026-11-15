@@ -125,7 +125,7 @@ sanitized into its own slug — so worktrees fragment stores further.)
 | Project | Shape | Checks | Deletes? |
 |---|---|---|---|
 | [`alexknowshtml/claude-memory-health`](https://github.com/alexknowshtml/claude-memory-health) | `/memory-health` slash command + TS scripts (`check-bloat.ts`, `check-orphans.ts`) + optional cron scheduler running `claude` headless | size bloat (>100 lines), orphans, inline content that should be extracted, staleness | **No** — demotes to `cold-storage/` |
-| [`dgowrie/claude-workflows` → `skills/memory-audit`](https://github.com/dgowrie/claude-workflows/blob/main/skills/memory-audit/SKILL.md) | skill; discover → read index → evaluate → report → apply | >30 days & no ongoing relevance; files >2KB; relative dates → absolute (anchored on mtime); redundancy; cross-project promotion to global `CLAUDE.md` | **No** — proposes, user confirms |
+| [`dgowrie/claude-workflows/skills/memory-audit`](https://github.com/dgowrie/claude-workflows/blob/main/skills/memory-audit/SKILL.md) | skill; discover → read index → evaluate → report → apply | >30 days & no ongoing relevance; files >2KB; relative dates → absolute (anchored on mtime); redundancy; cross-project promotion to global `CLAUDE.md` | **No** — proposes, user confirms |
 
 Converging conventions worth adopting:
 

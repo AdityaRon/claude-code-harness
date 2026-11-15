@@ -12,7 +12,13 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 source hooks/lib.sh
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/home/.claude"
-PY=$(bash skills/comms-hub/bin/python.sh 2>/dev/null) || { PY=""; echo "  SKIP: friction, draft and lint: no Python 3.10+ with a TOML reader"; }
+# check_draft and skill_lint are in claude-code-skills, read at the commit config/skills.pin names.
+PY="" SK="$TMP/sk" SKSRC=$(skills_src "$PWD") || SKSRC=""
+if [[ -z "$SKSRC" ]]; then no_skills "friction, draft and lint"
+else
+  skills_tree "$SKSRC" "$PWD" "$SK" skills/comms-hub/bin skills/skill-forge/bin
+  PY=$(bash "$SK/skills/comms-hub/bin/python.sh" 2>/dev/null) || { PY=""; echo "  SKIP: friction, draft and lint: no Python 3.10+ with a TOML reader"; }
+fi
 
 r() { local n=$1 c=$2; printf "$c%.0s" $(seq 1 "$n"); }   # n copies of c
 A=$(r 16 Q); B36=$(r 36 a); B40=$(r 40 b); B24=$(r 24 c); B20=$(r 20 d)
@@ -89,14 +95,14 @@ py_sites() {   # samples on stdin
   [ -n "$PY" ] || return 0
   HOME="$TMP/home" "$PY" -c '
 import importlib.util, re, sys
-sys.path[:0] = ["skills/comms-hub/bin", "skills/skill-forge/bin"]
+sys.path[:0] = [sys.argv[1] + "/skills/comms-hub/bin", sys.argv[1] + "/skills/skill-forge/bin"]
 spec = importlib.util.spec_from_file_location("friction", "tools/permission-friction.py")
 friction = importlib.util.module_from_spec(spec); spec.loader.exec_module(friction)
 import check_draft, skill_lint
 for s in sys.stdin.read().splitlines():
     t = f"x {s} y"
     print(int(bool(re.search(r"<(TOKEN|JWT|MASKED)>", friction.mask(t, 10000)))), int(bool(check_draft.TOKEN.search(t))),
-          int(any(rx.search(f"key = \"{s}\"") for _, rx in skill_lint.SECRET_RULES)))'
+          int(any(rx.search(f"key = \"{s}\"") for _, rx in skill_lint.SECRET_RULES)))' "$SK"
 }
 PYRES=(); while IFS= read -r ln; do PYRES+=("$ln"); done < <(for ((i = 1; i < ${#SHAPES[@]}; i += 2)); do printf '%s\n' "${SHAPES[$i]}"; done | py_sites)
 SAMPRES=(); while IFS= read -r ln; do SAMPRES+=("$ln"); done < <(for ((i = 1; i < ${#SAMPLES[@]}; i += 2)); do printf '%s\n' "${SAMPLES[$i]}"; done | py_sites)

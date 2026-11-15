@@ -80,55 +80,13 @@ echo "  ✓ harness-contract.version"
 # none, and a failed read must not end the install under set -e.
 PREV_COMMIT=$(sed -n '/^commit=/{s///p;q;}' ~/.claude/harness.version 2>/dev/null) || PREV_COMMIT=""
 
-# A skill's bin/ and *.example.toml go with its SKILL.md, by glob; its tests/
-# stay in the clone. comms-hub reads ~/.config/comms-hub/config.toml, which
-# this installer never creates or touches: it holds names a public repo cannot.
-for skill in "$REPO"/skills/*/; do
-  [[ -d "$skill" ]] || continue
-  name=$(basename "$skill")
-  mkdir -p ~/.claude/skills/"$name"
-  place "$skill"SKILL.md ~/.claude/skills/"$name"/SKILL.md
-  for f in "$skill"*.example.toml; do
-    if [[ -f "$f" ]]; then place "$f" ~/.claude/skills/"$name"/"$(basename "$f")"; fi
-  done
-  if [[ -d "$skill"bin ]]; then
-    mkdir -p ~/.claude/skills/"$name"/bin
-    for f in "$skill"bin/*; do
-      if [[ -f "$f" ]]; then place "$f" ~/.claude/skills/"$name"/bin/"$(basename "$f")"; fi
-    done
-  fi
-  # A skill's panel/ is a mod its own session loads (comms-hub's: hub.py launch
-  # passes --plugin-dir); its tests stay, as do the types the engine writes.
-  if [[ -d "$skill"panel ]]; then
-    for f in "$skill"panel/.claude-plugin/plugin.json "$skill"panel/hooks/* "$skill"panel/types/*; do
-      if [[ -f "$f" ]]; then
-        rel=${f#"$skill"}
-        mkdir -p ~/.claude/skills/"$name"/"$(dirname "$rel")"
-        place "$f" ~/.claude/skills/"$name"/"$rel"
-      fi
-    done
-  fi
-  # A skill's templates/ (skill-forge's archetypes) go to the data dir, never
-  # under ~/.claude/skills, so no template can be read as a skill. Copied whole
-  # beside the old set and swapped in, so a removed template does not linger.
-  if [[ -d "$skill"templates ]]; then
-    data="${XDG_DATA_HOME:-$HOME/.local/share}/$name"
-    mkdir -p "$data"
-    rm -rf "$data/templates.new"
-    cp -R "$skill"templates "$data/templates.new" && rm -rf "$data/templates" && mv "$data/templates.new" "$data/templates"
-  fi
-  echo "  ✓ skills/$name"
-done
-if [[ -d "$REPO/skills/comms-hub" && ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/comms-hub/config.toml" ]]; then
-  echo "  ℹ comms-hub is not configured (optional): the Setup section of ~/.claude/skills/comms-hub/SKILL.md"
-  echo "     starts with hub.py init, which writes ~/.config/comms-hub/config.toml; then: bash doctor.sh --skill comms-hub"
-fi
-# skill-forge reads ~/.config/skill-forge/config.toml (its mask patterns can name
-# customers), which this installer never creates or touches either.
-if [[ -d "$REPO/skills/skill-forge" && ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/skill-forge/config.toml" ]]; then
-  echo "  ℹ skill-forge is not configured (optional): copy ~/.claude/skills/skill-forge/config.example.toml"
-  echo "     to ~/.config/skill-forge/config.toml and add your mask patterns"
-fi
+# ---- Skills: the claude-code-skills release config/skills.pin names ----
+# That repo's install.sh owns ~/.claude/skills; this one writes nothing there.
+# A failed fetch keeps the installed skills and this install going, and
+# harness-update.sh retries it from the installed pin.
+place "$REPO/config/skills.pin" ~/.claude/skills.pin
+bash "$REPO/bin/skills-sync.sh" --pin "$REPO/config/skills.pin" \
+  || echo "     harness-update.sh retries at its next run; now: ~/.claude/skills-sync.sh"
 
 # ---- Personal rules --------------------------------------------------
 # ~/.claude/rules/ is user scope: every file here loads in every session, in

@@ -46,11 +46,13 @@ repo layout is for reading the repo, not for the installed tree.
   harness-src/             ← harness-update.sh's own clone, made on its first run
   harness.version          ← version, commit, the clone it came from and its origin, install time
   harness-contract.version ← last_verified_version from config/upstream-contract.json
-  skills/<name>/SKILL.md   ← memory-audit, memory-archive, pr-review, comms-hub, slack-draft, skill-forge
-  skills/comms-hub/bin/    ← its scripts; config.example.toml sits beside its SKILL.md
-  skills/comms-hub/panel/  ← the comms panel mod: plugin.json, hooks/, types/; its tests stay in the clone
-  skills/skill-forge/bin/  ← its scripts; config.example.toml beside it; its templates go to
-                             ~/.local/share/skill-forge/templates/ ($XDG_DATA_HOME), not here
+  skills-sync.sh           ← installs the claude-code-skills release skills.pin names
+  skills.pin               ← that release's URL, tag and commit, from config/skills.pin
+  skills-src/              ← skills-sync.sh's clone of claude-code-skills, at that tag
+  skills/                  ← written by that clone's install.sh, never by this repo's:
+                             memory-audit, memory-archive, pr-review, comms-hub (with its panel mod),
+                             slack-draft, skill-forge (its templates go to ~/.local/share/skill-forge/)
+  skills.manifest  skills.version  ← what claude-code-skills' install.sh wrote, and its release
   rules/*.md               ← copied from rules/; local-*.md and other files left alone
   local-settings/*.json    ← yours, read by install.sh and network-guard
   logs/
@@ -80,25 +82,18 @@ Rules go to `~/.claude/rules/` and load in every session in every project:
 - `environment.md`: git and Claude Code facts that hold on this machine.
 - `python-tests.md`: path-scoped, so it loads only when Claude opens Python.
 
-Skills go to `~/.claude/skills/<name>/SKILL.md`:
-
-- `memory-audit`: check memories against external truth.
-- `memory-archive`: relieve an over-limit index; proposes, never writes.
-- `pr-review`: writing, answering and requesting a review; loads only when a
-  review is in play.
-- `comms-hub`: the tick for the one session that speaks on Slack for all the
-  others. Its `bin/` scripts and `config.example.toml` install with it; its
-  tests stay in the clone.
-- `slack-draft`: how any other session sends Slack: it writes a draft in the
-  format comms-hub's gate reads and hands it to the comms session.
-- `skill-forge`: inventories a new job's systems, finds the questions that
-  keep coming up, and drafts one skill per question; its `skill_lint.py` checks
-  any skill. Its config, `~/.config/skill-forge/config.toml`, is yours to copy
-  from the example; `install.sh` never writes it.
+Skills come from [claude-code-skills](https://github.com/AdityaRon/claude-code-skills)
+at the release `config/skills.pin` names, installed by that repo's `install.sh`:
+`memory-audit`, `memory-archive`, `pr-review`, `comms-hub`, `slack-draft` and
+`skill-forge`. Each one's protocol and tests are there. If the fetch fails, the
+skills already installed stay as they were, `install.sh` says why and finishes,
+and `harness-update.sh` retries at its next run. A machine whose
+`HARNESS_UPDATE_URL` names another clone of this repo sets `HARNESS_SKILLS_URL`
+to a clone of that one.
 
 ## comms-hub's config and state
 
-Neither lives in this repo or in `~/.claude`, and `install.sh` creates neither:
+Neither lives in a repo or in `~/.claude`, and no `install.sh` creates either:
 
 - Config: `~/.config/comms-hub/config.toml` (`$XDG_CONFIG_HOME` is honoured),
   written by `hub.py init` (in `~/.claude/skills/comms-hub/bin/`, run with the
@@ -118,7 +113,7 @@ If you keep your home directory's dotfiles in git, ignore both:
 .local/state/comms-hub/
 ```
 
-Then `bash doctor.sh --skill comms-hub` checks every prerequisite: `gh` signed
+Then `bash doctor.sh --skill comms-hub` (from `~/.claude/skills-src`) checks every prerequisite: `gh` signed
 in as the config's login, Python 3.10+ with a TOML reader, `jq`, a connected
 Slack MCP server (any server whose name contains `slack`, added with
 `claude mcp add` or `/mcp`), SendMessage and ListAgents not denied, and the
@@ -134,6 +129,6 @@ bash doctor.sh
 
 Runs every test in `tests/*.test.sh` and prints a summary. The suite covers known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, `git -c`/`-C` global-option prefixes, shell-body git aliases, interpreter inline-code escapes and heredocs, combined interpreter flags, `@file` upload variants, stage-then-exfil copies, and mutating HTTP methods), a **fail-closed** check that every Bash/file guard denies when jq is unavailable, the plan-renderer (UTF-8 round-trip, script-injection containment, retention cap), and the settings merge (`config/merge-settings.jq`: that a stale `defaultMode` is replaced, allow/deny lists are unioned, user keys survive, and re-running the installer is a no-op).
 
-`tests/comms-hub.test.sh` runs the comms-hub skill's Python tests with the first Python 3.10+ on PATH that has a TOML reader. Their mutation list is a separate run (150 mutations in 237 s on an Apple M2, 2026-10-22): `python3.11 skills/comms-hub/tests/run.py --mutate` applies each mutation a test file's docstring names to a temp copy of the skill and fails if that file stays green.
+The skills' own suites run in claude-code-skills. Three suites here read the skills at the pinned commit, from `$CCH_SKILLS_CLONE` or `~/.claude/skills-src`: `tests/skills-sync.test.sh` (harness v1.4.2 upgraded to this tree leaves `~/.claude/skills` byte for byte), `tests/token-shapes.test.sh` (comms-hub's draft gate and skill_lint against the secret scanner) and part of `tests/heredoc-openers.test.sh` (skill-forge's heredoc reader against bash). Without a clone they skip, except in CI, which clones it.
 
 CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS, with Python 3.12, and lints every hook with `shellcheck` on each push and PR. On a PR it also runs the hook benchmark against the base branch; see [releases.md](releases.md).
