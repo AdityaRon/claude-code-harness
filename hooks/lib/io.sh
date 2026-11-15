@@ -56,6 +56,8 @@ jq_get() {
       .session_id) printf '%s\n' "$PRESET_SID"; return 0 ;;
       .tool_input.url) printf '%s\n' "$PRESET_URL"; return 0 ;;
       .tool_input.ws.url) printf '%s\n' "$PRESET_WS"; return 0 ;;
+      .tool_use_id) printf '%s\n' "$PRESET_ID"; return 0 ;;
+      .permission_mode) printf '%s\n' "$PRESET_MODE"; return 0 ;;
     esac
   fi
   if command -v jq &>/dev/null; then
@@ -128,7 +130,8 @@ unreadable_exit() {
   [[ $? -eq 0 && -z "${HOOK_DECIDED:-}" ]] || return 0
   if [[ -n "${JOINED_ASK:-}" ]]; then emit_ask "$JOINED_ASK"; return 0; fi
   [[ -n "${UNREADABLE_GUARD:-}" ]] || return 0
-  emit_ask "$UNREADABLE_GUARD: this command's quoting is more than the guard can read for certain (a \${ } holding quotes, a heredoc opener it cannot parse, or a quote inside backticks), so it cannot tell which ; & | separate commands. Check what it runs."
+  local why="$UNREADABLE_GUARD: this command's quoting is more than the guard can read for certain (a \${ } holding quotes, a heredoc opener it cannot parse, or a quote inside backticks), so it cannot tell which ; & | separate commands. Check what it runs."
+  shadow_hit ask unreadable "$why" || emit_ask "$why"
 }
 
 # bash joins a line ending in \ to the next, and a newline inside quotes is
@@ -155,6 +158,7 @@ joined_pass() {   # command
   # shellcheck disable=SC1090,SC2030  # the file is the guard; the values are the subshell's own
   out=$(JOINED_PASS=$$; INPUT=$in; PRESET_CMD=$j; . "${GUARD_SELF:-$0}" <<<"$in"); st=$?
   if [[ $st -ne 0 ]]; then printf '%s' "$out"; exit "$st"; fi
+  shadow_relay "$out"
   case "$out" in
     *'"permissionDecision":"deny"'*)
       emit_deny "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null | tail -n 1)"

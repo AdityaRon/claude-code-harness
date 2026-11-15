@@ -148,8 +148,7 @@ if [[ "$TOOL" == Monitor ]]; then
   if [[ -n "$URL" ]]; then
     HOST=$(extract_host "$URL")
     if ! host_allowed "$HOST"; then
-      emit_ask "A monitor opening a WebSocket to $HOST is outside the default allowlist. Confirm the endpoint is safe (no secrets in the path/query).$(add_hint "$HOST")"
-      exit 0
+      decide ask monitor-ws-host "A monitor opening a WebSocket to $HOST is outside the default allowlist. Confirm the endpoint is safe (no secrets in the path/query).$(add_hint "$HOST")"
     fi
   fi
 fi
@@ -173,12 +172,10 @@ case "$TOOL" in
     # Other egress channels beyond curl/wget. scp/rsync/sftp copy files to a
     # remote host; a local HTTP server exposes the working tree. All → ask.
     if printf '%s\n' "$CMD" | grep -qE '\b(scp|rsync|sftp)\b[^|;&]*([A-Za-z0-9._-]+@[A-Za-z0-9._-]+:|[A-Za-z0-9._-]+\.[A-Za-z]{2,}:)'; then
-      emit_ask "scp/rsync/sftp transfers files to a remote host. Confirm the destination is trusted and the files contain no secrets."
-      exit 0
+      decide ask remote-copy "scp/rsync/sftp transfers files to a remote host. Confirm the destination is trusted and the files contain no secrets."
     fi
     if printf '%s\n' "$CMD" | grep -qE '(python3?\s+-m\s+http\.server|php\s+-S|ruby\s+-run\s+-e\s+httpd|npx\s+http-server)'; then
-      emit_ask "This starts a local HTTP server exposing files on the network. Confirm this is intended and scoped."
-      exit 0
+      decide ask http-server "This starts a local HTTP server exposing files on the network. Confirm this is intended and scoped."
     fi
 
     # The machine-local allowlist is this guard's input: widening it takes one
@@ -197,8 +194,7 @@ case "$TOOL" in
             && { printf '%s\n' "$CMD" | sed -E 's#[0-9]*>&[0-9-]##g; s#[0-9&]*>>?[[:space:]]*/dev/null##g' | grep -q '>' \
                  || printf '%s\n' "$CMD" | tr '|;&`(){}' '\n' \
                     | grep -qE '^[[:space:]]*((then|do|else|elif|!)[[:space:]]+)*((tee|cp|mv|ln|rsync|dd|install|sponge|tar|unzip|curl|wget|mkfifo|mknod|find|python3?|node|ruby|perl|php|ex|ed|vim?|nvim)([[:space:]]|$)|(sed|g?awk)[[:space:]]+-[a-zA-Z]*i)'; }; }; }; then
-      emit_ask "This can change the machine-local network allowlist (~/.claude/local-settings); requests to a host it adds stop asking. Confirm the host."
-      exit 0
+      decide ask allowlist-edit "This can change the machine-local network allowlist (~/.claude/local-settings); requests to a host it adds stop asking. Confirm the host."
     fi
 
     # Beyond this point we only concern ourselves with curl/wget invocations.
@@ -254,8 +250,7 @@ case "$TOOL" in
     # so does every flag that reroutes the request or reads options from a file.
     CURLS=$(printf '%s\n' "$CMD" | grep -oE '\bcurl\b[^|;&]*')
     if printf '%s\n' "$CURLS" | grep -qE '\s(--connect-to|--resolve|--config|--unix-socket|--abstract-unix-socket|-[a-zA-Z]*K)(\s|=|$)'; then
-      emit_ask "curl --connect-to, --resolve, --unix-socket or -K/--config decides where this request really goes, which the URL check cannot see. Confirm it."
-      exit 0
+      decide ask curl-reroute "curl --connect-to, --resolve, --unix-socket or -K/--config decides where this request really goes, which the URL check cannot see. Confirm it."
     fi
     PROXIES=$( { printf '%s\n' "$CURLS" | grep -oE '\s(-[a-zA-Z]*x|--proxy|--preproxy|--socks4a?|--socks5(-hostname)?)(\s+|=)?[^[:space:]-][^[:space:]]*' \
                  | sed -E 's/^[[:space:]]*(-[a-zA-Z]*x|--[a-z0-9-]+)(=|[[:space:]]+)?//'
@@ -266,8 +261,7 @@ case "$TOOL" in
       [[ "$v" == *://* ]] || v="http://$v"
       PH=$(extract_host "$v")
       host_allowed "$PH" && continue
-      emit_ask "curl/wget routes this request through ${PH:-an unparsed proxy}, which is on no allowlist, so the URL check does not cover where it goes. Confirm the proxy.$(add_hint "$PH")"
-      exit 0
+      decide ask proxy-unlisted "curl/wget routes this request through ${PH:-an unparsed proxy}, which is on no allowlist, so the URL check does not cover where it goes. Confirm the proxy.$(add_hint "$PH")"
     done <<<"$PROXIES"
 
     # Every http(s) URL in the command: curl fetches each one, so checking only
@@ -300,8 +294,7 @@ case "$TOOL" in
     [[ $SENDS -eq 1 ]] && body_allowed && SENDS=0
     if [[ $SENDS -eq 1 ]] \
        || printf '%s\n' "$CMD" | grep -qE '\bwget\b[^|;&]*--(post-data|post-file|body-data|body-file|method)\b'; then
-      emit_ask "curl/wget is sending data (POST/PUT/PATCH/DELETE or a request body) to ${HOST:-a host without a scheme}. Confirm the target and payload."
-      exit 0
+      decide ask sends-body "curl/wget is sending data (POST/PUT/PATCH/DELETE or a request body) to ${HOST:-a host without a scheme}. Confirm the target and payload."
     fi
 
     if [[ -z "$URL" ]]; then
@@ -317,7 +310,7 @@ case "$TOOL" in
           is_loopback "$(extract_host "$b")" && ! local_admin_url "$b" || { ALL_LOCAL=0; break; }
         done <<<"$BARE"
         [[ $ALL_LOCAL -eq 1 ]] && exit 0
-        emit_ask "curl/wget target has no http(s):// scheme, so its host could not be checked against the allowlist. Confirm the endpoint."
+        decide ask no-scheme "curl/wget target has no http(s):// scheme, so its host could not be checked against the allowlist. Confirm the endpoint."
       fi
       exit 0
     fi
@@ -327,10 +320,10 @@ case "$TOOL" in
       [[ -z "$u" ]] && continue
       H=$(extract_host "$u")
       if is_loopback "$H" && local_admin_url "$u"; then
-        emit_ask "curl/wget to $u on this machine looks like a local admin API (kubectl proxy, Docker, Vault or Kubernetes paths), which can return cluster or host credentials. Confirm this read."
-        exit 0
+        decide ask local-admin-api "curl/wget to $u on this machine looks like a local admin API (kubectl proxy, Docker, Vault or Kubernetes paths), which can return cluster or host credentials. Confirm this read."
+        continue
       fi
-      host_allowed "$H" || { emit_ask "curl/wget request to $H is outside the default allowlist. Confirm this endpoint is safe.$(add_hint "$H")"; exit 0; }
+      host_allowed "$H" || decide ask host-unlisted "curl/wget request to $H is outside the default allowlist. Confirm this endpoint is safe.$(add_hint "$H")"
     done <<<"$URLS"
     exit 0
     ;;

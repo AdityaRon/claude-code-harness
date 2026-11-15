@@ -136,8 +136,7 @@ if printf '%s\n' "$ICMD" | grep -qE "$TOKENS_RE" \
    || { [[ -n "$NOATTR_RE" ]] && printf '%s\n' "$ICMD_NOATTR" | grep -qE "$NOATTR_RE"; }; then
   # Asks rather than denies (#72): a deny had Claude rewrite routine glue as a
   # script file: 15 unique commands in the 16 days to 2026-10-15.
-  emit_ask "Inline code passed to an interpreter references env vars, dotfiles, sockets, or an env-dumping command. Review the payload before running it."
-  exit 0
+  decide ask sensitive-token "Inline code passed to an interpreter references env vars, dotfiles, sockets, or an env-dumping command. Review the payload before running it."
 fi
 
 # A perl/ruby one-liner in stream-edit mode whose payload is one substitution
@@ -218,8 +217,7 @@ hidden_lengths() {
 NB=""; [[ -n "${JOINED_PASS:-}" ]] && NB=$'\001'
 if printf '%s\n' "$TYPED" | grep -qE "${IB}${INTERP}\b[^|;&$NB]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&$NB]{200,}" \
    || { [[ -n "$NQS" ]] && hidden_lengths; }; then
-  emit_ask "Long inline script passed to an interpreter. Review the payload before running — inline code bypasses file-based review."
-  exit 0
+  decide ask long-inline "Long inline script passed to an interpreter. Review the payload before running — inline code bypasses file-based review."
 fi
 
 exit 0

@@ -3,6 +3,9 @@
 set -u
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
+export CLAUDE_SHADOW_LOG="$TMP/shadow.log"  # shadow mode lines (hooks/lib/shadow.sh), out of the real log too
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source tests/lib.sh || exit 1
 export CLAUDE_LOCAL_SETTINGS_DIR="$TMP/no-local"  # this machine's allowlist must not change results
 export CLAUDE_NET_TUNNEL_RE='^cch-no-tunnel$'     # nor a port-forward a session left open
 HOOK="hooks/network-guard.sh"
@@ -13,7 +16,7 @@ check_bash() {
   local payload
   payload=$(jq -nc --arg c "$cmd" '{tool_name:"Bash", tool_input:{command:$c}}')
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
+  result=$(printf '%s\n' "$payload" | shadow_run bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
@@ -21,6 +24,9 @@ check_bash() {
   fi
   # A hook that crashes prints nothing, which would otherwise read as allow.
   [[ $rc -ne 0 ]] && got="exit $rc"
+  # Its asks are in shadow mode (hooks/lib/shadow.sh), its denies live.
+  [[ "$got" == ask && "$result" != *'"shadow":'* ]] && got="live ask"
+  [[ "$got" == deny && "$result" == *'"shadow":'* ]] && got="shadowed deny"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
     PASS=$((PASS+1))
@@ -35,7 +41,7 @@ check_webfetch() {
   local payload
   payload=$(jq -nc --arg u "$url" '{tool_name:"WebFetch", tool_input:{url:$u}}')
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
+  result=$(printf '%s\n' "$payload" | shadow_run bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
@@ -281,10 +287,11 @@ check_bash "a directory named *.json is skipped"    allow "curl -s https://secon
 # (one call reads the list more than once), so no jq is left behind.
 mkfifo "$LS/stuck.json"
 PAYLOAD=$(jq -nc '{tool_name:"Bash", tool_input:{command:"curl -s https://second.example/"}}')
+: > "$CLAUDE_SHADOW_LOG"   # an ask in shadow mode prints nothing too
 ( printf '%s\n' "$PAYLOAD" | bash "$HOOK" >"$TMP/fifo.out" 2>/dev/null; : >"$TMP/fifo.done" ) &
 HOOKPID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [[ -f "$TMP/fifo.done" ]] && break; sleep 0.25; done
-if [[ -f "$TMP/fifo.done" && ! -s "$TMP/fifo.out" ]]; then
+if [[ -f "$TMP/fifo.done" && ! -s "$TMP/fifo.out" && ! -s "$CLAUDE_SHADOW_LOG" ]]; then
   echo "  OK (allow): a FIFO in local-settings does not stall the guard"; PASS=$((PASS+1))
 else
   echo "  FAIL (expected=allow within 5s got=$(cat "$TMP/fifo.out" 2>/dev/null || echo stalled)): a FIFO in local-settings does not stall the guard"; FAIL=$((FAIL+1))
@@ -309,7 +316,7 @@ check_bash "list the folder"               allow "ls ~/.claude/local-settings 2>
 
 echo ""
 echo "=== an ask about an unlisted host names the add command ==="
-reason_of() { printf '%s' "$1" | CLAUDE_LOCAL_SETTINGS_DIR="$TMP/none" bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""'; }
+reason_of() { printf '%s' "$1" | CLAUDE_LOCAL_SETTINGS_DIR="$TMP/none" shadow_run bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""'; }
 hint_check() {
   local label="$1" want="$2" payload="$3" r
   r=$(reason_of "$payload")
@@ -445,10 +452,11 @@ check_bash "unquoted message, plain text"  allow $'git commit -q -F - <<EOF\nSee
 
 check_monitor() {   # check_monitor LABEL EXPECT TOOL-INPUT-JSON
   local result got
-  result=$(jq -nc --argjson i "$3" '{tool_name:"Monitor", tool_input:$i}' | bash "$HOOK" 2>/dev/null); rc=$?
+  result=$(jq -nc --argjson i "$3" '{tool_name:"Monitor", tool_input:$i}' | shadow_run bash "$HOOK" 2>/dev/null); rc=$?
   got=$(printf '%s\n' "$result" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
   [[ -z "$got" ]] && got=allow
   [[ $rc -ne 0 ]] && got="exit $rc"
+  [[ "$got" == ask && "$result" != *'"shadow":'* ]] && got="live ask"
   if [[ "$got" = "$2" ]]; then echo "  OK ($2): $1"; PASS=$((PASS+1))
   else echo "  FAIL (expected=$2 got=$got): $1  [input: $3]"; FAIL=$((FAIL+1)); fi
 }

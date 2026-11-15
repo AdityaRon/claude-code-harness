@@ -8,6 +8,7 @@ PASS=0; FAIL=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
+export CLAUDE_SHADOW_LOG="$TMP/shadow.log"  # shadow mode lines (hooks/lib/shadow.sh), out of the real log too
 echo "SECRET=abc" > "$TMP/.env"
 ln -s "$TMP/.env" "$TMP/benign-looking-link"
 

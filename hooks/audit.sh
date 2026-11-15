@@ -59,7 +59,10 @@ case "$EVENT" in
     # Log-only. No `retry` field is emitted, so the denial stands exactly as
     # decided — this arm observes, it does not overturn.
     TOOL=$(sanitize "$(jq_get '.tool_name')")
-    WHY=$(sanitize "$(jq_get '.denial_reason')")
+    # The hooks doc names the field `reason`; every live line read `denial_reason` as empty.
+    WHY=$(sanitize "$(jq_get '.reason // .denial_reason')")
+    # Before the command, which can hold ` | `: tools/shadow-report.py joins on the id.
+    ID=$(sanitize "$(jq_get '.tool_use_id')"); MODE=$(sanitize "$(jq_get '.permission_mode')")
     if [[ "$TOOL" == "Bash" ]]; then
       TARGET=$(sanitize "$(jq_get '.tool_input.command')")
     elif [[ "$TOOL" == "Monitor" ]]; then
@@ -69,7 +72,7 @@ case "$EVENT" in
       [[ -z "$TARGET" ]] && TARGET=$(sanitize "$(jq_get '.tool_input.path')")
       [[ -z "$TARGET" ]] && TARGET=$(sanitize "$(jq_get '.tool_input.notebook_path')")
     fi
-    log_audit "$TS | DENIED | ${TOOL:-unknown} | ${TARGET:-unknown} | ${WHY:-no reason given} | $DIR"
+    log_audit "$TS | DENIED | ${TOOL:-unknown} | id=${ID// /_} mode=${MODE// /_} | ${TARGET:-unknown} | ${WHY:-no reason given} | $DIR"
     ;;
   PostModelSwitch)
     # Which model produced a given conclusion is otherwise unrecoverable: every

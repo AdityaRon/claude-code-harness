@@ -14,6 +14,12 @@ classifier decides only what no guard or rule names; see
 `tools/permission-friction.py --days 23` over 2026-09-24 to 2026-10-16 (PR #90)
 found an approved guard ask held its call 92 to 269 s at the median, by guard.
 
+Until step 9 of #237, some of what follows is in shadow mode: kubectl-guard and
+interpreter-guard whole, network-guard's asks, rm-guard's `rm -rf` outside the
+scratch folders and env-guard's bare `env`. Each still finds what it would
+decide, logs it to `~/.claude/logs/shadow.log`, and decides nothing; every deny
+not named there stays live. See [shadow-mode.md](shadow-mode.md).
+
 ## What each guard does
 
 | Hook | Event | Behaviour |

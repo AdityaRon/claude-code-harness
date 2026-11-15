@@ -4,6 +4,7 @@ set -u
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_LOCAL_SETTINGS_DIR="$TMP/ls"
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"
+export CLAUDE_SHADOW_LOG="$TMP/shadow.log"  # shadow mode lines (hooks/lib/shadow.sh), out of the real log too
 unset CLAUDE_NET_ALLOWLIST
 T="bin/net-allowlist.sh"
 F="$CLAUDE_LOCAL_SETTINGS_DIR/net-allowlist.json"

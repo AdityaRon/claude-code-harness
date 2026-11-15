@@ -3,6 +3,9 @@
 set -u
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
+export CLAUDE_SHADOW_LOG="$TMP/shadow.log"  # shadow mode lines (hooks/lib/shadow.sh), out of the real log too
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source tests/lib.sh || exit 1
 HOOK="hooks/interpreter-guard.sh"
 PASS=0; FAIL=0
 
@@ -11,7 +14,7 @@ check() {
   local payload
   payload=$(jq -nc --arg c "$cmd" '{tool_input:{command:$c}}')
   local result got
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
+  result=$(printf '%s\n' "$payload" | shadow_run bash "$HOOK" 2>/dev/null); rc=$?
   if [[ -z "$result" ]]; then
     got="allow"
   else
@@ -19,6 +22,8 @@ check() {
   fi
   # A hook that crashes prints nothing, which would otherwise read as allow.
   [[ $rc -ne 0 ]] && got="exit $rc"
+  # The whole guard is in shadow mode (hooks/lib/shadow.sh): an answer it gives live is a miss.
+  [[ ( "$got" == ask || "$got" == deny ) && "$result" != *'"shadow":'* ]] && got="live $got"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
     PASS=$((PASS+1))

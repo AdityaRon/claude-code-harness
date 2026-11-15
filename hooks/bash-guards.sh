@@ -50,16 +50,16 @@ BG_F=()
 while IFS= read -r -d '' bg_f; do BG_F[${#BG_F[@]}]=$bg_f; done < <(
   printf '%s' "$INPUT" | jq -j 'def f(p): try ((p // "") | if type == "string" then split("\u0000") | join("") else . end) catch "";
     f(.tool_name), "\u0000", f(.tool_input.command), "\u0000", f(.cwd), "\u0000", f(.session_id), "\u0000",
-    f(.tool_input.url), "\u0000", f(.tool_input.ws.url), "\u0000", f(.tool_use_id), "\u0000"' 2>/dev/null
+    f(.tool_input.url), "\u0000", f(.tool_input.ws.url), "\u0000", f(.tool_use_id), "\u0000", f(.permission_mode), "\u0000"' 2>/dev/null
   printf 'rc=%s\0' "$?")
 PRESET_OK=no
-[[ ${#BG_F[@]} -eq 8 && "${BG_F[7]}" == rc=0 ]] && PRESET_OK=ok
+[[ ${#BG_F[@]} -eq 9 && "${BG_F[8]}" == rc=0 ]] && PRESET_OK=ok
 # Whitespace alone is no document and no error; each guard allowed it.
 [[ ${#BG_F[@]} -eq 1 && "${BG_F[0]}" == rc=0 ]] && { PRESET_OK=ok; BG_F=(); }
 # shellcheck disable=SC2034  # lib.sh reads them in each guard's fork
 {
   PRESET_TOOL=${BG_F[0]:-} PRESET_CMD=${BG_F[1]:-} PRESET_CWD=${BG_F[2]:-} PRESET_SID=${BG_F[3]:-}
-  PRESET_URL=${BG_F[4]:-} PRESET_WS=${BG_F[5]:-} PRESET_ID=${BG_F[6]:-}
+  PRESET_URL=${BG_F[4]:-} PRESET_WS=${BG_F[5]:-} PRESET_ID=${BG_F[6]:-} PRESET_MODE=${BG_F[7]:-}
   HARNESS_PRESET=$$   # lib.sh honours it only where $$ is this, in these forks
 }
 unset BG_F bg_f

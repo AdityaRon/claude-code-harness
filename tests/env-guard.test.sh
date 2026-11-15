@@ -5,6 +5,9 @@
 set -u
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"  # guard decisions are audited; keep test ones out of the real log
+export CLAUDE_SHADOW_LOG="$TMP/shadow.log"  # shadow mode lines (hooks/lib/shadow.sh), out of the real log too
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source tests/lib.sh || exit 1
 HOOK="hooks/env-guard.sh"
 PASS=0; FAIL=0
 
@@ -13,7 +16,7 @@ check() {
   local payload
   payload=$(jq -nc --arg c "$cmd" '{tool_input:{command:$c}}')
   local result
-  result=$(printf '%s\n' "$payload" | bash "$HOOK" 2>/dev/null); rc=$?
+  result=$(printf '%s\n' "$payload" | shadow_run bash "$HOOK" 2>/dev/null); rc=$?
   local got
   if [[ -z "$result" ]]; then
     got="allow"
@@ -22,6 +25,9 @@ check() {
   fi
   # A hook that crashes prints nothing, which would otherwise read as allow.
   [[ $rc -ne 0 ]] && got="exit $rc"
+  # A bare `env` is in shadow mode (hooks/lib/shadow.sh); every other deny is live.
+  [[ "$result" != *'"shadow":'* && "$result" =~ \"Blocked:\ \`env(\ -[^\`]*)?\`\ prints ]] && got="live bare env"
+  [[ "$result" == *'"shadow":'* && "$result" != *'"shadow":"bare-env"'* ]] && got="shadowed $got"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
     PASS=$((PASS+1))
@@ -399,7 +405,7 @@ check "find -name, no reader" allow 'find . -name .env'
 echo "--- a deny says what it matched ---"
 says() {   # says LABEL CMD TEXT: the deny reason contains TEXT
   local r
-  r=$(jq -nc --arg c "$2" '{tool_input:{command:$c}}' | bash "$HOOK" 2>/dev/null \
+  r=$(jq -nc --arg c "$2" '{tool_input:{command:$c}}' | shadow_run bash "$HOOK" 2>/dev/null \
     | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
   if [[ "$r" == *"$3"* ]]; then echo "  OK (says): $1"; PASS=$((PASS+1))
   else echo "  FAIL (reason lacks: $3): $1  [got: $r]"; FAIL=$((FAIL+1)); fi

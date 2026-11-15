@@ -213,13 +213,14 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts
   hook-latency.py        ← each hook's wall time per day, from local transcripts (doctor.sh --latency)
   hooknames.py           ← names the hook a transcript record numbers, for the two above
+  shadow-report.py       ← what each shadowed guard or rule would have decided, and what happened instead
   session-census.py      ← claude processes, their memory, and idle background jobs (doctor.sh --census)
   pickup-report.sh       ← after an install, how running sessions pick up each change; install.sh runs it with
                            --prune, which removes what install wrote that the clone deleted
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json,
                            skills.pin
 hooks/                   ← one file per hook, plus lib.sh, which sources lib/: command, paths,
-                           scratch, io, inline, net and host; bash-guards.sh runs the Bash guards
+                           scratch, io, inline, net, host and shadow; bash-guards.sh runs the Bash guards
 rules/                   ← installed to ~/.claude/rules, loaded in every session
   prose-and-comments.md  collaboration.md  working-agreement.md  environment.md
   python-tests.md        ← path-scoped: loads only when Claude opens Python
@@ -235,6 +236,7 @@ docs/
   memory.md              ← what Claude Code's memory does now, and each harness tool's verdict
   session-routing.md     ← routing a PR to its session; holds only in single-author repos
   permission-friction.md ← which guard asks and denies cost the most, and why
+  shadow-mode.md         ← the guards and rules on trial (#237): what they log, how step 9 reads the report
   permission-friction-cases.jsonl  ← cases tools/permission-friction.py --cases replays
   history/               ← superseded memory research the memory skills still cite
 ```

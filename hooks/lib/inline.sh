@@ -210,22 +210,23 @@ check_inline_shellouts() {
   case "$CMD" in *python*|*node*|*ruby*|*perl*|*php*|*bun*|*deno*) ;; *) return 0 ;; esac
   # An awk error prints nothing, which would read as an empty, allowed command.
   if ! iv=$(inline_script_view "$tool" "$mode" "$CMD") || [[ "$iv" != *$'\001'* ]]; then
-    emit_ask "This guard could not read the command's inline script, so it asks rather than allow it unread."
-    exit 0
+    decide ask inline-unreadable "This guard could not read the command's inline script, so it asks rather than allow it unread."
+    return 0
   fi
   CMD=${iv#*$'\001'}; views=${iv%%$'\001'*}
   while [[ -n "$views" ]]; do
     v=${views%%$'\002'*}; views=${views#"$v"}; views=${views#$'\002'}
     [[ -z "$v" ]] && continue
     if [[ "$v" == __OPAQUE_SHELLOUT__ ]]; then
-      emit_ask "An inline script names $tool and hands a shell-out a command built from a value this guard cannot read (os.system(cmd), subprocess.run(args)). Put the $tool command in the shell-out as a literal, or run $tool directly."
-      exit 0
+      decide ask inline-opaque "An inline script names $tool and hands a shell-out a command built from a value this guard cannot read (os.system(cmd), subprocess.run(args)). Put the $tool command in the shell-out as a literal, or run $tool directly."
+      continue
     fi
     if (( depth >= 4 )) || ! r=$(printf '%s' "$INPUT" | jq -c --arg c "$v" '.tool_input.command = $c' \
-        | HARNESS_SHELLOUT_DEPTH=$((depth + 1)) CLAUDE_AUDIT_LOG=/dev/null bash "${GUARD_SELF:-$0}"); then
-      emit_ask "This guard could not check what an inline script hands a shell-out: $v"
-      exit 0
+        | HARNESS_SHELLOUT_DEPTH=$((depth + 1)) CLAUDE_AUDIT_LOG=/dev/null CLAUDE_SHADOW_LOG=/dev/null bash "${GUARD_SELF:-$0}"); then
+      decide ask inline-unchecked "This guard could not check what an inline script hands a shell-out: $v"
+      continue
     fi
+    shadow_relay "$r"   # the run's shadowed hit, noted under this call
     d=$(printf '%s' "$r" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
     reason=$(printf '%s' "$r" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)
     case "$d" in

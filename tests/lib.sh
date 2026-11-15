@@ -37,3 +37,20 @@ no_skills() {   # WHAT
   if [[ -n "${CI:-}" ]]; then fail "$1" "no claude-code-skills clone at the pinned commit: set CCH_SKILLS_CLONE"
   else echo "  SKIP: $1: no claude-code-skills clone at the pinned commit (set CCH_SKILLS_CLONE)"; fi
 }
+
+# A guard in shadow mode (hooks/lib/shadow.sh) answers nothing and writes a line
+# to $CLAUDE_SHADOW_LOG. shadow_run CMD... runs CMD on stdin and prints what it
+# answered, or else that line's would-be answer with "shadow":RULE beside it, so
+# a row still checks what the guard finds and can tell a live answer from it.
+shadow_run() {
+  local out rc
+  : > "$CLAUDE_SHADOW_LOG"
+  out=$("$@"); rc=$?
+  if [[ -z "$out" && -s "$CLAUDE_SHADOW_LOG" ]]; then
+    jq -c '{shadow: .rule, hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: .would, permissionDecisionReason: .reason}}' \
+      "$CLAUDE_SHADOW_LOG" | head -n 1
+  else
+    printf '%s' "$out"
+  fi
+  return "$rc"
+}

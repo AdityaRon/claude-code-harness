@@ -3,6 +3,9 @@
 set -u
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$TMP/audit.log"
+export CLAUDE_SHADOW_LOG="$TMP/shadow.log"  # shadow mode lines (hooks/lib/shadow.sh), out of the real log too
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+source tests/lib.sh || exit 1
 HOOK="$PWD/hooks/rm-guard.sh"
 export HOME="$TMP/home" TMPDIR="$TMP/t"
 SID="abcd1234-0000-4000-8000-000000000000"
@@ -13,10 +16,13 @@ PASS=0; FAIL=0
 check() {
   local label="$1" expect="$2" cmd="$3" cwd="${4:-$TMP}" sid="${5:-$SID}" got out rc
   out=$(jq -nc --arg c "$cmd" --arg d "$cwd" --arg s "$sid" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:$s}' \
-    | bash "$HOOK" 2>/dev/null); rc=$?
+    | shadow_run bash "$HOOK" 2>/dev/null); rc=$?
   got=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
   [[ -z "$got" ]] && got=allow
   [[ $rc -ne 0 ]] && got="exit $rc"
+  # The scratch rule is in shadow mode (hooks/lib/shadow.sh); a catastrophic target denies live.
+  [[ "$out" == *'"permissionDecisionReason":"Blocked: rm -rf '* && "$out" != *'"shadow":'* ]] && got="live scratch deny"
+  [[ "$out" == *'"shadow":'* && "$out" != *'"shadow":"rf-outside-scratch"'* ]] && got="shadowed $got"
   if [[ "$got" == "$expect" ]]; then echo "  OK ($expect): $label"; PASS=$((PASS+1))
   else echo "  FAIL (expected=$expect got=$got): $label  [cmd: $cmd]"; FAIL=$((FAIL+1)); fi
 }
