@@ -56,27 +56,23 @@ check "git add id_rsa"         deny "git add id_rsa"
 check "git add server.pem"     deny "git add server.pem"
 
 echo ""
-echo "=== Config tampering ==="
+echo "=== Config tampering: core.hooksPath denies; identity and signing config runs (#237) ==="
 check "set core.hooksPath"     deny "git config core.hooksPath /dev/null"
-check "set user.email (ask)"   ask  "git config user.email attacker@evil.example"
-check "set user.name (ask)"    ask  "git config user.name 'Someone Else'"
-check "set signingkey (ask)"   ask  "git config gpg.signingkey BAD"
-check "--unset user.email (ask)" ask "git config --unset user.email"
-check "git config set (ask)"   ask  "git config set user.name x"
-check "write after a read (ask)" ask "git config user.name; git config user.email x@y.z"
-check "-C repo, a write (ask)" ask  "git -C repo config user.email x@y.z"
-# Reads: the identity check used `.*`, which ran past the `;` after a read.
+check "set user.email"         allow "git config user.email attacker@evil.example"
+check "set user.name"          allow "git config user.name 'Someone Else'"
+check "set signingkey"         allow "git config gpg.signingkey BAD"
+check "--unset user.email"     allow "git config --unset user.email"
+check "git config set"         allow "git config set user.name x"
+check "write after a read"     allow "git config user.name; git config user.email x@y.z"
+check "-C repo, a write"       allow "git -C repo config user.email x@y.z"
 check "read, then ls"          allow "git config --global user.name; git config --global user.email; ls -lt | head -8"
 check "read with --get"        allow "git config --get user.name"
 check "read in a substitution" allow 'NAME=$(git config user.name)'
 check "read, stderr dropped"   allow "git config user.email 2>/dev/null || echo unset"
 check "git config get"         allow "git config get user.name"
-# A read lifts the ask only for its own command. Main asks on each of these; the
-# wider terms for a quoted -c value or a shell's -c string once made one match
-# of the read and the setter, and the setter went unread.
-check "a setter in a read's \$( ), after -c \"a b\"" ask 'git -c "a b" config --get user.name $(git config user.name x)'
-check "a setter behind escaped quotes"       ask 'git -c \"x; git config user.name x; \" config --get user.name'
-check "a setter in a shell's -c read"        ask 'bash -c "git config --get user.name $(git config user.name x)"'
+check "a setter in a read's \$( ), after -c \"a b\"" allow 'git -c "a b" config --get user.name $(git config user.name x)'
+check "a setter behind escaped quotes"       allow 'git -c \"x; git config user.name x; \" config --get user.name'
+check "a setter in a shell's -c read"        allow 'bash -c "git config --get user.name $(git config user.name x)"'
 check "a read after -c \"a b\""              allow 'git -c "a b" config --get user.name'
 
 echo ""
@@ -181,8 +177,8 @@ check "reset --hard VAR="        deny "VAR=1 git reset --hard origin/main"
 check "clean -fd"                deny "git clean -fd"
 check "clean -fd -C"             deny "git -C /tmp/x clean -fd"
 check "clean --force"            deny "git clean --force"
-check "branch -D, no repo to check" ask "git branch -D topic"
-check "branch -D -C, not a repo"     ask "git -C /tmp/x branch -D topic"
+check "branch -D, no repo to check" allow "git branch -D topic"
+check "branch -D -C, not a repo"     allow "git -C /tmp/x branch -D topic"
 
 echo ""
 echo "=== Read-only and near-miss forms must stay silent (expect: allow) ==="
@@ -300,7 +296,7 @@ check "restore ."                 deny 'git restore .'
 check "restore -S -W ."           deny 'git restore -S -W .'
 check "stash drop"                ask  'git stash drop'
 check "stash clear"               ask  'git stash clear'
-check "worktree remove --force"   ask  'git worktree remove --force ../wt'
+check "worktree remove --force"   allow 'git worktree remove --force ../wt'
 check "add parent file"           allow 'git add ../README.md'
 check "add dotfile by name"       allow 'git add .gitignore'
 check "xargs add by name"         allow 'echo a.txt | xargs git add'
@@ -334,7 +330,7 @@ check "near miss: echoed"         allow 'echo GIT push --force'
 check "near miss: cd into git"    allow 'cd /usr/bin/git'
 
 echo ""
-echo "=== worktree remove --force: a scratch worktree of this session runs ==="
+echo "=== worktree remove --force runs, wherever the worktree is (#237) ==="
 WT_HOME="$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")"; mkdir -p "$WT_HOME/.claude/jobs/abcd1234/tmp"
 check_wt() {
   local label="$1" expect="$2" cmd="$3" cwd="${4:-/repo}" out got
@@ -347,17 +343,17 @@ check_wt() {
 check_wt "--force on \$CLAUDE_JOB_DIR/tmp/wt" allow 'git worktree remove --force "$CLAUDE_JOB_DIR/tmp/wt-1"'
 check_wt "-f on a literal scratch path"      allow "git worktree remove -f $WT_HOME/.claude/jobs/abcd1234/tmp/wt-2"
 check_wt "-C repo, scratch worktree"         allow 'git -C ~/src/app worktree remove --force ~/.claude/jobs/abcd1234/tmp/wt-3'
-check_wt "--force on a repo worktree"        ask   'git worktree remove --force ../app-feature'
-check_wt "--force, climbs out with .."       ask   'git worktree remove --force "$CLAUDE_JOB_DIR/tmp/../../repo"'
-check_wt "--force, redefines CLAUDE_JOB_DIR" ask   'CLAUDE_JOB_DIR=/ git worktree remove --force "$CLAUDE_JOB_DIR/tmp/../../repo"'
-check_wt "--force, another session"          ask   'git worktree remove --force ~/.claude/jobs/ffffffff/tmp/wt'
-check_wt "--force, CLAUDE_JOB_DIR set inline"  ask   'CLAUDE_JOB_DIR=/x git worktree remove --force "$CLAUDE_JOB_DIR/tmp/wt"'
+check_wt "--force on a repo worktree"        allow 'git worktree remove --force ../app-feature'
+check_wt "--force, climbs out with .."       allow 'git worktree remove --force "$CLAUDE_JOB_DIR/tmp/../../repo"'
+check_wt "--force, redefines CLAUDE_JOB_DIR" allow 'CLAUDE_JOB_DIR=/ git worktree remove --force "$CLAUDE_JOB_DIR/tmp/../../repo"'
+check_wt "--force, another session"          allow 'git worktree remove --force ~/.claude/jobs/ffffffff/tmp/wt'
+check_wt "--force, CLAUDE_JOB_DIR set inline"  allow 'CLAUDE_JOB_DIR=/x git worktree remove --force "$CLAUDE_JOB_DIR/tmp/wt"'
 check_wt "--force in the sandbox job folder"  allow "git worktree remove --force /tmp/claude-$(id -u)/abcd1234/wt-4"
-check_wt "--force, another job's folder"      ask   "git worktree remove --force /tmp/claude-$(id -u)/ffffffff/wt"
+check_wt "--force, another job's folder"      allow "git worktree remove --force /tmp/claude-$(id -u)/ffffffff/wt"
 check_wt "stash drop still asks"             ask   'git stash drop'
 
 echo ""
-echo "=== worktree remove --force: a worktree with nothing to lose runs ==="
+echo "=== worktree remove --force runs, dirty or clean ==="
 R="$TMP/wtrepo"; mkdir -p "$R"
 git init -q "$R/main" && printf 'build/\n' > "$R/main/.gitignore" && git -C "$R/main" add .gitignore \
   && git -C "$R/main" -c user.email=t@t -c user.name=t commit -q -m init
@@ -365,19 +361,18 @@ for k in clean ign dirty mod; do git -C "$R/main" worktree add -q "$R/$k" -b "b-
 mkdir -p "$R/ign/build" && echo x > "$R/ign/build/out"; echo u > "$R/dirty/new.txt"; echo m >> "$R/mod/.gitignore"
 check_wt "--force, clean worktree"           allow "git worktree remove --force $R/clean"
 check_wt "--force, only ignored files"       allow "git worktree remove -f $R/ign"
-check_wt "--force, an untracked file"        ask   "git worktree remove --force $R/dirty"
-check_wt "--force, a modified file"          ask   "git worktree remove --force $R/mod"
+check_wt "--force, an untracked file"        allow "git worktree remove --force $R/dirty"
+check_wt "--force, a modified file"          allow "git worktree remove --force $R/mod"
 check_wt "--force, relative from the cwd"    allow 'git worktree remove --force ../clean' "$R/main"
-check_wt "--force, relative after a cd"      ask   'cd /tmp && git worktree remove --force ../clean' "$R/main"
-check_wt "--force, a path in a variable"     ask   "W=$R/clean; git worktree remove --force \$W"
-check_wt "--force, clean then dirty"         ask   "git worktree remove --force $R/clean && git worktree remove --force $R/dirty"
-check_wt "--force, no such path"             ask   "git worktree remove --force $R/gone"
-# Main asks here too; a wide match of the second remove once swallowed the first.
-check_wt "--force, a dirty one behind escaped quotes" ask "git -c \\\"x; git worktree remove --force $R/dirty; \\\" worktree remove --force $R/clean"
+check_wt "--force, relative after a cd"      allow 'cd /tmp && git worktree remove --force ../clean' "$R/main"
+check_wt "--force, a path in a variable"     allow "W=$R/clean; git worktree remove --force \$W"
+check_wt "--force, clean then dirty"         allow "git worktree remove --force $R/clean && git worktree remove --force $R/dirty"
+check_wt "--force, no such path"             allow "git worktree remove --force $R/gone"
+check_wt "--force, a dirty one behind escaped quotes" allow "git -c \\\"x; git worktree remove --force $R/dirty; \\\" worktree remove --force $R/clean"
 check_wt "--force, clean, after -c 'a b'"    allow "git -c 'a b' worktree remove --force $R/clean"
 
 echo ""
-echo "=== branch delete: runs only when a remote-tracking ref holds the tip ==="
+echo "=== branch delete runs, whatever holds the tip (#237) ==="
 git init -q --bare "$R/remote.git" && git -C "$R/main" remote add origin "$R/remote.git"
 git -C "$R/main" branch b-pushed && git -C "$R/main" branch Feature-X
 git -C "$R/main" push -q origin b-pushed Feature-X 2>/dev/null
@@ -390,46 +385,38 @@ check_wt "-D, mixed-case name on a remote"   allow "git branch -D Feature-X" "$M
 check_wt "-D -C, tip on a remote"            allow "git -C $M branch -D b-pushed"
 check_wt "-D, redirect after the name"       allow "git branch -D b-pushed 2>/dev/null" "$M"
 check_wt "--delete --force"                  allow "git branch --delete --force b-pushed" "$M"
-check_wt "-D, commits only local"            ask   "git branch -D b-local" "$M"
-check_wt "-D, one of two only local"         ask   "git branch -D b-pushed b-local" "$M"
-check_wt "-D, no such branch"                ask   "git branch -D b-gone" "$M"
-check_wt "-D, name in a variable"            ask   "B=b-pushed; git branch -D \$B" "$M"
-check_wt "-D, after a cd"                    ask   "cd $M && git branch -D b-pushed" "/tmp"
-check_wt "-D, names from xargs"              ask   "git branch | xargs git branch -D" "$M"
-check_wt "-D, unknown flag"                  ask   "git branch -D -r origin/b-pushed" "$M"
-check_wt "-D, then a local-only delete"      ask   "git branch -D b-pushed && git branch -D b-local" "$M"
+check_wt "-D, commits only local"            allow "git branch -D b-local" "$M"
+check_wt "-D, one of two only local"         allow "git branch -D b-pushed b-local" "$M"
+check_wt "-D, no such branch"                allow "git branch -D b-gone" "$M"
+check_wt "-D, name in a variable"            allow "B=b-pushed; git branch -D \$B" "$M"
+check_wt "-D, after a cd"                    allow "cd $M && git branch -D b-pushed" "/tmp"
+check_wt "-D, names from xargs"              allow "git branch | xargs git branch -D" "$M"
+check_wt "-D, unknown flag"                  allow "git branch -D -r origin/b-pushed" "$M"
+check_wt "-D, then a local-only delete"      allow "git branch -D b-pushed && git branch -D b-local" "$M"
 check_wt "-qD bundle, tip on a remote"       allow "git branch -qD b-pushed" "$M"
 check_wt "a new branch named like a flag"    allow "git branch feature-d" "$M"
-# The gate reads the normalized line, the parser the command as typed: a second
-# delete spelled another way was never checked and the first passed the call.
-check_wt "-D, then one spelled /usr/bin/git" ask   "git branch -D b-pushed; /usr/bin/git branch -D b-local" "$M"
-check_wt "-D, then one spelled \"git\""        ask   "git branch -D b-pushed; \"git\" branch -D b-local" "$M"
-check_wt "-D, then one spelled GIT"          ask   "git branch -D b-pushed && GIT branch -D b-local" "$M"
-check_wt "-D, then one spelled \\git"         ask   "git branch -D b-pushed && \\git branch -D b-local" "$M"
-check_wt "-D, then one a function runs"      ask   "f() { \"\$@\"; }; git branch -D b-pushed; f git branch -D b-local" "$M"
-# The parser reads the command as typed, where `"a;b"` cuts the second -D off:
-# one segment parsed, one counted, and b-local went with nothing asking.
-check_wt "-D, then one behind a quoted ;"     ask   'git branch -D b-pushed; git branch "a;b" -D b-local' "$M"
+check_wt "-D, then one spelled /usr/bin/git" allow "git branch -D b-pushed; /usr/bin/git branch -D b-local" "$M"
+check_wt "-D, then one spelled \"git\""        allow "git branch -D b-pushed; \"git\" branch -D b-local" "$M"
+check_wt "-D, then one spelled GIT"          allow "git branch -D b-pushed && GIT branch -D b-local" "$M"
+check_wt "-D, then one spelled \\git"         allow "git branch -D b-pushed && \\git branch -D b-local" "$M"
+check_wt "-D, then one a function runs"      allow "f() { \"\$@\"; }; git branch -D b-pushed; f git branch -D b-local" "$M"
+check_wt "-D, then one behind a quoted ;"     allow 'git branch -D b-pushed; git branch "a;b" -D b-local' "$M"
 check_wt "-D, then a quoted ; in an echo"     allow 'git branch -D b-pushed; echo "a;b"' "$M"
-# Each reading showed one delete, a different one, and each count matched its
-# own: the parse proved b-pushed, which echo prints, and b-local went unchecked.
-check_wt "-D in each reading, a different one" ask 'git branch "a;b" -D b-local; echo x\;git branch -D b-pushed' "$M"
-check_wt "-D, xargs adds a name"             ask   "echo b-local | xargs git branch -D b-pushed" "$M"
-check_wt "-qD bundle, commits only local"    ask   "git branch -qD b-local" "$M"
-check_wt "-Dq bundle, commits only local"    ask   "git branch -Dq b-local" "$M"
-# A plain -d runs whatever holds the tip: git refuses an unmerged branch itself.
+check_wt "-D in each reading, a different one" allow 'git branch "a;b" -D b-local; echo x\;git branch -D b-pushed' "$M"
+check_wt "-D, xargs adds a name"             allow "echo b-local | xargs git branch -D b-pushed" "$M"
+check_wt "-qD bundle, commits only local"    allow "git branch -qD b-local" "$M"
+check_wt "-Dq bundle, commits only local"    allow "git branch -Dq b-local" "$M"
 check_wt "-d, commits only local"            allow "git branch -d b-local" "$M"
 check_wt "-dq bundle, commits only local"    allow "git branch -dq b-local" "$M"
 check_wt "--delete, commits only local"      allow "git branch --delete b-local" "$M"
 check_wt "-d, two names"                     allow "git branch -d b-local b-pushed" "$M"
-check_wt "-d -f, commits only local"         ask   "git branch -d -f b-local" "$M"
-check_wt "-df bundle, commits only local"    ask   "git branch -df b-local" "$M"
-check_wt "--delete --force, only local"      ask   "git branch --delete --force b-local" "$M"
-check_wt "-d, name in a variable"            ask   "B=b-local; git branch -d \$B" "$M"
-check_wt "-d, then -D of a local-only tip"   ask   "git branch -d b-pushed && git branch -D b-local" "$M"
-check_wt "--del abbreviation"                ask   "git branch --del --force b-local" "$M"
-check_wt "quoted -D"                         ask   "git branch \"-D\" b-local" "$M"
-# The gate and the parser both read the command with its quoted message gone.
+check_wt "-d -f, commits only local"         allow "git branch -d -f b-local" "$M"
+check_wt "-df bundle, commits only local"    allow "git branch -df b-local" "$M"
+check_wt "--delete --force, only local"      allow "git branch --delete --force b-local" "$M"
+check_wt "-d, name in a variable"            allow "B=b-local; git branch -d \$B" "$M"
+check_wt "-d, then -D of a local-only tip"   allow "git branch -d b-pushed && git branch -D b-local" "$M"
+check_wt "--del abbreviation"                allow "git branch --del --force b-local" "$M"
+check_wt "quoted -D"                         allow "git branch \"-D\" b-local" "$M"
 check_wt "-D after a message naming another" allow "git commit -m 'note; git branch -D b-local' && git branch -D b-pushed" "$M"
 
 echo ""
@@ -636,7 +623,7 @@ check "quoted ; before clean -f"             deny  'git clean "a;b" -fd'
 check "quoted ; before -c core.hooksPath"    deny  'git -c "a;b" -c core.hooksPath=/x status'
 check "quoted ; before a ! alias"            deny  "git config \"a;b\" alias.x '!sh'"
 check "quoted ; before push --delete"        ask   'git push origin "a;b" --delete nosuchbranch'
-check "quoted ; before branch -D"            ask   'git branch "a;b" -D nosuchbranch'
+check "quoted ; before branch -D"            allow 'git branch "a;b" -D nosuchbranch'
 check "after bash x.sh"                      deny  'bash x.sh; git push origin "a;b" --force'
 check "after a \$( )"                        deny  'd=$(pwd); git push origin "a;b" --force'
 check "in a script bash runs"                deny  $'cat > x.sh <<\'EOF\'\ngit push origin "a;b" --force\nEOF\nbash x.sh'
@@ -648,7 +635,7 @@ check "a quoted ; in a commit message"       allow 'git commit -m "fix; tests" &
 check "echo with a quoted ;"                 allow 'echo "a;b"; git push origin main'
 check "a quoted ; in a branch name"          allow 'git push origin "a;b"'
 check "a quoted ; in a format"               allow 'git log --format="%h;%s" | head'
-check "a plain -d behind a quoted ; (a name the parser cannot read)" ask 'git branch "a;b" -d nosuchbranch'
+check "a plain -d behind a quoted ; (a name the parser cannot read)" allow 'git branch "a;b" -d nosuchbranch'
 
 echo ""
 echo "=== A separator, or the ) that ends a \$( ), ends a short flag ==="
@@ -715,7 +702,7 @@ check '-C "a b", checkout .'                  deny  'git -C "a b" checkout .'
 check '-C "a b", add .'                       deny  'git -C "a b" add .'
 check '-C "a b", filter-branch'               deny  'git -C "a b" filter-branch HEAD'
 check '-C "a b", config core.hooksPath'       deny  'git -C "a b" config core.hooksPath /x'
-check '-C "a b", branch -D'                   ask   'git -C "a b" branch -D x'
+check '-C "a b", branch -D'                   allow 'git -C "a b" branch -D x'
 check '-C "a b", push --delete'               ask   'git -C "a b" push origin --delete x'
 check '-C "a b", stash drop'                  ask   'git -C "a b" stash drop'
 check 'bash -c "git push --force"'            deny  'bash -c "git push origin main --force"'
@@ -726,13 +713,25 @@ check 'bash -c "git checkout ."'              deny  'bash -c "git checkout ."'
 check 'bash -c "git add .env"'                  deny  'bash -c "git add .env"'
 check 'git add ".env"'                          deny  'git add ".env"'
 check 'bash -c "git filter-branch"'           deny  'bash -c "git filter-branch HEAD"'
-check 'bash -c "git branch -D x"'             ask   'bash -c "git branch -D x"'
+check 'bash -c "git branch -D x"'             allow 'bash -c "git branch -D x"'
 # A check that lifts a decision keeps main's terms.
 check '--staged behind -c "a b" lifts nothing' deny 'git restore . ; git -c "a b" restore --staged f'
 check '-C "a b", restore --staged .'          allow 'git -C "a b" restore --staged .'
 check '-c "user.name=A B", commit'            allow 'git -c "user.name=A B" commit -m x'
 check 'bash -c "git status"'                  allow 'bash -c "git status"'
 check '-C "a b", log'                         allow 'git -C "a b" log --oneline'
+
+echo ""
+echo "=== A silenced op beside one that still asks or denies: the other decides (#237) ==="
+check "branch -D, then stash drop"            ask   'git branch -D topic; git stash drop'
+check "worktree remove -f, then stash clear"  ask   'git worktree remove --force ../wt && git stash clear'
+check "config user.email, then remote add"    ask   'git config user.email x@y.z && git remote add up https://example.com/r.git'
+check "config user.name, then an alias"       ask   'git config user.name x; git config alias.co checkout'
+check "branch -D, then push --delete"         ask   'git branch -D topic && git push origin --delete topic'
+check "branch -D, then a subcommand in a variable" ask 'git branch -D topic; git $SUB'
+check "config user.name, then a ! alias"      deny  "git config user.name x; git config alias.x '!sh'"
+check "worktree remove -f, then reset --hard" deny  'git worktree remove --force ../wt; git reset --hard'
+check "branch -D, then a force push"          deny  'git branch -D topic && git push origin main --force'
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

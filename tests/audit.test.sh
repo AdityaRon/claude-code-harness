@@ -168,9 +168,9 @@ guard(){ printf '%s' "$2" | bash "hooks/$1" >/dev/null 2>&1; }
 guard env-guard.sh '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}'
 grep -qF "| GUARD | deny | env-guard | cat .env |" "$CLAUDE_AUDIT_LOG" \
   && pass "deny logged with hook and command" || fail "deny logged with hook and command" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
-guard network-guard.sh '{"tool_name":"WebFetch","tool_input":{"url":"https://evil.example/x"}}'
-grep -qF "| GUARD | ask | network-guard | https://evil.example/x |" "$CLAUDE_AUDIT_LOG" \
-  && pass "ask logged with the URL" || fail "ask logged with the URL" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
+guard network-guard.sh '{"tool_name":"Bash","tool_input":{"command":"curl -s https://evil.example/x"}}'
+grep -qF "| GUARD | ask | network-guard | curl -s https://evil.example/x |" "$CLAUDE_AUDIT_LOG" \
+  && pass "ask logged with the command" || fail "ask logged with the command" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
 guard network-guard.sh '{"tool_name":"Monitor","tool_input":{"ws":{"url":"wss://evil.example/feed"}}}'
 grep -qF "| GUARD | ask | network-guard | wss://evil.example/feed |" "$CLAUDE_AUDIT_LOG" \
   && pass "a monitor's ask logged with its ws URL" || fail "a monitor's ask logged with its ws URL" "$(tail -2 "$CLAUDE_AUDIT_LOG")"

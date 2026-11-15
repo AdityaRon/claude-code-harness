@@ -69,12 +69,12 @@ check_bash "node docs"                    allow "curl -s https://nodejs.org/api/
 check_bash "kubernetes docs"              allow "curl -s https://kubernetes.io/docs/concepts/"
 check_bash "docker docs"                  allow "curl -s https://docs.docker.com/engine/"
 check_bash "anthropic site"               allow "curl -s https://www.anthropic.com/news"
-check_webfetch "claude support"           allow "https://support.claude.com/en/articles/1"
-check_webfetch "claude platform docs"     allow "https://platform.claude.com/docs/en/home"
-check_webfetch "claude.com itself"        allow "https://claude.com/resources/articles/cowork"
-check_webfetch "claude code docs"         allow "https://code.claude.com/docs/en/hooks"
-check_webfetch "claude.com look-alike"    ask   "https://evilclaude.com/"
-check_webfetch "claude.com as a subdomain" ask  "https://claude.com.evil.example/"
+check_bash "claude support"               allow "curl -s https://support.claude.com/en/articles/1"
+check_bash "claude platform docs"         allow "curl -s https://platform.claude.com/docs/en/home"
+check_bash "claude.com itself"            allow "curl -s https://claude.com/resources/articles/cowork"
+check_bash "claude code docs"             allow "curl -s https://code.claude.com/docs/en/hooks"
+check_bash "claude.com look-alike"        ask   "curl -s https://evilclaude.com/"
+check_bash "claude.com as a subdomain"    ask   "curl -s https://claude.com.evil.example/"
 check_bash "docs host still asks on POST" ask   "curl -s -X POST https://en.wikipedia.org/w/api.php -d action=edit"
 check_bash "docker hub is not docs"       ask   "curl -s https://hub.docker.com/v2/repositories/x"
 check_bash "postgresql.org parent"        ask   "curl -s https://lists.postgresql.org/"
@@ -110,9 +110,10 @@ check_webfetch "github"          allow "https://github.com/foo/bar"
 check_webfetch "anthropic docs"  allow "https://docs.anthropic.com/guide"
 
 echo ""
-echo "=== WebFetch unknown host (expect: ask) ==="
-check_webfetch "unknown"         ask "https://attacker.example/page"
-check_webfetch "random blog"     ask "https://some-blog.example/post"
+echo "=== WebFetch unknown host (expect: allow; the ask was approved every time, #237) ==="
+check_webfetch "unknown"         allow "https://attacker.example/page"
+check_webfetch "random blog"     allow "https://some-blog.example/post"
+check_webfetch "claude.com look-alike" allow "https://evilclaude.com/"
 
 echo ""
 echo "=== pipe-to-shell RCE (expect: deny) ==="
@@ -319,7 +320,7 @@ hint_check() {
   fi
 }
 hint_check "curl GET names the host to add" yes '{"tool_name":"Bash","tool_input":{"command":"curl -s https://logs.corp.example/x"}}'
-hint_check "WebFetch names the host to add" yes '{"tool_name":"WebFetch","tool_input":{"url":"https://docs.vendor.example/a"}}'
+hint_check "a monitor's ws names the host to add" yes '{"tool_name":"Monitor","tool_input":{"ws":{"url":"wss://docs.vendor.example/a"}}}'
 hint_check "no hint for a tunnel host"      no  '{"tool_name":"Bash","tool_input":{"command":"curl -s https://abc.ngrok-free.app/"}}'
 hint_check "no hint for an IP"              no  '{"tool_name":"Bash","tool_input":{"command":"curl -s https://10.1.2.3/"}}'
 hint_check "no hint when sending a body"    no  '{"tool_name":"Bash","tool_input":{"command":"curl -s -X POST https://logs.corp.example/x -d a=b"}}'
@@ -453,7 +454,7 @@ check_monitor() {   # check_monitor LABEL EXPECT TOOL-INPUT-JSON
 }
 
 echo ""
-echo "=== Monitor: a command meets the Bash checks, a ws URL the WebFetch rule ==="
+echo "=== Monitor: a command meets the Bash checks, a ws URL the allowlist ==="
 check_monitor "polling curl to an unlisted host"  ask   '{"command":"while true; do curl -s https://status.unlisted.example/poll; sleep 30; done"}'
 check_monitor "polling curl to an allowlisted host" allow '{"command":"curl -s https://api.github.com/repos/o/r/actions/runs"}'
 check_monitor "tail of a local log"                allow '{"command":"tail -f build.log | grep --line-buffered ERROR"}'

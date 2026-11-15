@@ -377,13 +377,53 @@ ALLOW=$(printf '%s' "$OUT" | jq -c '.permissions.allow')
 OUT=$(merge '{"permissions":{"deny":["Bash(rm -rf:*)"]}}' '{"permissions":{"deny":["Bash(rm -rf:*)"]}}')
 [[ "$(printf '%s' "$OUT" | jq -c '.permissions.deny')" == *'rm -rf'* ]] \
   && pass "a retired rule that arrives in NEW (a local-settings fragment) is kept" || fail "fragment keeps a retired rule" "$OUT"
-jq -n -e 'input as $s | input as $r | [$s.permissions.deny[], $s.permissions.allow[]] as $ship
-    | ($ship - ([$r.permissions.deny, $r.permissions.allow] | add)) | length == ($ship | length)' \
+jq -n -e 'input as $s | input as $r | [$s.permissions.deny[], $s.permissions.allow[], ($s.permissions.ask // [])[]] as $ship
+    | ($ship - ([$r.permissions.deny, $r.permissions.allow, $r.permissions.ask] | map(. // []) | add)) | length == ($ship | length)' \
     config/settings.json config/retired-rules.json >/dev/null \
   && pass "nothing the repo ships is on the retired list" || fail "a shipped rule is retired" "$(jq -c '.permissions' config/retired-rules.json)"
 
+
+echo ""
+echo "=== kubectl: the blanket allow retires; read verbs allow and mutating verbs ask ==="
+SHIPPED=$(cat config/settings.json)
+OUT=$(merge '{"permissions":{"allow":["Bash(kubectl:*)","Bash(mine:*)"]}}' "$SHIPPED")
+ALLOW=$(printf '%s' "$OUT" | jq -c '.permissions.allow')
+[[ "$ALLOW" != *'"Bash(kubectl:*)"'* && "$ALLOW" == *'"Bash(kubectl get:*)"'* && "$ALLOW" == *'"Bash(mine:*)"'* ]] \
+  && pass "an old install loses Bash(kubectl:*) and gains the read verbs" || fail "kubectl:* retired" "$ALLOW"
+FRAG=$(printf '%s' "$SHIPPED" | jq -c '.permissions.allow += ["Bash(kubectl:*)"]')
+OUT=$(merge '{"permissions":{"allow":["Bash(kubectl:*)"]}}' "$FRAG")
+[[ "$(printf '%s' "$OUT" | jq -c '.permissions.allow')" == *'"Bash(kubectl:*)"'* ]] \
+  && pass "a local-settings fragment that lists Bash(kubectl:*) keeps it" || fail "fragment keeps kubectl:*" "$(printf '%s' "$OUT" | jq -c '.permissions.allow')"
+MISSING=""
+for v in delete apply create replace patch edit scale rollout drain cordon uncordon taint label annotate set run exec cp port-forward; do
+  for r in "Bash(kubectl $v *)" "Bash(kubectl * $v *)"; do
+    jq -e --arg r "$r" '.permissions.ask | index($r)' config/settings.json >/dev/null || MISSING="$MISSING $r"
+  done
+  jq -e --arg v "$v" '.permissions.allow | any(startswith("Bash(kubectl " + $v))' config/settings.json >/dev/null && MISSING="$MISSING allow:$v"
+done
+[[ -z "$MISSING" ]] && pass "every mutating verb asks in both orders, and none is allowed" || fail "kubectl ask rules" "$MISSING"
+unset RETIRED
+
+echo ""
+echo "=== permissions.ask is unioned like allow ==="
+OUT=$(merge '{"permissions":{"ask":["Bash(mine-ask *)"]}}' '{"permissions":{"ask":["Bash(kubectl delete *)"]}}')
+[[ "$(printf '%s' "$OUT" | jq -r '.permissions.ask | sort | join(",")')" == "Bash(kubectl delete *),Bash(mine-ask *)" ]] \
+  && pass "ask unioned" || fail "ask unioned" "$(printf '%s' "$OUT" | jq -c '.permissions.ask')"
+OUT=$(merge '{"permissions":{"ask":["Bash(mine-ask *)"]}}' "$HARNESS")
+[[ "$(printf '%s' "$OUT" | jq -c '.permissions.ask')" == '["Bash(mine-ask *)"]' ]] \
+  && pass "a user's ask survives a source with none" || fail "user ask kept" "$(printf '%s' "$OUT" | jq -c '.permissions.ask')"
+OUT=$(merge '{"permissions":{"ask":["Bash(cat ~/x *)"]}}' "$HARNESS")
+[[ "$(printf '%s' "$OUT" | jq -c '.permissions.ask')" == *"Bash(cat $HOME/x *)"* ]] \
+  && pass "an ask rule with ~/ gains its expanded twin" || fail "ask expand_home" "$(printf '%s' "$OUT" | jq -c '.permissions.ask')"
+OUT=$(RETIRED='{"permissions":{"ask":["Bash(old-ask *)"]}}' merge '{"permissions":{"ask":["Bash(old-ask *)","Bash(mine-ask *)"]}}' "$HARNESS")
+[[ "$(printf '%s' "$OUT" | jq -c '.permissions.ask')" == '["Bash(mine-ask *)"]' ]] \
+  && pass "a retired ask rule leaves" || fail "retired ask" "$(printf '%s' "$OUT" | jq -c '.permissions.ask')"
+[[ "$(merge '{}' "$HARNESS" | jq -c '.permissions | has("ask")')" == false ]] \
+  && pass "no ask key when neither side has one" || fail "no empty ask" "$(merge '{}' "$HARNESS" | jq -c .permissions)"
+
 echo ""
 echo "=== an install over the seven Bash guard entries leaves one bash-guards entry ==="
+RETIRED=$(jq -c . config/retired-rules.json)
 # As installed before hooks/bash-guards.sh: every guard its own Bash|Monitor
 # entry, one spelled with the expanded home, beside a user's own Bash hook.
 G='{"type":"command","command":"~/.claude/hooks/%s.sh","onFailure":"block"}'
@@ -396,8 +436,8 @@ OUT=$(merge "$OLD" "$(cat config/settings.json)")
 on() { printf '%s' "$OUT" | jq -c --arg m "$1" '[.hooks.PreToolUse[] | select(.matcher == $m) | .hooks[] | {command, onFailure}]'; }
 [[ "$(on 'Bash|Monitor')" == '[{"command":"~/.claude/hooks/bash-guards.sh","onFailure":"block"}]' ]] \
   && pass "Bash|Monitor runs bash-guards alone, onFailure block" || fail "Bash|Monitor entry" "$(on 'Bash|Monitor')"
-[[ "$(on WebFetch)" == '[{"command":"~/.claude/hooks/network-guard.sh","onFailure":"block"}]' ]] \
-  && pass "network-guard stays on WebFetch" || fail "WebFetch entry" "$(on WebFetch)"
+[[ "$(on WebFetch)" == '[]' ]] \
+  && pass "an installed network-guard entry on WebFetch leaves (#237)" || fail "WebFetch entry" "$(on WebFetch)"
 [[ "$(on 'Write|Edit|MultiEdit|NotebookEdit')" == *'"~/.claude/hooks/config-guard.sh","onFailure":"block"'* ]] \
   && pass "config-guard stays on the file tools" || fail "file tools entry" "$(on 'Write|Edit|MultiEdit|NotebookEdit')"
 [[ "$(on Bash)" == '[{"command":"/opt/mine.sh","onFailure":null}]' ]] \

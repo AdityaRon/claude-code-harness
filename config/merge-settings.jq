@@ -7,7 +7,7 @@
 #
 # Ownership rules:
 #   - user wins for overlapping top-level keys they set themselves (env, tui, …)
-#   - allow / deny lists are unioned so users and projects can extend them
+#   - allow / ask / deny lists are unioned so users and projects can extend them
 #   - statusLine and permissions.defaultMode are harness-owned
 #   - the harness owns the hook entries it installed; yours are preserved
 #
@@ -64,6 +64,10 @@ def keep_foreign($h):
                          + ($new.permissions.allow // []) | expand_home($home))
 | .permissions.deny  = ((($old.permissions.deny  // []) - ($retired.permissions.deny  // [] | expand_home($home)))
                          + ($new.permissions.deny  // []) | expand_home($home))
+| (if $old.permissions.ask != null or $new.permissions.ask != null
+   then .permissions.ask = ((($old.permissions.ask // []) - ($retired.permissions.ask // [] | expand_home($home)))
+                            + ($new.permissions.ask // []) | expand_home($home))
+   else . end)
 # Harness owns the permission mode, so a stale value can't shadow it — but
 # never write a null key if a customized source has dropped it.
 | (if $new.permissions.defaultMode

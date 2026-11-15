@@ -308,7 +308,7 @@ envcase() {   # envcase HOOK PAYLOAD: the same answer with and without them
 }
 envcase sensitive-file-guard "$(jq -nc --arg d "$TMP/run" '{tool_name:"Read",tool_input:{file_path:"/repo/.env"},cwd:$d}')"
 envcase config-guard "$(jq -nc --arg d "$TMP/run" --arg f "$HOME/.claude/settings.json" '{tool_name:"Write",tool_input:{file_path:$f,content:"{}"},cwd:$d}')"
-envcase network-guard "$(jq -nc --arg d "$TMP/run" '{tool_name:"WebFetch",tool_input:{url:"https://evil.example.com/x"},cwd:$d}')"
+envcase network-guard "$(jq -nc --arg d "$TMP/run" '{tool_name:"Monitor",tool_input:{ws:{url:"wss://evil.example.com/x"}},cwd:$d}')"
 # A guard run alone re-runs itself on an inline script; GUARD_SELF must not redirect that.
 envcase git-guard "$(payload "python3 -c 'import os; os.system(\"git push --force origin main\")'")"
 OUT=$(payload "python3 -c 'import os; os.system(\"git push --force origin main\")'" \
