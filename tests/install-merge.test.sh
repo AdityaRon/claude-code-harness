@@ -395,13 +395,17 @@ OUT=$(merge '{"permissions":{"allow":["Bash(kubectl:*)"]}}' "$FRAG")
 [[ "$(printf '%s' "$OUT" | jq -c '.permissions.allow')" == *'"Bash(kubectl:*)"'* ]] \
   && pass "a local-settings fragment that lists Bash(kubectl:*) keeps it" || fail "fragment keeps kubectl:*" "$(printf '%s' "$OUT" | jq -c '.permissions.allow')"
 MISSING=""
+for v in get describe logs top explain api-resources api-versions version cluster-info "config view" \
+         "config get-contexts" "config current-context" "auth can-i" events; do
+  jq -e --arg r "Bash(kubectl $v:*)" '.permissions.allow | index($r)' config/settings.json >/dev/null || MISSING="$MISSING allow:$v"
+done
 for v in delete apply create replace patch edit scale rollout drain cordon uncordon taint label annotate set run exec cp port-forward; do
   for r in "Bash(kubectl $v *)" "Bash(kubectl * $v *)"; do
     jq -e --arg r "$r" '.permissions.ask | index($r)' config/settings.json >/dev/null || MISSING="$MISSING $r"
   done
   jq -e --arg v "$v" '.permissions.allow | any(startswith("Bash(kubectl " + $v))' config/settings.json >/dev/null && MISSING="$MISSING allow:$v"
 done
-[[ -z "$MISSING" ]] && pass "every mutating verb asks in both orders, and none is allowed" || fail "kubectl ask rules" "$MISSING"
+[[ -z "$MISSING" ]] && pass "each read verb is allowed; every mutating verb asks in both orders, and none is allowed" || fail "kubectl ask rules" "$MISSING"
 unset RETIRED
 
 echo ""
