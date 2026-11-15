@@ -62,6 +62,7 @@ export CLAUDE_DOCTOR_CMD="bash $TMP/stub.sh"
 # A stand-in for the CLI file that check 4 greps. Without this the tests would
 # scan the real ~150MB binary once per settings key per invocation — slow, and it
 # would make results depend on the machine's Claude install rather than fixtures.
+ALL_TOOLS=$(jq -r '[.hooks[][]?.matcher // empty | split("|")[] | select(test("^[A-Za-z]+$"))] | unique[]' config/settings.json)
 ALL_KEYS=$(jq -r 'keys[] | select(. != "hooks" and . != "permissions" and . != "env" and . != "sandbox" and . != "statusLine")' config/settings.json)
 
 # Section 5 reads the two memory-index limits out of the CLI rather than trusting the
@@ -72,7 +73,7 @@ ALL_KEYS=$(jq -r 'keys[] | select(. != "hooks" and . != "permissions" and . != "
 mkcli(){  # mkcli <path> [key-to-omit]
   local out="$1" omit="${2:-}" k
   : > "$out"
-  for k in $ALL_KEYS; do
+  for k in $ALL_KEYS $ALL_TOOLS; do
     [ "$k" = "$omit" ] && continue
     echo "$k" >> "$out"
   done
@@ -245,6 +246,20 @@ printf '%s' "$OUT" | grep -qF "index line limit 200 matches" \
   && pass "a minified name holding \$ still resolves" \
   || fail "a minified name holding \$ still resolves" "$OUT"
 
+
+echo ""
+echo "=== 7: a tool a hook matcher names must still exist in the CLI ==="
+OUT=$(run "$ALL_EVENTS" "$ALL_MODES")
+check_contains "tool names are read from the matchers" "✓ ExitPlanMode" "$OUT"
+check_absent "the regex matcher is not a tool name" "mcp__" "$OUT"
+mkcli "$TMP/notool" ExitPlanMode
+OUT=$(CLAUDE_CLI_BIN="$TMP/notool" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 1 ] && pass "a renamed tool exits 1" || fail "a renamed tool exits 1" "exit=$ST"
+check_contains "and is named" "ExitPlanMode is named in a hook matcher" "$OUT"
+jq '.hooks.PreToolUse += [{"matcher":"MadeUpTool","hooks":[{"type":"command","command":"true"}]}]' config/settings.json > "$TMP/s.json"
+OUT=$(CLAUDE_UPSTREAM_SETTINGS="$TMP/s.json" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 1 ] && pass "a made-up tool in a matcher exits 1" || fail "a made-up tool in a matcher exits 1" "exit=$ST"
+check_contains "and names it" "MadeUpTool is named in a hook matcher" "$OUT"
 
 echo ""
 echo "=== 6: the mods the harness ships pass claude plugin test ==="

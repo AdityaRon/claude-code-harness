@@ -63,7 +63,12 @@ printf '%s\n' "$CH_SENTINEL" > "$HOME/.config/comms-hub/config.toml"
 # Twelve backups from earlier installs; this run makes a thirteenth.
 for i in 00 01 02 03 04 05 06 07 08 09 10 11; do printf '{}' > "$HOME/.claude/settings.json.bak.202601010000$i"; done
 
+# The contract pin an older install wrote, which nothing reads now.
+printf '2.1.325\n' > "$HOME/.claude/harness-contract.version"
+
 OUT=$(cd "$REPO" && CCH_SKIP_SELFTEST=1 bash install.sh 2>&1); RC=$?
+[ ! -e "$HOME/.claude/harness-contract.version" ] \
+  && pass "an old install's contract pin is removed" || fail "an old install's contract pin is removed" "still there"
 [ "$RC" -eq 0 ] && pass "installer exits 0" || fail "installer exits 0" "rc=$RC: $(printf '%s' "$OUT" | tail -3)"
 
 echo ""

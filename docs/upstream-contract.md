@@ -29,7 +29,10 @@ It is a **breakage check only**; it does not assess what a release adds. It chec
    (advisory: a string match in a bundled build is not authoritative);
 5. the memory index limits (200 lines, 25,000 bytes) that `memory-lint` and
    `memory-verify` enforce still match the ones read out of the CLI;
-6. each mod under `skills/` (today the comms panel) still passes `claude plugin test`.
+6. each mod under `skills/` (today the comms panel) still passes `claude plugin test`;
+7. every tool name in a `settings.json` hook matcher (read from the file, not a list;
+   `mcp__.*` and the empty matcher skipped) is still mentioned in the CLI. A renamed
+   tool would silently switch its guard off, so a miss is exit 1.
 
 It works by asking the CLI an impossible question: `claude doctor` prints the full
 list of valid hook events and permission modes *only* inside the warning for an

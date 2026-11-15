@@ -68,6 +68,9 @@ for f in "$REPO"/bin/*; do
   echo "  ✓ $b"
 done
 
+# Nothing reads the contract pin an older install wrote.
+rm -f ~/.claude/harness-contract.version
+
 # The commit the last install recorded: the report at the end diffs from it, and
 # removes what it wrote that the clone has since deleted. A first install has
 # none, and a failed read must not end the install under set -e.

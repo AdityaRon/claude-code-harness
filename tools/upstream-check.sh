@@ -23,7 +23,7 @@
 set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SETTINGS="$REPO/config/settings.json"
+SETTINGS=${CLAUDE_UPSTREAM_SETTINGS:-$REPO/config/settings.json}  # test seam
 CONTRACT=${CLAUDE_UPSTREAM_CONTRACT:-$REPO/config/upstream-contract.json}  # test seam
 DOCTOR_CMD=${CLAUDE_DOCTOR_CMD:-"claude doctor"}
 SENTINEL_EVENT="HarnessDriftSentinel"
@@ -335,6 +335,25 @@ else
       printf '%s\n' "$MOD_OUT" | strip_ansi | grep -v '^ *$' | tail -15 | sed 's/^/      /'
     fi
   done
+fi
+say ""
+
+# ---- 7. the tools the guards attach to still exist ---------------------
+# A hook matcher names a tool. If upstream renames the tool, the matcher matches
+# nothing and the guard is silently off. Substring match against the CLI file, as
+# for section 4; the regex matcher mcp__.* and the empty matcher are skipped.
+say "7. tool names in settings.json hook matchers still exist in the CLI"
+if [ ! -e "${CLI_BIN:-}" ] || [ -d "${CLI_BIN:-/}" ]; then
+  say "      (skipped — cannot locate the CLI files)"
+else
+  TOOLS=$(jq -r '[.hooks[][]?.matcher // empty | split("|")[] | select(test("^[A-Za-z]+$"))] | unique[]' "$SETTINGS")
+  TOOLS_N=0
+  for t in $TOOLS; do
+    TOOLS_N=$((TOOLS_N+1))
+    if grep -qF "$t" "$CLI_BIN" 2>/dev/null; then ok "$t"
+    else fail "$t is named in a hook matcher but the CLI no longer mentions it; the guard on it is off"; fi
+  done
+  [ "$TOOLS_N" -gt 0 ] || fail "found no tool names in the hook matchers (settings.json layout changed?)"
 fi
 say ""
 
