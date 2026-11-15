@@ -88,7 +88,7 @@ skills_retry() {
   [[ "$CHECK" == 1 || ! -f "$HOME/.claude/skills.pin" || ! -f "$HOME/.claude/skills-sync.sh" ]] && return 0
   local out
   if out=$(bash "$HOME/.claude/skills-sync.sh" --if-behind 2>&1); then
-    [[ -n "$out" ]] && say "skills: installed the pinned release on retry"
+    [[ -n "$out" ]] && say "skills retry: $(printf '%s\n' "$out" | head -1 | sed 's/^ *//')"
   else
     say "skills: still behind the pin; the next run retries: $(printf '%s\n' "$out" | grep -m1 '⚠')"
   fi

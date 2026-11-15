@@ -60,6 +60,12 @@ jobs:
         # See .github/install-apt-deps.sh for why this is not a plain apt-get.
         run: .github/install-apt-deps.sh jq
 
+      # As in ci.yml: the suites that read the skills fail in CI without a clone.
+      - name: Clone claude-code-skills
+        run: |
+          git clone --quiet "$(sed -n 's/^url=//p' config/skills.pin)" "$RUNNER_TEMP/skills"
+          echo "CCH_SKILLS_CLONE=$RUNNER_TEMP/skills" >> "$GITHUB_ENV"
+
       # The tag goes on the commit tested here (sha), not on $GITHUB_SHA.
       - name: Decide the version
         id: plan

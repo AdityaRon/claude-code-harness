@@ -22,8 +22,16 @@ CLONE=${HARNESS_SKILLS_CLONE:-$HOME/.claude/skills-src}
 [[ -n "$URL" && "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$COMMIT" =~ ^[0-9a-f]{40}$ ]] \
   || no "$PIN does not name a url=, a release tag= and a 40-character commit="
 
-if [[ -n "$IF_BEHIND" ]] && [[ "$(sed -n 's/^commit=//p' "$HOME/.claude/skills.version" 2>/dev/null | head -1)" == "$COMMIT" ]]; then
-  exit 0
+# --if-behind is harness-update.sh's retry: it also leaves alone skills installed
+# from another clone, as harness-update.sh leaves a harness installed from one.
+if [[ -n "$IF_BEHIND" ]]; then
+  recorded() { sed -n "s/^$1=//p" "$HOME/.claude/skills.version" 2>/dev/null | head -1; }
+  [[ "$(recorded commit)" == "$COMMIT" ]] && exit 0
+  from=$(recorded repo)
+  if [[ -n "$from" && "$(cd "$from" 2>/dev/null && pwd -P)" != "$(cd "$CLONE" 2>/dev/null && pwd -P)" ]]; then
+    echo "  ℹ skills: installed from $from, not $CLONE; left as they are (bash install.sh in the harness installs the pinned release)"
+    exit 0
+  fi
 fi
 
 # Cloned beside its place and moved in, so a clone that fails halfway leaves no
@@ -43,6 +51,11 @@ git -C "$CLONE" rev-parse --is-inside-work-tree >/dev/null 2>&1 || no "$CLONE is
 [[ -z "$(git -C "$CLONE" status --porcelain 2>/dev/null)" ]] || no "$CLONE has local changes; commit, stash or remove them"
 
 have() { [[ "$(git -C "$CLONE" rev-parse -q --verify "refs/tags/$TAG^{commit}" 2>/dev/null)" == "$COMMIT" ]]; }
+# The clone's origin first when no URL is set: a clone made from a mirror keeps
+# fetching from it on scheduled runs, which have no shell environment.
+if ! have && [[ -z "${HARNESS_SKILLS_URL:-}" ]]; then
+  git -C "$CLONE" fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null
+fi
 if ! have; then
   err=$(git -C "$CLONE" fetch --quiet "$URL" "refs/tags/$TAG:refs/tags/$TAG" 2>&1 | tail -1) \
     || no "fetch of $TAG from $URL failed (${err:-no message})"

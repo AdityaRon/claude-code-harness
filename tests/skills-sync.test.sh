@@ -26,9 +26,10 @@ mkdir -p "$HOME/.claude/skills/fx" && cat "$(dirname "$0")/body" > "$HOME/.claud
 printf 'commit=%s\n' "$(git -C "$(dirname "$0")" rev-parse HEAD)" > "$HOME/.claude/skills.version"
 SH
 echo one > "$F/body"
+printf '#!/usr/bin/env bash\necho "fx doctor $*"\n' > "$F/doctor.sh"
 ( cd "$F" && "${G[@]}" init -q && "${G[@]}" add -A && "${G[@]}" commit -qm one && "${G[@]}" tag v9.0.0 ) || { echo "fixture failed"; exit 1; }
 ONE=$("${G[@]}" -C "$F" rev-parse HEAD)
-pin() { printf 'url=%s\ntag=%s\ncommit=%s\n' "$F" "$1" "$2" > "$TMP/pin"; }
+pin() { printf 'url=%s\ntag=%s\ncommit=%s\n' "${3:-$F}" "$1" "$2" > "$TMP/pin"; }   # TAG COMMIT [URL]
 sync() { HOME="$1" bash "$SYNC" --pin "$TMP/pin" "${@:2}" 2>&1; }
 installs() { if [[ -f "$1/fx-installs" ]]; then wc -l < "$1/fx-installs" | tr -d ' '; fi; }
 A="$TMP/a"; mkdir -p "$A/.claude/skills/mine"; echo mine > "$A/.claude/skills/mine/SKILL.md"
@@ -70,6 +71,32 @@ OUT=$(sync "$TMP/b"); RC=$?
 pin v9.1.0 "$TWO"
 OUT=$(HARNESS_SKILLS_CLONE="$TMP/elsewhere" sync "$TMP/c"); RC=$?
 [[ $RC == 0 && -d "$TMP/elsewhere/.git" && ! -e "$TMP/c/.claude/skills-src" ]] && pass "HARNESS_SKILLS_CLONE moves the clone" || fail "clone override" "rc=$RC $OUT"
+
+# Cloned from a mirror with HARNESS_SKILLS_URL; later runs, as launchd starts
+# them, have no such variable and the pin's URL is unreachable.
+git clone -q --mirror "$F" "$TMP/mirror.git"
+OUT=$(HARNESS_SKILLS_URL="$TMP/mirror.git" sync "$TMP/e"); RC=$?
+( cd "$F" && echo three > body && "${G[@]}" commit -qam three && "${G[@]}" tag v9.2.0 ) && git -C "$TMP/mirror.git" fetch -q origin 'refs/tags/*:refs/tags/*'
+pin v9.2.0 "$("${G[@]}" -C "$F" rev-parse HEAD)" "$TMP/unreachable"
+OUT=$(sync "$TMP/e"); RC2=$?
+[[ $RC == 0 && $RC2 == 0 && "$(cat "$TMP/e/.claude/skills/fx/SKILL.md")" == three ]] \
+  && pass "a clone made from a mirror fetches the next tag from it, with no URL set" || fail "mirror origin" "rc=$RC/$RC2 $OUT"
+
+# Installed from a working clone by hand: the scheduled retry leaves it, an install does not.
+printf 'commit=%s\nrepo=%s\n' "$ONE" "$TMP/dev-clone" > "$TMP/e/.claude/skills.version"
+N=$(installs "$TMP/e")
+OUT=$(sync "$TMP/e" --if-behind); RC=$?
+[[ $RC == 0 && "$OUT" == *"installed from $TMP/dev-clone"*"left as they are"* && "$(installs "$TMP/e")" == "$N" ]] \
+  && pass "--if-behind leaves skills installed from another clone" || fail "hand install kept" "rc=$RC $OUT"
+OUT=$(sync "$TMP/e"); RC=$?
+[[ $RC == 0 && "$(installs "$TMP/e")" == $((N + 1)) ]] && pass "and a plain run installs the pinned release over them" || fail "plain run" "rc=$RC $OUT"
+
+echo ""
+echo "=== doctor.sh --skill runs the skills clone's check ==="
+OUT=$(HARNESS_SKILLS_CLONE="$TMP/e/.claude/skills-src" bash "$REPO/doctor.sh" --skill comms-hub 2>&1); RC=$?
+[[ $RC == 0 && "$OUT" == "fx doctor --skill comms-hub" ]] && pass "it runs that clone's doctor.sh --skill NAME" || fail "forward" "rc=$RC $OUT"
+OUT=$(HOME="$TMP/none" bash "$REPO/doctor.sh" --skill comms-hub 2>&1); RC=$?
+[[ $RC == 2 && "$OUT" == *"no claude-code-skills clone at $TMP/none/.claude/skills-src"* ]] && pass "with no clone: exit 2, saying where it looked" || fail "no clone" "rc=$RC $OUT"
 
 echo ""
 echo "=== harness $FROM, upgraded to this tree: ~/.claude/skills byte for byte ==="
