@@ -33,7 +33,7 @@ cd claude-code-harness
 bash install.sh
 ```
 
-- Merges into your `~/.claude/settings.json`: your keys kept, allow and deny lists unioned, the harness's hook entries owned by the harness.
+- Merges into your `~/.claude/settings.json`: your keys kept, allow, ask and deny lists unioned, the harness's hook entries owned by the harness.
 - Backs the previous file up as `settings.json.bak.<timestamp>` and folds in `~/.claude/local-settings/*.json`.
 - Clones claude-code-skills into `~/.claude/skills-src` at the release
   `config/skills.pin` names, verifies its commit and runs its `install.sh`
@@ -90,14 +90,14 @@ skip, except in CI, which clones it.
 | `env-guard` | Bash | Deny: reading, dumping, copying or sending env values and dotfiles (`cat .env`, `printenv`, `nc`) |
 | `sensitive-file-guard` | Read, Grep, file writes | Deny: `.env`, keys, SSH and cloud credentials, credential folders. Ask: a Grep at or above your home folder |
 | `secret-scanner` | file writes | Deny: high-confidence token shapes (AWS, GitHub, Slack, Stripe, Google, Anthropic, OpenAI, PEM) in written content |
-| `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, a broad `git add` that would stage a credential file or that it cannot check. Ask: force-deleting a local branch, or deleting a remote one, whose tip no other ref holds (a plain `git branch -d` runs: git refuses an unmerged branch itself), remote and identity changes |
+| `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, a broad `git add` that would stage a credential file or that it cannot check. Ask: deleting a remote branch whose tip no other ref holds, remote changes, stash drop. Runs: local branch deletes, `worktree remove --force`, identity and signing config |
 | `rm-guard` | Bash | Deny: recursive `rm` of home, root or a top-level folder, and `rm -rf` outside the session's scratch folder |
 | `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, the Bash guards' skip file, shell startup files, `~/.gitconfig`, LaunchAgents, Bash writes into a mod Claude Code loads by itself, and copies or extractions into a `.claude` folder. Deny: moving or emptying `~/.claude` |
-| `network-guard` | Bash, WebFetch | Deny: file uploads and pipe-to-shell. Ask: request bodies, `DELETE`, hosts off the allowlist, `scp`/`rsync`, local servers |
+| `network-guard` | Bash | Deny: file uploads and pipe-to-shell. Ask: request bodies, `DELETE`, `curl`/`wget` to hosts off the allowlist, `scp`/`rsync`, local servers. WebFetch is not guarded |
 | `interpreter-guard` | Bash | Ask: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts |
 | `kubectl-guard` | Bash | Ask: every mutating verb wherever it sits, secret reads, and any subcommand it cannot classify |
 | `subagent-cache-guard` | a subagent's tool calls, SubagentStop | Deny: a subagent's tool calls once its prompt cache went cold 5 times in one run (`CLAUDE_SUBAGENT_MAX_COLD_STARTS`), until it replies with where it got to. Main sessions are left alone |
-| `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review, one that runs code outside the guards, or one hooking `settings.read` or `agent.spawn` |
+| `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review. Anything else it hooks or calls, outside the guards included, is shown in a notice |
 | `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
 | `memory-lint` | file writes | Advise: name, type, description, `verify:` block and index tier of a memory file |
 | `comment-budget` | file writes | Advise: a comment block an edit grew past 6 lines |

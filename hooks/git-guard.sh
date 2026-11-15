@@ -3,12 +3,13 @@
 #   deny: force pushes (--force, an f in any short cluster, a + refspec,
 #         --mirror), broad staging (., -A, :/, $(pwd)), staging credential
 #         files, core.hooksPath by -c or git config, a ! alias, any mention of
-#         .git/hooks, history rewrites, reset --hard, clean -f, branch -d/-D,
-#         and checkout or restore of the whole tree
-#   ask:  glob staging, stash drop/clear, worktree remove --force outside this
-#         session's scratch, remote branch deletion whose tip no other ref
-#         holds, remote set-url/add, any other alias, identity and signing
-#         config, and a subcommand held in a variable or a function's arguments
+#         .git/hooks, history rewrites, reset --hard, clean -f, and checkout or
+#         restore of the whole tree
+#   ask:  glob staging, stash drop/clear, remote branch deletion whose tip no
+#         other ref holds, remote set-url/add, any other alias, and a
+#         subcommand held in a variable or a function's arguments
+#   runs: local branch deletion, worktree remove --force, and identity and
+#         signing config, whose asks were approved every time (#237)
 # Most patterns start at a command boundary, but matching is textual: the same
 # words in a heredoc, or in a message this cannot prove is text, can still match.
 source "$(dirname "$0")/lib.sh"
@@ -179,74 +180,10 @@ proved_in_each_reading() {   # FN
 }
 
 # --- Branch deletion ----------------------------------------------------
-# A branch whose tip a remote-tracking ref contains loses nothing when deleted,
-# so it runs. Sessions make a branch per worktree and could never remove one:
-# 398 piled up in one repo. Anything this cannot prove asks: a name in a
-# variable, xargs, a cd first, an unknown flag, a tip only this branch holds.
-# The raw command, not $CMD: its second line is lower-cased, and refs are not.
+# A local branch delete runs: its ask was approved every time in 30 days (#237).
+# BRANCH_DEL stays for push --delete, which still asks when the same call
+# deletes a local branch too.
 BRANCH_DEL='(-[A-Za-z]*[dD][A-Za-z]*|--de(l|le|let|lete)?)\b'   # -qD bundles; git takes --del
-branch_on_remote() {
-  local tip
-  [[ "$2" =~ ^[A-Za-z0-9._/@+-]+$ && "$2" != -* ]] || return 1
-  tip=$(git -C "$1" rev-parse -q --verify "refs/heads/$2^{commit}" 2>/dev/null) || return 1
-  [[ -n $(git -C "$1" for-each-ref --count=1 --contains "$tip" --format=x refs/remotes 2>/dev/null) ]]
-}
-branch_delete_safe() {
-  local raw segs seg t i b repo cwd n=0 names force
-  cwd=$(jq_get '.cwd')
-  raw=$(separate_groups "$PROOF_TEXT")
-  # xargs appends names the command does not show; normalize_wrappers hides it.
-  printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
-  raw=$(normalize_wrappers "$raw")
-  printf '%s\n' "$raw" | grep -qE "${A}(cd|pushd)\b" && return 1
-  segs=$(printf '%s\n' "$raw" | grep -oE "${A}${GIT}branch\s+[^|;&]*" | sed -E 's/^[|&;`$( ]*//')
-  while IFS= read -r seg; do
-    printf '%s\n' "$seg" | grep -qE "\s${BRANCH_DEL}" || continue
-    read -ra t <<<"$seg"
-    [[ "${t[0]}" == git ]] || return 1
-    repo="$cwd"; i=1
-    while [[ "${t[i]:-}" != branch ]]; do
-      case "${t[i]:-}" in
-        -C) repo="${t[i+1]:-}"; i=$((i + 2)) ;;
-        -C?*) repo="${t[i]#-C}"; i=$((i + 1)) ;;
-        --no-pager) i=$((i + 1)) ;;
-        *) return 1 ;;
-      esac
-    done
-    # shellcheck disable=SC2088  # '~/' is the tilde as typed; it is expanded here
-    case "$repo" in
-      ''|*'$'*|*'`'*) return 1 ;;
-      '~/'*) repo="$HOME/${repo#\~/}" ;;
-      /*) ;;
-      *) [[ -n "$cwd" ]] || return 1; repo="$cwd/$repo" ;;
-    esac
-    names=(); force=0
-    for ((i = i + 1; i < ${#t[@]}; i++)); do
-      case "${t[i]}" in
-        [0-9]\>*|\>*|[0-9]\<*|\<*) break ;;
-        --force|-*[Df]*) [[ "${t[i]}" =~ ^(--force|-[dDfq]|-[dDfq][dDfq])$ ]] || return 1; force=1 ;;
-        -[dq]|-[dq][dq]|--delete|--quiet) ;;
-        -*) return 1 ;;
-        *) names+=("${t[i]}") ;;
-      esac
-    done
-    [[ ${#names[@]} -gt 0 ]] || return 1
-    # A plain -d loses nothing: git itself refuses a branch not merged into HEAD or its upstream.
-    for b in "${names[@]}"; do
-      if [[ $force -eq 1 ]]; then branch_on_remote "$repo" "$b" || return 1
-      else [[ "$b" =~ ^[A-Za-z0-9._/@+-]+$ && "$b" != -* ]] || return 1; fi
-    done
-    n=$((n + 1))
-  done <<<"$segs"
-  PROOF_N=$n
-  [[ $n -eq $(gate_segments branch "\s${BRANCH_DEL}") ]]
-}
-# With its quotes, too: `git -C "a b" branch -D x` lost its git once they went.
-if { printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}branch\s([^|;&]*\s)?${BRANCH_DEL}" \
-     || printf '%s\n' "$CMD" | grep -qE "${A}${GIT}branch\s([^|;&]*\s)?${BRANCH_DEL}"; } && ! proved_in_each_reading branch_delete_safe; then
-  emit_ask "This deletes a branch whose commits no remote-tracking ref holds, or one this guard could not check. Confirm the work is merged or no longer needed."
-  exit 0
-fi
 
 # Discarding the whole working tree is reset --hard for uncommitted work, and
 # `Bash(git checkout:*)` is on the allow list, so nothing else stops it.
@@ -276,45 +213,7 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}stash\s+(drop|clear)\b"; then
   emit_ask "This deletes a stash with its uncommitted changes. Confirm nothing in it is needed."
   exit 0
 fi
-# A forced worktree removal asks, unless every path is a scratch worktree this
-# session made (git needs --force there whenever the tree is dirty), or a
-# worktree with nothing to lose: git removes one whose status is empty without
-# --force, ignored files included, so --force there deletes nothing more.
-clean_worktree() {
-  local p="${1//\"/}" s
-  p="${p//\'/}"
-  case "$p" in ''|*'$'*) return 1 ;; esac
-  # shellcheck disable=SC2088  # '~/' is the tilde as typed; it is expanded here
-  case "$p" in
-    '~/'*) p="$HOME/${p#\~/}" ;;
-    /*) ;;
-    *) [[ -n "$RELBASE" ]] || return 1; p="$RELBASE/$p" ;;
-  esac
-  [[ -d "$p" ]] && s=$(git -C "$p" status --porcelain 2>/dev/null) && [[ -z "$s" ]]
-}
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}worktree\s+remove\s[^|;&]*(--force|-f)\b"; then
-  SCRATCH=$(session_scratch "$(jq_get '.tool_input.command')"$'\n'"$(jq_get '.cwd')")
-  # The raw command: normalizing strips the `CLAUDE_JOB_DIR=/x` prefix this looks for.
-  jq_get '.tool_input.command' | grep -qE '(^|[^A-Za-z0-9_])(CLAUDE_JOB_DIR|HOME|TMPDIR)[[:space:]]*=' && SCRATCH=""
-  BASE=$(in_scratch "$(jq_get '.cwd')" "$SCRATCH" "") || BASE=""
-  # A relative path means the session's cwd only when nothing moves it first.
-  RELBASE=$(jq_get '.cwd')
-  printf '%s\n' "$CMD" | grep -qE "${A}(cd|pushd)\b|\s(-C|--git-dir|--work-tree)\b" && RELBASE=""
-  # A clean path lifts the ask, so its segments are cut on main's terms as well
-  # as the wider ones: grep -o matches do not overlap, and a wide match can
-  # swallow a second remove (`git -c \"x; git worktree remove -f /wt; \" …`).
-  PATHS=$({ printf '%s\n' "$CMD" | grep -oE "${GIT}worktree\s+remove\s[^|;&]*"
-            printf '%s\n' "$CMD" | grep -oE "${GIT0}worktree\s+remove\s[^|;&]*"; } \
-    | sed -E 's/^.*worktree[[:space:]]+remove[[:space:]]+//' | tr -s ' \t' '\n' | grep -vE '^-' | grep -v '^$')
-  ALL=1
-  while IFS= read -r wp; do
-    in_scratch "$wp" "$SCRATCH" "$BASE" >/dev/null || clean_worktree "$wp" || { ALL=0; break; }
-  done <<<"$PATHS"
-  if [[ -z "$PATHS" || $ALL -eq 0 ]]; then
-    emit_ask "This deletes a worktree with its uncommitted changes. Confirm nothing in it is needed."
-    exit 0
-  fi
-fi
+# worktree remove --force runs: its ask was approved every time in 30 days (#237).
 
 # --- Remote branch deletion (push --delete, -d, <remote> :branch) -------
 # Runs when a ref this push leaves in place holds the tip the remote reports.
@@ -525,7 +424,7 @@ if printf '%s\n%s\n' "$SCAN" "$(printf '%s\n' "$SCAN" | tr -d '"'\')" | grep -qE
 fi
 
 # --- Git config tampering ----------------------------------------------
-# core.hooksPath redirection, user.name/email spoofing, gpg.signingkey swap.
+# core.hooksPath redirection and ! aliases.
 if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}config\s+.*core\.hooksPath"; then
   emit_deny "Blocked: changing core.hooksPath disables or redirects git hooks. Not permitted."
   exit 0
@@ -540,24 +439,7 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}config\s+[^|;&]*alias\."; then
   emit_ask "git config is defining an alias. Confirm the alias body is safe (a leading '!' would run a shell command)."
   exit 0
 fi
-# Identity and signing keys: setting one asks, reading one does not (`git config
-# --global user.name`, `--get`, `--list`, `git config get …`). Judged one command at
-# a time: a `.*` here once spanned the `;` in `git config user.name; ls`. A read
-# lifts the ask, so the commands are cut on main's terms as well as the wider
-# ones: grep -o matches do not overlap, and a wide one can swallow a setter
-# (`git -c "a b" config --get user.name $(git config user.name x)`).
-ID_KEY='(user\.(name|email|signingkey)|gpg\.signingkey|commit\.gpgsign|tag\.gpgsign)'
-while IFS= read -r seg; do
-  printf '%s\n' "$seg" | grep -qE "$ID_KEY" || continue
-  if ! printf '%s\n' "$seg" | grep -qE -- "\s(--(unset|unset-all|replace-all|add|edit|rename-section|remove-section)|-e|set|unset|edit)(\s|=|$)"; then
-    printf '%s\n' "$seg" | grep -qE -- "\s(--(get|get-all|get-regexp|get-urlmatch|list)|-l|get|list)(\s|$)" && continue
-    rest=$(printf '%s\n' "$seg" | sed -E "s/^.*${ID_KEY}[\"']?//"); read -r first _ <<<"$rest"
-    [[ -z "$first" || "$first" =~ ^([0-9]*[\<\>]|[\)\&]) ]] && continue
-  fi
-  emit_ask "git config is changing identity or signing settings. Confirm this is intended."
-  exit 0
-done < <([[ "$CMD" == *config* ]] || exit 0   # every segment names config; no grep starts without it
-         printf '%s\n' "$CMD" | grep -oE "${A}${GIT}config\s+[^|;&]*"; printf '%s\n' "$CMD" | grep -oE "${A0}${GIT0}config\s+[^|;&]*")
+# Identity and signing config runs: its ask was approved every time in 30 days (#237).
 
 # --- Writes into .git/hooks/* ------------------------------------------
 # The directory counts, not just a path through it: `cd .git/hooks && cat >

@@ -17,8 +17,8 @@ never deletes what it did not put there.
 From `config/merge-settings.jq`: the merge is `shipped * yours`, so for any key
 you set, your value wins, down to each leaf of an object such as `env` or
 `sandbox`. A list you set (say `sandbox.network.allowedDomains`) replaces the
-shipped list rather than adding to it. The exceptions: `permissions.allow` and
-`permissions.deny` are unioned (minus `config/retired-rules.json`), the harness
+shipped list rather than adding to it. The exceptions: `permissions.allow`, `.ask`
+and `.deny` are unioned (minus `config/retired-rules.json`), the harness
 owns `permissions.defaultMode` and `statusLine` and rewrites them, and it owns
 the hook entries it installed while keeping yours.
 
@@ -26,7 +26,7 @@ the hook entries it installed while keeping yours.
 
 **Allow rules for tools this public repo cannot name** (work skills, internal
 CLIs): put them in `~/.claude/local-settings/<name>.json`. Every install folds
-each file's `permissions.allow` and `permissions.deny` into the merge and reads
+each file's `permissions.allow`, `.ask` and `.deny` into the merge and reads
 nothing else from it, so a fragment cannot change the mode, hooks or status line.
 A repo that ships your work skills can keep its fragment and symlink it in:
 ```json
@@ -71,8 +71,8 @@ address, shared hosting (`github.io`), and tunnel or request-capture services
 (`ngrok`, `webhook.site`). When Claude runs the script with anything but `list`,
 `candidates` or `remove`, or writes into that folder, the guard asks you first;
 the Edit and Write tools are denied there. An allow rule never silenced
-`network-guard`: a `WebFetch(domain:logs.internal.example)` or
-`Bash(curl -s https://logs.internal.example*)` entry in `permissions.allow` skips
+`network-guard`: a `Bash(curl -s https://logs.internal.example*)` entry in
+`permissions.allow` skips
 the prompt, and a guard's ask comes before it is consulted. After
 `git pull && bash install.sh`, move such hosts here with `add`. `candidates`
 prints your hosts, so keep its output local.

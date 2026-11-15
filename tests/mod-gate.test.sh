@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for mod-gate.sh: a mod Claude writes is reviewed with `claude plugin
 # validate`; hooks that override permission decisions are denied, everything
-# else is allowed and shown to the person.
+# else is allowed and shown to the person, never asked (#237).
 #
 # Needs a Claude Code with mods (2.1.287+). CLAUDE_MOD_GATE_CLI points at one;
 # without it the suite says so and skips rather than passing on nothing.
@@ -93,9 +93,13 @@ fi
 rm -f "$M/hooks/register.js"
 
 OUT=$(write "$TMP/benign.js")
-[[ "$(decision "$OUT")" == "ask" ]] && pass "a counter mod hooking tool.call asks" || fail "a counter mod hooking tool.call asks" "$OUT"
+[[ "$(decision "$OUT")" == "allow" ]] && pass "a counter mod hooking tool.call is shown, not asked" || fail "a counter mod hooking tool.call is shown, not asked" "$OUT"
 case "$OUT" in *"will hook: tool.call, ui.render"*) pass "the person is told what it hooks" ;; *) fail "the person is told what it hooks" "$OUT" ;; esac
 case "$OUT" in *"answer a call itself"*) pass "a tool.call hook is called out" ;; *) fail "a tool.call hook is called out" "$OUT" ;; esac
+[[ "$(printf '%s' "$OUT" | jq -r '.systemMessage // empty')" == *"will hook: tool.call"* ]] \
+  && pass "the notice is a systemMessage" || fail "the notice is a systemMessage" "$OUT"
+grep -qF "| MOD | review | counter |" "$CLAUDE_AUDIT_LOG" 2>/dev/null \
+  && pass "the review is logged" || fail "the review is logged" "$(cat "$CLAUDE_AUDIT_LOG" 2>/dev/null)"
 [[ ! -f "$M/hooks/register.js" ]] && pass "the review never writes the real mod" || fail "the review never writes the real mod" "register.js exists"
 
 OUT=$(write "$TMP/override.js")
@@ -109,14 +113,14 @@ case "$OUT" in *"It calls"*) fail "a mod with no calls lists none" "$OUT" ;; *"w
 # 2.1.304 lets settings.read rewrite the merged settings, and 2.1.300 lets
 # agent.spawn rewrite a spawned agent's prompt and model: both reach past the guards.
 OUT=$(write "$TMP/settings.js")
-[[ "$(decision "$OUT")" == "ask" ]] && pass "a settings.read hook asks" || fail "a settings.read hook asks" "$OUT"
+[[ "$(decision "$OUT")" == "allow" ]] && pass "a settings.read hook is shown, not asked" || fail "a settings.read hook is shown, not asked" "$OUT"
 case "$OUT" in *"rewrite the merged settings"*) pass "and says what it can rewrite" ;; *) fail "settings.read is called out" "$OUT" ;; esac
 OUT=$(write "$TMP/spawn.js")
-[[ "$(decision "$OUT")" == "ask" ]] && pass "an agent.spawn hook asks" || fail "an agent.spawn hook asks" "$OUT"
+[[ "$(decision "$OUT")" == "allow" ]] && pass "an agent.spawn hook is shown, not asked" || fail "an agent.spawn hook is shown, not asked" "$OUT"
 case "$OUT" in *"spawned agent's prompt and model"*) pass "and says what it can rewrite" ;; *) fail "agent.spawn is called out" "$OUT" ;; esac
 OUT=$(write "$TMP/both.js")
-[[ "$(decision "$OUT")" == "ask" && "$(printf '%s' "$OUT" | grep -o 'read that hook' | wc -l | tr -d ' ')" == 2 ]] \
-  && pass "both hooks: one ask naming each" || fail "both hooks: one ask naming each" "$OUT"
+[[ "$(decision "$OUT")" == "allow" && "$(printf '%s' "$OUT" | jq -r .systemMessage | grep -o 'read that hook' | wc -l | tr -d ' ')" == 2 ]] \
+  && pass "both hooks: one notice naming each" || fail "both hooks: one notice naming each" "$OUT"
 
 OUT=$(write "$TMP/unlisted.js")
 case "$OUT" in *"will not load it yet"*) pass "a module validation rejects is allowed, with a notice" ;; *) fail "a module validation rejects is allowed, with a notice" "$OUT" ;; esac

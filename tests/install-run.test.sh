@@ -30,11 +30,13 @@ printf 'hand-written\n'       > "$HOME/.claude/rules/scratch-notes.md"
 # iTerm2 status-line case, which every install used to erase.
 mkdir -p "$HOME/.claude"
 # Its deny list holds a rule of its own and two the repo has retired, as on any
-# machine last installed before they were.
+# machine last installed before they were; its allow list the retired
+# Bash(kubectl:*), and its ask list a rule of its own.
 cat > "$HOME/.claude/settings.json" <<'JSON'
 {"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"~/.config/iterm2/cc-status"}]}]},
  "env":{"MINE":"1"},"effortLevel":"xhigh",
- "permissions":{"deny":["Bash(my-danger:*)","Bash(rm -rf:*)","Bash(rm -rf /:*)"]}}
+ "permissions":{"deny":["Bash(my-danger:*)","Bash(rm -rf:*)","Bash(rm -rf /:*)"],
+                "allow":["Bash(kubectl:*)"],"ask":["Bash(my-ask *)"]}}
 JSON
 
 # Machine-local settings fragments: one good, one that tries to change the mode
@@ -50,6 +52,7 @@ JSON
 printf '{not json' > "$HOME/.claude/local-settings/broken.json"
 printf '%s' '{"netAllowlist":["logs.internal.example","flags.vendor.example"]}' > "$HOME/.claude/local-settings/hosts.json"
 printf '%s' '{"permissions":{"deny":["Bash(rm -rf /:*)"]}}' > "$HOME/.claude/local-settings/keep.json"
+printf '%s' '{"permissions":{"ask":["Bash(work-deploy *)"]}}' > "$HOME/.claude/local-settings/asks.json"
 
 # Not a regular file, named like a fragment. A FIFO there would block jq's open;
 # a directory takes the same [[ -f ]] branch without risking a hung test.
@@ -221,6 +224,13 @@ grep -qF 'retired rule removed: Bash(rm -rf:*)' <<<"$OUT" && ! grep -qxF 'Bash(r
   && pass "a retired rule is named and removed" || fail "retired rule removed" "$(grep retired <<<"$OUT")"
 ! grep -qF 'retired rule removed: Bash(rm -rf /:*)' <<<"$OUT" && grep -qxF 'Bash(rm -rf /:*)' <<<"$DENY" \
   && pass "a retired rule a fragment lists is kept, and not named" || fail "fragment keeps retired rule" "$(grep retired <<<"$OUT")"
+ALLOW=$(jq -r '.permissions.allow[]' "$S" 2>/dev/null)
+grep -qF 'retired rule removed: Bash(kubectl:*)' <<<"$OUT" && ! grep -qxF 'Bash(kubectl:*)' <<<"$ALLOW" && grep -qxF 'Bash(kubectl get:*)' <<<"$ALLOW" \
+  && pass "Bash(kubectl:*) is named and removed; the read verbs arrive" || fail "kubectl:* retired" "$(grep retired <<<"$OUT")"
+ASK=$(jq -r '.permissions.ask[]' "$S" 2>/dev/null)
+grep -qxF 'Bash(kubectl * delete *)' <<<"$ASK" && grep -qxF 'Bash(my-ask *)' <<<"$ASK" && grep -qxF 'Bash(work-deploy *)' <<<"$ASK" \
+  && grep -qF 'local-settings/asks.json (1 rules)' <<<"$OUT" \
+  && pass "shipped, installed and fragment ask rules all land" || fail "ask rules land" "$ASK"
 [[ -x "$HOME/.claude/net-allowlist.sh" ]] \
   && pass "net-allowlist.sh installed" || fail "net-allowlist.sh installed" "missing"
 N1=$(jq '.permissions.allow | length' "$S")

@@ -31,7 +31,8 @@
     ],
     "allow": [
       "Bash(python:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(kubectl:*)"
     ]
   }
 }

@@ -111,7 +111,7 @@ SOURCE="$REPO/config/settings.json"
 
 # Machine-local rules: ~/.claude/local-settings/*.json, the settings side of
 # rules/local-*.md, for work tools a public repo cannot name. Only
-# permissions.allow and .deny are read, so a fragment can add rules but never
+# permissions.allow, .ask and .deny are read, so a fragment can add rules but never
 # change the mode, hooks or anything else; the guards still run first.
 LOCAL_SETTINGS=~/.claude/local-settings
 if compgen -G "$LOCAL_SETTINGS/*.json" >/dev/null && command -v jq &>/dev/null; then
@@ -120,16 +120,17 @@ if compgen -G "$LOCAL_SETTINGS/*.json" >/dev/null && command -v jq &>/dev/null; 
   for frag in "$LOCAL_SETTINGS"/*.json; do
     # jq blocks opening a FIFO; only a regular file (or a link to one) is read.
     [[ -f "$frag" ]] || { echo "  ⚠ local-settings/$(basename "$frag") skipped: not a regular file."; continue; }
-    if jq -e '(.permissions.allow // []) + (.permissions.deny // []) | all(type == "string")' "$frag" >/dev/null 2>&1 \
+    if jq -e '(.permissions.allow // []) + (.permissions.ask // []) + (.permissions.deny // []) | all(type == "string")' "$frag" >/dev/null 2>&1 \
        && jq --slurpfile f "$frag" '.permissions.allow += ($f[0].permissions.allow // [])
-                                   | .permissions.deny  += ($f[0].permissions.deny  // [])' \
+                                   | .permissions.deny  += ($f[0].permissions.deny  // [])
+                                   | if $f[0].permissions.ask then .permissions.ask += $f[0].permissions.ask else . end' \
             "$COMBINED" > "$COMBINED.next"; then
       mv "$COMBINED.next" "$COMBINED"
-      echo "  ✓ local-settings/$(basename "$frag") ($(jq -r '"\((.permissions.allow // []) + (.permissions.deny // []) | length) rules"
+      echo "  ✓ local-settings/$(basename "$frag") ($(jq -r '"\((.permissions.allow // []) + (.permissions.ask // []) + (.permissions.deny // []) | length) rules"
         + (if (.netAllowlist | type) == "array" then ", \(.netAllowlist | length) hosts" else "" end)' "$frag"))"
     else
       rm -f "$COMBINED.next"
-      echo "  ⚠ local-settings/$(basename "$frag") skipped: not JSON, or allow/deny not lists of strings."
+      echo "  ⚠ local-settings/$(basename "$frag") skipped: not JSON, or allow/ask/deny not lists of strings."
     fi
   done
   SOURCE="$COMBINED"
@@ -195,9 +196,9 @@ else
   # Only a message, so a failure here must not stop the install; a rule a
   # fragment lists is kept by the merge, so it is not named.
   jq -r --argjson r "$RETIRED" --slurpfile s "$SOURCE" '
-      ([$r.permissions.deny, $r.permissions.allow] | map(. // []) | add) as $gone
-      | ([$s[0].permissions.deny, $s[0].permissions.allow] | map(. // []) | add) as $kept
-      | [(.permissions.deny // [])[], (.permissions.allow // [])[]]
+      ([$r.permissions.deny, $r.permissions.ask, $r.permissions.allow] | map(. // []) | add) as $gone
+      | ([$s[0].permissions.deny, $s[0].permissions.ask, $s[0].permissions.allow] | map(. // []) | add) as $kept
+      | [(.permissions.deny // [])[], (.permissions.ask // [])[], (.permissions.allow // [])[]]
       | map(select(. as $x | any($gone[]; . == $x) and (any($kept[]; . == $x) | not))) | unique[]' "$TARGET" 2>/dev/null \
     | while IFS= read -r rule; do echo "  ✓ retired rule removed: $rule"; done \
     || echo "  ⚠ could not list retired rules; the merge below still removes them."

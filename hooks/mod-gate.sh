@@ -90,13 +90,8 @@ elif [[ -n "$HOOKS$CALLS" ]]; then
   printf '%s\n' "$HOOKS" | grep -qx 'tool\.call' && MSG="$MSG It hooks tool.call, which can answer a call itself so the guards never run; read that hook before enabling."
   printf '%s\n' "$HOOKS" | grep -qx 'settings\.read' && MSG="$MSG It hooks settings.read, which can rewrite the merged settings, permissions.deny and hooks included; read that hook before enabling."
   printf '%s\n' "$HOOKS" | grep -qx 'agent\.spawn' && MSG="$MSG It hooks agent.spawn, which can rewrite a spawned agent's prompt and model; read that hook before enabling."
-  # A systemMessage reaches the screen, not the model, and nobody in a
-  # background session: what runs outside the guards is asked instead.
-  if [[ -n "$RISKY" ]] || printf '%s\n' "$HOOKS" | grep -qxE 'tool\.call|settings\.read|agent\.spawn'; then
-    log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | MOD | review | $NAME | $FILE"
-    emit_ask "$MSG"
-    exit 0
-  fi
+  # A notice, not an ask, even for what runs outside the guards: that ask was
+  # approved every time in 30 days (#237).
 else
   exit 0
 fi
