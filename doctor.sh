@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs every test in tests/ and reports totals.
 # Exit code = number of suites that failed, were killed or timed out (at most 100).
-#   bash doctor.sh --skill comms-hub   that skill's prerequisites instead
+#   bash doctor.sh --skill comms-hub   that skill's prerequisites, from ~/.claude/skills-src
 #   bash doctor.sh --hosts             running claude processes whose binary is gone
 #   bash doctor.sh --latency [ARGS]    hook wall times from the transcripts (tools/hook-latency.py)
 #   bash doctor.sh --census [ARGS]     claude processes, their memory, idle background jobs
@@ -14,9 +14,12 @@ case "${1:-}" in
   --census) shift; exec python3 tools/session-census.py "$@" ;;
 esac
 
+# The skills' checks live in their own repo's clone, which install.sh fetches;
+# comms-hub's SKILL.md still sends its reader here.
 if [[ "${1:-}" == "--skill" ]]; then
-  [[ -f "skills/${2:-}/bin/prereqs.sh" ]] || { echo "no prerequisite check for skill '${2:-}'" >&2; exit 2; }
-  exec bash "skills/$2/bin/prereqs.sh"
+  S=${HARNESS_SKILLS_CLONE:-$HOME/.claude/skills-src}
+  [[ -f "$S/doctor.sh" ]] || { echo "no claude-code-skills clone at $S: bash install.sh fetches it" >&2; exit 2; }
+  exec bash "$S/doctor.sh" --skill "${2:-}"
 fi
 
 # A background session host whose binary an upgrade deleted loses ~/Desktop,

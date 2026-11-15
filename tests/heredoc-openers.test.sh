@@ -9,6 +9,8 @@ PASS=0; FAIL=0
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
 fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+# shellcheck source=lib.sh
+source tests/lib.sh
 # shellcheck source=../hooks/lib.sh
 source hooks/lib.sh
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
@@ -670,14 +672,22 @@ echo ""
 echo "=== skill-forge's demand.py reads heredocs as bash does ==="
 # demand.py counts the commands a session runs; a body read as commands, or a
 # command read as a body, miscounts them. Same cases, same oracle.
-DPY=$(bash skills/skill-forge/bin/python.sh 2>/dev/null)
-if [ -z "$DPY" ]; then
+# skill-forge is in claude-code-skills, read at the commit config/skills.pin names.
+DPY="" SKSRC=$(skills_src "$PWD") || SKSRC=""
+if [ -n "$SKSRC" ]; then
+  skills_tree "$SKSRC" "$PWD" "$TMP/sk" skills/skill-forge/bin
+  export CCH_SF_BIN="$TMP/sk/skills/skill-forge/bin"
+  DPY=$(bash "$CCH_SF_BIN/python.sh" 2>/dev/null)
+fi
+if [ -z "$SKSRC" ]; then
+  no_skills "demand.py and skill_lint parity"
+elif [ -z "$DPY" ]; then
   # CI sets up Python 3.12: a skip there would leave the parity check unable to fail.
   if [ -n "${CI:-}" ]; then fail "demand.py parity" "no Python 3.10+ in CI"; else echo "  SKIP: no Python 3.10+ with a TOML reader"; fi
 else
   demand_keeps() {   # each command, NUL-ended, on stdin: 1 if drop_heredocs keeps the marker line
     "$DPY" -c '
-import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
+import os, sys; sys.path.insert(0, os.environ["CCH_SF_BIN"]); import demand
 for c in sys.stdin.read().split("\0")[:-1]:
     print(int("echo HDMARK" in demand.drop_heredocs(c).split("\n")))'
   }
@@ -727,7 +737,7 @@ for c in sys.stdin.read().split("\0")[:-1]:
   # The comment and ${ } rules in "$( )": Heredocs.scan raises on one line of each.
   demand_unread() {   # each command, NUL-ended, on stdin: 1 if a line is unreadable
     "$DPY" -c '
-import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
+import os, sys; sys.path.insert(0, os.environ["CCH_SF_BIN"]); import demand
 for c in sys.stdin.read().split("\0")[:-1]:
     h = demand.Heredocs()
     try:
@@ -750,7 +760,7 @@ for c in sys.stdin.read().split("\0")[:-1]:
   # after each doubt, it keeps the body as typed.
   DC=()
   while IFS= read -r k; do DC+=("$k"); done < <(for ((i = 0; i < ${#CLOSED_ROWS[@]}; i += 3)); do printf '%s\0%s\0' "${CLOSED_ROWS[$((i + 1))]}" "${CLOSED_ROWS[$((i + 2))]}"; done | "$DPY" -c '
-import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
+import os, sys; sys.path.insert(0, os.environ["CCH_SF_BIN"]); import demand
 f = sys.stdin.read().split("\0")[:-1]
 for p, c in zip(f[0::2], f[1::2]):
     b1 = c.split("\n")[1]
@@ -769,7 +779,7 @@ for p, c in zip(f[0::2], f[1::2]):
     && pass "a body piped to \$SHELL: demand.py keeps it" || fail "a body piped to \$SHELL: demand.py dropped it" ""
   # A quote inside backticks that holds a backtick: hd_scan's HD_BAD, demand.py's ValueError.
   r=$("$DPY" -c '
-import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
+import os, sys; sys.path.insert(0, os.environ["CCH_SF_BIN"]); import demand
 try:
     demand.Heredocs().scan(sys.argv[1]); print("read")
 except ValueError:
@@ -777,7 +787,7 @@ except ValueError:
   [ "$r" = unreadable ] && pass "demand.py: a backtick-holding quote inside backticks is unreadable" || fail "demand.py read a backtick-holding quote inside backticks" "$r"
   # After a # right after a substitution's ), a quote opens: the << on the next line is in the string.
   r=$("$DPY" -c '
-import sys; sys.path.insert(0, "skills/skill-forge/bin"); import demand
+import os, sys; sys.path.insert(0, os.environ["CCH_SF_BIN"]); import demand
 for p in sys.argv[1:]:
     h = demand.Heredocs(); h.scan(p); print(int(h.scan("cat <<EOF") is None))' 'echo $(pwd)#"' 'echo $((1))#"' 'cat <(echo a)#"' | tr '\n' ' ')
   [ "$r" = "1 1 1 " ] && pass "demand.py: after \$(pwd)#\", \$((1))#\" and <(echo a)#\", a << is in the string" || fail "demand.py read # after a substitution's ) as a comment" "[$r]"
@@ -799,7 +809,7 @@ for p in sys.argv[1:]:
   # unreadable, a lint finding); where bash reads it as body data, it stays.
   lint_apply() {   # each script, NUL-ended, on stdin: 1 if "--apply" survives shell_code, 2 if unreadable
     "$DPY" -c '
-import sys; sys.path.insert(0, "skills/skill-forge/bin"); import skill_lint
+import os, sys; sys.path.insert(0, os.environ["CCH_SF_BIN"]); import skill_lint
 for c in sys.stdin.read().split("\0")[:-1]:
     try:
         print(int("--apply" in skill_lint.shell_code(c)))

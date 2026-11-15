@@ -18,7 +18,10 @@ jobs:
     # on main's runs of 2026-11-13 and 11-14, so 20 cut off the next suite added.
     timeout-minutes: 30
     steps:
+      # Every tag: tests/skills-sync.test.sh installs v1.4.2 and upgrades from it.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install jq (Linux)
         if: runner.os == 'Linux'
@@ -29,10 +32,17 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install jq || true
 
-      # tests/comms-hub.test.sh needs 3.10+ with tomllib; pinned so both OSes run the same one.
+      # The skills' heredoc and token-shape readers need 3.10+ with tomllib; pinned so both OSes run the same one.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # The suites that read the skills (skills-sync, token-shapes, heredoc-openers)
+      # take them from a clone at the pinned commit and fail in CI without one.
+      - name: Clone claude-code-skills
+        run: |
+          git clone --quiet "$(sed -n 's/^url=//p' config/skills.pin)" "$RUNNER_TEMP/skills"
+          echo "CCH_SKILLS_CLONE=$RUNNER_TEMP/skills" >> "$GITHUB_ENV"
 
       - name: Run the hook test suite
         run: bash doctor.sh
@@ -79,7 +89,7 @@ jobs:
         # linted the day it lands instead of the day someone remembers. .github
         # is in the list because CI's own helpers are shell too, and a broken
         # one fails every job before anything else gets a chance to run.
-        run: shellcheck -S warning hooks/*.sh hooks/lib/*.sh bin/*.sh tools/*.sh ./*.sh .github/*.sh skills/*/bin/*.sh
+        run: shellcheck -S warning hooks/*.sh hooks/lib/*.sh bin/*.sh tools/*.sh ./*.sh .github/*.sh
       - name: Lint the test suites
         # Errors only: the suites carry warnings (SC2015's `a && b || c` as a
         # pass/fail line) that are their idiom, while an error is a broken test.

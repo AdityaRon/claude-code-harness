@@ -29,8 +29,7 @@ It is a **breakage check only**; it does not assess what a release adds. It chec
    (advisory: a string match in a bundled build is not authoritative);
 5. the memory index limits (200 lines, 25,000 bytes) that `memory-lint` and
    `memory-verify` enforce still match the ones read out of the CLI;
-6. each mod under `skills/` (today the comms panel) still passes `claude plugin test`;
-7. every tool name in a `settings.json` hook matcher (read from the file, not a list;
+6. every tool name in a `settings.json` hook matcher (read from the file, not a list;
    `mcp__.*` and the empty matcher skipped) is still mentioned in the CLI. A renamed
    tool would silently switch its guard off, so a miss is exit 1.
 
@@ -60,13 +59,11 @@ harness's own `network-guard` denies.
 
 On exit 1 or 2 the scheduled run hands the result to Claude, once per CLI version
 (a branch `claude/contract-<version>`, whether or not its PR is still open). Claude
-may edit the bin, hooks, tests, config, docs, rules and `skills/` folders and run
-the tests. For exit 2 it first decides whether the report is a real break, and
+may edit the bin, hooks, tests, config, docs and rules folders and run the tests. For exit 2 it first decides whether the report is a real break, and
 changes nothing when it is not. Its PR is always a **draft** for you to read, never
 landed by the workflow, and the workflow refuses to publish a fix that touches
 `.github/`, drops a deny or ask rule, or adds a line holding a credential
-(`tests/workflow-gates.test.sh`). A mod that fails `claude plugin test` is a
-breakage in the same way, so Claude may fix under `skills/`. A new fix PR closes the
+(`tests/workflow-gates.test.sh`). A new fix PR closes the
 older ones `github-actions` opened, with a link, and deletes their branches; one you
 opened is left alone. GitHub holds the `pull_request` runs on a PR `github-actions`
 opens, since the repo's fork PR approval policy is `first_time_contributors`, so the
@@ -76,6 +73,11 @@ Without a token the same run keeps one open issue with the check's output instea
 push and PR the workflow fails only on exit 1 or 3. When a scheduled or dispatched
 run on main completes, the Release workflow runs and tags what landed
 ([releases.md](releases.md)).
+
+The comms panel, the one mod the harness installs (through claude-code-skills),
+has its `claude plugin test` run daily on the newest Claude Code by that repo's
+`.github/workflows/panel.yml`, with no login. The mod API is early access, so a
+release can move it, and a moved API shows only as a blank or erroring pane.
 
 Until 2026-11-15 the check also kept an acknowledgement of every hook event, tool
 and setting Claude Code shipped, and a daily run opened a PR assessing each release

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # install.sh replaces files that live sessions are running: a hook on each tool
-# call, the status line, a skill's tick. Copied in place, a reader could catch a
+# call, the status line. Copied in place, a reader could catch a
 # hook half written; one Bash call was denied with "syntax error near unexpected
 # token" during an install. So every file is written beside its target and
 # renamed over it. These checks do not depend on winning a race: a rename gives
@@ -13,7 +13,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'kill "${READER:-0}" 2>/dev/null; rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"
-unset XDG_CONFIG_HOME XDG_DATA_HOME SKILL_FORGE_TEMPLATES
+unset XDG_CONFIG_HOME XDG_DATA_HOME
 mkdir -p "$HOME"
 export CCH_SKIP_SELFTEST=1
 install(){ bash "$REPO/install.sh" > "$TMP/install.log" 2>&1; }
@@ -23,8 +23,8 @@ install || { fail "first install" "$(tail -5 "$TMP/install.log")"; echo "--- Res
 
 C="$HOME/.claude"
 HOOK=$(ls "$C"/hooks/*.sh | head -1)
-FILES=("$HOOK" "$C/statusline.sh" "$C/memory-verify.sh" "$C/skills/comms-hub/bin/hub.py"
-       "$C/skills/comms-hub/SKILL.md" "$C/rules/$(ls "$REPO/rules" | head -1)")
+# The skills install by rename too, in claude-code-skills' own install test.
+FILES=("$HOOK" "$C/statusline.sh" "$C/memory-verify.sh" "$C/skills.pin" "$C/rules/$(ls "$REPO/rules" | head -1)")
 BEFORE=()   # by index: bash 3.2, macOS's, has no associative arrays
 for i in "${!FILES[@]}"; do BEFORE[i]=$(inode "${FILES[i]}"); done
 
@@ -42,7 +42,7 @@ for i in "${!FILES[@]}"; do
     && pass "${f#"$C"/} replaced by rename (new inode)" \
     || fail "${f#"$C"/} replaced by rename" "inode ${BEFORE[i]:-unread} before and after: rewritten in place"
 done
-[[ "$CHECKED" -eq 6 ]] && pass "checked 6 installed files" || fail "checked 6 installed files" "checked $CHECKED"
+[[ "$CHECKED" -eq 5 ]] && pass "checked 5 installed files" || fail "checked 5 installed files" "checked $CHECKED"
 [[ "$(cat <&3)" == "$OLD" ]] \
   && pass "a reader that opened the old hook still reads all of it" \
   || fail "a reader that opened the old hook still reads all of it" "it read the new or a partial file"

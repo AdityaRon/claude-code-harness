@@ -105,7 +105,7 @@ BROKEN=""
 CHECKED=0
 # Workflows too: release.yml and upstream-drift.yml run tools/ by path, and no
 # PR's CI runs them, so a moved tool would surface only at release or drift time.
-for src in README.md docs/*.md docs/history/*.md skills/*/SKILL.md config/upstream-contract.json .github/workflows/*.yml; do
+for src in README.md docs/*.md docs/history/*.md config/upstream-contract.json .github/workflows/*.yml; do
   [ -f "$src" ] || continue
   while read -r ref; do
     case "$ref" in *'<'*|*'*'*|*'$'*) continue ;; esac
@@ -190,9 +190,7 @@ done
 [ -z "$UNSMOKED" ] && pass "every wired hook is named by a smoke suite" || fail "hooks no smoke suite names" "$UNSMOKED"
 
 echo ""
-echo "=== The README layout block names every bin/ and tools/ file and each skill's folders ==="
-# comms-hub's panel/ shipped with no mention in the map, beside the bin/ and
-# tests/ the line did name.
+echo "=== The README layout block names every bin/ and tools/ file ==="
 # bin/ is what installs and tools/ stays in the clone, so each file must sit under
 # its own heading: one listed under the other misstates what installs.
 section() {  # a top-level heading -> the words of its line and the lines under it
@@ -209,17 +207,6 @@ MISSING_TOOLS=$(missing_in "$(section tools/)" $(tracked ':(glob)tools/*'))
 [ -z "$MISSING_TOOLS" ] \
   && pass "every tools/ file is listed under tools/" \
   || fail "every tools/ file is listed under tools/" "missing:$MISSING_TOOLS"
-MISSING_SKILL=""
-for n in $(tracked ':(glob)skills/*/*' ':(glob)skills/*/**' | cut -d/ -f2 | sort -u); do
-  line=$(entry "(^|[ ,])$n/")
-  if [ -z "$line" ]; then MISSING_SKILL="$MISSING_SKILL $n/"; continue; fi
-  for sub in $(tracked "skills/$n" | awk -F/ 'NF > 3 {print $3}' | sort -u); do
-    printf '%s' "$line" | grep -qE "(^|[ ,(])$sub/" || MISSING_SKILL="$MISSING_SKILL $n/$sub/"
-  done
-done
-[ -z "$MISSING_SKILL" ] \
-  && pass "every skill and its folders appear on its layout line" \
-  || fail "every skill and its folders appear on its layout line" "missing:$MISSING_SKILL"
 
 echo ""
 echo "=== Every hook, bin/ and tools/ file and .github script is named by another suite ==="
@@ -256,15 +243,6 @@ done
 [ -z "$UNLISTED" ] \
   && pass "every suite is named after its file or on the tests/ line" \
   || fail "every suite is named after its file or on the tests/ line" "unlisted:$UNLISTED"
-
-echo ""
-echo "=== Every skill's tests/run.py is skill-forge's, byte for byte ==="
-# comms-hub's was an older copy (111 lines of diff): it copied only bin/ and
-# tests/, so a mutation could not name a file elsewhere in the skill.
-for f in skills/*/tests/run.py; do
-  [ "$f" = skills/skill-forge/tests/run.py ] && continue
-  cmp -s "$f" skills/skill-forge/tests/run.py && pass "$f is skill-forge's" || fail "$f differs from skill-forge's" "copy skills/skill-forge/tests/run.py over it"
-done
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

@@ -1,7 +1,8 @@
 # Claude Code Harness
 
-Hooks, settings, rules and skills for Claude Code, installed into `~/.claude`
-once per machine, so they apply in every project without touching repo files.
+Hooks, settings and rules for Claude Code, and the skills from
+[claude-code-skills](https://github.com/AdityaRon/claude-code-skills) at a pinned
+release, installed into `~/.claude` once per machine, so they apply in every project without touching repo files.
 PreToolUse guards stop actions that are hard to undo or that leak secrets
 (force pushes, `rm -rf` outside scratch, reading `.env`, writing a token to
 disk), ask you about a short list (cluster writes, request bodies to unknown
@@ -24,8 +25,7 @@ Claude Code's transcripts, and `bash doctor.sh --census` counts claude processes
 
 Needs macOS or Linux with bash, `jq` (the guards fail closed without it), `gh`,
 `python3` (for `tools/hook-bench.py` and `tools/permission-friction.py`; 3.10 or
-newer with a TOML reader for the comms-hub and skill-forge skills and their
-tests) and `claude`.
+newer with a TOML reader for the comms-hub and skill-forge skills) and `claude`.
 
 ```bash
 git clone https://github.com/AdityaRon/claude-code-harness.git
@@ -35,6 +35,10 @@ bash install.sh
 
 - Merges into your `~/.claude/settings.json`: your keys kept, allow, ask and deny lists unioned, the harness's hook entries owned by the harness.
 - Backs the previous file up as `settings.json.bak.<timestamp>` and folds in `~/.claude/local-settings/*.json`.
+- Clones claude-code-skills into `~/.claude/skills-src` at the release
+  `config/skills.pin` names, verifies its commit and runs its `install.sh`
+  (`bin/skills-sync.sh`). If that fetch fails, the installed skills stay as
+  they were, the install says so and finishes, and `harness-update.sh` retries.
 - Runs `doctor.sh` to verify every hook.
 
 **A fork, or a fresh copy.** Clone your own copy instead, then run
@@ -72,8 +76,11 @@ runs all). A suite gets 30 minutes (`CCH_SUITE_TIMEOUT`); the summary lists wall
 times slowest first and names a suite stopped by a signal KILLED and one past its
 limit TIMEOUT, apart from failures. CI runs doctor on Linux and macOS, lints
 the scripts and suites with shellcheck, compiles every Python file with macOS's /usr/bin/python3 (3.9),
-and benchmarks each PR's hooks against main. Each skill's mutation list runs
-weekly (`.github/workflows/mutations.yml`).
+and benchmarks each PR's hooks against main. The suites that read the skills
+(`tests/skills-sync.test.sh`, `tests/token-shapes.test.sh` and part of
+`tests/heredoc-openers.test.sh`) take them from a claude-code-skills clone at the
+pinned commit, `$CCH_SKILLS_CLONE` or `~/.claude/skills-src`; without one they
+skip, except in CI, which clones it.
 
 ## What it blocks, asks and logs
 
@@ -144,73 +151,27 @@ What `install.sh` does with a value you set, from `config/merge-settings.jq`:
 
 Each of these in full: [docs/customization.md](docs/customization.md).
 
-## comms-hub: one session speaks on Slack for all of them
+## Skills
 
-A skill for running several sessions at once. One long-lived session, the comms
-session, runs a tick on a `/loop` cron trigger: it reads GitHub for your PRs and
-review requests and Slack for replies, and routes each event to the peer session
-that owns the PR or ticket. It is the only session that sends Slack. A peer hands
-it a draft and a target with SendMessage; it checks every claim against its
-source, runs the draft through a gate (every PR a link, no em or en dash, no `>`
-quote, no token-shaped string, a length cap, the linked PRs' live state, no
-review ask to someone who already reviewed that head, and no reply that only
-restates your own posted review, which goes as a reaction instead), then sends,
-or schedules for the morning in quiet hours. It resolves a review thread on your own PR only
-once you answered it and that reviewer approved after. It reviews a PR asked of
-you as a comment only. It never approves a PR or merges someone else's.
+The skills live in [claude-code-skills](https://github.com/AdityaRon/claude-code-skills),
+split out of this repo at 6699a5c: comms-hub and slack-draft (one session speaks
+on Slack for all of them, with a panel mod beside its chat), skill-forge (one
+skill per recurring question in a new job), pr-review, memory-audit and
+memory-archive. Their protocols, tests and changelog are there.
 
-- Needs `gh`, Python 3.10+ with a TOML reader, `jq`, a Slack MCP server (any,
-  registered with `claude mcp add` or `/mcp`, with read channel, read thread,
-  search, send and schedule tools), ListAgents and SendMessage, and the `/loop`
-  trigger. `bash doctor.sh --skill comms-hub` checks each and says how to fix it.
-- Config in `~/.config/comms-hub/config.toml`, written by the skill's
-  `hub.py init` from its `config.example.toml` with your GitHub login and time
-  zone filled in; state in `~/.local/state/comms-hub/`. `install.sh` creates
-  neither, and neither belongs in a repo ([docs/install.md](docs/install.md)).
-- The protocol the comms session follows: [skills/comms-hub/SKILL.md](skills/comms-hub/SKILL.md).
-  A peer's side, the draft it hands over, is the separate [slack-draft](skills/slack-draft/SKILL.md)
-  skill, so a session that only sends Slack does not load the tick.
-  Each script's lessons are in its docstring; `tests/comms-hub.test.sh` runs the
-  tests and `skills/comms-hub/tests/run.py --mutate` checks that each rule's
-  mutation turns a test red.
-- A panel beside the comms session's chat (`skills/comms-hub/panel/`, a mod
-  `hub.py launch` loads into that session alone): what needs you, what goes
-  out and when, what is with other sessions, and what changed since you last
-  looked, one line each, from `hub.py panel` as each turn ends and each minute
-  while it is drawn, so it calls no model; its PR rows move when a tick
-  scans, and every five minutes while it is drawn in active hours, from one
-  GitHub query (`queue.py check`). `claude plugin test skills/comms-hub/panel` runs its tests,
-  and `tools/upstream-check.sh` runs them against the installed Claude Code daily.
-
-## skill-forge: one skill per recurring question
-
-A skill for a new job's environment. It inventories, read-only, the systems
-that answer operational questions (access and how to re-login, metrics, logs,
-databases, schedulers, deploy tools, the repos that hold configs), mines
-transcripts and shell history for the questions that keep coming up, and
-drafts one skill per question from an archetype: sql-readonly, metrics-query,
-logs-fetch, cluster-probe, job-run, api-readonly, runbook or local-repro. A
-drafted skill is read-only by default, opens every output with where its
-answer came from, masks identifiers that name customers, and tells an empty
-answer from a missing metric, a partial one and an expired login. It is not a
-library of prebuilt infra skills: the archetypes are templates it specializes.
-
-- `skills/skill-forge/bin/skill_lint.py` checks any skill against the ten
-  conventions, with its scripts in `bin/` or at the skill root.
-  `tests/skill-lint.test.sh` runs it over every skill here; a finding is fixed,
-  or waived in that skill's `lint-waivers.toml` with its reason. A skill whose
-  every engine check is N/A gets WARN, not a clean pass.
-- Config in `~/.config/skill-forge/config.toml` (mask patterns, transcript
-  dirs, excluded contexts, line budget), from the skill's `config.example.toml`;
-  state, `inventory.md` included, in `~/.local/state/skill-forge/`; templates in
-  `~/.local/share/skill-forge/templates/`, never under `~/.claude/skills`.
-  `install.sh` creates no config. A drafted skill installs to `~/.claude/skills`
-  or a work repo, never into this one.
-- The protocol: [skills/skill-forge/SKILL.md](skills/skill-forge/SKILL.md).
-  `tests/skill-forge.test.sh` runs the tests, `skills/skill-forge/tests/run.py --mutate`
-  checks that each listed mutation turns a test red, and
-  `skills/skill-forge/tests/live_acceptance.py` runs the acceptance checks
-  against Postgres and Prometheus in Docker.
+- `config/skills.pin` names the release this harness installs: its URL, tag and
+  commit. `install.sh` and `harness-update.sh` both install it through
+  `bin/skills-sync.sh`, so `harness-update.sh` stays the one entry point.
+  `HARNESS_SKILLS_URL` points at another clone of it, as `HARNESS_UPDATE_URL`
+  does for this repo; `HARNESS_SKILLS_CLONE` moves `~/.claude/skills-src`.
+- That repo's `install.sh` owns `~/.claude/skills` and skill-forge's templates in
+  `~/.local/share/skill-forge/`, and records what it wrote in
+  `~/.claude/skills.manifest`. This repo writes nothing there and removes nothing
+  there (`tools/pickup-report.sh`).
+- Several skills run tools this repo installs in `~/.claude`: `memory-verify.sh`,
+  `memory-index.sh`, `session-route.sh` and `spend-report.py`.
+- `bash doctor.sh --skill comms-hub` runs that skill's prerequisite check from
+  `~/.claude/skills-src`.
 
 ## Design choices
 
@@ -240,6 +201,7 @@ CHANGELOG.md             ← one entry per release
 LICENSE                  ← MIT
 bin/                     ← every file installed flat to ~/.claude by install.sh
   statusline.sh  harness-update.sh  net-allowlist.sh  sandbox.sh  sandbox-trial.sh
+  skills-sync.sh         ← installs the claude-code-skills release config/skills.pin names
   memory-verify.sh  memory-fix.sh  memory-index.sh  memory-provenance.sh
   session-route.sh       ← which session owns this PR (docs/session-routing.md)
   relocate-clones.sh     ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads (docs/known-limitations.md)
@@ -254,22 +216,17 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   session-census.py      ← claude processes, their memory, and idle background jobs (doctor.sh --census)
   pickup-report.sh       ← after an install, how running sessions pick up each change; install.sh runs it with
                            --prune, which removes what install wrote that the clone deleted
-config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json
+config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json,
+                           skills.pin
 hooks/                   ← one file per hook, plus lib.sh, which sources lib/: command, paths,
                            scratch, io, inline, net and host; bash-guards.sh runs the Bash guards
 rules/                   ← installed to ~/.claude/rules, loaded in every session
   prose-and-comments.md  collaboration.md  working-agreement.md  environment.md
   python-tests.md        ← path-scoped: loads only when Claude opens Python
-skills/                  ← memory-audit/, memory-archive/, pr-review/, slack-draft/
-  comms-hub/             ← SKILL.md, config.example.toml, bin/ (its scripts), panel/ (the comms panel mod),
-                           tests/ (Python), lint-waivers.toml (skill_lint's waivers, not installed)
-  skill-forge/           ← SKILL.md, config.example.toml, bin/, templates/ (installed to ~/.local/share), tests/,
-                           forge.toml (its manifest for skill_lint, not installed)
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
                            heredoc-openers, repo-layout, token-shapes and workflow-gates cut across
-                           files; comms-hub, comms-hub-prereqs, skill-forge and skill-lint run the
-                           skills' own suites; lib.sh is their shared pass/fail; bench-corpus.jsonl
+                           files; lib.sh is their shared pass/fail; bench-corpus.jsonl
                            feeds hook-bench; doctor tests doctor.sh's own report; smoke.list is the
                            set install.sh verifies with (doctor.sh --smoke)
 docs/
@@ -279,7 +236,7 @@ docs/
   session-routing.md     ← routing a PR to its session; holds only in single-author repos
   permission-friction.md ← which guard asks and denies cost the most, and why
   permission-friction-cases.jsonl  ← cases tools/permission-friction.py --cases replays
-  history/               ← superseded memory research the skills still cite
+  history/               ← superseded memory research the memory skills still cite
 ```
 
 Everything here is portable because the repo is public; machine-local rules and

@@ -248,7 +248,7 @@ printf '%s' "$OUT" | grep -qF "index line limit 200 matches" \
 
 
 echo ""
-echo "=== 7: a tool a hook matcher names must still exist in the CLI ==="
+echo "=== 6: a tool a hook matcher names must still exist in the CLI ==="
 OUT=$(run "$ALL_EVENTS" "$ALL_MODES")
 check_contains "tool names are read from the matchers" "✓ ExitPlanMode" "$OUT"
 check_absent "the regex matcher is not a tool name" "mcp__" "$OUT"
@@ -260,37 +260,6 @@ jq '.hooks.PreToolUse += [{"matcher":"MadeUpTool","hooks":[{"type":"command","co
 OUT=$(CLAUDE_UPSTREAM_SETTINGS="$TMP/s.json" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
 [ "$ST" -eq 1 ] && pass "a made-up tool in a matcher exits 1" || fail "a made-up tool in a matcher exits 1" "exit=$ST"
 check_contains "and names it" "MadeUpTool is named in a hook matcher" "$OUT"
-
-echo ""
-echo "=== 6: the mods the harness ships pass claude plugin test ==="
-# Stands in for `claude plugin test <folder>`: logs what it was given, then
-# passes, or fails the way a moved mod API would when STUB_MOD_FAIL is set.
-cat > "$TMP/ptstub.sh" <<'STUB'
-#!/usr/bin/env bash
-echo "$1 ${CLAUDE_CONFIG_DIR:-unset}" >> "$PT_LOG"
-[ -f "$1/.claude-plugin/plugin.json" ] || { echo "no plugin at $1"; exit 1; }
-if [ -n "${STUB_MOD_FAIL:-}" ]; then
-  echo "(fail) the pane reads again when a turn ends"
-  echo " 2 pass"; echo " 1 fail"; exit 1
-fi
-echo " 3 pass"; echo " 0 fail"
-STUB
-export PT_LOG="$TMP/pt.log"
-OUT=$(CLAUDE_PLUGIN_TEST_CMD="bash $TMP/ptstub.sh" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 0 ] && pass "a mod that passes keeps exit 0" || fail "a mod that passes keeps exit 0" "exit=$ST"
-check_contains "and is named" "✓ skills/comms-hub/panel" "$OUT"
-grep -q '^skills/comms-hub/panel ' "$PT_LOG" && pass "the test is given the mod's folder" || fail "the mod's folder" "$(cat "$PT_LOG")"
-case "$(head -1 "$PT_LOG" | cut -d' ' -f2)" in
-  "$HOME"*|unset) fail "it runs in the probe config dir" "$(cat "$PT_LOG")" ;;
-  */config) pass "it runs in the probe config dir, not the user's" ;;
-  *) fail "it runs in the probe config dir" "$(cat "$PT_LOG")" ;;
-esac
-OUT=$(STUB_MOD_FAIL=1 CLAUDE_PLUGIN_TEST_CMD="bash $TMP/ptstub.sh" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
-[ "$ST" -eq 1 ] && pass "a mod that fails is a breakage (exit 1)" || fail "a failing mod exits 1" "exit=$ST"
-check_contains "naming the mod" "✗ skills/comms-hub/panel fails claude plugin test" "$OUT"
-check_contains "and the failing test" "(fail) the pane reads again when a turn ends" "$OUT"
-OUT=$(run "$ALL_EVENTS" "$ALL_MODES")
-check_contains "a stubbed doctor without a test stub skips it" "skipped: doctor is stubbed" "$OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

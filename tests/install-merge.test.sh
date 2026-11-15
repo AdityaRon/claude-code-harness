@@ -353,15 +353,12 @@ OUT=$(merge '{"autoDreamEnabled":false}' "$(cat config/settings.json)")
   || fail "an explicit user autoDreamEnabled false is kept" "$(printf '%s' "$OUT" | jq -r '.autoDreamEnabled')"
 
 echo ""
-echo "=== The shipped config names only skills this repo ships ==="
-# The repo is public. Allow rules for machine-local skills named work tools and
-# could never be removed by a later install, because the merge unions allow.
-FOREIGN=""
-for s in $(grep -oE '/\.claude/skills/[^/"]+' config/settings.json | sed 's#.*/##' | sort -u); do
-  [[ -d "skills/$s" ]] || FOREIGN="$FOREIGN $s"
-done
-[[ -z "$FOREIGN" ]] && pass "no allow rule for a skill outside skills/" \
-  || fail "no allow rule for a skill outside skills/" "$FOREIGN"
+echo "=== The shipped config names no skill ==="
+# The repo is public, and the merge unions allow, so a rule shipped here is never
+# removed. The skills ship from claude-code-skills; a work skill's rules belong in
+# a local-settings fragment.
+NAMED=$(grep -oE '/\.claude/skills/[^/"]+' config/settings.json | sort -u | tr '\n' ' ')
+[[ -z "$NAMED" ]] && pass "no rule names a path under ~/.claude/skills" || fail "rules naming a skill" "$NAMED"
 
 echo ""
 echo "=== retired rules leave an installed settings.json ==="
