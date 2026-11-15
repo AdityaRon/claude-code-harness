@@ -134,37 +134,6 @@ in_budget worktree-prune && for g in "$LAUNCH_DIR/.git" "$LAUNCH_DIR"/*/.git; do
   done
 done
 
-# --- CLI ahead of the harness contract --------------------------------------
-# install.sh records the release the contract was verified at. `claude --version`
-# measured 0.07s here, cheap enough to run on every start. The nudge is shown
-# once per CLI version per day, stamped in STATE_DIR: nothing the reader can do
-# changes between sessions, and it fired in every session in every repo.
-PIN_FILE=$(expand_tilde "${CLAUDE_CONTRACT_PIN:-$HOME/.claude/harness-contract.version}")
-if [[ -f "$PIN_FILE" ]] && in_budget contract-nudge; then
-  PIN="" && { IFS= read -r PIN < "$PIN_FILE" || true; }
-  CLI=${CLAUDE_CLI_VERSION:-$(cli_version)}
-  if [[ -n "$PIN" && -n "$CLI" && "$CLI" != "$PIN" ]]; then
-    STAMP_FILE="$STATE_DIR/contract-nudge"
-    STAMP="$CLI $(date +%Y-%m-%d)"
-    CUR="" && { { read -r CUR < "$STAMP_FILE"; } 2>/dev/null || true; }
-    [[ "$CUR" != "$STAMP" && ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR" 2>/dev/null
-    # Once per machine per day.
-    if [[ "$CUR" != "$STAMP" ]] && claim "$STAMP_FILE" "$STAMP"; then
-      echo ""
-      # An older CLI is behind, not past: the review already merged, and settings
-      # it added (onFailure needs 2.1.295) are ignored until Claude Code updates.
-      if [[ "$(printf '%s\n%s\n' "$CLI" "$PIN" | sort -V | head -1)" == "$CLI" ]]; then
-        echo "## Claude Code is older than the harness contract"
-        echo "Installed $CLI; the harness was verified at $PIN, so settings added since may be ignored. Update Claude Code."
-      else
-        echo "## Claude Code is past the harness contract"
-        echo "Installed $CLI; the harness was verified at $PIN. The daily Upstream drift run lands the review and the release that follows; the scheduled harness-update installs it. If this persists for more than a day, see the Release blocked issue."
-      fi
-      printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
-    fi
-  fi
-fi
-
 # --- the host's binary is gone: an upgrade deleted it under a running session --
 # Every source, no stamp: a restart is the only fix, and each host is one.
 # One ps; CLAUDE_HOST_PS and CLAUDE_HOST_START are the test seams (lib.sh).

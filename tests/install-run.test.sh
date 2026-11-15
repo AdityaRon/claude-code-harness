@@ -130,7 +130,7 @@ for m in project_old:project feedback_one:feedback; do
 done
 printf -- '- [P](project_old.md) — hook\n- [F](feedback_one.md) — hook\n' > "$STORE/MEMORY.md"
 ( cd "$LAUNCH" && jq -nc --arg d "$LAUNCH" '{source:"resume", session_id:"inst", hook_event_name:"SessionStart", cwd:$d}' \
-    | env -i HOME="$HOME" PATH="$PATH" MEMORY_INDEX_PRESSURE_LINES=1 CLAUDE_SESSION_START_BUDGET=60 CLAUDE_CONTRACT_PIN="$TMP/no-pin" \
+    | env -i HOME="$HOME" PATH="$PATH" MEMORY_INDEX_PRESSURE_LINES=1 CLAUDE_SESSION_START_BUDGET=60 \
         CLAUDE_HARNESS_LATEST="$TMP/no-latest" CLAUDE_HARNESS_VERSION="$TMP/no-version" \
         bash "$HOME/.claude/hooks/session-start.sh" >/dev/null 2>&1 )
 [[ "$(grep -o 'feedback_one\|project_old' "$STORE/MEMORY.md" | head -1)" = feedback_one ]] \
@@ -213,9 +213,6 @@ V_OUT=$(env "${SF_ENV[@]}" "${SF_PY:-python3}" -B "$SF/bin/forge.py" verify "$TM
   && pass "settings.json written" || fail "settings.json written" "missing"
 [ -x "$HOME/.claude/hooks/memory-lint.sh" ] \
   && pass "hooks installed executable" || fail "hooks installed executable" "missing or not +x"
-PIN=$(jq -r '.last_verified_version | split(" ")[0]' "$REPO/config/upstream-contract.json")
-[ "$(cat "$HOME/.claude/harness-contract.version" 2>/dev/null)" = "$PIN" ] \
-  && pass "contract pin installed" || fail "contract pin installed" "want $PIN"
 
 echo ""
 echo "=== machine-local settings fragments add rules and nothing else ==="

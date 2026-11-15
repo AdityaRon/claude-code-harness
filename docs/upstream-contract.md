@@ -1,13 +1,14 @@
 # Keeping up with Claude Code
 
-How the harness notices when Claude Code changes under it: the upstream
-contract, the daily drift check, and `/insights`. Moved from the README.
+How the harness notices when Claude Code breaks something it relies on: the
+upstream contract, the daily check, and `/insights`.
 
 This harness hard-codes facts about Claude Code: which hook events exist, which
-permission modes are valid, what `settings.json` may contain. Claude Code
-**auto-updates**, so those facts rot with no commit landing here. That has already
-happened twice: auto mode became the product default, and `SessionEnd` appeared
-while the session summary was still wired to `Stop`.
+permission modes are valid, what `settings.json` may contain, how large a memory
+index loads. Claude Code **auto-updates**, so those facts can break with no commit
+landing here. That has already happened twice: auto mode became the product
+default, and `SessionEnd` appeared while the session summary was still wired to
+`Stop`.
 
 A push-triggered CI run can never catch this, because upstream changes when the
 repo stands still. So:
@@ -18,85 +19,69 @@ bash tools/upstream-check.sh
 
 `tools/upstream-check.sh` compares the harness against the **installed** CLI, using only
 auth-free commands (`claude doctor`, `claude --version`) so CI needs no credentials.
-It checks that the shipped `settings.json` still validates, that every hook event
-the harness registers still exists, and that the shipped `defaultMode` is still
-accepted, then reports events upstream has that nobody here has assessed.
+It is a **breakage check only**; it does not assess what a release adds. It checks:
+
+1. the shipped `settings.json` still validates;
+2. every hook event `settings.json` registers still exists;
+3. the shipped `defaultMode` is the contract's `expected_default_mode` and the CLI
+   still accepts it;
+4. every top-level settings key the harness sets is still mentioned in the CLI
+   (advisory: a string match in a bundled build is not authoritative);
+5. the memory index limits (200 lines, 25,000 bytes) that `memory-lint` and
+   `memory-verify` enforce still match the ones read out of the CLI;
+6. each mod under `skills/` (today the comms panel) still passes `claude plugin test`.
 
 It works by asking the CLI an impossible question: `claude doctor` prints the full
-list of valid hook events *only* inside the warning for an unknown one, so the
-check registers a sentinel event to make it enumerate them. Note that doctor
-**exits 0 even when it rejects your settings**, so the output is parsed rather than
-trusted.
+list of valid hook events and permission modes *only* inside the warning for an
+unknown one, so the check registers a sentinel to make it enumerate them. Note that
+doctor **exits 0 even when it rejects your settings**, so the output is parsed rather
+than trusted.
 
 | Exit | Meaning | Action |
 |---|---|---|
-| 0 | contract holds | none |
+| 0 | nothing the harness relies on has moved | none |
 | 1 | **breakage**: the harness relies on something upstream changed | fix the harness |
-| 2 | upstream grew: new capability nobody has assessed | adopt it, or record the decision |
+| 2 | could not confirm something: a settings key the CLI no longer mentions, or memory limits that could not be read | verify by hand; the daily run hands it to Claude |
 | 3 | the check itself could not run | install `jq` / the CLI |
 
-`upstream-contract.json` holds the assumptions. `acknowledged_hook_events` is *not*
-"events we use"; it is "events a human has looked at and decided about", and
-`notes_on_unused_events` records why each unused one was skipped. When upstream adds
-an event the check fails with exit 2 until someone either hooks it or writes down
-why not. **That deliberate nag is the mechanism that keeps this harness current
-instead of quietly stale.**
+`config/upstream-contract.json` holds the two assumptions that are not already in
+`config/settings.json`: `expected_default_mode` and `memory_index_limits`. The hook
+events checked are the ones `settings.json` registers, so adopting a new event needs
+no edit there. An event upstream adds, a tool, a setting or a release that breaks
+nothing is not a signal, and nothing records a decision about it.
 
 `.github/workflows/upstream-drift.yml` runs it **daily on a schedule** plus on
-demand, and on any push touching the assumptions. It installs the CLI via npm
-rather than `curl … | bash`: piping a remote script into a shell is exactly what
-this harness's own `network-guard` denies.
+demand, and on any push touching what it reads. It installs the CLI via npm
+rather than piping a remote script into a shell, which is exactly what this
+harness's own `network-guard` denies.
 
-Sections 1 to 4 only see what `doctor` and the binary enumerate, so a new tool or
-settings key arrives silently. Section 6 closes that: it reads the changelog
-(`~/.claude/cache/changelog.md` locally; CI downloads it and passes
-`CLAUDE_CHANGELOG_PATH`), lists the harness-relevant entries for every release after
-`last_verified_version`, and exits 2 until someone assesses them and bumps that
-field. Entries naming something the contract already has a decision for are
-included, because that decision may now be stale.
+On exit 1 or 2 the scheduled run hands the result to Claude, once per CLI version
+(a branch `claude/contract-<version>`, whether or not its PR is still open). Claude
+may edit the bin, hooks, tests, config, docs, rules and `skills/` folders and run
+the tests. For exit 2 it first decides whether the report is a real break, and
+changes nothing when it is not. Its PR is always a **draft** for you to read, never
+landed by the workflow, and the workflow refuses to publish a fix that touches
+`.github/`, drops a deny or ask rule, or adds a line holding a credential
+(`tests/workflow-gates.test.sh`). A mod that fails `claude plugin test` is a
+breakage in the same way, so Claude may fix under `skills/`. A new fix PR closes the
+older ones `github-actions` opened, with a link, and deletes their branches; one you
+opened is left alone. GitHub holds the `pull_request` runs on a PR `github-actions`
+opens, since the repo's fork PR approval policy is `first_time_contributors`, so the
+workflow approves its own PR's CI; a dispatched run does not count for those checks
+and is only the fallback when approval is refused. After a merge: `bash install.sh`.
+Without a token the same run keeps one open issue with the check's output instead. On
+push and PR the workflow fails only on exit 1 or 3. When a scheduled or dispatched
+run on main completes, the Release workflow runs and tags what landed
+([releases.md](releases.md)).
 
-Section 4e runs `claude plugin test` on every mod under `skills/` (today the comms
-panel), with no login. The mod API is early access, so a release can move it, and
-a moved API shows only as a blank or erroring pane. A failing mod is a breakage,
-exit 1, so the daily run hands it to Claude's fix mode, which may edit `skills/`.
-
-When the daily run finds a new release it triages first: if no entry since the pin
-matches the section 6 filter (1 of the 21 releases 2.1.280 to 2.1.302), it moves
-`last_verified_version` itself. Otherwise Claude reviews the releases and edits only
-`upstream-contract.json`, once per release. A PR whose body starts with `Nothing to
-decide.` is opened ready and merged by the workflow once its CI passes; one that
-starts with `Decide:` is a **draft** assigned to you, with its questions, never
-changes. Not adopting is the default, so a review asks only when a release changes
-something a hook, a guard or `config/settings.json` relies on; adds a tool that can
-run commands, write files or reach the network with no PreToolUse matcher naming
-it; loosens a default the settings do not pin; or does something Claude cannot
-read. A new opt-in setting, environment variable or hook event is recorded as not
-set and listed under `Could adopt:` in the PR that lands. Until 2026-10-28 every
-new setting was a question, and all 6 reviews from 2.1.304 to 2.1.312 waited as
-drafts.
-Landing on its own needs a branch rule `github-actions` can satisfy; as of 2026-10-17
-`main` needs no approval and requires the `doctor.sh` and `shellcheck` checks.
-GitHub holds the `pull_request` runs on a PR `github-actions` opens, since the
-repo's fork PR approval policy is `first_time_contributors`, so the workflow
-approves its own PR's CI; a dispatched run does not count for those checks and is
-only the fallback when approval is refused. A new
-contract PR closes the older ones `github-actions` opened, with a link, and deletes
-their branches; one you opened is left alone. After any merge: `bash install.sh`.
-On exit 1, a breakage, Claude fixes the harness instead: it may edit the bin,
-hooks, tests, config, docs and rules folders and run the tests, and reviews the
-releases too. Its PR is always a **draft** for you, and the workflow refuses to
-publish a fix that touches `.github/`, drops a deny or ask rule, or adds a line
-holding a credential (`tests/workflow-gates.test.sh`). 2.1.311's breakage waited as
-an issue until a hand-tagged run fixed it (#142).
-Without a token the same run keeps one open issue with section 6 instead. Locally,
-`session-start` says when the installed CLI is past the contract. On push and PR
-the workflow fails only on exit 1 or 3; exit 2 is the scheduled run's to clear.
-When a scheduled or dispatched run on main completes, the Release workflow
-runs and tags what landed ([releases.md](releases.md)).
+Until 2026-11-15 the check also kept an acknowledgement of every hook event, tool
+and setting Claude Code shipped, and a daily run opened a PR assessing each release
+("contract: review Claude Code releases up to ..."). That is gone: reading releases
+for features is a person's call, not a daily PR.
 
 Setup, once: run `/install-github-app` in Claude Code for this repo. It installs
 the Claude GitHub App, which lets the draft PR run CI, and stores
-`CLAUDE_CODE_OAUTH_TOKEN`; confirm with `gh secret list`. The reviews use your
+`CLAUDE_CODE_OAUTH_TOKEN`; confirm with `gh secret list`. The fixes use your
 plan's usage. On a fork, `tools/fork-setup.sh` checks this and the rest GitHub
 leaves off, and `--apply` turns on the workflows and the PR permission.
 

@@ -16,9 +16,7 @@ mkdir -p "$CLAUDE_STATE_DIR"
 # user's memory is worse than no test.
 export CLAUDE_MEMORY_PROJECTS_DIR="$TMP/projects"
 mkdir -p "$CLAUDE_MEMORY_PROJECTS_DIR"
-# Keep the real pin and CLI out of every case but the ones below.
-export CLAUDE_CONTRACT_PIN="$TMP/no-pin"
-# And the real release record, which harness-update.sh writes on this machine.
+# Keep the real release record, which harness-update.sh writes on this machine.
 export CLAUDE_HARNESS_LATEST="$TMP/no-latest"
 export CLAUDE_HARNESS_VERSION="$TMP/no-version"
 # And the Bash guards' timing log, which the hook rotates.
@@ -235,36 +233,6 @@ else
 fi
 
 echo ""
-echo "=== CLI past the contract pin → one nudge; same version or no pin → silent ==="
-printf '2.1.280\n' > "$TMP/pin"
-OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
-check_contains "nudge names both versions" "Installed 2.1.281; the harness was verified at 2.1.280" "$OUT"
-check_contains "and says the release chain installs it" "the scheduled harness-update installs it" "$OUT"
-OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.280 run_resume "sess-clean")
-check_not_contains "silent at the pinned version" "past the harness contract" "$OUT"
-OUT=$(CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
-check_not_contains "silent without a pin file" "past the harness contract" "$OUT"
-rm -f "$CLAUDE_STATE_DIR/contract-nudge"
-OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.99 run_resume "sess-clean")
-check_contains     "an older CLI is told to update" "older than the harness contract" "$OUT"
-check_not_contains "and is not called past it"      "past the harness contract" "$OUT"
-printf '2.1.281 %s\n' "$(date +%Y-%m-%d)" > "$CLAUDE_STATE_DIR/contract-nudge"
-
-echo ""
-echo "=== the nudge is stamped: once per CLI version per day, not every session ==="
-# It fired in every session in every repo while the CLI was ahead of the pin,
-# and nothing the reader can do changes between two sessions on the same day.
-OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.281 run_resume "sess-clean")
-check_not_contains "second session the same day is silent" "past the harness contract" "$OUT"
-check_eq "stamp lives in the state dir" "2.1.281 $(date +%Y-%m-%d)" "$(head -1 "$CLAUDE_STATE_DIR/contract-nudge")"
-OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.282 run_resume "sess-clean")
-check_contains "a newer CLI nudges again" "Installed 2.1.282; the harness was verified at 2.1.280" "$OUT"
-printf '2.1.282 2000-01-01\n' > "$CLAUDE_STATE_DIR/contract-nudge"
-rm -f "$CLAUDE_STATE_DIR"/contract-nudge.claim.*   # a new day has no claim yet
-OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.282 run_resume "sess-clean")
-check_contains "and so does a stale stamp from another day" "Installed 2.1.282" "$OUT"
-
-echo ""
 echo "=== a newer harness release was fetched → one nudge a day; otherwise silent ==="
 LATEST="$TMP/harness-latest"; VERSION="$TMP/harness.version"
 nudge() { CLAUDE_HARNESS_LATEST="$LATEST" CLAUDE_HARNESS_VERSION="$VERSION" run_resume "sess-clean"; }
@@ -345,19 +313,6 @@ for s in '/Users/someone/Desktop' '/tmp/a b/c.d_e-f' '/x/é/ü/日本/🙂' '/A-
   check_eq "store_slug, C locale: $s" "$(printf '%s' "$s" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')" "$(LC_ALL=C lib "store_slug '$s'")"
 done
 
-echo ""
-echo "=== cli_version: read from the path claude resolves to, else asked ==="
-C="$TMP/cli"; mkdir -p "$C/Caskroom/claude-code@latest/2.1.322" "$C/versions" "$C/bin" "$C/npm"
-touch "$C/Caskroom/claude-code@latest/2.1.322/claude" "$C/versions/2.1.330"
-ln -s "$C/versions/2.1.330" "$C/bin/claude"
-printf '#!/bin/sh\necho "9.9.9 (Claude Code)"\n' > "$C/npm/cli"; chmod +x "$C/npm/cli"
-check_eq "a cask install: its folder names the version" "2.1.322" "$(CLAUDE_CLI_PATH="$C/Caskroom/claude-code@latest/2.1.322/claude" lib cli_version)"
-check_eq "a link into versions/: resolved, then named" "2.1.330" "$(CLAUDE_CLI_PATH="$C/bin/claude" lib cli_version)"
-check_eq "no version in the path: the binary is asked" "9.9.9" "$(CLAUDE_CLI_PATH="$C/npm/cli" lib cli_version)"
-printf '2.1.331\n' > "$TMP/pin"
-OUT=$(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_PATH="$C/bin/claude" CLAUDE_STATE_DIR="$TMP/state-cli" run_resume "sess-clean")
-check_contains "the contract nudge uses it" "Installed 2.1.330; the harness was verified at 2.1.331" "$OUT"
-
 # A copy of the hook beside a stub memory-index.sh that records each run and takes
 # STUB_SLEEP seconds (lib.sh puts the system folders first on PATH, so a stub has
 # to be one the hook finds beside itself).
@@ -365,21 +320,20 @@ TREE="$TMP/tree"; mkdir -p "$TREE/hooks" "$TREE/bin"
 cp hooks/session-start.sh hooks/lib.sh "$TREE/hooks/"; cp -R hooks/lib "$TREE/hooks/lib"
 export RUNS="$TMP/index-runs"
 printf '#!/usr/bin/env bash\necho run >> "$RUNS"\nsleep "${STUB_SLEEP:-1}"\n' > "$TREE/bin/memory-index.sh"
-printf '2.1.280\n' > "$TMP/pin"
 IDX="$CLAUDE_MEMORY_PROJECTS_DIR/$SLUG/memory/MEMORY.md"
 run_tree() {  # sid [VAR=value...]: the copied hook on a resume payload
   local sid="$1"; shift
   jq -nc --arg sid "$sid" '{source:"resume", session_id:$sid, hook_event_name:"SessionStart"}' \
     | env "$@" bash "$TREE/hooks/session-start.sh" 2>/dev/null
 }
-due() {  # every optional section has work: the index changed, both nudges are due
+due() {  # every optional section has work: the index changed, the release nudge is due
   mkdir -p "${IDX%/*}"; [ -f "$IDX" ] || printf -- '- [P](p.md) - h\n' > "$IDX"
   touch -t "20260103$(printf '%02d' $((RANDOM % 60)))00" "$IDX"
-  rm -f "$CLAUDE_STATE_DIR/contract-nudge" "$CLAUDE_STATE_DIR/release-nudge" "$CLAUDE_STATE_DIR"/*.claim.* \
+  rm -f "$CLAUDE_STATE_DIR/release-nudge" "$CLAUDE_STATE_DIR"/*.claim.* \
     "$CLAUDE_STATE_DIR/memory-index/$SLUG" "$CLAUDE_STATE_DIR"/memory-index/*.claim.* "$RUNS"
   printf 'v1.0.3\n' > "$LATEST"; printf 'version=v1.0.2\n' > "$VERSION"
 }
-NUDGES=(CLAUDE_CONTRACT_PIN="$TMP/pin" CLAUDE_CLI_VERSION=2.1.281 CLAUDE_HARNESS_LATEST="$LATEST"
+NUDGES=(CLAUDE_HARNESS_LATEST="$LATEST"
         CLAUDE_HARNESS_VERSION="$VERSION" MEMORY_INDEX_PRESSURE_LINES=1)
 
 echo ""
@@ -396,7 +350,7 @@ S0=$SECONDS
 OUT=$(run_tree sess-clean "${NUDGES[@]}" STUB_SLEEP=$SLOW CLAUDE_SESSION_START_BUDGET=$BUD)
 EL=$((SECONDS - S0))
 check_contains "one line names each section it skipped" \
-  "session-start: past its $BUD s budget, skipped: worktree-prune contract-nudge release-nudge resume-drift" "$OUT"
+  "session-start: past its $BUD s budget, skipped: worktree-prune release-nudge resume-drift" "$OUT"
 check_not_contains "no nudge from a skipped section" "Harness v1.0.3 is available" "$OUT"
 check_eq "the slow section ran once, started in budget" "1" "$(cat "$RUNS" 2>/dev/null | wc -l | tr -d ' ')"
 [ "$EL" -le $((B + SLOW + 2)) ] && pass "back in ${EL}s, not hung (an ordinary run here: ${B}s, the slow section ${SLOW}s)" \
@@ -405,7 +359,7 @@ due
 mkdir -p "$TMP/mods/sess-clean/m1/.claude-plugin"; : > "$TMP/mods/sess-clean/m1/.claude-plugin/plugin.json"
 OUT=$(run_tree sess-clean "${NUDGES[@]}" CLAUDE_SESSION_START_BUDGET=0 CLAUDE_DEV_MODS_DIR="$TMP/mods")
 check_contains "a budget already spent names every section" \
-  "skipped: git-context memory-index worktree-prune contract-nudge release-nudge resume-drift" "$OUT"
+  "skipped: git-context memory-index worktree-prune release-nudge resume-drift" "$OUT"
 check_contains "and still names a mod loading from this session: no process, a safety notice" \
   "Mod loading from this session: $TMP/mods/sess-clean/m1" "$OUT"
 due
@@ -432,43 +386,38 @@ due
 for i in $(seq 1 14); do run_tree "storm-$i" "${NUDGES[@]}" > "$TMP/storm-$i.out" & done
 wait
 check_eq "the index tool ran once" "1" "$(cat "$RUNS" 2>/dev/null | wc -l | tr -d ' ')"
-check_eq "one session showed the contract nudge" "1" "$(cat "$TMP"/storm-*.out | grep -c 'past the harness contract')"
 check_eq "one session showed the release nudge" "1" "$(cat "$TMP"/storm-*.out | grep -c 'Harness v1.0.3 is available')"
-check_eq "one claim per stamp is left" "1 1" \
-  "$(ls "$CLAUDE_STATE_DIR"/contract-nudge.claim.* | wc -l | tr -d ' ') $(ls "$CLAUDE_STATE_DIR"/release-nudge.claim.* | wc -l | tr -d ' ')"
+check_eq "one claim is left" "1" "$(ls "$CLAUDE_STATE_DIR"/release-nudge.claim.* | wc -l | tr -d ' ')"
 
 echo ""
 echo "=== claims from an earlier day: a storm still does the work once, and clears them ==="
 # After a reboot, a session killed mid-claim leaves its claim; the next storm must
 # not run the work twice (the timed lock this replaced did, 6 of 8 trials).
 due
-for f in contract-nudge release-nudge; do : > "$CLAUDE_STATE_DIR/$f.claim.2.1.281_2000-01-01"; done
+: > "$CLAUDE_STATE_DIR/release-nudge.claim.v1.0.3_2000-01-01"
 for i in $(seq 1 14); do run_tree "storm2-$i" "${NUDGES[@]}" > "$TMP/storm2-$i.out" & done
 wait
-check_eq "the contract nudge once" "1" "$(cat "$TMP"/storm2-*.out | grep -c 'past the harness contract')"
 check_eq "the release nudge once" "1" "$(cat "$TMP"/storm2-*.out | grep -c 'Harness v1.0.3 is available')"
 check_eq "the old claims are gone" "" "$(ls "$CLAUDE_STATE_DIR"/*.claim.*2000-01-01 2>/dev/null)"
 due
-: > "$CLAUDE_STATE_DIR/contract-nudge.claim.2.1.281_$(date +%Y-%m-%d)"
+: > "$CLAUDE_STATE_DIR/release-nudge.claim.v1.0.3_$(date +%Y-%m-%d)"
 OUT=$(run_tree sess-clean "${NUDGES[@]}")
-check_not_contains "today's claim left by a killed run costs that day's nudge, no more" "past the harness contract" "$OUT"
+check_not_contains "today's claim left by a killed run costs that day's nudge, no more" "Harness v1.0.3 is available" "$OUT"
 
 echo ""
 echo "=== a storm past its budget: no session shows the nudge, and the next start does ==="
 # The budget wins over the nudge. A section skipped for time claims nothing, so an
 # old claim stays (a few bytes) and the nudge waits for the next start in budget.
 due
-for f in contract-nudge release-nudge; do : > "$CLAUDE_STATE_DIR/$f.claim.2.1.281_2000-01-01"; done
+: > "$CLAUDE_STATE_DIR/release-nudge.claim.v1.0.3_2000-01-01"
 for i in $(seq 1 14); do run_tree "storm3-$i" "${NUDGES[@]}" CLAUDE_SESSION_START_BUDGET=0 > "$TMP/storm3-$i.out" & done
 wait
-check_eq "no session showed either nudge" "0 0" \
-  "$(cat "$TMP"/storm3-*.out | grep -c 'past the harness contract') $(cat "$TMP"/storm3-*.out | grep -c 'Harness v1.0.3 is available')"
+check_eq "no session showed the nudge" "0" "$(cat "$TMP"/storm3-*.out | grep -c 'Harness v1.0.3 is available')"
 # By name: a claim taken for today would also clear the old ones, keeping the count.
-check_eq "none claimed one; the old claims wait" "2 0" \
+check_eq "none claimed one; the old claim waits" "1 0" \
   "$(ls "$CLAUDE_STATE_DIR"/*-nudge.claim.*_2000-01-01 2>/dev/null | wc -l | tr -d ' ') $(ls "$CLAUDE_STATE_DIR"/*-nudge.claim.*_"$(date +%Y-%m-%d)" 2>/dev/null | wc -l | tr -d ' ')"
 OUT=$(run_tree sess-clean "${NUDGES[@]}")
 check_contains "the next start in budget shows the release nudge" "Harness v1.0.3 is available" "$OUT"
-check_contains "and the contract nudge" "past the harness contract" "$OUT"
 check_eq "and clears the old claims" "" "$(ls "$CLAUDE_STATE_DIR"/*.claim.*2000-01-01 2>/dev/null)"
 
 echo ""

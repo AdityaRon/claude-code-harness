@@ -45,7 +45,6 @@ repo layout is for reading the repo, not for the installed tree.
   harness-update.conf      ← with_cli=1 or 0, from --with-cli or --no-cli
   harness-src/             ← harness-update.sh's own clone, made on its first run
   harness.version          ← version, commit, the clone it came from and its origin, install time
-  harness-contract.version ← last_verified_version from config/upstream-contract.json
   skills/<name>/SKILL.md   ← memory-audit, memory-archive, pr-review, comms-hub, slack-draft, skill-forge
   skills/comms-hub/bin/    ← its scripts; config.example.toml sits beside its SKILL.md
   skills/comms-hub/panel/  ← the comms panel mod: plugin.json, hooks/, types/; its tests stay in the clone
