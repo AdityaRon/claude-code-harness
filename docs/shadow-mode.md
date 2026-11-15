@@ -16,9 +16,9 @@ covers one rule.
 
 | Entry | Cover while it is shadowed |
 |---|---|
-| `kubectl-guard` | #241 narrowed `Bash(kubectl:*)` to read verbs and added native ask rules for mutating verbs in both orders (`kubectl delete *`, `kubectl * delete *`). Anything else reaches the classifier. A `get secret` or `config view --raw` with the verb first matches a read prefix and has no ask rule, so the report is the only thing that sees it. |
+| `kubectl-guard` | #241 narrowed `Bash(kubectl:*)` to read verbs and added native ask rules for mutating verbs in both orders (`kubectl delete *`, `kubectl * delete *`). Anything else reaches the classifier. A `get secret` or `config view --raw` with the verb first matches a read prefix and has no ask rule, so no prompt covers it; the report's "Ran: allow rule" column shows whether the classifier saw it. |
 | `interpreter-guard` | Auto mode drops interpreter allow wildcards such as `Bash(python3:*)`, so the classifier sees inline code. |
-| `network-guard:` each ask | No allow rule covers curl, wget, scp, rsync or sftp, so the classifier sees each call. That includes `allowlist-edit`: while it is shadowed, a host added to the machine's allowlist also hides later asks from this log. |
+| `network-guard:` each ask | No allow rule covers curl, wget, scp, rsync or sftp, so the classifier sees each call. `allowlist-edit` is the exception: a lone `cp`, `mv`, `sed` or `echo` into `~/.claude/local-settings` matches an allow rule, so nothing else sees it. The allowlist feeds only network-guard's asks, all shadowed, so a host added meanwhile weakens no live deny, but it hides later asks for that host from this log. |
 | `rm-guard:rf-outside-scratch` | `rm` has no allow rule, so the classifier sees it. |
 | `env-guard:bare-env` | `env` has no allow rule, so the classifier sees it. |
 
@@ -66,7 +66,8 @@ too, by the hooks doc, so `audit.sh` now writes them into each denial:
 ```
 
 The reason is read from `reason`, the documented field. Before this change,
-`denial_reason` was read, and every live denial line said `no reason given`.
+`denial_reason` was read: all 27 denial lines in one Mac's audit log, 2026-09-19
+to 2026-11-13, say `no reason given`.
 
 ## The report
 
@@ -86,7 +87,8 @@ row add up to its asks plus denies:
 |---|---|
 | Classifier denied | Auto mode refused it, with a verdict (`[Category]`). |
 | Denied, no verdict | Auto mode refused it without judging it (no verdict, or the classifier was unavailable). |
-| Prompt approved, Prompt rejected | Claude Code asked a human through a native ask rule or a built-in check, and this was the answer. |
+| Rule prompt approved, Rule prompt rejected | A native ask rule had Claude Code ask a human, and this was the answer. |
+| Other prompt | Claude Code asked a human for another reason (a built-in safety check), or the transcript does not say why. |
 | Native deny | A deny rule or a built-in check refused it. |
 | Live guard | A guard that is still live asked or denied the same call. |
 | Ran: allow rule | An allow rule let it run, so neither the classifier nor a person saw it. |
@@ -102,11 +104,12 @@ whatever happened next.
 
 For each row:
 
-- **Covered:** classifier denied, a native prompt or deny, or a live guard. If
+- **Covered:** classifier denied, a rule prompt, a native deny, or a live guard. If
   every decision is in these columns, delete the rule, or the whole guard, with
   its tests and its line in `SHADOW`.
-- **Look at the ids:** Ran: classifier. The classifier saw the call and allowed
-  it. For a rule that would have denied, read those calls before retiring it.
+- **Look at the ids:** Ran: classifier, and Other prompt. The classifier saw
+  the call and allowed it, or a person was asked for some other reason. For a
+  rule that would have denied, read those calls before retiring it.
 - **Not covered:** Ran: allow rule, Ran: other, Denied, no verdict, and any
   decision made outside auto mode. Restore the rule, which means deleting its
   line in `SHADOW`, or add a native rule that covers those calls first.

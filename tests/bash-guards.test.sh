@@ -259,6 +259,14 @@ disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
 [[ $RC == 2 && -z "$OUT" && "$ERR" == *"lib.sh is older than bash-guards.sh"* ]] \
   && pass "a lib.sh without the seams: exit 2" || fail "a lib.sh without the seams" "rc=$RC out=$OUT err=$ERR"
 copy_hooks
+# A lib.sh from before shadow mode, mid-install: decide is missing, and env-guard's denies go through it.
+sed -e 's/^for _lib_part in command paths scratch io inline net host shadow; do$/for _lib_part in command paths scratch io inline net host; do/' \
+    -e 's/ stale_claude_hosts shadow_note >/ stale_claude_hosts >/' hooks/lib.sh > "$TMP/hk/lib.sh"
+cmp -s hooks/lib.sh "$TMP/hk/lib.sh" && fail "test setup" "lib.sh's part list was not found"
+disp "$TMP/hk" "$(payload 'cat .env')"
+[[ $RC == 2 && -z "$OUT" && "$ERR" == *"Blocked: bash-guards stopped"* ]] \
+  && pass "a lib.sh without shadow mode's decide: exit 2, not a deny that falls through" || fail "a lib.sh without decide" "rc=$RC out=$OUT err=$ERR"
+copy_hooks
 sed 's/^printf .%s. "\$BG_OUT"$/exit 1/' hooks/bash-guards.sh > "$TMP/hk/bash-guards.sh"
 grep -q '^exit 1$' "$TMP/hk/bash-guards.sh" || fail "test setup" "the final printf was not found"
 disp "$TMP/hk" "$(payload 'kubectl delete pod web')"

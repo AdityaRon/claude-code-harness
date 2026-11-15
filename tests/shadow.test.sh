@@ -136,7 +136,7 @@ run kubectl-guard "$(call Bash "kubectl delete pod $(printf 'x%.0s' $(seq 1 400)
 [[ ${#C} -gt 0 && "$(field command | awk '{ print length($0) }')" == 200 ]] && pass "the command is cut at 200 characters" || fail "cut" "$(field command | wc -c)"
 rm -f "$CLAUDE_SHADOW_LOG"
 call Bash 'kubectl delete pod web' | bash hooks/kubectl-guard.sh >/dev/null 2>&1
-[[ "$(stat -f %Lp "$CLAUDE_SHADOW_LOG" 2>/dev/null || stat -c %a "$CLAUDE_SHADOW_LOG")" == 600 ]] \
+[[ "$(stat -c %a "$CLAUDE_SHADOW_LOG" 2>/dev/null || stat -f %Lp "$CLAUDE_SHADOW_LOG")" == 600 ]] \
   && pass "a new log is 0600" || fail "mode" "$(ls -l "$CLAUDE_SHADOW_LOG")"
 : > "$CLAUDE_AUDIT_LOG"
 run kubectl-guard "$(call Bash 'kubectl delete pod web')"

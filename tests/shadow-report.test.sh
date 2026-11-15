@@ -38,6 +38,11 @@ lines = [
     rec('toolu_e1', 'env-guard', 'bare-env', 'deny'),                 # no transcript result
     rec('', 'network-guard', 'host-unlisted', 'ask'),                 # no tool_use_id
     rec('toolu_n1', 'network-guard', 'sends-body', 'ask'),            # a deny rule
+    # Transcript only, no permissionDecision: the kind alone says what happened.
+    rec('toolu_c1', 'kubectl-guard', 'mutating-verb', 'ask'),         # auto mode blocked it, no audit line
+    rec('toolu_c2', 'interpreter-guard', 'sensitive-token', 'ask'),   # a person rejected a prompt, reason unrecorded
+    rec('toolu_c3', 'network-guard', 'sends-body', 'ask'),            # a deny rule
+    rec('toolu_c4', 'rm-guard', 'rf-outside-scratch', 'deny'),        # a person approved a safety-check prompt
     rec('toolu_old', 'kubectl-guard', 'mutating-verb', 'ask', ts=old),   # outside --days
     'not json SECRETCMD',
 ]
@@ -57,12 +62,15 @@ def use(uid):
     out.append(json.dumps(dict(type='assistant', timestamp=t, sessionId='s1', cwd=d,
         message=dict(role='assistant', content=[dict(type='tool_use', id=uid, name='Bash', input=dict(command='SECRETCMD ' + uid))]))))
 def result(uid, pd, err=False, kind=None):
-    r = dict(type='user', timestamp=t, sessionId='s1', permissionDecision=pd,
+    r = dict(type='user', timestamp=t, sessionId='s1',
              message=dict(role='user', content=[dict(type='tool_result', tool_use_id=uid, content='SECRETCMD out', is_error=err)]))
+    if pd:
+        r['permissionDecision'] = pd
     if kind:
         r['toolDenialKind'] = kind
     out.append(json.dumps(r))
-for u in ('toolu_k1', 'toolu_k2', 'toolu_k3', 'toolu_k4', 'toolu_i1', 'toolu_i2', 'toolu_r1', 'toolu_r2', 'toolu_e1', 'toolu_n1'):
+for u in ('toolu_k1', 'toolu_k2', 'toolu_k3', 'toolu_k4', 'toolu_i1', 'toolu_i2', 'toolu_r1', 'toolu_r2', 'toolu_e1', 'toolu_n1',
+          'toolu_c1', 'toolu_c2', 'toolu_c3', 'toolu_c4'):
     use(u)
 result('toolu_k2', dict(decision='accept', source='user_temporary', grantScope='once', reasonCode='rule:userSettings'))
 result('toolu_k3', dict(decision='reject', source='user_reject', reasonCode='rule:userSettings'), err=True, kind='user-rejected')
@@ -71,6 +79,10 @@ result('toolu_i1', dict(decision='accept', source='config', reasonType='classifi
 result('toolu_i2', dict(decision='accept', source='config', reasonType='mode'))
 result('toolu_r2', dict(decision='reject', source='hook', reasonType='hook', reasonCode='hook:PreToolUse'), err=True)
 result('toolu_n1', dict(decision='reject', source='config', ruleSource='userSettings', reasonCode='rule:userSettings'), err=True, kind='permission-rule')
+result('toolu_c1', None, err=True, kind='automode-blocked')
+result('toolu_c2', None, err=True, kind='user-rejected')
+result('toolu_c3', None, err=True, kind='permission-rule')
+result('toolu_c4', dict(decision='accept', source='user_temporary', grantScope='once', reasonCode='safetyCheck'))
 open(os.path.join(proj, 's.jsonl'), 'w').write('\n'.join(out) + '\n')
 PY
 
@@ -80,26 +92,26 @@ row() {   # row GUARD RULE CELLS...: the table row, exactly
   local got; got=$(printf '%s\n' "$OUT" | grep -F "| $1 | $2 |")
   [[ "$got" == "| $1 | $2 | $(printf '%s | ' "${@:3}" | sed 's/ | $//') |" ]] && pass "$1 $2" || fail "$1 $2" "got: $got"
 }
-#                                           ask deny !auto  cls nov  p+ p-  nd  live  rule cls oth  none noid
-row kubectl-guard     mutating-verb           3   0   0      1   0    1  1   0   0     0    0   0    0    0
-row kubectl-guard     secret-read             1   0   0      0   0    0  0   0   0     1    0   0    0    0
-row interpreter-guard sensitive-token         1   0   0      0   0    0  0   0   0     0    1   0    0    0
-row interpreter-guard long-inline             1   0   1      0   0    0  0   0   0     0    0   1    0    0
-row rm-guard          rf-outside-scratch      0   2   0      0   1    0  0   0   1     0    0   0    0    0
-row env-guard         bare-env                0   1   0      0   0    0  0   0   0     0    0   0    1    0
-row network-guard     host-unlisted           2   0   0      1   0    0  0   0   0     0    0   0    0    1
-row network-guard     sends-body              1   0   0      0   0    0  0   1   0     0    0   0    0    0
+#                                           ask deny !auto  cls nov  r+ r- oth  nd  live  rule cls oth  none noid
+row kubectl-guard     mutating-verb           4   0   0      2   0    1  1  0    0   0     0    0   0    0    0
+row kubectl-guard     secret-read             1   0   0      0   0    0  0  0    0   0     1    0   0    0    0
+row interpreter-guard sensitive-token         2   0   0      0   0    0  0  1    0   0     0    1   0    0    0
+row interpreter-guard long-inline             1   0   1      0   0    0  0  0    0   0     0    0   1    0    0
+row rm-guard          rf-outside-scratch      0   3   0      0   1    0  0  1    0   1     0    0   0    0    0
+row env-guard         bare-env                0   1   0      0   0    0  0  0    0   0     0    0   0    1    0
+row network-guard     host-unlisted           2   0   0      1   0    0  0  0    0   0     0    0   0    0    1
+row network-guard     sends-body              2   0   0      0   0    0  0  0    2   0     0    0   0    0    0
 TOTAL=$(printf '%s\n' "$OUT" | grep -F '| **all** |')
-[[ "$TOTAL" == "| **all** | | 9 | 3 | 1 | 2 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |" ]] \
-  && pass "the totals: 12 decisions, one in each outcome but two classifier denials" || fail "totals" "$TOTAL"
-[[ "$OUT" == *"12 shadowed decisions from 10 calls"* && "$OUT" == *"1 unreadable lines skipped"* ]] \
+[[ "$TOTAL" == "| **all** | | 12 | 4 | 1 | 3 | 1 | 1 | 1 | 2 | 2 | 1 | 1 | 1 | 1 | 1 | 1 |" ]] \
+  && pass "the totals: 16 decisions, each in one outcome" || fail "totals" "$TOTAL"
+[[ "$OUT" == *"16 shadowed decisions from 14 calls"* && "$OUT" == *"1 unreadable lines skipped"* ]] \
   && pass "the header counts, the old line and the duplicate left out" || fail "header" "$(printf '%s\n' "$OUT" | head -4)"
 [[ "$OUT" != *toolu_old* ]] && pass "a line older than --days is left out" || fail "window" "$OUT"
 [[ "$OUT" == *"- Classifier denied: toolu_k1"* && "$OUT" == *"- Ran: classifier: toolu_i1"* ]] \
   && pass "the tool_use_ids are listed by outcome" || fail "ids" "$OUT"
 [[ "$OUT" != *SECRETCMD* ]] && pass "no command or reason text in the report" || fail "text leaked" "$OUT"
 OUT=$(python3 -I tools/shadow-report.py --days 60 2>&1)
-printf '%s\n' "$OUT" | grep -qF '| kubectl-guard | mutating-verb | 4 |' && pass "--days 60 reaches the old line" || fail "--days 60" "$OUT"
+printf '%s\n' "$OUT" | grep -qF '| kubectl-guard | mutating-verb | 5 |' && pass "--days 60 reaches the old line" || fail "--days 60" "$OUT"
 
 echo ""
 results

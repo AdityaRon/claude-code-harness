@@ -59,7 +59,7 @@ case "$EVENT" in
     # Log-only. No `retry` field is emitted, so the denial stands exactly as
     # decided — this arm observes, it does not overturn.
     TOOL=$(sanitize "$(jq_get '.tool_name')")
-    # The hooks doc names the field `reason`; every live line read `denial_reason` as empty.
+    # The hooks doc names the field `reason`; `denial_reason` was empty on 27 of 27 lines on one Mac.
     WHY=$(sanitize "$(jq_get '.reason // .denial_reason')")
     # Before the command, which can hold ` | `: tools/shadow-report.py joins on the id.
     ID=$(sanitize "$(jq_get '.tool_use_id')"); MODE=$(sanitize "$(jq_get '.permission_mode')")

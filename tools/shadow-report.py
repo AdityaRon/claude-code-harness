@@ -24,8 +24,9 @@ HOME = os.path.expanduser('~')
 OUTCOMES = [
     ('classifier', 'Classifier denied'),        # auto mode refused it with a verdict ([Category])
     ('no_verdict', 'Denied, no verdict'),       # auto mode refused it without one: not cover
-    ('prompt_yes', 'Prompt approved'),          # Claude Code asked a human (a native ask rule or check)
-    ('prompt_no', 'Prompt rejected'),
+    ('prompt_yes', 'Rule prompt approved'),     # a native ask rule had Claude Code ask a human
+    ('prompt_no', 'Rule prompt rejected'),
+    ('prompt_other', 'Other prompt'),           # asked for another reason (a safety check), or not recorded
     ('native_deny', 'Native deny'),             # a deny rule or a built-in check refused it
     ('live_guard', 'Live guard'),               # a guard still live asked or denied the same call
     ('ran_rule', 'Ran: allow rule'),
@@ -118,9 +119,11 @@ def outcome(r, denied, timing, results, asks, hblocks):
     if kind == 'automode-blocked' or (pd.get('decision') == 'reject' and pd.get('reasonType') == 'classifier'):
         return 'classifier'
     if str(pd.get('source') or '').startswith('user'):
+        if not code.startswith('rule:'):
+            return 'prompt_other'
         return 'prompt_yes' if pd.get('decision') == 'accept' else 'prompt_no'
     if kind in ('user-rejected', 'cancelled'):
-        return 'prompt_no'
+        return 'prompt_other'
     if pd.get('decision') == 'reject' or kind == 'permission-rule':
         return 'native_deny'
     if pd.get('decision') == 'accept' and pd.get('reasonType') in ('rule', 'subcommandResults'):
