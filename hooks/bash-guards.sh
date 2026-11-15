@@ -66,6 +66,14 @@ unset BG_F bg_f
 # A payload that does not parse is denied once, here, under this hook's name.
 [[ "$PRESET_OK" == ok ]] || { BG_DONE=1; require_parsable_or_deny; BG_DONE=""; exit 1; }
 
+# The command with its lines joined as bash joins them, made once here for
+# every guard's second run on it (joined_pass, lib/io.sh).
+# shellcheck disable=SC2034  # lib.sh reads them in each guard's fork
+PRESET_JOINED="" PRESET_JINPUT=""
+# shellcheck disable=SC2034
+if [[ "$PRESET_CMD" == *$'\n'* && "$PRESET_CMD" == *[\"\'\\]* ]] && PRESET_JOINED=$(join_continued_lines "$PRESET_CMD"); then
+  PRESET_JINPUT=$(printf '%s' "$INPUT" | jq -c --arg c "$PRESET_JOINED" '.tool_input.command = $c' 2>/dev/null) || PRESET_JOINED=""
+fi
 # bash-guards.skip beside this hook (~/.claude/hooks/) names guards to leave out,
 # one a line. It only takes names off the list above, so a missing or empty file
 # runs all seven, and a symlink is not read. In the hooks folder, a write to it is

@@ -457,5 +457,13 @@ check "a reader after a pipe in a quoted cmdsub" deny 'echo "$(true | cat .env)"
 check "jq on a credential in a quoted cmdsub"   deny  'echo "$(jq . ~/.aws/credentials)"'
 
 echo ""
+echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
+# bash joins a line ending in \ to the next and keeps a quoted newline in its
+# word, where the guard read each line alone: each row that asks or denies here
+# was allowed.
+check "cat, \\ then .env"                    deny  $'cat \\\n.env'
+check "a quoted newline before .env"         deny  $'cat "a\nb" .env'
+check "a body's \$( ), \\ then .env"         deny  $'cat <<EOF > /dev/null\n$(cat \\\n.env)\nEOF'
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

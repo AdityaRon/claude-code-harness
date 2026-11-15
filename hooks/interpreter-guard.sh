@@ -26,6 +26,7 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Every check below names an interpreter. Normalizing drops quotes, backslashes
 # and case but never adds a letter, so a command naming none once those are
 # gone is done before ~20 ms of normalizing. `sh` counts only as its own word:
@@ -37,6 +38,14 @@ unreadable_check interpreter-guard "$CMD"
 # `/usr/bin/python3` and `PYTHON3` run python too. ICMD adds the normalized form
 # (lib.sh) as a second line; the stream-edit exemption below keeps to CMD.
 ICMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
+# A quoted or escaped ; | or & ended the [^|;&] spans below, so `python3 -X "a;b"
+# -c …` never reached its -c. The reading with those hidden (lib.sh) is added,
+# not swapped in: `bash -c "true; python3 -c …"` does split there. The
+# stream-edit exemption and the length rule below read both.
+NQS=""; NCMD=""; TYPED=$ICMD
+[[ "$CMD" == *[\"\'\\]* && "$CMD" == *[\;\&\|]* ]] && NQS=$(neutralize_quoted_separators "$CMD")
+[[ "$NQS" == "$CMD" ]] && NQS=""
+[[ -n "$NQS" ]] && NCMD=$(printf '%s\n%s' "$NQS" "$(normalize_command "$NQS")") && ICMD=$(printf '%s\n%s' "$ICMD" "$NCMD")
 
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
@@ -180,7 +189,7 @@ if [ "${STREAM_EDIT_CANDIDATE:-yes}" = "yes" ] \
     # would read the `-file` in `my-file.md` as an inline flag and kill the
     # exemption for any target whose name happens to end a hyphenated segment
     # in c or e.
-    REST=$(printf '%s\n' "$CMD" \
+    REST=$(printf '%s\n%s\n' "$CMD" "$NQS" \
       | sed "s/[[:space:]]-[A-Za-z0-9]*e[[:space:]]*'[^']*'/ /")
     OTHER_INLINE="${IB}${INTERP}[^|;&]*[[:space:]](-[A-Za-z0-9]*[ce]|--eval|--exec|-r)([[:space:]]|$)"
     if ! printf '%s\n' "$REST" | grep -qE "$OTHER_INLINE" \
@@ -194,7 +203,21 @@ fi
 # This catches novel payloads without producing false positives on trivial
 # one-liners like `python -c "print(1)"`.
 # Both spans stay inside the interpreter's own segment: a `grep -c` after && is not its flag.
-if printf '%s\n' "$ICMD" | grep -qE "${IB}${INTERP}\b[^|;&]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&]{200,}"; then
+# In the hidden-separator reading the flag is reached past a quoted ;, but each
+# length still stops at one as it does in the command as typed, so a payload of
+# short statements measures as it did. There each hidden one is a control byte,
+# and % is escaped before hiding, so a length stops at those and at no % typed.
+hidden_lengths() {
+  local hs=$'\001' q
+  q=$(neutralize_quoted_separators "$(printf '%s' "$CMD" | sed 's/%/%25/g')")
+  printf '%s\n%s\n' "$q" "$(normalize_command "$q")" | sed "s/%3B/$hs/g; s/%7C/$hs/g; s/%26/$hs/g; s/%25/%/g" \
+    | grep -qE "${IB}${INTERP}\b[^|;&$hs]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&$hs]{200,}"
+}
+# On the joined lines (joined_pass, lib/io.sh) a quoted newline is the byte \001,
+# and a length stops there as it does at the newline in the command as typed.
+NB=""; [[ -n "${JOINED_PASS:-}" ]] && NB=$'\001'
+if printf '%s\n' "$TYPED" | grep -qE "${IB}${INTERP}\b[^|;&$NB]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&$NB]{200,}" \
+   || { [[ -n "$NQS" ]] && hidden_lengths; }; then
   emit_ask "Long inline script passed to an interpreter. Review the payload before running — inline code bypasses file-based review."
   exit 0
 fi

@@ -11,6 +11,7 @@ require_jq_or_deny
 require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
+joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Every pattern below needs one of these words. Normalizing drops quotes,
 # backslashes and case but never adds a letter, so a command without any of
 # them once those are gone cannot match, and is done before ~65 ms of work.

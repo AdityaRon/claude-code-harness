@@ -10,6 +10,8 @@
 # from the environment, is dropped here with the two names that go with it.
 [[ -n "${HARNESS_PRESET:-}" && "$HARNESS_PRESET" == "$$" ]] && return 0
 unset HARNESS_PRESET GUARD_NAME GUARD_SELF
+# The same for the run on a command's joined lines (joined_pass, lib/io.sh).
+[[ -n "${JOINED_PASS:-}" && "$JOINED_PASS" == "$$" ]] || unset JOINED_PASS
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 

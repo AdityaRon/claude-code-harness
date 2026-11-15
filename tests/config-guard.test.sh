@@ -303,12 +303,49 @@ bash_is ask 'echo x > $PWD/$d/.claude/hooks/lib.sh'
 bash_is ask 'echo x > $PWD/.claude/hooks/lib.sh' "$HOME"
 CLAUDE_PROJECT_DIR=$HOME bash_is ask 'echo x > "$CLAUDE_PROJECT_DIR/.claude/hooks/lib.sh"'
 
+echo "=== a \$( ) or backticks in an unquoted heredoc body run as the body is read: ask ==="
+# The body was dropped as data, and a "$( )" kept its ) on the last word
+# (settings.json)): each of these was allowed.
+bash_is ask $'cat <<EOF > /dev/null\n$(cp /dev/null ~/.claude/settings.json)\nEOF'
+bash_is ask $'cat <<EOF > /dev/null\n`cp /dev/null ~/.claude/settings.json`\nEOF'
+bash_is ask $'cat <<EOF > /dev/null\nx $(cp /dev/null ~/.claude/settings.json\n)\nEOF'
+bash_is ask $'tee /dev/null <<EOF\n$(cp /dev/null ~/.claude/settings.json)\nEOF'
+bash_is ask $'cat <<EOF > /dev/null\nx $\\\n(cp /dev/null ~/.claude/settings.json)\nEOF'
+bash_is ask $'cat <<EOF > /dev/null\n$(cp "a;b" ~/.claude/settings.json)\nEOF'
+bash_is ask 'echo "$(cp /dev/null ~/.claude/settings.json)"'
+# $\ then ( is a $( ) once bash joins the lines; in double quotes the old reading
+# hid its ; as quoted text, so the unreadable floor is what asks.
+bash_is ask $'echo "$\\\n(cp /dev/null ~/.claude/settings.json)"'
+bash_is ask $'echo "$\\\n(true; cp /dev/null ~/.claude/settings.json)"'
+bash_is allow $'cat <<\'EOF\' > notes.md\n$(cp /dev/null ~/.claude/settings.json)\nEOF'
+bash_is allow $'cat <<EOF > notes.md\nwritten $(date), see ~/.claude/settings.json\nEOF'
+bash_is allow $'cat <<EOF > notes.md\nsee $HOME/.claude/settings.json\nEOF'
+bash_is allow 'echo "a (b) ~/.claude/settings.json" > notes.md'
+# A cd inside a kept body's $( ) is followed there.
+bash_is ask $'cat <<EOF > /dev/null\n$(cd .claude && cp x hooks/lib.sh)\nEOF' "$HOME"
+# Held as main holds them. A cd in a kept body's $( ) runs in a subshell, so the
+# cd after the body is still read from the session's folder; the first head of
+# this change allowed the first.
+bash_is ask $'cat <<EOF > /dev/null\n$(cd /tmp)\nEOF\ncd .claude && cp x hooks/lib.sh' "$HOME"
+bash_is ask $'cat <<EOF > /dev/null\n$(cd /tmp; true)\nEOF\ncd .claude && cp x hooks/lib.sh' "$HOME"
+bash_is ask 'd=$(pwd); cp "a;b" ~/.claude/settings.json'
+
 echo "=== a monitor's command is checked as a Bash command ==="
 monitor_is ask '{"command":"sleep 300; cp /srv/x.sh ~/.claude/hooks/env-guard.sh"}'
 monitor_is ask '{"command":"echo export A=1 >> ~/.zshrc"}'
 monitor_is allow '{"command":"tail -f ~/.claude/audit.log"}'
 monitor_is allow '{"ws":{"url":"wss://github.com/o/r"}}'
 
+echo ""
+echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
+# bash joins a line ending in \ to the next and keeps a quoted newline in its
+# word, where the guard read each line alone: each row that asks or denies here
+# was allowed.
+bash_is ask $'cat <<EOF > /dev/null\n$(cp /dev/null \\\n~/.claude/settings.json)\nEOF'
+bash_is ask $'cp /dev/null \\\n~/.claude/settings.json'
+bash_is ask $'cp "a\nb" ~/.claude/settings.json'
+bash_is ask $'cp $\'a\nb\' ~/.claude/settings.json'
+bash_is allow $'cp x \\\ny'
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
