@@ -556,7 +556,8 @@ while IFS= read -r seg; do
   fi
   emit_ask "git config is changing identity or signing settings. Confirm this is intended."
   exit 0
-done < <(printf '%s\n' "$CMD" | grep -oE "${A}${GIT}config\s+[^|;&]*"; printf '%s\n' "$CMD" | grep -oE "${A0}${GIT0}config\s+[^|;&]*")
+done < <([[ "$CMD" == *config* ]] || exit 0   # every segment names config; no grep starts without it
+         printf '%s\n' "$CMD" | grep -oE "${A}${GIT}config\s+[^|;&]*"; printf '%s\n' "$CMD" | grep -oE "${A0}${GIT0}config\s+[^|;&]*")
 
 # --- Writes into .git/hooks/* ------------------------------------------
 # The directory counts, not just a path through it: `cd .git/hooks && cat >
