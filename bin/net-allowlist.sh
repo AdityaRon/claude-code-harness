@@ -26,10 +26,12 @@ url_host() {
 }
 
 # What network-guard decides for a plain GET to this host right now.
+# In shadow mode (hooks/lib/shadow.sh) the guard's line, sent to stdout here and
+# kept out of the real log, says what it would have decided.
 guard_says() {
   jq -nc --arg c "curl -s https://$1/" '{tool_name:"Bash",tool_input:{command:$c}}' \
-    | CLAUDE_AUDIT_LOG=/dev/null bash "$HOOKS/network-guard.sh" 2>/dev/null \
-    | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null | grep . || echo allow
+    | CLAUDE_AUDIT_LOG=/dev/null CLAUDE_SHADOW_LOG=/dev/stdout bash "$HOOKS/network-guard.sh" 2>/dev/null \
+    | jq -r '.hookSpecificOutput.permissionDecision // .would // empty' 2>/dev/null | grep -m1 . || echo allow
 }
 
 cmd_list() {

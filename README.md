@@ -226,7 +226,7 @@ rules/                   ← installed to ~/.claude/rules, loaded in every sessi
   python-tests.md        ← path-scoped: loads only when Claude opens Python
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
-                           heredoc-openers, repo-layout, token-shapes and workflow-gates cut across
+                           heredoc-openers, repo-layout, shadow, token-shapes and workflow-gates cut across
                            files; lib.sh is their shared pass/fail; bench-corpus.jsonl
                            feeds hook-bench; doctor tests doctor.sh's own report; smoke.list is the
                            set install.sh verifies with (doctor.sh --smoke)

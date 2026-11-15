@@ -628,12 +628,13 @@ def render(d):
 
 
 def decide(hook, tool, inp, extra_env=None):
-    """Run one PreToolUse guard on a recorded call: its decision, or allow when it is silent."""
+    """Run one PreToolUse guard on a recorded call: its decision, or allow when it is silent. A rule in
+    shadow mode (hooks/lib/shadow.sh) answers what it would have decided: its line comes to stdout."""
     payload = json.dumps(dict(tool_name=tool, tool_input=inp, hook_event_name='PreToolUse', cwd=HOME, permission_mode='auto'))
     # Out of the real audit and shadow logs, and blind to this machine's allowlists
     # and to any tunnel running now (a port-forward turns a loopback POST into an
     # ask) unless a case sets one.
-    env = {**os.environ, 'CLAUDE_AUDIT_LOG': os.devnull, 'CLAUDE_SHADOW_LOG': os.devnull, 'CLAUDE_NET_ALLOWLIST': '',
+    env = {**os.environ, 'CLAUDE_AUDIT_LOG': os.devnull, 'CLAUDE_SHADOW_LOG': '/dev/stdout', 'CLAUDE_NET_ALLOWLIST': '',
            'CLAUDE_LOCAL_SETTINGS_DIR': os.devnull, 'CLAUDE_NET_TUNNEL_RE': '^cch-no-tunnel$',
            **(extra_env or {})}
     try:
@@ -646,7 +647,10 @@ def decide(hook, tool, inp, extra_env=None):
     if p.returncode != 0:
         return 'error'
     try:
-        return (json.loads(p.stdout or '{}').get('hookSpecificOutput') or {}).get('permissionDecision') or 'allow'
+        docs = [json.loads(ln) for ln in p.stdout.splitlines() if ln.strip()]
+        live = [(d.get('hookSpecificOutput') or {}).get('permissionDecision') for d in docs if 'hookSpecificOutput' in d]
+        would = [d.get('would') for d in docs if 'would' in d]
+        return next((x for x in live + would if x), 'allow')
     except (ValueError, AttributeError):
         return 'error'
 
