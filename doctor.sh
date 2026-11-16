@@ -143,6 +143,10 @@ for f in "${SUITES[@]}"; do
     NT=$((NT+1)); NOTES="${NOTES}TIMEOUT: $f, ${tt} case(s) past their limit, none failed"$'\n'
   else
     FAILED_SUITES=$((FAILED_SUITES+1))
+    # Named with its first failing case, so the line alone says what to rerun.
+    first=$(printf '%s\n' "$OUTPUT" | grep -m1 -E '^[[:space:]]*FAIL' | sed -E 's/^[[:space:]]+//' | cut -c1-160)
+    if [[ -z "$line" ]]; then NOTES="${NOTES}FAILED: $f, exit $STATUS, no Results line"$'\n'
+    else NOTES="${NOTES}FAILED: $f, ${ff:-0} case(s)${first:+; first: $first}"$'\n'; fi
   fi
 done
 trap - TERM INT HUP

@@ -251,16 +251,17 @@ if [[ -z "${CCH_SKIP_SELFTEST:-}" && -x "$REPO/doctor.sh" ]]; then
   SET=--smoke; [[ "${1:-}" == "--full" ]] && SET=""
   echo ""
   echo "Running doctor.sh ${SET:-(every suite)} to verify hooks..."
-  # A fixed /tmp name is shared by every user and every concurrent run.
-  log=$(mktemp "${TMPDIR:-/tmp}/cch-doctor.XXXXXX")
+  # In logs/, not $TMPDIR: macOS empties that on a reboot, the log with it.
+  log=~/.claude/logs/install-doctor.log
+  mkdir -p ~/.claude/logs
   if bash "$REPO/doctor.sh" $SET > "$log" 2>&1; then
     echo "  ✓ $(grep '^SUMMARY:' "$log")"
     [[ -n "$SET" ]] && echo "    the smoke set; every suite: bash $REPO/doctor.sh"
-    rm -f "$log"
   elif ! grep -q '^SUMMARY:' "$log" || grep -q '^SUMMARY: KILLED' "$log"; then
     echo "  ✗ doctor.sh was stopped before it finished, so this is not a test result. See $log"
   else
     echo "  ✗ $(grep '^SUMMARY:' "$log"). See $log"
+    grep -E '^(FAILED|KILLED|TIMEOUT):' "$log" | sed 's/^/    /'
   fi
 fi
 

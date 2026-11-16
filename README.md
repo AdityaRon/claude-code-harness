@@ -61,7 +61,8 @@ files in place first; this public repo ships neither. More in
 [docs/install.md](docs/install.md), including what lands in `~/.claude`.
 
 **Updating.** `~/.claude/harness-update.sh` checks the newest release tag out
-of its own clone, runs `doctor.sh`, and installs only on green; `--schedule` runs
+of its own clone, runs `doctor.sh --smoke` (`--full`: every suite), and installs
+only on green; `--schedule` runs
 it at 01:17, 07:17, 13:17 and 19:17 local time and `--unschedule` stops that.
 `--with-cli` also upgrades a Homebrew-cask Claude Code on each run. It leaves
 alone an install from a clone with local changes or commits, so update that
@@ -101,7 +102,7 @@ skip, except in CI, which clones it.
 | `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, the Bash guards' skip file, shell startup files, `~/.gitconfig`, LaunchAgents, Bash writes into a mod Claude Code loads by itself, and copies or extractions into a `.claude` folder. Deny: moving or emptying `~/.claude` |
 | `network-guard` | Bash | Deny: file uploads and pipe-to-shell. Ask: edits to the machine-local network allowlist. Shadow: request bodies, `DELETE`, `curl`/`wget` to hosts off the allowlist, `scp`/`rsync`, local servers. WebFetch is not guarded |
 | `interpreter-guard` | Bash | Shadow: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts. Auto mode drops `Bash(python3:*)`, so its classifier sees them |
-| `kubectl-guard` | Bash | Shadow. Read verbs are allowed by prefix; native ask rules in `config/settings.json` ask before every mutating verb and secret read, verb first or flags first |
+| `kubectl-guard` | Bash | Asks on a Secret read in any spelling (`get Secret`, `describe secret`, a kind from xargs) and on kubeconfig credentials. Its verb rules are in shadow: read verbs are allowed by prefix, and native ask rules in `config/settings.json` ask before every mutating verb, verb first or flags first |
 | `subagent-cache-guard` | a subagent's tool calls, SubagentStop | Deny: a subagent's tool calls once its prompt cache went cold 5 times in one run (`CLAUDE_SUBAGENT_MAX_COLD_STARTS`), until it replies with where it got to. Main sessions are left alone |
 | `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review. Anything else it hooks or calls, outside the guards included, is shown in a notice |
 | `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
@@ -238,7 +239,7 @@ tests/                   ← <name>.test.sh for most hooks, tools and .github sc
                            heredoc-openers, repo-layout, shadow, token-shapes and workflow-gates cut across
                            files; lib.sh is their shared pass/fail; bench-corpus.jsonl
                            feeds hook-bench; doctor tests doctor.sh's own report; smoke.list is the
-                           set install.sh verifies with (doctor.sh --smoke)
+                           set install.sh and harness-update.sh verify with (doctor.sh --smoke)
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
   permissions.md  auto-mode.md  customization.md  known-limitations.md
