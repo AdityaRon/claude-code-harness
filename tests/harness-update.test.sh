@@ -53,7 +53,13 @@ touch "$HOME/.claude/installed-$VER"; echo install >> "$HOME/order.log"
 { echo "#!/usr/bin/env bash"; echo "# installed at $VER"; cat "$HOME/.claude/harness-update.sh"; } > "$HOME/.claude/harness-update.sh.new"
 chmod +x "$HOME/.claude/harness-update.sh.new"; mv -f "$HOME/.claude/harness-update.sh.new" "$HOME/.claude/harness-update.sh"
 SH
-printf '#!/usr/bin/env bash\necho "SUMMARY: stub"; exit "$(cat "$(dirname "$0")/DOCTOR_RC")"\n' > "$SRC/doctor.sh"
+# The stand-in doctor logs its arguments, and on red names a suite as doctor.sh does.
+cat > "$SRC/doctor.sh" <<'SH'
+#!/usr/bin/env bash
+echo "$*" > "$HOME/doctor.args"; rc=$(cat "$(dirname "$0")/DOCTOR_RC"); echo "SUMMARY: stub"
+[ "$rc" = 0 ] || echo "FAILED: tests/stub.test.sh, 1 case(s); first: FAIL (expected=ask got=allow): stub case"
+exit "$rc"
+SH
 echo 0 > "$SRC/DOCTOR_RC"; echo one > "$SRC/README"
 # main ends past the newest tag, as the release workflow's CHANGELOG PR leaves it.
 ( cd "$SRC" && git init -q && $G add -A && $G commit -qm v1.0.0 && git tag v1.0.0 \
@@ -118,11 +124,17 @@ echo ""
 echo "=== red doctor: nothing installed, clone back where it was ==="
 OUT=$(bash "$UPD" 2>&1); RC=$?
 [ "$RC" = 1 ] && [[ "$OUT" == *"doctor.sh failed on v1.0.2"* ]] && pass "exit 1 and says why" || fail "red doctor" "rc=$RC $OUT"
+DL="$HOME/.claude/logs/harness-update-doctor.log"
+[[ "$OUT" == *"SUMMARY: stub; FAILED: tests/stub.test.sh, 1 case(s); first: FAIL (expected=ask got=allow): stub case; log: $DL"* ]] \
+  && pass "names the failed suite and its first case, and where the log is" || fail "names the suite" "$OUT"
+grep -q '^FAILED: tests/stub.test.sh' "$DL" && pass "the log is kept under ~/.claude/logs, which a reboot keeps" || fail "kept log" "$(ls "$HOME/.claude/logs")"
+[ "$(cat "$HOME/doctor.args")" = --smoke ] && pass "gated on the smoke set" || fail "smoke set" "$(cat "$HOME/doctor.args")"
 head_is v1.0.1 && pass "back at v1.0.1" || fail "back at v1.0.1" "$(git -C "$U" describe --tags)"
 [ "$(installed)" = v1.0.1 ] && [ ! -e "$HOME/.claude/installed-v1.0.2" ] && pass "v1.0.1 still installed" || fail "installed" "$(installed)"
 [ "$(cut -d' ' -f1 "$HOME/.claude/state/harness-latest")" = v1.0.2 ] && pass "harness-latest still names v1.0.2" || fail "latest" ""
 push_tag v1.0.3 0
-bash "$UPD" >/dev/null 2>&1; head_is v1.0.3 && [ "$(installed)" = v1.0.3 ] && pass "the next green tag installs" || fail "v1.0.3" "$(installed)"
+bash "$UPD" --full >/dev/null 2>&1; head_is v1.0.3 && [ "$(installed)" = v1.0.3 ] && pass "the next green tag installs" || fail "v1.0.3" "$(installed)"
+[ -z "$(cat "$HOME/doctor.args")" ] && pass "--full gates on every suite" || fail "--full" "$(cat "$HOME/doctor.args")"
 
 echo ""
 echo "=== refusals: uncommitted changes, local commits in the update clone ==="

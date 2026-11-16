@@ -61,7 +61,8 @@ files in place first; this public repo ships neither. More in
 [docs/install.md](docs/install.md), including what lands in `~/.claude`.
 
 **Updating.** `~/.claude/harness-update.sh` checks the newest release tag out
-of its own clone, runs `doctor.sh`, and installs only on green; `--schedule` runs
+of its own clone, runs `doctor.sh --smoke` (`--full`: every suite), and installs
+only on green; `--schedule` runs
 it at 01:17, 07:17, 13:17 and 19:17 local time and `--unschedule` stops that.
 `--with-cli` also upgrades a Homebrew-cask Claude Code on each run. It leaves
 alone an install from a clone with local changes or commits, so update that
@@ -238,7 +239,7 @@ tests/                   ← <name>.test.sh for most hooks, tools and .github sc
                            heredoc-openers, repo-layout, shadow, token-shapes and workflow-gates cut across
                            files; lib.sh is their shared pass/fail; bench-corpus.jsonl
                            feeds hook-bench; doctor tests doctor.sh's own report; smoke.list is the
-                           set install.sh verifies with (doctor.sh --smoke)
+                           set install.sh and harness-update.sh verify with (doctor.sh --smoke)
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
   permissions.md  auto-mode.md  customization.md  known-limitations.md
