@@ -2,6 +2,9 @@
 # hooks/lib.sh sources this: shadow mode (#237, docs/shadow-mode.md).
 # An entry logs what it would have decided to shadow.log and decides nothing.
 # A guard name covers all its rules; guard:rule one. Delete a line to restore it.
+# Only in auto mode: each entry counts on auto mode's classifier, and another
+# mode has none (default mode runs Bash(python3:*) with no prompt), so there
+# the rule is live.
 SHADOW=(
   kubectl-guard:mutating-verb      # these verbs ask natively, verb first or behind flags.
   kubectl-guard:subverb-change     # Not the credential reads: `get Secret`, `describe secret`
@@ -31,14 +34,17 @@ SHADOW=(
   env-guard:bare-env               # env has no allow rule, so the classifier sees it
 )
 
-# shadow_hit WOULD RULE REASON: when this guard's RULE is on the list, note what
-# it would have decided and return 0. Otherwise return 1, and the caller decides.
-# A decision with no RULE (a fail-closed deny) is never shadowed.
+# shadow_hit WOULD RULE REASON: when this guard's RULE is on the list and the call
+# is in auto mode, note what it would have decided and return 0. Otherwise return
+# 1, and the caller decides. A decision with no RULE (a fail-closed deny) is never
+# shadowed. A payload with no permission_mode (an older Claude Code, the bench)
+# counts as auto, as before this check.
 shadow_hit() {
   local g=${GUARD_NAME:-${0##*/}}
   g=${g%.sh}
   [[ -n "${2:-}" ]] || return 1
   case " ${SHADOW[*]} " in *" $g "*|*" $g:$2 "*) ;; *) return 1 ;; esac
+  case "$(jq_get '.permission_mode')" in auto|'') ;; *) return 1 ;; esac
   shadow_note "$1" "$2" "$3"
   return 0
 }

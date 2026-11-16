@@ -15,10 +15,11 @@ mkdir -p "$HOME/.claude" "$TMP/run"
 
 # cwd is /: under this suite's TMPDIR a relative rm -rf would be in a scratch folder.
 call() {   # call TOOL COMMAND-OR-WS-URL: a payload with every field the record copies
+  # CALL_MODE sets permission_mode (default auto); "none" leaves the field out.
   if [[ "$1" == Monitor-ws ]]; then
-    jq -nc --arg u "$2" --arg d / '{hook_event_name:"PreToolUse",tool_name:"Monitor",tool_input:{ws:{url:$u}},cwd:$d,session_id:"sess-1",tool_use_id:"toolu_shadow",permission_mode:"auto"}'
+    jq -nc --arg u "$2" --arg d / --arg m "${CALL_MODE:-auto}" '{hook_event_name:"PreToolUse",tool_name:"Monitor",tool_input:{ws:{url:$u}},cwd:$d,session_id:"sess-1",tool_use_id:"toolu_shadow",permission_mode:$m} | if $m == "none" then del(.permission_mode) else . end'
   else
-    jq -nc --arg t "$1" --arg c "$2" --arg d / '{hook_event_name:"PreToolUse",tool_name:$t,tool_input:{command:$c},cwd:$d,session_id:"sess-1",tool_use_id:"toolu_shadow",permission_mode:"auto"}'
+    jq -nc --arg t "$1" --arg c "$2" --arg d / --arg m "${CALL_MODE:-auto}" '{hook_event_name:"PreToolUse",tool_name:$t,tool_input:{command:$c},cwd:$d,session_id:"sess-1",tool_use_id:"toolu_shadow",permission_mode:$m} | if $m == "none" then del(.permission_mode) else . end'
   fi
 }
 run() {   # run HOOK PAYLOAD: sets OUT and RC; empties the shadow log first
@@ -149,6 +150,23 @@ call Bash 'kubectl delete pod web' | bash hooks/kubectl-guard.sh >/dev/null 2>&1
 : > "$CLAUDE_AUDIT_LOG"
 run kubectl-guard "$(call Bash 'kubectl delete pod web')"
 [[ ! -s "$CLAUDE_AUDIT_LOG" ]] && pass "no GUARD line: a shadowed ask was no prompt" || fail "audit line" "$(cat "$CLAUDE_AUDIT_LOG")"
+
+echo ""
+echo "=== outside auto mode the list is live: no classifier stands behind it ==="
+moded() {   # moded LABEL MODE HOOK WANT-DECISION WANT-SHADOW-LINES COMMAND
+  run "$3" "$(CALL_MODE=$2 call Bash "$6")"
+  if [[ "$(dec "$OUT")" == "$4" && "$(lines)" == "$5" ]]; then pass "$1"
+  else fail "$1" "out=$OUT log=$(cat "$CLAUDE_SHADOW_LOG")"; fi
+}
+moded "default: a shadowed kubectl delete asks"                default kubectl-guard ask 0 'kubectl delete pod web'
+moded "acceptEdits: interpreter-guard, shadowed whole, asks"   acceptEdits interpreter-guard ask 0 'python3 -c "import os; print(os.environ)"'
+moded "bypassPermissions: rm -rf outside scratch denies"       bypassPermissions rm-guard deny 0 'rm -rf build'
+moded "plan: a bare env denies"                                plan env-guard deny 0 "$E"
+moded "auto: still shadowed"                                   auto kubectl-guard allow 1 'kubectl delete pod web'
+moded "no permission_mode (older Claude Code, the bench): shadowed" none kubectl-guard allow 1 'kubectl delete pod web'
+moded "through bash-guards.sh: the preset's mode"              default bash-guards ask 0 'kubectl delete pod web'
+moded "default: the joined pass sees the mode"                 default kubectl-guard ask 0 $'echo "a\nb"; kubectl delete pod web'
+moded "default: an inline shell-out's run sees the mode"       default kubectl-guard ask 0 "$PY"
 
 echo ""
 echo "=== a skipped guard runs, and writes, nothing ==="
