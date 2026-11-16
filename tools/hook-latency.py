@@ -5,18 +5,22 @@ Claude Code writes a hook record (an attachment with durationMs) only when the h
 something or failed. A guard that allowed in silence leaves none, so n counts the runs that
 answered, and the report says how many records it read and which it could not count.
 
-A record from Claude Code 2.1.319 on names its hook only as "command hook N", read here through
-settings.json as it is now (hooknames.py), so a record from before a settings change can be misnamed.
+A record from Claude Code 2.1.319 on names its hook only as "command hook N". The guard whose words
+are in the decision reason on its own stdout names it, never its stderr (hooknames.py). One with no
+such reason is named through settings.json as it is now and marked ?: a record from before a settings
+change can be named for the hook now at its number.
 
   tools/hook-latency.py                      last 30 days, per hook per day
   tools/hook-latency.py --days 8 --total     one row per hook for the window
   tools/hook-latency.py --hook session-start
   bash doctor.sh --latency [ARGS]            the same
 
-hooks/bash-guards.sh runs the seven Bash guards as one hook, so its record is one row. Its
-timing log has each guard's seconds for every call, answered or not; the second table reads it,
-dated by joining each line's tool_use_id to the call in the transcripts. Those seconds are wall
-time with the seven running at once, so they overstate a guard's own cost.
+hooks/bash-guards.sh runs the seven Bash guards as one hook, so a numbered record on a Bash or
+Monitor call that one of them answered is on a "bash-guards.sh (<guard>)" row. A record from before
+bash-guards was installed, when each guard was its own hook, lands there too, though its time is
+that guard's alone. Its timing log has each guard's seconds for every call, answered or not; the
+second table reads it, dated by joining each line's tool_use_id to the call in the transcripts.
+Those seconds are wall time with the seven running at once, so they overstate a guard's own cost.
 """
 import argparse
 import collections
@@ -28,9 +32,10 @@ import sys
 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # hooknames.py, also when loaded by path
-from hooknames import label, numbered, read_timing, settings_hooks
+from hooknames import GuardReasons, bash_guards, label, name_from_output, numbered, read_timing, settings_hooks
 
 HOME = os.path.expanduser("~")
+BASH_GUARDS_ON = ("Bash", "Monitor")   # bash-guards' matcher in config/settings.json
 
 
 def pct(xs, p):
@@ -50,6 +55,16 @@ def parse_ts(s):
         return dt.datetime.strptime(str(s)[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=dt.timezone.utc)
     except ValueError:
         return None
+
+
+def output_hook(at, tool, reasons, bg):
+    """The hook whose guard wrote the record's own stdout reason, or None."""
+    gs = name_from_output(at, reasons)
+    if not gs:
+        return None
+    if gs <= bg and tool in BASH_GUARDS_ON:
+        return f"bash-guards.sh ({'+'.join(sorted(gs))})"
+    return f"{next(iter(gs))}.sh" if len(gs) == 1 else None
 
 
 def main():
@@ -73,7 +88,8 @@ def main():
     runs = collections.defaultdict(list)
     skipped = collections.Counter()
     counted = 0
-    any_nth = False
+    named = collections.Counter()   # numbered records: named from their output, or by the map
+    reasons, bg = GuardReasons(), bash_guards()
     timing = read_timing(a.timing_log)
     called = {}   # tool_use_id in the timing log -> when the transcript says the call was made
     first = last = None
@@ -105,7 +121,12 @@ def main():
                 if t is None or t < cut:
                     continue
                 name = str(at["hookName"])
-                hook = label(at.get("command", ""), name.split(":")[0], hooks)
+                event, _, tool = name.partition(":")
+                cmd = at.get("command", "")
+                hook, by = label(cmd, event, hooks), None
+                if numbered(cmd):
+                    found = output_hook(at, tool, reasons, bg)
+                    hook, by = (found, "output") if found else (hook, "map")
                 if a.hook and a.hook not in name and a.hook not in hook:
                     continue
                 ms = at.get("durationMs")
@@ -113,16 +134,17 @@ def main():
                     skipped[kind] += 1
                     continue
                 counted += 1
-                any_nth = any_nth or numbered(at.get("command", ""))
+                if by:
+                    named[by] += 1
                 first = min(first or t, t)
                 last = max(last or t, t)
                 day = "" if a.total else t.strftime("%Y-%m-%d")
-                runs[(day, name, hook)].append(ms)
+                runs[(day, name, hook, by == "map")].append(ms)
 
     rows = []
-    for (day, name, hook), xs in runs.items():
+    for (day, name, hook, unconfirmed), xs in runs.items():
         xs.sort()
-        rows.append(dict(day=day, event=name, hook=hook, n=len(xs), p50=pct(xs, 50), p95=pct(xs, 95), max=xs[-1]))
+        rows.append(dict(day=day, event=name, hook=hook, unconfirmed=unconfirmed, n=len(xs), p50=pct(xs, 50), p95=pct(xs, 95), max=xs[-1]))
     rows.sort(key=lambda r: (r["day"], -r["p95"]) if not a.total else (-r["p95"], r["event"]))
 
     # Each Bash guard inside bash-guards: every call, from the timing log, dated by the transcript.
@@ -155,7 +177,8 @@ def main():
     undated = sum(1 for uid in timing if uid not in called)
 
     if a.json:
-        json.dump(dict(transcripts=len(files), counted=counted, not_counted=dict(skipped), rows=rows,
+        json.dump(dict(transcripts=len(files), counted=counted, not_counted=dict(skipped),
+                       numbered=dict(from_output=named["output"], from_map=named["map"]), rows=rows,
                        timing=dict(lines=len(timing), in_window=in_window, no_call_found=undated), guards=grows), sys.stdout, indent=1)
         print()
         return 0
@@ -164,7 +187,10 @@ def main():
     nc = ", ".join(f"{v} {k}" for k, v in skipped.most_common()) or "none"
     print(f"Counted {counted} hook records. Not counted, no durationMs: {nc}.")
     print("Claude Code records a hook only when it printed output or failed, so n counts the runs that answered, not every run.")
-    if any_nth:
+    if named["output"] or named["map"]:
+        print(f"{named['output'] + named['map']} records name their hook only as \"command hook N\": {named['output']} are named by the guard "
+              f"whose words are in the decision reason on their own stdout, {named['map']} by their number" + (", marked ?." if named["map"] else "."))
+    if named["map"]:
         print(f"\"command hook N\" is named through {a.settings} as it is now.")
         try:
             changed = dt.datetime.fromtimestamp(os.path.getmtime(a.settings), dt.timezone.utc)
@@ -175,12 +201,13 @@ def main():
             print(f"It changed at {changed:%Y-%m-%d %H:%M} UTC, inside the window: a numbered record from before then "
                   "may be named for the hook now at its number.")
     if rows:
-        w = max(len(r["hook"]) for r in rows)
+        shown = lambda r: r["hook"] + (" ?" if r["unconfirmed"] else "")
+        w = max(len(shown(r)) for r in rows)
         e = max(len(r["event"]) for r in rows)
         print()
         print(("" if a.total else f"{'day':<11} ") + f"{'event':<{e}}  {'hook':<{w}}  {'n':>5}  {'p50':>7}  {'p95':>7}  {'max':>7}")
         for r in rows:
-            print(("" if a.total else f"{r['day']:<11} ") + f"{r['event']:<{e}}  {r['hook']:<{w}}  {r['n']:>5}  {fmt(r['p50']):>7}  {fmt(r['p95']):>7}  {fmt(r['max']):>7}")
+            print(("" if a.total else f"{r['day']:<11} ") + f"{r['event']:<{e}}  {shown(r):<{w}}  {r['n']:>5}  {fmt(r['p50']):>7}  {fmt(r['p95']):>7}  {fmt(r['max']):>7}")
     if timing:
         print()
         print(f"Bash guards inside bash-guards, from its timing log: {len(timing)} calls logged, {in_window} in the window, "

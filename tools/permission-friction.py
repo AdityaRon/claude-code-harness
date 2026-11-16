@@ -12,6 +12,10 @@ resolved (`permissionDecision`), so a prompt Claude Code raised itself (an ask
 rule, a protected path, a mode) and the human approved is counted too. Older
 transcripts show only the rejections.
 
+From 2.1.319 a hook record names its hook only as "command hook N". The guard
+whose words are in the reason on that hook's own stdout names it, never its
+stderr (tools/hooknames.py); with none, settings.json as it is now does.
+
   tools/permission-friction.py --days 49 --out DIR   # DIR/report.md + DIR/friction.json
   tools/permission-friction.py --days 49             # report to stdout
   tools/permission-friction.py --replay hooks/       # also re-run recorded asks/blocks through these guards
@@ -21,7 +25,7 @@ import argparse, collections, datetime as dt, glob, json, os, re, shlex, subproc
 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # hooknames.py, also when loaded by path
-from hooknames import GuardReasons, label, numbered, read_timing, settings_hooks
+from hooknames import GuardReasons, bash_guards, label, name_from_output, numbered, read_timing, settings_hooks
 
 HOME = os.path.expanduser('~')
 CLAUDE = os.path.join(HOME, '.claude')
@@ -30,17 +34,6 @@ AUDIT = [os.path.join(CLAUDE, 'logs', f) for f in ('audit.log.1', 'audit.log')]
 SETTINGS = os.path.join(CLAUDE, 'settings.json')
 HOOKS = os.path.join(CLAUDE, 'hooks')
 
-
-def bash_guards():
-    """The guards hooks/bash-guards.sh runs in one hook, from its BG_GUARDS line."""
-    for d in (os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'hooks'), HOOKS):
-        try:
-            m = re.search(r'^BG_GUARDS=\(([^)]*)\)', open(os.path.join(d, 'bash-guards.sh')).read(), re.M)
-        except OSError:
-            continue
-        if m:
-            return set(m.group(1).split())
-    return set()
 
 # Machine-local masks, one per line: `<regex>` or `<regex> => <replacement>`. Kept out of
 # the repo because the names worth masking (tenant ids, customer names) are site-specific.
@@ -271,21 +264,26 @@ def collect(cut):
     hooks = settings_hooks(SETTINGS)
     guard = lambda c: re.sub(r'\.sh$', '', label(c, 'PreToolUse', hooks))
     timing = None
-    reasons, bg, by_number = GuardReasons(hooks_dir=HOOKS), bash_guards(), collections.Counter()
+    reasons, bg = GuardReasons(hooks_dir=HOOKS), bash_guards()
+    naming = dict(by_number=collections.Counter(), from_output=collections.Counter())
 
-    def named(cmd, text):
-        """A numbered record names today's Nth hook. Where its reason holds words only another
-        guard ever wrote, that guard asked: the number predates a settings.json change."""
+    def named(at, cmd):
+        """A numbered record names today's Nth hook. Where the reason on its own stdout holds
+        words only another guard ever wrote, that guard answered: the number predates a
+        settings.json change. Its stderr is never read (hooknames.output_reason)."""
         n = guard(cmd)
         if not numbered(cmd):
             return n
-        gs = reasons.guards(text)
+        gs = name_from_output(at, reasons)
         if not gs:
-            by_number[n] += 1
+            naming['by_number'][n] += 1
             return n
         if n in gs or (n == 'bash-guards' and gs <= bg):
-            return n
-        return 'bash-guards' if len(gs) > 1 and gs <= bg else '+'.join(sorted(gs))
+            g = n
+        else:
+            g = 'bash-guards' if len(gs) > 1 and gs <= bg else '+'.join(sorted(gs))
+        naming['from_output'][g] += 1
+        return g
 
     def answers(uid, decision, reason, name):
         """bash-guards runs the seven Bash guards in one hook. Its timing log keeps each
@@ -342,11 +340,10 @@ def collect(cut):
                     if hs.get('permissionDecision') in ('ask', 'deny'):
                         why = hs.get('permissionDecisionReason', '')
                         asks[at['toolUseID']].extend(answers(at['toolUseID'], hs['permissionDecision'],
-                                                             why, named(at.get('command'), why)))
+                                                             why, named(at, at.get('command'))))
                 elif at.get('type') == 'hook_blocking_error':
-                    be = at.get('blockingError') or {}
-                    hblocks[at['toolUseID']].append(named(be.get('command'), str(be.get('blockingError') or '')))
-    return files, uses, results, asks, hblocks, kind, by_number
+                    hblocks[at['toolUseID']].append(named(at, (at.get('blockingError') or {}).get('command')))
+    return files, uses, results, asks, hblocks, kind, naming
 
 
 def approved_label(u, cmd):
@@ -583,6 +580,10 @@ def render(d):
     L.append('| guard | asks | outcomes | sessions | approved wait p50 / p90 (s) | approved wait total (h) |\n|---|---:|---|---:|---|---:|')
     for g in d['guard_asks']:
         L.append(f"| {g['key']} | {g['count']} | {g['outcomes']} | {g['sessions']} | {g['wait_p50_s']} / {g['wait_p90_s']} | {g['wait_total_h']} |")
+    out, num = sum((d.get('named_from_output') or {}).values()), sum((d.get('named_by_number_only') or {}).values())
+    if out or num:
+        L.append(f'\nOf {out + num} answers recorded as "command hook N" (Claude Code 2.1.319 on), {out} are named by the guard '
+                 f'whose own words are in the reason on the hook\'s stdout (never its stderr), and {num} by number alone.')
     if d.get('named_by_number_only'):
         L.append('\nNamed by hook number alone, because no guard\'s own words are in the reason, so a settings.json change '
                  'in the window may have moved them: ' + ', '.join(f'{g} {n}' for g, n in d['named_by_number_only'].items()) + '.')
@@ -750,13 +751,14 @@ def main():
     now = dt.datetime.now(dt.timezone.utc)
     cut = now - dt.timedelta(days=a.days)
     rules = deny_rules()
-    files, uses, results, asks, hblocks, kind, by_number = collect(cut)
+    files, uses, results, asks, hblocks, kind, naming = collect(cut)
     if a.project:
         uses = {k: u for k, u in uses.items() if a.project in u['cwd']}
     events, baseline = classify(uses, results, asks, hblocks, kind, rules, guard_messages())
     audit, audit_tests, audit_first = audit_counts(cut)
     data = summarize(events, uses, baseline, streaks_of(uses, events), audit, audit_tests, audit_first, cut, now, rules, len(files))
-    data['named_by_number_only'] = dict(by_number.most_common())
+    data['named_by_number_only'] = dict(naming['by_number'].most_common())
+    data['named_from_output'] = dict(naming['from_output'].most_common())
     md = render(data)
     if a.replay:
         data['replay'] = replay(events, os.path.abspath(a.replay))
