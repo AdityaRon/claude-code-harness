@@ -16,7 +16,7 @@ covers one rule.
 
 | Entry | Cover while it is shadowed |
 |---|---|
-| `kubectl-guard` | #241 narrowed `Bash(kubectl:*)` to read verbs and added native ask rules for mutating verbs in both orders (`kubectl delete *`, `kubectl * delete *`). Credential reads the read prefixes would allow also ask natively: `get secret` and `get secrets` (bare, named, `secret/<name>`, in a comma list, `secrets.v1`), and `config view --raw` or `--flatten`, verb first or behind flags. Anything else reaches the classifier. A 2.1.325 headless probe matched each of those forms; an upper-case kind (`get Secret`) matched none. |
+| `kubectl-guard:` its verb rules (`mutating-verb`, `subverb-change`, `exec`, `unknown-verb`, `dynamic-verb`, `input-verb`, `ambiguous-var`, `inline-*`) | #241 narrowed `Bash(kubectl:*)` to read verbs and added native ask rules for mutating verbs in both orders (`kubectl delete *`, `kubectl * delete *`). kubectl behind a function or an inline script's opaque shell-out matches no allow rule, so the classifier sees it. Its credential rules stay live: a 2.1.325 headless probe ran `get Secret`, `get SECRETS` and `describe secret` with no prompt, because each matches a read allow rule and no ask rule (native rules are case-sensitive, and none covers describe). |
 | `interpreter-guard` | Auto mode drops interpreter allow wildcards such as `Bash(python3:*)`, so the classifier sees inline code. |
 | `network-guard:` each ask but one | No allow rule covers curl, wget, scp, rsync or sftp, so the classifier sees each call. |
 | `rm-guard:rf-outside-scratch` | `rm` has no allow rule, so the classifier sees it. |
@@ -34,7 +34,11 @@ These stay live:
 - git-guard's broad `git add` deny. `Bash(git add:*)` is allowed, so nothing
   else would read the call;
 - every fail-closed deny: a payload that does not parse, no jq, a guard that dies;
-- the floor that turns an unreadable command into an ask, in rm-guard and env-guard;
+- kubectl-guard's credential reads: `get` or `describe` of a Secret in any case
+  or spelling, `--raw` secrets paths, `config view --raw` or `--flatten`, and a
+  `get` kind from a variable, a substitution or xargs;
+- the floor that turns an unreadable command into an ask, in rm-guard, env-guard
+  and kubectl-guard;
 - every guard not named above.
 
 A shadowed hit does not end its guard. The guard goes on as if the rule were
