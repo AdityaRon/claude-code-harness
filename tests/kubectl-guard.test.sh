@@ -22,7 +22,7 @@ check() {
   fi
   # A hook that crashes prints nothing, which would otherwise read as allow.
   [[ $rc -ne 0 ]] && got="exit $rc"
-  # The whole guard is in shadow mode (hooks/lib/shadow.sh): an answer it gives live is a miss.
+  # Rules on the SHADOW list (hooks/lib/shadow.sh) answer nothing; an answer a row expects live reads "live ask".
   [[ ( "$got" == ask || "$got" == deny ) && "$result" != *'"shadow":'* ]] && got="live $got"
   if [[ "$got" = "$expect" ]]; then
     echo "  OK ($expect): $label"
@@ -101,9 +101,9 @@ check "rollout restart mutates"  ask    'kubectl --context X -n vm rollout resta
 check "auth can-i is read"       allow 'kubectl auth can-i delete pods -n vm'
 check "auth reconcile mutates"   ask    'kubectl auth reconcile -f rbac.yaml'
 check "config view is read"      allow 'kubectl config view --minify'
-check "config view --raw: tokens" ask   'kubectl config view --raw'
-check "--raw with jsonpath"       ask   "kubectl config view --minify --raw -o jsonpath='{.users[0].user.token}'"
-check "--flatten embeds keys"     ask   'kubectl --context x config view --flatten'
+check "config view --raw: tokens" 'live ask'   'kubectl config view --raw'
+check "--raw with jsonpath"       'live ask'   "kubectl config view --minify --raw -o jsonpath='{.users[0].user.token}'"
+check "--flatten embeds keys"     'live ask'   'kubectl --context x config view --flatten'
 check "--raw=false is redacted"   allow 'kubectl config view --raw=false'
 check "config get-contexts read" allow 'kubectl config get-contexts -o name'
 check "config use-context sets"  ask    'kubectl config use-context example-prod'
@@ -124,19 +124,19 @@ check "xargs"              ask  'echo foo | xargs kubectl delete pod'
 
 echo ""
 echo "=== get secret materialises credentials (expect: ask) ==="
-check "get secret -o yaml"        ask   'kubectl get secret -o yaml -n vm'
-check "get secrets plural"        ask   'kubectl --context example-prod get secrets -n default'
-check "get secret jsonpath"       ask   'kubectl -n vm get secret db-creds -o jsonpath={.data}'
+check "get secret -o yaml"        'live ask'   'kubectl get secret -o yaml -n vm'
+check "get secrets plural"        'live ask'   'kubectl --context example-prod get secrets -n default'
+check "get secret jsonpath"       'live ask'   'kubectl -n vm get secret db-creds -o jsonpath={.data}'
 check "get svc is still a read"   allow 'kubectl -n vm get svc vmselect-vm'
 check "get pods is still a read"  allow 'kubectl --context X -n vm get pods'
 echo ""
 
 echo "=== describe secret prints key names and annotations (expect: ask) ==="
-check "describe secret name"      ask   'kubectl -n vm describe secret db-creds'
-check "describe secrets plural"   ask   'kubectl --context example-prod describe secrets -n default'
-check "describe secret/name"      ask   'kubectl describe secret/db-creds'
-check "describe Secret, case"     ask   'kubectl describe Secret db-creds'
-check "describe flags first"      ask   'kubectl describe -n vm secret db-creds'
+check "describe secret name"      'live ask'   'kubectl -n vm describe secret db-creds'
+check "describe secrets plural"   'live ask'   'kubectl --context example-prod describe secrets -n default'
+check "describe secret/name"      'live ask'   'kubectl describe secret/db-creds'
+check "describe Secret, case"     'live ask'   'kubectl describe Secret db-creds'
+check "describe flags first"      'live ask'   'kubectl describe -n vm secret db-creds'
 check "describe pod is a read"    allow 'kubectl -n vm describe pod vmselect-vm-0'
 check "describe CRD is a read"    allow 'kubectl describe secretproviderclass vault'
 echo ""
@@ -181,18 +181,18 @@ echo "=== secret spellings that went silent — #C (expect: ask) ==="
 # literals `secret` and `secrets`. Every spelling below dumps the same data
 # and matched neither, so it rode the Bash(kubectl:*) allow entry with no
 # guard opinion at all.
-check "resource/name form"       ask   'kubectl -n vm get secret/db-creds -o yaml'
-check "quoted resource/name"     ask   "kubectl -n vm get 'secret/db-creds' -o yaml"
-check "comma-joined kinds"       ask   'kubectl get pods,secrets -A -o yaml'
-check "comma list, secret first" ask   'kubectl get secrets,configmaps -A -o yaml'
-check "capitalised kind"         ask   'kubectl get Secret -n vm -o json'
-check "upper-case plural"        ask   'kubectl get SECRETS -A'
-check "group-qualified kind"     ask   'kubectl get secrets.v1. -o yaml'
-check "group-qualified + name"   ask   'kubectl get secret.v1.core/db-creds -o yaml'
-check "raw API path"             ask   'kubectl get --raw /api/v1/namespaces/vm/secrets'
-check "raw API path, one secret" ask   'kubectl get --raw /api/v1/namespaces/vm/secrets/db-creds'
-check "raw API path, =form"      ask   'kubectl get --raw=/api/v1/namespaces/vm/secrets'
-check "raw path in a chain"      ask   'kubectl get pods -n vm && kubectl get --raw /api/v1/secrets'
+check "resource/name form"       'live ask'   'kubectl -n vm get secret/db-creds -o yaml'
+check "quoted resource/name"     'live ask'   "kubectl -n vm get 'secret/db-creds' -o yaml"
+check "comma-joined kinds"       'live ask'   'kubectl get pods,secrets -A -o yaml'
+check "comma list, secret first" 'live ask'   'kubectl get secrets,configmaps -A -o yaml'
+check "capitalised kind"         'live ask'   'kubectl get Secret -n vm -o json'
+check "upper-case plural"        'live ask'   'kubectl get SECRETS -A'
+check "group-qualified kind"     'live ask'   'kubectl get secrets.v1. -o yaml'
+check "group-qualified + name"   'live ask'   'kubectl get secret.v1.core/db-creds -o yaml'
+check "raw API path"             'live ask'   'kubectl get --raw /api/v1/namespaces/vm/secrets'
+check "raw API path, one secret" 'live ask'   'kubectl get --raw /api/v1/namespaces/vm/secrets/db-creds'
+check "raw API path, =form"      'live ask'   'kubectl get --raw=/api/v1/namespaces/vm/secrets'
+check "raw path in a chain"      'live ask'   'kubectl get pods -n vm && kubectl get --raw /api/v1/secrets'
 
 echo ""
 echo "=== Kinds that merely start with 'secret' are still reads (expect: allow) ==="
@@ -210,10 +210,10 @@ echo ""
 echo "=== The kind after a flag is still the kind (expect: ask) ==="
 # Only the first bare token after `get` was compared, so a format value read
 # as the resource and the real kind behind it went unchecked.
-check "-o value before kind"     ask   'kubectl get -o yaml secret'
-check "-o value, kind and name"  ask   'kubectl get -o yaml secret db'
-check "--output value first"     ask   'kubectl get --output json secrets -n vm'
-check "-l value first"           ask   'kubectl get -l app=db secret'
+check "-o value before kind"     'live ask'   'kubectl get -o yaml secret'
+check "-o value, kind and name"  'live ask'   'kubectl get -o yaml secret db'
+check "--output value first"     'live ask'   'kubectl get --output json secrets -n vm'
+check "-l value first"           'live ask'   'kubectl get -l app=db secret'
 
 echo ""
 echo "=== Flag values that only look like a kind are not one (expect: allow) ==="
@@ -373,17 +373,17 @@ check "git log --grep for kubectl text"      allow $'python3 - <<\'EOF\'\nimport
 check "escaped quotes in python -c"          allow $'python3 -c "import subprocess; subprocess.run([\\"grep\\", \\"kubectl delete\\", \\"notes.md\\"])"'
 check "lists joined by +, a read"            allow $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run([\'kubectl\',\'get\',\'pods\'] + [\'delete\',\'pod\',\'a\'])\nEOF'
 check "lists joined by +, a delete"          ask   $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run([\'kubectl\'] + [\'delete\',\'pod\',\'a\'])\nEOF'
-check "a string + a name for the kind"       ask   $'python3 - <<\'EOF\'\nimport os\nos.system("kubectl get " + kind)\nEOF'
+check "a string + a name for the kind"       'live ask'   $'python3 - <<\'EOF\'\nimport os\nos.system("kubectl get " + kind)\nEOF'
 check "a string + a name for the pod, a read" allow $'python3 - <<\'EOF\'\nimport os\nos.system("kubectl get pod " + name + " -o json")\nEOF'
 check "a string + a name for the verb"       ask   $'python3 - <<\'EOF\'\nimport os\nos.system("kubectl " + verb + " pod a")\nEOF'
-check "an f-string field for the kind"       ask   $'python3 - <<\'EOF\'\nimport os\nos.system(f"kubectl get {kind}")\nEOF'
+check "an f-string field for the kind"       'live ask'   $'python3 - <<\'EOF\'\nimport os\nos.system(f"kubectl get {kind}")\nEOF'
 check "format() builds the command"          ask   $'python3 - <<\'EOF\'\nimport os\nos.system("kubectl get {}".format(kind))\nEOF'
 check "join of a literal list, a read"       allow $'python3 - <<\'EOF\'\nimport os\nos.system(" ".join([\'kubectl\',\'get\',\'pods\']))\nEOF'
 check "a name supplies the command word"     ask   $'python3 - <<\'EOF\'\nimport subprocess\nbase = ["kubectl"]\nsubprocess.run(base + [\'delete\',\'pod\',\'a\'])\nEOF'
 check "exec of code, with globals"           ask   $'python3 -c "exec(\\"import os; os.system(\'kubectl delete pod a\')\\", {})"'
 check "a variable pod name, a read"          allow $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run([\'kubectl\',\'get\',\'pod\',name,\'-o\',\'json\'])\nEOF'
 check "a variable verb"                      ask   $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run([\'kubectl\',verb,\'pod\',\'a\'])\nEOF'
-check "a variable kind for get"              ask   $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run([\'kubectl\',\'get\',kind])\nEOF'
+check "a variable kind for get"              'live ask'   $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run([\'kubectl\',\'get\',kind])\nEOF'
 check "bash -c in a list"                    ask   $'python3 -c "import subprocess; subprocess.run([\'bash\',\'-c\',\'kubectl delete pod a\'])"'
 check "cd, then delete, in os.system"        ask   $'python3 - <<\'EOF\'\nimport os\nos.system(\'cd /tmp && kubectl delete pod a\')\nEOF'
 check "execSync with options, a read"        allow $'node -e "require(\'child_process\').execSync(\'kubectl get pods\', {stdio: \'inherit\'})"'
@@ -439,9 +439,9 @@ check "variable naming a variable"        ask   'a=kubectl; b="$a delete"; $b po
 check "\${KUBECTL:-kubectl} delete"       ask   '${KUBECTL:-kubectl} delete pod x'
 check "for k in kubectl"                  ask   'for k in kubectl; do "$k" delete pod x; done'
 check "two values, one runs"              ask   'k=kubectl; k="kubectl --context prod"; $k delete pod x'
-check "kind in a variable"                ask   'kind=secrets; kubectl get $kind -o yaml'
-check "kinds in a loop"                   ask   'for r in pods secrets; do kubectl get $r; done'
-check "kind from outside the command"     ask   'kubectl get "$KIND"'
+check "kind in a variable"                'live ask'   'kind=secrets; kubectl get $kind -o yaml'
+check "kinds in a loop"                   'live ask'   'for r in pods secrets; do kubectl get $r; done'
+check "kind from outside the command"     'live ask'   'kubectl get "$KIND"'
 check "verb from a substitution"          ask   'kubectl $(cat verb.txt) pod x'
 check "verb after a quoted -n \$(…)"      ask   'kubectl -n "$(cat ns)" delete pod x'
 check "verb after --context=\"\$(…)\""    ask   'kubectl --context="$(cat ctx)" delete pod x'
@@ -449,12 +449,12 @@ check "delete inside a flag value"        ask   'kubectl --context "$(kubectl de
 check "loop value, then delete"           ask   'for ns in a b; do kubectl -n $ns delete pod x; done'
 check "xargs supplies the verb"           ask   'echo delete pod x | xargs kubectl'
 check "xargs -n1, flags only"             ask   'cat names | xargs -n1 kubectl --context prod'
-check "xargs supplies get's kind"         ask   'echo secrets | xargs kubectl get'
-check "xargs -I{} as get's kind"          ask   'echo secrets | xargs -I{} kubectl get {}'
-check "xargs -I@ as get's kind"           ask   'echo secrets | xargs -I@ kubectl get @'
-check "xargs -I @, separate"              ask   'echo secrets | xargs -I @ kubectl get @'
+check "xargs supplies get's kind"         'live ask'   'echo secrets | xargs kubectl get'
+check "xargs -I{} as get's kind"          'live ask'   'echo secrets | xargs -I{} kubectl get {}'
+check "xargs -I@ as get's kind"           'live ask'   'echo secrets | xargs -I@ kubectl get @'
+check "xargs -I @, separate"              'live ask'   'echo secrets | xargs -I @ kubectl get @'
 check "parallel supplies the verb"        ask   'echo delete | parallel kubectl'
-check "quoted \$(kubectl get secrets)"    ask   'echo "$(kubectl get secrets)"'
+check "quoted \$(kubectl get secrets)"    'live ask'   'echo "$(kubectl get secrets)"'
 check "k=kubectl; \"\$k\" get"            allow 'k=kubectl; "$k" get pods'
 check "variable only echoed"              allow 'K=kubectl; echo "$K delete"'
 check "\$(which kubectl) get"             allow '$(which kubectl) get pods'
@@ -480,14 +480,14 @@ echo "=== Review of the above: flag values, get's flags, arrays, loops, xargs so
 # An unquoted `)` reaches the scan as `;` (lib.sh's separate_groups).
 check "unquoted -n \$(…), then delete"    ask   'kubectl -n $(cat ns) delete pod x'
 check "unquoted --context=\$(…), delete"  ask   'kubectl --context=$(cat ctx) delete pod x'
-check "unquoted -n \$(…), get secrets"    ask   'kubectl -n $(cat ns) get secrets'
+check "unquoted -n \$(…), get secrets"    'live ask'   'kubectl -n $(cat ns) get secrets'
 check "unquoted -n \$(…), a read"         allow 'kubectl -n $(cat ns) get pods'
-check "xargs get, -o yaml before kind"   ask   'cat names | xargs -n1 kubectl get -o yaml'
-check "get -o yaml \$KIND"                ask   'kubectl get -o yaml $KIND'
+check "xargs get, -o yaml before kind"   'live ask'   'cat names | xargs -n1 kubectl get -o yaml'
+check "get -o yaml \$KIND"                'live ask'   'kubectl get -o yaml $KIND'
 check "assignment then ; with no space"  ask   'X=1;kubectl delete pod x'
 check "k=kubectl;\$k, no space"           ask   'k=kubectl;$k delete pod x'
 check "array run as a command"           ask   'cmd=(kubectl delete pod x); "${cmd[@]}"'
-check "array of kinds"                   ask   'kinds=(pods secrets); kubectl get "${kinds[@]}"'
+check "array of kinds"                   'live ask'   'kinds=(pods secrets); kubectl get "${kinds[@]}"'
 check "K=\${K:-kubectl}, then delete"     ask   'KUBECTL=${KUBECTL:-kubectl}; $KUBECTL delete pod x'
 check "K=\${K:-kubectl}, a read"          allow 'KUBECTL=${KUBECTL:-kubectl}; $KUBECTL get pods'
 check "loop over a piped \$(…) list"      allow 'for ns in $(kubectl get ns -o name | cut -d/ -f2); do kubectl get pods -n $ns; done'
@@ -496,18 +496,18 @@ check "| xargs kubectl in a message"     allow 'git commit -m "fix: pipe pod nam
 check "xargs fed by get pods -o name"    allow 'kubectl get pods -o name | xargs -I{} kubectl get {} -o yaml'
 check "xargs, pod/{}"                    allow 'kubectl get pods -o name | xargs -I{} kubectl get pod/{} -o wide'
 check "loop over get pods -o name"       allow 'for p in $(kubectl get pods -o name); do kubectl get $p -o yaml; done'
-check "xargs fed by get secrets -o name" ask   'kubectl get secrets -o name | xargs -I{} kubectl get {} -o yaml'
-check "loop over get secrets -o name"    ask   'for s in $(kubectl get secrets -o name); do kubectl get $s -o yaml; done'
-check "loop over api-resources"          ask   'for r in $(kubectl api-resources -o name); do kubectl get $r -A; done'
-check "while read, kind unknown"         ask   'kubectl get pods -o name | while read p; do kubectl get $p -o yaml; done'
+check "xargs fed by get secrets -o name" 'live ask'   'kubectl get secrets -o name | xargs -I{} kubectl get {} -o yaml'
+check "loop over get secrets -o name"    'live ask'   'for s in $(kubectl get secrets -o name); do kubectl get $s -o yaml; done'
+check "loop over api-resources"          'live ask'   'for r in $(kubectl api-resources -o name); do kubectl get $r -A; done'
+check "while read, kind unknown"         'live ask'   'kubectl get pods -o name | while read p; do kubectl get $p -o yaml; done'
 # Second review.
-check "K=\${K:-\$(which kubectl)}, delete" ask  'KUBECTL=${KUBECTL:-$(which kubectl)}; $KUBECTL delete pod x'
+check "K=\${K:-\$(which kubectl)}, delete" 'live ask'  'KUBECTL=${KUBECTL:-$(which kubectl)}; $KUBECTL delete pod x'
 check "array grown with +="              ask   'cmd=(kubectl); cmd+=(delete pod x); "${cmd[@]}"'
 check "array grown with +=, a read"      allow 'cmd=(kubectl); cmd+=(get pods); "${cmd[@]}"'
 check "piped list, loop var before verb" allow 'for ns in $(kubectl get ns -o name | cut -d/ -f2); do kubectl -n $ns get pods; done'
 check "grep between -o name and xargs"   allow 'kubectl get pods -o name | grep web | xargs -I{} kubectl get {} -o yaml'
 check "grep inside the loop's list"      allow 'for p in $(kubectl get pods -o name | grep web); do kubectl get $p -o yaml; done'
-check "sed rewrites the names"           ask   'kubectl get pods -o name | sed s/pod/secret/ | xargs -I{} kubectl get {} -o yaml'
+check "sed rewrites the names"           'live ask'   'kubectl get pods -o name | sed s/pod/secret/ | xargs -I{} kubectl get {} -o yaml'
 
 echo ""
 echo "=== A & glued to a word is a separator; 2>&1, &> and |& are not ==="
