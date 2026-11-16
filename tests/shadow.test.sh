@@ -32,7 +32,7 @@ redacted() { bash -c 'source hooks/lib.sh; printf "%s\n" "$1" | redact_secrets' 
 
 echo "=== the shipped list ==="
 # Pinned here, so a line added or dropped is a change this suite sees (step 9 of #237).
-WANT="kubectl-guard:mutating-verb kubectl-guard:subverb-change kubectl-guard:exec kubectl-guard:unknown-verb kubectl-guard:dynamic-verb kubectl-guard:input-verb kubectl-guard:ambiguous-var kubectl-guard:inline-unreadable kubectl-guard:inline-opaque kubectl-guard:inline-unchecked interpreter-guard network-guard:monitor-ws-host network-guard:remote-copy network-guard:http-server network-guard:curl-reroute network-guard:proxy-unlisted network-guard:sends-body network-guard:no-scheme network-guard:local-admin-api network-guard:host-unlisted network-guard:unreadable rm-guard:rf-outside-scratch env-guard:bare-env"
+WANT="kubectl-guard:mutating-verb kubectl-guard:subverb-change kubectl-guard:exec kubectl-guard:unknown-verb kubectl-guard:input-verb kubectl-guard:ambiguous-var kubectl-guard:inline-unreadable kubectl-guard:inline-opaque kubectl-guard:inline-unchecked interpreter-guard network-guard:monitor-ws-host network-guard:remote-copy network-guard:http-server network-guard:curl-reroute network-guard:proxy-unlisted network-guard:sends-body network-guard:no-scheme network-guard:local-admin-api network-guard:host-unlisted network-guard:unreadable rm-guard:rf-outside-scratch env-guard:bare-env"
 GOT=$(bash -c 'source hooks/lib.sh; printf "%s" "${SHADOW[*]}"')
 [[ "$GOT" == "$WANT" ]] && pass "the list is the one #237 step 4 names" || fail "the list" "$GOT"
 
@@ -58,7 +58,6 @@ kubectl-guard|mutating-verb|ask|Bash|kubectl delete pod web
 kubectl-guard|subverb-change|ask|Bash|kubectl config use-context prod
 kubectl-guard|exec|ask|Bash|kubectl exec -it web -- sh
 kubectl-guard|unknown-verb|ask|Bash|kubectl frobnicate pod web
-kubectl-guard|dynamic-verb|ask|Bash|k(){ kubectl "\$@"; }; k get pods
 kubectl-guard|ambiguous-var|ask|Bash|K=kubectl; [ -n "\$X" ] && K=echo; \$K get pods
 interpreter-guard|sensitive-token|ask|Bash|python3 -c "import os; print(os.environ)"
 interpreter-guard|long-inline|ask|Bash|python3 -c "print('$(printf 'x%.0s' $(seq 1 220))')"
@@ -103,6 +102,7 @@ live "describe secret, under the describe allow"       kubectl-guard ask 0 'kube
 live "a kind from xargs"                               kubectl-guard ask 0 'echo secret | xargs kubectl get'
 live "a shadowed delete, then get secret"              kubectl-guard ask 1 'kubectl delete pod a; kubectl get secret b'
 live "an unreadable kubectl keeps kubectl-guard's floor" kubectl-guard ask 0 "$UNREAD ; kubectl get pods"
+live "kubectl behind a function"                       kubectl-guard ask 0 'k(){ kubectl "$@"; }; k get secret db -o yaml'
 run bash-guards "$(call Bash "python3 -c 'import os; os.system(\"rm -rf ~/\")'")"
 [[ "$(dec "$OUT")" == deny ]] && pass "an inline script's catastrophic rm still denies" || fail "inline catastrophic rm" "$OUT"
 run bash-guards '{"tool_input":{"command":"ls"}} oops'
