@@ -21,7 +21,7 @@ import argparse, collections, datetime as dt, glob, json, os, re, shlex, subproc
 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # hooknames.py, also when loaded by path
-from hooknames import label, read_timing, settings_hooks
+from hooknames import GuardReasons, label, numbered, read_timing, settings_hooks
 
 HOME = os.path.expanduser('~')
 CLAUDE = os.path.join(HOME, '.claude')
@@ -29,6 +29,18 @@ PROJECTS = os.path.join(CLAUDE, 'projects')
 AUDIT = [os.path.join(CLAUDE, 'logs', f) for f in ('audit.log.1', 'audit.log')]
 SETTINGS = os.path.join(CLAUDE, 'settings.json')
 HOOKS = os.path.join(CLAUDE, 'hooks')
+
+
+def bash_guards():
+    """The guards hooks/bash-guards.sh runs in one hook, from its BG_GUARDS line."""
+    for d in (os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'hooks'), HOOKS):
+        try:
+            m = re.search(r'^BG_GUARDS=\(([^)]*)\)', open(os.path.join(d, 'bash-guards.sh')).read(), re.M)
+        except OSError:
+            continue
+        if m:
+            return set(m.group(1).split())
+    return set()
 
 # Machine-local masks, one per line: `<regex>` or `<regex> => <replacement>`. Kept out of
 # the repo because the names worth masking (tenant ids, customer names) are site-specific.
@@ -259,6 +271,21 @@ def collect(cut):
     hooks = settings_hooks(SETTINGS)
     guard = lambda c: re.sub(r'\.sh$', '', label(c, 'PreToolUse', hooks))
     timing = None
+    reasons, bg, by_number = GuardReasons(hooks_dir=HOOKS), bash_guards(), collections.Counter()
+
+    def named(cmd, text):
+        """A numbered record names today's Nth hook. Where its reason holds words only another
+        guard ever wrote, that guard asked: the number predates a settings.json change."""
+        n = guard(cmd)
+        if not numbered(cmd):
+            return n
+        gs = reasons.guards(text)
+        if not gs:
+            by_number[n] += 1
+            return n
+        if n in gs or (n == 'bash-guards' and gs <= bg):
+            return n
+        return 'bash-guards' if len(gs) > 1 and gs <= bg else '+'.join(sorted(gs))
 
     def answers(uid, decision, reason, name):
         """bash-guards runs the seven Bash guards in one hook. Its timing log keeps each
@@ -313,12 +340,13 @@ def collect(cut):
                     except Exception:
                         continue
                     if hs.get('permissionDecision') in ('ask', 'deny'):
+                        why = hs.get('permissionDecisionReason', '')
                         asks[at['toolUseID']].extend(answers(at['toolUseID'], hs['permissionDecision'],
-                                                             hs.get('permissionDecisionReason', ''), guard(at.get('command'))))
+                                                             why, named(at.get('command'), why)))
                 elif at.get('type') == 'hook_blocking_error':
                     be = at.get('blockingError') or {}
-                    hblocks[at['toolUseID']].append(guard(be.get('command')))
-    return files, uses, results, asks, hblocks, kind
+                    hblocks[at['toolUseID']].append(named(be.get('command'), str(be.get('blockingError') or '')))
+    return files, uses, results, asks, hblocks, kind, by_number
 
 
 def approved_label(u, cmd):
@@ -555,6 +583,9 @@ def render(d):
     L.append('| guard | asks | outcomes | sessions | approved wait p50 / p90 (s) | approved wait total (h) |\n|---|---:|---|---:|---|---:|')
     for g in d['guard_asks']:
         L.append(f"| {g['key']} | {g['count']} | {g['outcomes']} | {g['sessions']} | {g['wait_p50_s']} / {g['wait_p90_s']} | {g['wait_total_h']} |")
+    if d.get('named_by_number_only'):
+        L.append('\nNamed by hook number alone, because no guard\'s own words are in the reason, so a settings.json change '
+                 'in the window may have moved them: ' + ', '.join(f'{g} {n}' for g, n in d['named_by_number_only'].items()) + '.')
     L.append('\nWait is tool_use to tool_result, so it includes run time. For scale, Bash calls that met no permission decision:\n')
     L.append('| session kind | approved asks | ask wait p50 / p90 (s) | ask wait total (h) | no-prompt Bash p50 / p90 (s) |\n|---|---:|---|---:|---|')
     for k, v in d['waits'].items():
@@ -719,12 +750,13 @@ def main():
     now = dt.datetime.now(dt.timezone.utc)
     cut = now - dt.timedelta(days=a.days)
     rules = deny_rules()
-    files, uses, results, asks, hblocks, kind = collect(cut)
+    files, uses, results, asks, hblocks, kind, by_number = collect(cut)
     if a.project:
         uses = {k: u for k, u in uses.items() if a.project in u['cwd']}
     events, baseline = classify(uses, results, asks, hblocks, kind, rules, guard_messages())
     audit, audit_tests, audit_first = audit_counts(cut)
     data = summarize(events, uses, baseline, streaks_of(uses, events), audit, audit_tests, audit_first, cut, now, rules, len(files))
+    data['named_by_number_only'] = dict(by_number.most_common())
     md = render(data)
     if a.replay:
         data['replay'] = replay(events, os.path.abspath(a.replay))

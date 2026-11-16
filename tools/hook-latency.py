@@ -166,6 +166,14 @@ def main():
     print("Claude Code records a hook only when it printed output or failed, so n counts the runs that answered, not every run.")
     if any_nth:
         print(f"\"command hook N\" is named through {a.settings} as it is now.")
+        try:
+            changed = dt.datetime.fromtimestamp(os.path.getmtime(a.settings), dt.timezone.utc)
+        except OSError:
+            changed = None
+        # An install rewrites it, and a hook added or dropped shifts every number after it.
+        if changed and changed > cut:
+            print(f"It changed at {changed:%Y-%m-%d %H:%M} UTC, inside the window: a numbered record from before then "
+                  "may be named for the hook now at its number.")
     if rows:
         w = max(len(r["hook"]) for r in rows)
         e = max(len(r["event"]) for r in rows)

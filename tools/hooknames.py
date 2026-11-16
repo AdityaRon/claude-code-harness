@@ -10,9 +10,11 @@ tcc-check is 4 and memory-lint 2.
 
   tools/hooknames.py PreToolUse 4 [--settings PATH]   the hook a record calls "command hook 4"
 """
+import glob
 import json
 import os
 import re
+import subprocess
 
 NTH = re.compile(r"command hook (\d+)")
 
@@ -92,6 +94,72 @@ def read_timing(path=None):
                     per.append((g, s, status, decision))
                 out[cols[0]] = per
     return out
+
+
+# ---- the guard a reason names -------------------------------------------------
+# A "command hook N" record names today's Nth hook, so after a settings.json change
+# it can name the wrong one: an ask from kubectl-guard read as mod-gate's. A guard's
+# own message does not move with the layout. GuardReasons reads every message each
+# hooks/*.sh has held in the clone's history (a removed rule's too), keeps the
+# literal runs only one guard ever wrote, and names the guards a reason holds.
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FRAGMENT_MIN = 20   # shorter runs ("Mod '") are shared or say nothing
+_PIECES = re.compile(r"\$\{[^}]*\}|\$\(|\$\w+|\\.")
+
+
+def _hook_texts(repo, hooks_dir):
+    """[(guard, file text)] for every version of hooks/*.sh in repo's history, else the files in hooks_dir."""
+    out = []
+    try:
+        objs = subprocess.run(["git", "-C", repo, "rev-list", "--objects", "--all", "--", "hooks"],
+                              capture_output=True, text=True, timeout=120, check=True).stdout.splitlines()
+        # Not lib.sh: every guard sourced it, so its words are no one guard's.
+        blobs = [ln.split(" ", 1) for ln in objs if re.fullmatch(r"[0-9a-f]+ hooks/[^/]+\.sh", ln) and not ln.endswith(" hooks/lib.sh")]
+        raw = subprocess.run(["git", "-C", repo, "cat-file", "--batch"], input="".join(b + "\n" for b, _ in blobs).encode(),
+                             capture_output=True, timeout=120, check=True).stdout
+        pos = 0
+        for _, path in blobs:
+            end = raw.index(b"\n", pos)
+            size = int(raw[pos:end].split()[2])
+            out.append((os.path.basename(path)[:-3], raw[end + 1:end + 1 + size].decode("utf-8", "replace")))
+            pos = end + 1 + size + 1
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        out = []
+    if not out:
+        for f in (f for f in glob.glob(os.path.join(hooks_dir, "*.sh")) if not f.endswith("/lib.sh")):
+            try:
+                with open(f, errors="replace") as fh:
+                    out.append((os.path.basename(f)[:-3], fh.read()))
+            except OSError:
+                pass
+    return out
+
+
+class GuardReasons:
+    def __init__(self, repo=REPO, hooks_dir=os.path.expanduser("~/.claude/hooks")):
+        self.repo, self.hooks_dir, self.table, self.names = repo, hooks_dir, None, set()
+
+    def _build(self):
+        owners = {}
+        for g, text in _hook_texts(self.repo, self.hooks_dir):
+            self.names.add(g)
+            # Quotes pair within a line: a stray one elsewhere would shift every pair after it.
+            for line in text.split("\n"):
+                for s in re.findall(r'"((?:[^"\\]|\\.)*)"', line):
+                    for piece in _PIECES.split(s):
+                        piece = piece.strip()
+                        if len(piece) >= FRAGMENT_MIN and " " in piece:
+                            owners.setdefault(piece, set()).add(g)
+        self.table = [(p, next(iter(gs))) for p, gs in owners.items() if len(gs) == 1]
+
+    def guards(self, reason):
+        """The guards whose own words are in reason: a leading "<guard>: " names one outright."""
+        if self.table is None:
+            self._build()
+        m = re.match(r"([a-z][a-z-]*):", reason or "")
+        if m and m.group(1) in self.names:
+            return {m.group(1)}
+        return {g for p, g in self.table if p in (reason or "")}
 
 
 if __name__ == "__main__":
