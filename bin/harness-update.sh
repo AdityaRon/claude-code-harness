@@ -2,11 +2,11 @@
 # Moves this machine to the newest harness release: fetches tags into its own
 # clone, checks the tag out detached, runs doctor.sh, installs on green.
 #   harness-update.sh [--repo DIR] [--check] [--full] [--with-cli | --no-cli]
-# --full gates the install on every doctor suite, not the smoke set.
 #   harness-update.sh --schedule | --unschedule   01:17, 07:17, 13:17, 19:17 local
 #   harness-update.sh --newer A B                 exit 0 when tag A is newer
 # --with-cli first upgrades a Homebrew-cask Claude Code, on later runs too, until
 # --no-cli. Uses --repo DIR, else $HARNESS_UPDATE_CLONE or ~/.claude/harness-src.
+# --full gates the install on every doctor suite, not the smoke set.
 # Refuses local changes or commits; never resets or replaces work the tag lacks.
 set -uo pipefail
 # launchd and cron start with a PATH that has no Homebrew; appended, so a
