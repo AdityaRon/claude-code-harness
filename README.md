@@ -222,7 +222,8 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts
   hook-latency.py        ← each hook's wall time per day, from local transcripts (doctor.sh --latency)
-  hooknames.py           ← names the hook a transcript record numbers, for the two above
+  hooknames.py           ← names the hook a transcript record numbers, for the two above: by the guard
+                           whose words are in the reason on its own stdout, else by settings.json
   shadow-report.py       ← what each shadowed guard or rule would have decided, and what happened instead
   session-census.py      ← claude processes, their memory, and idle background jobs (doctor.sh --census)
   pickup-report.sh       ← after an install, how running sessions pick up each change; install.sh runs it with

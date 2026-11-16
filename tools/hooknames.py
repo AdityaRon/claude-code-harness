@@ -8,6 +8,10 @@ matcher in order, a repeated command counted once. Records whose output names th
 config-guard is 7 on Edit as on Bash, and with audit.sh three times first on PostToolUse,
 tcc-check is 4 and memory-lint 2.
 
+That is settings.json as it is now, so a record from before a change can be named for the
+hook now at its number. name_from_output names a numbered record by the guard whose words
+are in the decision reason on its own stdout instead, and never reads its stderr.
+
   tools/hooknames.py PreToolUse 4 [--settings PATH]   the hook a record calls "command hook 4"
 """
 import glob
@@ -160,6 +164,55 @@ class GuardReasons:
         if m and m.group(1) in self.names:
             return {m.group(1)}
         return {g for p, g in self.table if p in (reason or "")}
+
+
+# ---- the guard a record's own output names ------------------------------------
+# Only the hook's stdout. Its stderr carries whatever ran under it: bash's
+# "shell-init: ... Operation not permitted" holds words tcc-check.sh quotes, so
+# matching stderr named 216 records tcc-check that another hook wrote (records
+# that carry their command, 30 days on the maintainer's Mac, 2026-11-16).
+def output_reason(at):
+    """The decision reason in a hook record's own stdout, else "".
+
+    hook_success and hook_non_blocking_error keep stdout apart: the reason is its JSON
+    hookSpecificOutput.permissionDecisionReason. hook_blocking_error keeps one text. An exit
+    2's stderr comes labelled "[<command>]: " and is not read: 85 of the 87 on the maintainer's
+    Mac are labelled, and tcc-check, memory-lint and comment-budget, the hooks here that exit 2,
+    put their message on stderr. Unlabelled, it is taken as the reason a {"decision": "block"}
+    put on stdout: inferred from the other two, not measured.
+    """
+    if at.get("type") == "hook_blocking_error":
+        be = at.get("blockingError") or {}
+        text, cmd = be.get("blockingError"), be.get("command")
+        if not isinstance(text, str) or not cmd or text.startswith(f"[{cmd}]: "):
+            return ""
+        return text
+    try:
+        out = json.loads(at.get("stdout") or "")
+    except (TypeError, ValueError):
+        return ""
+    hs = out.get("hookSpecificOutput") if isinstance(out, dict) else None
+    why = hs.get("permissionDecisionReason") if isinstance(hs, dict) else None
+    return why if isinstance(why, str) else ""
+
+
+def name_from_output(at, reasons):
+    """The guards a GuardReasons finds in the record's own stdout reason, a set; None when it names none."""
+    why = output_reason(at)
+    return (reasons.guards(why) or None) if why.strip() else None
+
+
+def bash_guards(dirs=(os.path.join(REPO, "hooks"), os.path.expanduser("~/.claude/hooks"))):
+    """The guards hooks/bash-guards.sh runs in one hook, from its BG_GUARDS line."""
+    for d in dirs:
+        try:
+            with open(os.path.join(d, "bash-guards.sh"), errors="replace") as f:
+                m = re.search(r"^BG_GUARDS=\(([^)]*)\)", f.read(), re.M)
+        except OSError:
+            continue
+        if m:
+            return set(m.group(1).split())
+    return set()
 
 
 if __name__ == "__main__":
