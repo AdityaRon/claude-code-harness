@@ -148,13 +148,13 @@ orec PreToolUse:Bash "command hook 3" 430 "" "$SHELLINIT"
 orec PreToolUse:Bash "command hook 1" 440 "$SHELLINIT" ""    # the same words on stdout: tcc-check's, as a control
 L2=$(python3 "$REPO/tools/hook-latency.py" --projects "$P2" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --total --json)
 orow() { jq -c --arg e "$1" --arg h "$2" '[.rows[] | select(.event == $e and .hook == $h)] | map([.n, .max, .unconfirmed])' <<<"$L2"; }
-[ "$(orow PreToolUse:Bash 'bash-guards.sh (network-guard)')" = '[[1,410,false]]' ] && [ "$(orow PreToolUse:Bash config-guard.sh)" = '[[1,430,true]]' ] \
+[ "$(orow PreToolUse:Bash 'bash-guards.sh (network-guard)')" = '[[1,410,false]]' ] \
   && pass "network-guard's reason on a Bash call is the bash-guards (network-guard) row, though settings.json says config-guard" \
   || fail "named from output" "$(jq -c '[.rows[] | {event, hook, max, unconfirmed}]' <<<"$L2")"
 [ "$(orow PreToolUse:WebFetch network-guard.sh)" = '[[1,420,false]]' ] \
   && pass "on a tool bash-guards does not run on, it is network-guard's own row" || fail "WebFetch" "$(jq -c '[.rows[] | {event, hook}]' <<<"$L2")"
-[ "$(jq -c '[.rows[] | select(.hook | test("tcc-check")) | .max]' <<<"$L2")" = '[440]' ] \
-  && pass "a shell-init line on stderr is not named tcc-check; on stdout it is" || fail "stderr" "$(jq -c '[.rows[] | {hook, max}]' <<<"$L2")"
+[ "$(jq -c '[.rows[] | select(.hook | test("tcc-check")) | [.n, .max]]' <<<"$L2")" = '[[1,440]]' ] && [ "$(orow PreToolUse:Bash config-guard.sh)" = '[[1,430,true]]' ] \
+  && pass "a shell-init line on stderr is not named tcc-check, so the map names it; on stdout it is tcc-check's" || fail "stderr" "$(jq -c '[.rows[] | {hook, n, max}]' <<<"$L2")"
 [ "$(jq -c '.numbered' <<<"$L2")" = '{"from_output":3,"from_map":1}' ] \
   && pass "3 named from output, 1 by the map" || fail "named counts" "$(jq -c '.numbered' <<<"$L2")"
 rm "$T2"; orec PreToolUse:Bash "command hook 3" 410 "$NET" ""
