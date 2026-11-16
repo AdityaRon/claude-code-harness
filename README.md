@@ -8,8 +8,9 @@ PreToolUse guards deny what is hard to undo or leaks secrets (force pushes,
 asks remain where shared state changes (cluster writes and secret reads, through
 native ask rules; writes to this harness's own config). Everything else is left
 to Claude Code's auto mode and its classifier. The guards that auto mode may now
-cover run in shadow mode until 2026-11-29: they log what they would have decided
-and decide nothing ([docs/shadow-mode.md](docs/shadow-mode.md), #237). Every deny
+cover run in shadow mode until 2026-11-29: in auto mode they log what they would
+have decided and decide nothing; in any other mode they decide as before
+([docs/shadow-mode.md](docs/shadow-mode.md), #237). Every deny
 and ask is a line in `~/.claude/logs/audit.log`.
 
 What the guards cost: `python3 tools/hook-bench.py --base v1.0.0 --head HEAD`, run
