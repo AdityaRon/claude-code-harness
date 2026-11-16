@@ -181,7 +181,7 @@ def main():
     audit_path = os.path.expanduser(os.environ.get('CLAUDE_AUDIT_LOG') or '~/.claude/logs/audit.log')
     rows, nbad = shadow_lines(shadow_path, cut)
     denied = denials(audit_path, cut)
-    files, _, results, asks, hblocks, _ = friction().collect(cut)
+    files, _, results, asks, hblocks, _, _ = friction().collect(cut)
     timing = read_timing()
     for r in rows:
         r['out'] = outcome(r, denied, timing, results, asks, hblocks)

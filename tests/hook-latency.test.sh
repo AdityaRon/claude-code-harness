@@ -81,6 +81,13 @@ echo "=== \"command hook N\" is named through settings.json ==="
 [ "$(row PreToolUse:Bash 'hook 9' "$TMP/day.json")" = '[[1,62,62,62]]' ] \
   && pass "a number past the settings stays a number" || fail "out of range" "$(jq -c '[.rows[].hook]' "$TMP/day.json")"
 
+touch "$TMP/settings.json"
+lat --days 7 > "$TMP/now.txt"
+touch -t 200001010000 "$TMP/settings.json"
+lat --days 7 > "$TMP/old.txt"
+grep -q 'inside the window: a numbered record from before then may be named for the hook now at its number' "$TMP/now.txt" \
+  && ! grep -q 'inside the window' "$TMP/old.txt" \
+  && pass "a settings.json changed inside the window is named as a reason a number may mislead" || fail "changed caveat" "$(grep -c window "$TMP/now.txt") $(grep -c window "$TMP/old.txt")"
 [ "$(python3 "$REPO/tools/hooknames.py" PreToolUse 2 --settings "$TMP/settings.json")" = git-guard.sh ] \
   && pass "tools/hooknames.py PreToolUse 2 names the hook from the command line" || fail "hooknames CLI" ""
 

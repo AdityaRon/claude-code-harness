@@ -130,6 +130,30 @@ OUT=$(HOME="$TMP/home" python3 "$PF" --days 1 --out "$TMP/o" >/dev/null 2>&1 && 
 [[ "$OUT" == "git-guard=1" ]] && pass "hook 2 on Bash is git-guard, not 'command ho'" || fail "numbered hook name" "$OUT"
 
 echo ""
+echo "=== a numbered record whose reason only another guard writes is that guard's ==="
+# settings.json changed since: today hook 1 is env-guard and hook 2 git-guard.
+H4="$TMP/home4"; mkdir -p "$H4/.claude/projects/p"
+cp "$TMP/home/.claude/settings.json" "$H4/.claude/settings.json"
+num_call() {  # id hook-number reason
+  jq -nc --arg t "$NOW" --arg id "$1" '{type:"assistant", timestamp:$t, sessionId:"s4", cwd:"/w/proj", message:{content:[{type:"tool_use", id:$id, name:"Bash", input:{command:"true"}}]}}'
+  jq -nc --arg t "$NOW" --arg id "$1" --arg n "$2" --arg r "$3" '{type:"attachment", timestamp:$t, attachment:{type:"hook_success", hookEvent:"PreToolUse", hookName:"PreToolUse:Bash", toolUseID:$id, command:("command hook " + $n), durationMs:90,
+    stdout:({hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"ask", permissionDecisionReason:$r}} | tojson)}}'
+  jq -nc --arg t "$NOW" --arg id "$1" '{type:"user", timestamp:$t, sessionId:"s4", permissionDecision:{decision:"accept", source:"user_temporary"}, message:{content:[{type:"tool_result", tool_use_id:$id, content:"ok"}]}}'
+}
+{ num_call n1 1 "kubectl delete mutates the cluster. Name the specific target (context, namespace, resource) — a permission rule cannot gate this verb, because kubectl takes its global flags before the verb."
+  num_call n2 2 "env-guard: this command's quoting is more than the guard can read for certain"
+  num_call n3 2 "This deletes a branch"
+  num_call n4 2 "git-guard: this command's quoting is more than the guard can read for certain"
+} > "$H4/.claude/projects/p/s4.jsonl"
+OUT=$(HOME="$H4" python3 "$PF" --days 1 --out "$TMP/o4" >/dev/null 2>&1 \
+  && jq -r '[.guard_asks[] | "\(.key)=\(.count)"] | sort | join(",")' "$TMP/o4/friction.json")
+[[ "$OUT" == "env-guard=1,git-guard=2,kubectl-guard=1" ]] \
+  && pass "kubectl-guard's words and a leading env-guard: name their guard over the number" || fail "reason over number" "$OUT"
+N=$(jq -c '.named_by_number_only' "$TMP/o4/friction.json" 2>/dev/null)
+[[ "$N" == '{"git-guard":1}' ]] && grep -q 'Named by hook number alone' "$TMP/o4/report.md" \
+  && pass "a reason no guard wrote keeps the number, and the report counts it" || fail "by number" "$N"
+
+echo ""
 echo "=== an ask from bash-guards goes back to the guards that gave it, by its timing log ==="
 H3="$TMP/home3"; mkdir -p "$H3/.claude/projects/p"
 printf '%s\n' '{"hooks":{"PreToolUse":[{"matcher":"Bash|Monitor","hooks":[{"type":"command","command":"~/.claude/hooks/bash-guards.sh"}]}]}}' > "$H3/.claude/settings.json"
