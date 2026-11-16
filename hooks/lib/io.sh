@@ -65,6 +65,35 @@ jq_get() {
   fi
 }
 
+# Each Bash guard first asks whether the command names any of its words once " '
+# and \ are out, and most commands name none. cmd_bare sets BARE to that text and
+# word_filter matches ERE against it, case-folded. Under the dispatcher the text
+# came from its one jq (PRESET_BARE) and the match is a builtin, so a guard done
+# here has started no process. Run alone, on the joined lines (joined_pass), or
+# on any text but the payload's command, it is tr and grep as before. One ERE
+# feeds both, so the two cannot drift, and tests/bash-guards.test.sh holds them
+# to the same answer. Not ${1//[\"\'\\]/}: bash 3.2 took 25 s on 8,000 bytes.
+cmd_bare() {   # TEXT; returns 1 where BARE is not the dispatcher's
+  BARE=""
+  if [[ -n "${HARNESS_PRESET:-}" && -z "${JOINED_PASS:-}" && -n "${PRESET_BARE+x}" ]]; then
+    # jq_get's $( ) dropped the newlines a command ends in.
+    local nl=$'\n' c
+    c=${PRESET_CMD%"${PRESET_CMD##*[!$nl]}"}
+    [[ "$1" == "$c" || "$1" == "$PRESET_CMD" ]] && { BARE=$PRESET_BARE; return 0; }
+  fi
+  return 1
+}
+word_filter() {   # ERE TEXT
+  if cmd_bare "$2"; then
+    local rc=1
+    shopt -s nocasematch
+    [[ "$BARE" =~ $1 ]] && rc=0
+    shopt -u nocasematch
+    return $rc
+  fi
+  printf '%s\n' "$2" | tr -d '"'\''\\' | grep -qiE "$1"
+}
+
 # First N bytes of stdin, minus a character the cut split. head -c and GNU
 # cut -c both count bytes, so either can leave half a multibyte character and an
 # audit line no UTF-8 reader accepts; iconv -c drops the partial one.

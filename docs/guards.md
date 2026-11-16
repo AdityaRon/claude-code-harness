@@ -55,9 +55,13 @@ A commit-message or PR-body heredoc is text to every guard, except when some lin
 `env-guard`, `git-guard`, `interpreter-guard`, `kubectl-guard`, `network-guard`,
 `rm-guard` and `config-guard` at once, each as a fork of itself with those
 fields already read. A call starts one hook process instead of seven, and no
-guard loads `lib.sh` again or starts jq for those fields (`config-guard` still
-runs its own): forks start no new program, which is what costs on a machine
-whose endpoint agent inspects every process start. Each guard file still runs alone as before
+guard loads `lib.sh` again or starts jq for those fields: forks start no new
+program, which is what costs on a machine whose endpoint agent inspects every
+process start. The same jq hands over the command with its quotes and
+backslashes out, and each guard's first question, whether the command names
+any of its words, is a builtin match on that text (`word_filter`,
+`hooks/lib/io.sh`). A command that names none, `ls -la` say, starts two
+processes in all: the dispatcher's `cat` and `jq`. Each guard file still runs alone as before
 (`bash ~/.claude/hooks/kubectl-guard.sh < payload.json`).
 
 - **Answers.** A deny beats an ask, and an ask beats a silent allow. One guard answering is passed on byte for byte; when several do, the reasons of those with the strongest answer are joined, in the order above. Each guard writes its own audit line, under its own name.

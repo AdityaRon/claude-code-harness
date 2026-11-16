@@ -47,7 +47,7 @@ joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Normalizing drops quotes, backslashes and case but never adds a letter, so a
 # command with no kubectl once those are gone is done before ~15 ms of it. The
 # precise bail-out below still runs on the normalized text.
-printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qi 'kubectl' || exit 0
+word_filter 'kubectl' "$CMD" || exit 0
 CMD=$(strip_inert_heredocs "$CMD")
 unreadable_check kubectl-guard "$CMD"
 # A script's shell-outs are checked as commands of their own (lib.sh); "ask":

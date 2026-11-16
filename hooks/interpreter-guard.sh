@@ -31,7 +31,7 @@ joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # and case but never adds a letter, so a command naming none once those are
 # gone is done before ~20 ms of normalizing. `sh` counts only as its own word:
 # `push`, `x.sh` and `ssh` are not shells, `/bin/sh` and `;sh` are.
-printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qiE 'python|node|ruby|perl|php|bash|zsh|deno|bun|(^|[^a-z0-9_.-])sh([^a-z0-9_-]|$)' || exit 0
+word_filter 'python|node|ruby|perl|php|bash|zsh|deno|bun|(^|[^a-z0-9_.-])sh([^a-z0-9_-]|$)' "$CMD" || exit 0
 # A commit message or a notes file is text, not a command (lib.sh).
 CMD=$(strip_inert_heredocs "$CMD")
 unreadable_check interpreter-guard "$CMD"
