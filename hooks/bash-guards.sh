@@ -32,7 +32,7 @@ dirname() {
   printf '%s\n' "${p:-/}"
 }
 BG_DIR=$(dirname "$0")
-source "$BG_DIR/lib.sh" && declare -F read_input jq_get emit_deny log_decision decide >/dev/null || exit 1
+source "$BG_DIR/lib.sh" && declare -F read_input jq_get emit_deny log_decision decide word_filter >/dev/null || exit 1
 # A lib.sh without the seams would have each fork read an empty stdin and allow.
 case "$(declare -f read_input)" in *HARNESS_PRESET*) ;; *)
   BG_DONE=1; echo "Blocked: $BG_DIR/lib.sh is older than bash-guards.sh, so the Bash guards cannot run. Run bash install.sh from the harness clone." >&2; exit 2 ;;
@@ -46,20 +46,26 @@ command -v jq &>/dev/null || { BG_DONE=1; require_jq_or_deny; BG_DONE=""; exit 1
 # fails on what follows (`{...} oops`), so its exit status is the last field, and
 # NUL is taken out of each string or one would shift every field after it. Each
 # field is jq_get's own `EXPR // ""`, and a field jq cannot read is "", as there.
+# The last is the command as `tr -d` leaves it with " ' and \ out, for the guards'
+# word filters (word_filter, lib/io.sh): made here, no guard starts tr or grep
+# to find it names none of its words.
 BG_F=()
 while IFS= read -r -d '' bg_f; do BG_F[${#BG_F[@]}]=$bg_f; done < <(
   printf '%s' "$INPUT" | jq -j 'def f(p): try ((p // "") | if type == "string" then split("\u0000") | join("") else . end) catch "";
     f(.tool_name), "\u0000", f(.tool_input.command), "\u0000", f(.cwd), "\u0000", f(.session_id), "\u0000",
-    f(.tool_input.url), "\u0000", f(.tool_input.ws.url), "\u0000", f(.tool_use_id), "\u0000", f(.permission_mode), "\u0000"' 2>/dev/null
+    f(.tool_input.url), "\u0000", f(.tool_input.ws.url), "\u0000", f(.tool_use_id), "\u0000", f(.permission_mode), "\u0000",
+    (f(.tool_input.command) | if type == "string" then . else tojson end
+      | split("\"") | join("") | split("\u0027") | join("") | split("\\") | join("")), "\u0000"' 2>/dev/null
   printf 'rc=%s\0' "$?")
 PRESET_OK=no
-[[ ${#BG_F[@]} -eq 9 && "${BG_F[8]}" == rc=0 ]] && PRESET_OK=ok
+[[ ${#BG_F[@]} -eq 10 && "${BG_F[9]}" == rc=0 ]] && PRESET_OK=ok
 # Whitespace alone is no document and no error; each guard allowed it.
 [[ ${#BG_F[@]} -eq 1 && "${BG_F[0]}" == rc=0 ]] && { PRESET_OK=ok; BG_F=(); }
 # shellcheck disable=SC2034  # lib.sh reads them in each guard's fork
 {
   PRESET_TOOL=${BG_F[0]:-} PRESET_CMD=${BG_F[1]:-} PRESET_CWD=${BG_F[2]:-} PRESET_SID=${BG_F[3]:-}
   PRESET_URL=${BG_F[4]:-} PRESET_WS=${BG_F[5]:-} PRESET_ID=${BG_F[6]:-} PRESET_MODE=${BG_F[7]:-}
+  PRESET_BARE=${BG_F[8]:-}
   HARNESS_PRESET=$$   # lib.sh honours it only where $$ is this, in these forks
 }
 unset BG_F bg_f

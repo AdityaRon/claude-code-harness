@@ -27,7 +27,8 @@ joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # case, and removes paths and prefixes, but never adds a letter, so a command
 # with no git once quotes and backslashes are gone is done, before ~35 ms of it.
 # tr, not ${CMD//…}: bash 3.2's substitution took 30 s on an 8,000-byte command.
-R=$(printf '%s' "$CMD" | tr -d '"'\''\\')
+# Under the dispatcher its jq already made that text (cmd_bare, lib/io.sh).
+cmd_bare "$CMD" && R=$BARE || R=$(printf '%s' "$CMD" | tr -d '"'\''\\')
 [[ "$R" == *[Gg][Ii][Tt]* ]] || exit 0
 CMD=$(strip_inert_heredocs "$CMD")
 unreadable_check git-guard "$CMD"
