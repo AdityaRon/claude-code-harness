@@ -3,7 +3,16 @@
 # An entry logs what it would have decided to shadow.log and decides nothing.
 # A guard name covers all its rules; guard:rule one. Delete a line to restore it.
 SHADOW=(
-  kubectl-guard                    # read verbs are allowed by prefix; mutating verbs and secret reads ask natively
+  kubectl-guard:mutating-verb      # these verbs ask natively, verb first or behind flags.
+  kubectl-guard:subverb-change     # Not the credential reads: `get Secret`, `describe secret`
+  kubectl-guard:exec               # and a kind from $( ) or xargs match a read allow rule and no
+  kubectl-guard:unknown-verb       # ask rule (2.1.325), so they and the unreadable floor stay live.
+  kubectl-guard:dynamic-verb       # kubectl behind a function or an opaque shell-out matches no
+  kubectl-guard:input-verb         # allow rule, so the classifier sees it
+  kubectl-guard:ambiguous-var
+  kubectl-guard:inline-unreadable
+  kubectl-guard:inline-opaque
+  kubectl-guard:inline-unchecked
   interpreter-guard                # auto mode drops Bash(python3:*), so the classifier sees inline code
   network-guard:monitor-ws-host    # the asks below: no network allow rule, so the classifier sees each.
                                    # Not allowlist-edit: a cp or echo into local-settings is allow-ruled.
