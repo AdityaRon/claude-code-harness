@@ -7,9 +7,11 @@ SHADOW=(
   kubectl-guard:subverb-change     # Not the credential reads: `get Secret`, `describe secret`
   kubectl-guard:exec               # and a kind from $( ) or xargs match a read allow rule and no
   kubectl-guard:unknown-verb       # ask rule (2.1.325), so they and the unreadable floor stay live.
-  kubectl-guard:dynamic-verb       # kubectl behind a function or an opaque shell-out matches no
-  kubectl-guard:input-verb         # allow rule, so the classifier sees it
-  kubectl-guard:ambiguous-var
+                                   # So does dynamic-verb: `k(){ kubectl "$@"; }; k get secret`
+                                   # never reaches secret-read, and no probe has shown the
+                                   # classifier stops it when the user did not ask for it.
+  kubectl-guard:input-verb         # kubectl's verb from xargs or an opaque shell-out matches no
+  kubectl-guard:ambiguous-var      # allow rule, so the classifier sees it
   kubectl-guard:inline-unreadable
   kubectl-guard:inline-opaque
   kubectl-guard:inline-unchecked

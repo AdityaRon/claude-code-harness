@@ -16,7 +16,7 @@ covers one rule.
 
 | Entry | Cover while it is shadowed |
 |---|---|
-| `kubectl-guard:` its verb rules (`mutating-verb`, `subverb-change`, `exec`, `unknown-verb`, `dynamic-verb`, `input-verb`, `ambiguous-var`, `inline-*`) | #241 narrowed `Bash(kubectl:*)` to read verbs and added native ask rules for mutating verbs in both orders (`kubectl delete *`, `kubectl * delete *`). kubectl behind a function or an inline script's opaque shell-out matches no allow rule, so the classifier sees it. Its credential rules stay live: a 2.1.325 headless probe ran `get Secret`, `get SECRETS` and `describe secret` with no prompt, because each matches a read allow rule and no ask rule (native rules are case-sensitive, and none covers describe). |
+| `kubectl-guard:` its verb rules (`mutating-verb`, `subverb-change`, `exec`, `unknown-verb`, `input-verb`, `ambiguous-var`, `inline-*`) | #241 narrowed `Bash(kubectl:*)` to read verbs and added native ask rules for mutating verbs in both orders (`kubectl delete *`, `kubectl * delete *`). kubectl's verb from xargs or an inline script's opaque shell-out matches no allow rule, so the classifier sees it. Its credential rules stay live: a 2.1.325 headless probe ran `get Secret`, `get SECRETS` and `describe secret` with no prompt, because each matches a read allow rule and no ask rule (native rules are case-sensitive, and none covers describe). |
 | `interpreter-guard` | Auto mode drops interpreter allow wildcards such as `Bash(python3:*)`, so the classifier sees inline code. |
 | `network-guard:` each ask but one | No allow rule covers curl, wget, scp, rsync or sftp, so the classifier sees each call. |
 | `rm-guard:rf-outside-scratch` | `rm` has no allow rule, so the classifier sees it. |
@@ -37,6 +37,11 @@ These stay live:
 - kubectl-guard's credential reads: `get` or `describe` of a Secret in any case
   or spelling, `--raw` secrets paths, `config view --raw` or `--flatten`, and a
   `get` kind from a variable, a substitution or xargs;
+- kubectl-guard's `dynamic-verb`: kubectl behind a function (`k(){ kubectl "$@"; }`,
+  seen 7 times on the work machine) hands its verb over as `"$@"`, so
+  `k get secret` never reaches the credential rules, and no probe has shown the
+  classifier stops it when the user did not ask for it. It asks on wrapper
+  reads too: 14 such asks in 30 days on that machine;
 - the floor that turns an unreadable command into an ask, in rm-guard, env-guard
   and kubectl-guard;
 - every guard not named above.
