@@ -154,6 +154,40 @@ N=$(jq -c '.named_by_number_only' "$TMP/o4/friction.json" 2>/dev/null)
   && pass "a reason no guard wrote keeps the number, and the report counts it" || fail "by number" "$N"
 
 echo ""
+echo "=== a numbered record is named from its own stdout, never its stderr ==="
+# bash's line holds "Operation not permitted", which hooks/tcc-check.sh quotes.
+SHELLINIT="shell-init: error retrieving current directory: getcwd: cannot access parent directories: Operation not permitted"
+H5="$TMP/home5"; mkdir -p "$H5/.claude/projects/p"
+cp "$TMP/home/.claude/settings.json" "$H5/.claude/settings.json"   # hook 2 on Bash is git-guard
+call5() { jq -nc --arg t "$NOW" --arg id "$1" '{type:"assistant", timestamp:$t, sessionId:"s5", cwd:"/w/proj", message:{content:[{type:"tool_use", id:$id, name:"Bash", input:{command:"true"}}]}}'; }
+ask5() {  # id reason stderr: a "command hook 2" ask, approved
+  call5 "$1"
+  jq -nc --arg t "$NOW" --arg id "$1" --arg r "$2" --arg e "$3" '{type:"attachment", timestamp:$t, attachment:{type:"hook_success", hookEvent:"PreToolUse", hookName:"PreToolUse:Bash", toolUseID:$id, command:"command hook 2", durationMs:90, exitCode:0,
+    stdout:({hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"ask", permissionDecisionReason:$r}} | tojson), stderr:$e, content:""}}'
+  jq -nc --arg t "$NOW" --arg id "$1" '{type:"user", timestamp:$t, sessionId:"s5", permissionDecision:{decision:"accept", source:"user_temporary"}, message:{content:[{type:"tool_result", tool_use_id:$id, content:"ok"}]}}'
+}
+{ call5 x1   # an exit 2: Claude Code labels its stderr with the command
+  jq -nc --arg t "$NOW" --arg b "[command hook 2]: $SHELLINIT" '{type:"attachment", timestamp:$t, attachment:{type:"hook_blocking_error", hookEvent:"PreToolUse", hookName:"PreToolUse:Bash", toolUseID:"x1",
+    blockingError:{blockingError:$b, command:"command hook 2"}}}'
+  jq -nc --arg t "$NOW" --arg b "PreToolUse:Bash hook error: [command hook 2]: $SHELLINIT" '{type:"user", timestamp:$t, sessionId:"s5", message:{content:[{type:"tool_result", tool_use_id:"x1", is_error:true, content:$b}]}}'
+  call5 x4   # unlabelled: a {"decision": "block"} reason from stdout, here network-guard's words
+  jq -nc --arg t "$NOW" '{type:"attachment", timestamp:$t, attachment:{type:"hook_blocking_error", hookEvent:"PreToolUse", hookName:"PreToolUse:Bash", toolUseID:"x4",
+    blockingError:{blockingError:"curl/wget request to example.invalid is outside the default allowlist. Confirm this endpoint is safe.", command:"command hook 2"}}}'
+  ask5 x2 "This deletes a branch" "$SHELLINIT"
+  ask5 x3 "$SHELLINIT" ""   # the same words on stdout: tcc-check's, as a control
+} > "$H5/.claude/projects/p/s5.jsonl"
+HOME="$H5" python3 "$PF" --days 1 --out "$TMP/o5" >/dev/null 2>&1
+OUT=$(jq -r '[.hook_blocks[] | "\(.key)=\(.count)"] | sort | join(",")' "$TMP/o5/friction.json" 2>/dev/null)
+[[ "$OUT" == "git-guard=1,network-guard=1" ]] \
+  && pass "a hook_blocking_error labelled as an exit 2's stderr is not named tcc-check; an unlabelled one is read" || fail "blocking stderr" "$OUT"
+OUT=$(jq -r '[.guard_asks[] | "\(.key)=\(.count)"] | sort | join(",")' "$TMP/o5/friction.json" 2>/dev/null)
+[[ "$OUT" == "git-guard=1,tcc-check=1" ]] \
+  && pass "a hook_success's stderr is not read; the same line in its stdout reason is tcc-check's" || fail "stderr field" "$OUT"
+N=$(jq -c '[.named_from_output, .named_by_number_only]' "$TMP/o5/friction.json" 2>/dev/null)
+[[ "$N" == '[{"network-guard":1,"tcc-check":1},{"git-guard":2}]' ]] && grep -q '^Of 4 answers recorded as "command hook N".* 2 are named by the guard.* and 2 by number alone' "$TMP/o5/report.md" \
+  && pass "the report counts the numbered records named from output and by number" || fail "naming counts" "$N"
+
+echo ""
 echo "=== an ask from bash-guards goes back to the guards that gave it, by its timing log ==="
 H3="$TMP/home3"; mkdir -p "$H3/.claude/projects/p"
 printf '%s\n' '{"hooks":{"PreToolUse":[{"matcher":"Bash|Monitor","hooks":[{"type":"command","command":"~/.claude/hooks/bash-guards.sh"}]}]}}' > "$H3/.claude/settings.json"

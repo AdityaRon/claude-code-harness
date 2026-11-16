@@ -8,6 +8,13 @@ The call goes on to the permission rules and the classifier as if the rule were
 not there. Step 9, on or after 2026-11-29, reads the report below and retires
 or restores each one.
 
+Only in auto mode. In any other mode (default, acceptEdits, plan,
+bypassPermissions) no classifier stands behind the rule, so it decides live as
+before. A headless probe on Claude Code 2.1.325 in default mode, with hooks
+disabled and `Bash(python3:*)` allowed, ran `python3 -c 'print(6*7)'` with no
+prompt; without that rule it needed approval. A payload with no
+`permission_mode` (an older Claude Code, the bench corpus) counts as auto.
+
 ## What is shadowed, and what covers it meanwhile
 
 The list is `SHADOW` in [`hooks/lib/shadow.sh`](../hooks/lib/shadow.sh), one
@@ -111,7 +118,8 @@ row add up to its asks plus denies:
 | No id | Its payload had no `tool_use_id`. |
 
 "Not in auto mode" counts the decisions made while no classifier was running,
-whatever happened next.
+whatever happened next. Since shadowing became auto-only, such a call is decided
+live and writes no line here, so a count above 0 comes from an older install.
 
 ## How step 9 reads it
 

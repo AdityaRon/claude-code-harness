@@ -116,6 +116,51 @@ lat --total --json > "$TMP/tot.json"
   && pass "--hook keeps only matching hooks" || fail "--hook" ""
 [ "$(python3 "$REPO/tools/hook-latency.py" --projects "$TMP/none" --settings "$TMP/none.json" --json | jq -c '[.counted, (.rows|length)]')" = '[0,0]' ] \
   && pass "no transcripts: an empty report, exit 0" || fail "empty" ""
+[ "$(jq -c '.numbered' "$TMP/day.json")" = '{"from_output":0,"from_map":7}' ] \
+  && [ "$(jq -c '[.rows[] | select(.hook == "git-guard.sh") | .unconfirmed] | unique' "$TMP/day.json")" = '[true]' ] \
+  && pass "a numbered record with no reason on stdout is named by the map, and its row is unconfirmed" || fail "unconfirmed" "$(jq -c '{numbered, rows: [.rows[] | {hook, unconfirmed}]}' "$TMP/day.json")"
+[[ "$TXT" == *"git-guard.sh ?"* && "$TXT" == *"7 records name their hook only as \"command hook N\": 0 are named by the guard"*"7 by their number, marked ?"* ]] \
+  && pass "the text marks an unconfirmed row ? and counts how each numbered record was named" || fail "? in text" "$TXT"
+
+echo ""
+echo "=== a numbered record is named by the reason on its own stdout, never its stderr ==="
+P2="$TMP/projects2"; mkdir -p "$P2/proj"; T2="$P2/proj/s.jsonl"
+# orec HOOKNAME COMMAND MS STDOUT_REASON STDERR: one hook_success record in $T2.
+orec() {
+  python3 - "$T2" "$@" <<'PY'
+import datetime as dt, json, sys
+f, name, cmd, ms, why, err = sys.argv[1:7]
+t = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
+out = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": why}}) if why else ""
+at = {"type": "hook_success", "hookName": name, "hookEvent": name.split(":")[0], "command": cmd, "toolUseID": "t",
+      "durationMs": int(ms), "exitCode": 0, "stdout": out, "stderr": err, "content": ""}
+with open(f, "a") as fh:
+    fh.write(json.dumps({"type": "attachment", "timestamp": t.strftime("%Y-%m-%dT%H:%M:%S.000Z"), "attachment": at}) + "\n")
+PY
+}
+# Words from hooks/network-guard.sh; the stderr line is bash's, and holds
+# "Operation not permitted", which hooks/tcc-check.sh quotes.
+NET="curl/wget request to example.invalid is outside the default allowlist. Confirm this endpoint is safe."
+SHELLINIT="shell-init: error retrieving current directory: getcwd: cannot access parent directories: Operation not permitted"
+orec PreToolUse:Bash "command hook 3" 410 "$NET" ""          # today's hook 3 on Bash is config-guard
+orec PreToolUse:WebFetch "command hook 3" 420 "$NET" ""      # not a call bash-guards runs on
+orec PreToolUse:Bash "command hook 3" 430 "" "$SHELLINIT"
+orec PreToolUse:Bash "command hook 1" 440 "$SHELLINIT" ""    # the same words on stdout: tcc-check's, as a control
+L2=$(python3 "$REPO/tools/hook-latency.py" --projects "$P2" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --total --json)
+orow() { jq -c --arg e "$1" --arg h "$2" '[.rows[] | select(.event == $e and .hook == $h)] | map([.n, .max, .unconfirmed])' <<<"$L2"; }
+[ "$(orow PreToolUse:Bash 'bash-guards.sh (network-guard)')" = '[[1,410,false]]' ] \
+  && pass "network-guard's reason on a Bash call is the bash-guards (network-guard) row, though settings.json says config-guard" \
+  || fail "named from output" "$(jq -c '[.rows[] | {event, hook, max, unconfirmed}]' <<<"$L2")"
+[ "$(orow PreToolUse:WebFetch network-guard.sh)" = '[[1,420,false]]' ] \
+  && pass "on a tool bash-guards does not run on, it is network-guard's own row" || fail "WebFetch" "$(jq -c '[.rows[] | {event, hook}]' <<<"$L2")"
+[ "$(jq -c '[.rows[] | select(.hook | test("tcc-check")) | [.n, .max]]' <<<"$L2")" = '[[1,440]]' ] && [ "$(orow PreToolUse:Bash config-guard.sh)" = '[[1,430,true]]' ] \
+  && pass "a shell-init line on stderr is not named tcc-check, so the map names it; on stdout it is tcc-check's" || fail "stderr" "$(jq -c '[.rows[] | {hook, n, max}]' <<<"$L2")"
+[ "$(jq -c '.numbered' <<<"$L2")" = '{"from_output":3,"from_map":1}' ] \
+  && pass "3 named from output, 1 by the map" || fail "named counts" "$(jq -c '.numbered' <<<"$L2")"
+rm "$T2"; orec PreToolUse:Bash "command hook 3" 410 "$NET" ""
+TXT2=$(python3 "$REPO/tools/hook-latency.py" --projects "$P2" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --total 2>&1)
+[[ "$TXT2" == *"1 are named by the guard"*"0 by their number."* && "$TXT2" != *"is named through"* && "$TXT2" != *"?"* ]] \
+  && pass "with every numbered record named from output, no settings caveat and no ?" || fail "no caveat" "$TXT2"
 
 echo ""
 echo "=== each Bash guard inside bash-guards, from its timing log, dated by the transcript ==="

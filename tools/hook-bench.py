@@ -360,7 +360,7 @@ def main():
     ap.add_argument('--base', help='git ref (default: the latest tag)')
     ap.add_argument('--head', default='worktree', help="git ref, or 'worktree' (default) for hooks/ and config/ as on disk")
     ap.add_argument('--corpus', default='tests/bench-corpus.jsonl', help="JSONL file, or 'audit[:PATH]' for this machine's audit log")
-    ap.add_argument('--quick', action='store_true', help='every third payload (CI)')
+    ap.add_argument('--quick', action='store_true', help='every third payload (a quick local look; CI runs all)')
     ap.add_argument('--repeat', type=int, default=1, help='passes over the corpus')
     ap.add_argument('--hook-timeout', type=float, default=30.0, help='seconds a hook may run (default 30)')
     ap.add_argument('--serial', action='store_true',

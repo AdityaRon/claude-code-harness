@@ -71,5 +71,39 @@ EOF
 [ ! -s "$TMP/title.txt" ] && [ ! -s "$TMP/body.md" ] && pass "no link leaves both empty, for the fallback" \
   || fail "no link" "$(cat "$TMP/py.err")"
 
+echo ""
+echo "=== ci.yml: the PR bench runs every payload, and only when hooks/ or settings changed ==="
+# The run block of the "Benchmark this PR's hooks" step, run against a stub bench.
+CI_WF=.github/workflows/ci.yml
+awk '/name: Benchmark this PR.s hooks against the base branch/{f=1} f && /^        run: \|$/{on=1; next}
+     on && $0 != "" && !/^          /{exit} on' "$CI_WF" | sed 's/^          //' > "$TMP/bench.sh"
+if grep -q 'hook-bench.py' "$TMP/bench.sh"; then pass "the bench step is in $CI_WF"; else fail "the bench step is in $CI_WF" "not found"; fi
+bench_case() {  # name, a function that edits the PR side; sets BENCH_RC, BENCH_ARGV, BENCH_SUMMARY
+  local d="$TMP/bench.$PASS.$FAIL"
+  mkdir -p "$d/hooks" "$d/config" "$d/tools" "$d/docs" && cd "$d" || return
+  git init -q && git config user.email t@t && git config user.name t
+  printf 'echo hi\n' > hooks/guard.sh; printf '{}\n' > config/settings.json; printf 'x\n' > docs/a.md
+  printf 'import sys\nopen("argv.txt", "w").write(" ".join(sys.argv[1:]))\nopen("bench.md", "w").write("bench ran")\n' > tools/hook-bench.py
+  git add -A && git commit -qm base && git update-ref refs/remotes/origin/main HEAD
+  "$2"; git add -A && git commit -qm pr
+  BASE=main PR_BODY=$'text\nintended-decisions: id-a id-b' GITHUB_STEP_SUMMARY="$d/summary" bash "$TMP/bench.sh" > "$d.out" 2>&1
+  BENCH_RC=$? BENCH_ARGV=$(cat argv.txt 2>/dev/null || echo "not run") BENCH_SUMMARY=$(cat summary 2>/dev/null)
+  cd "$ROOT" || return
+}
+docs_only(){ echo y >> docs/a.md; }
+hook_edit(){ echo 'echo bye' >> hooks/guard.sh; }
+settings_edit(){ printf '{"a":1}\n' > config/settings.json; }
+bench_case "docs only" docs_only
+[ "$BENCH_RC" = 0 ] && [ "$BENCH_ARGV" = "not run" ] && [[ "$BENCH_SUMMARY" == *"benchmark skipped"* ]] \
+  && pass "a PR that leaves hooks/ and settings alone skips the bench" || fail "docs-only PR" "rc=$BENCH_RC argv=[$BENCH_ARGV] summary=[$BENCH_SUMMARY]"
+bench_case "hooks edit" hook_edit
+[[ "$BENCH_ARGV" == *"--base origin/main --head HEAD"*"--gate"* ]] && pass "a hooks/ edit runs the bench against the base" \
+  || fail "hooks edit runs the bench" "argv=[$BENCH_ARGV]"
+[[ " $BENCH_ARGV " != *" --quick "* ]] && pass "the PR bench runs every payload (no --quick)" || fail "no --quick" "argv=[$BENCH_ARGV]"
+[[ "$BENCH_ARGV" == *"--intended id-a id-b"* ]] && pass "the PR body's intended-decisions ids reach the gate" \
+  || fail "intended ids" "argv=[$BENCH_ARGV]"
+bench_case "settings edit" settings_edit
+[ "$BENCH_ARGV" != "not run" ] && pass "a config/settings.json edit runs the bench" || fail "settings edit runs the bench" "not run"
+
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
