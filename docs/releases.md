@@ -25,8 +25,9 @@ approval policy is `first_time_contributors`, so the workflow approves its own
 PR's CI (`.github/approve-pr-ci.sh`): a dispatched run does not count for
 main's required checks, and is only the fallback when approval is refused.
 
-The same benchmark, on every third payload, runs on each PR against main and
-posts its table to the job summary; `.github/workflows/ci.yml` runs it with
+The same benchmark, on every payload, runs on each PR that changes `hooks/` or
+`config/settings.json` against main (others skip it, since both sides would run
+the same files) and posts its table to the job summary; `.github/workflows/ci.yml` runs it with
 `--gate`, reading the PR's own `intended-decisions:` line, so the job fails on
 the same terms. If a merged PR changed a decision without that line, releases
 stay blocked until the line is added to its body (`gh pr edit N --body-file ...`)
@@ -84,7 +85,8 @@ per-hook table runs each hook alone. `--serial` is the earlier model (each hook
 alone, wait the slowest), which scored separate hooks as if each had its own
 core: on a 4-core runner it read the Bash dispatcher as 23% slower than v1.3.1
 when, launched together, it is 18% faster (#218). `--quick` takes every
-third payload, as CI does. The gate (`--gate`) fails on a decision change not
+third payload, for a quick local look; CI no longer uses it, since sampling let a
+decision change reach the release gate (#251). The gate (`--gate`) fails on a decision change not
 named in `--intended`, or on a p50 or p95 wait that grows past both
 `--limit-pct` (default 20) and `--floor-ms` (default 5), for tool classes with
 at least `--min-calls` calls (default 20). Absolute numbers depend on the
