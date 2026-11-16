@@ -15,7 +15,7 @@ cp doctor.sh "$D/"; ln -s "$REPO/hooks" "$D/hooks"; ln -s "$REPO/tools" "$D/tool
 suite() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$D/tests/$1.test.sh"; }
 suite a-pass  'echo "--- Results: 3 passed, 0 failed ---"'
 suite a-stdin 'read -r x; echo "--- Results: 1 passed, 0 failed ---"'
-suite b-fail  'echo "--- Results: 1 passed, 2 failed ---"; exit 2'
+suite b-fail  'echo "  OK (ask): a passing case"; echo "  FAIL (expected=ask got=allow): a fixture case  [cmd: x]"; echo "  FAIL (expected=deny got=allow): a second case"; echo "--- Results: 1 passed, 2 failed ---"; exit 2'
 suite c-many  'echo "--- Results: 0 passed, 130 failed ---"; exit 130'
 suite d-kill  'echo "half way"; kill -TERM $$'
 suite e-hang  "sleep 30 & echo \$! > '$TMP/child'; wait"
@@ -50,6 +50,12 @@ CHILD=$(cat "$TMP/child" 2>/dev/null)
   && pass "the hung suite's own child is stopped with it" || { fail "child left running" "pid $CHILD"; kill "$CHILD" 2>/dev/null; }
 [[ "$OUT" == *"TIMEOUT: tests/f-cases.test.sh, 2 case(s) past their limit, none failed"* ]] \
   && pass "a suite whose only misses are timed-out cases reads TIMEOUT" || fail "case timeout" "$OUT"
+[[ "$OUT" == *"FAILED: tests/b-fail.test.sh, 2 case(s); first: FAIL (expected=ask got=allow): a fixture case  [cmd: x]"* ]] \
+  && pass "a failed suite is named with its count and its first failing case" || fail "FAILED line" "$OUT"
+[[ "$OUT" == *"FAILED: tests/c-many.test.sh, 130 case(s)"$'\n'* ]] \
+  && pass "a failed suite that prints no FAIL line is named with its count alone" || fail "FAILED, no case" "$OUT"
+[[ "$OUT" == *"FAILED: tests/i-255.test.sh, exit 255, no Results line"* ]] \
+  && pass "a suite that dies without a Results line is named with its exit status" || fail "FAILED, no Results" "$OUT"
 # Times are whole seconds (bash's SECONDS), so under load the 1 s suite can read 2
 # and tie the one stopped at 2 s, and a quick one can read 1: the check is that the
 # list runs slowest first and each of the two slow suites reads its least.
@@ -131,6 +137,11 @@ OUT=$(inst 0 "SUMMARY: 18 suites │ 9 passed │ 0 failed │ 0 suite(s) failed
 OUT=$(inst 143 "SUMMARY: KILLED by SIGTERM while running suite 3 of 52 (tests/x.test.sh); nothing after it ran" --full)
 [ "$(cat "$TMP/doctor-args")" = "[]" ] && [[ "$OUT" == *"doctor.sh was stopped before it finished, so this is not a test result"* ]] \
   && pass "install --full runs every suite, and a KILLED summary reads as stopped" || fail "install full" "$(cat "$TMP/doctor-args") $(printf '%s\n' "$OUT" | tail -5)"
+OUT=$(inst 1 "SUMMARY: 18 suites │ 9 passed │ 1 failed │ 1 suite(s) failed
+FAILED: tests/x.test.sh, 1 case(s); first: FAIL (expected=ask got=allow): one case")
+[[ "$OUT" == *"1 suite(s) failed. See $TMP/ih/.claude/logs/install-doctor.log"$'\n'"    FAILED: tests/x.test.sh, 1 case(s); first: FAIL"* ]] \
+  && [[ -s "$TMP/ih/.claude/logs/install-doctor.log" ]] \
+  && pass "a red install names the failed suite and keeps its log under ~/.claude/logs" || fail "install red" "$(printf '%s\n' "$OUT" | tail -5)"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

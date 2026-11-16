@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Moves this machine to the newest harness release: fetches tags into its own
 # clone, checks the tag out detached, runs doctor.sh, installs on green.
-#   harness-update.sh [--repo DIR] [--check] [--with-cli | --no-cli]
+#   harness-update.sh [--repo DIR] [--check] [--full] [--with-cli | --no-cli]
+# --full gates the install on every doctor suite, not the smoke set.
 #   harness-update.sh --schedule | --unschedule   01:17, 07:17, 13:17, 19:17 local
 #   harness-update.sh --newer A B                 exit 0 when tag A is newer
 # --with-cli first upgrades a Homebrew-cask Claude Code, on later runs too, until
@@ -25,8 +26,14 @@ DEFAULT_URL=${HARNESS_UPDATE_URL:-https://github.com/AdityaRon/claude-code-harne
 # Local time, minute 17: a tag is installed within six hours.
 HOURS="1 7 13 19"
 
-usage() { sed -n '2,9s/^# \{0,1\}//p' "$0"; exit 2; }
+usage() { sed -n '2,10s/^# \{0,1\}//p' "$0"; exit 2; }
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
+# doctor's SUMMARY line and the suites it names, on one line, then where its log is.
+doctor_says() {
+  local s
+  s=$(awk '/^(SUMMARY|FAILED|KILLED|TIMEOUT):/ { printf "%s%s", (n++ ? "; " : ""), $0 }' "$1" 2>/dev/null)
+  echo "${s:-no SUMMARY line}; log: $1"
+}
 slots() {   # 01:17, 07:17, 13:17 and 19:17
   local h s=""
   for h in $HOURS; do s="$s, $(printf '%02d:17' "$h")"; done
@@ -186,14 +193,17 @@ update() {
   if [[ "$(git -C "$REPO" rev-parse HEAD)" != "$(git -C "$REPO" rev-parse "$LATEST^{commit}")" ]]; then
     git -C "$REPO" checkout --quiet --detach "$LATEST" || { say "checkout of $LATEST failed"; exit 1; }
   fi
-  say "checked out $LATEST (was $PREV); running doctor.sh"
-  DOC=$(mktemp "${TMPDIR:-/tmp}/cch-update.XXXXXX")
-  if ! bash "$REPO/doctor.sh" > "$DOC" 2>&1; then
+  # The smoke set, as install.sh runs: CI runs every suite on the tag before it
+  # is cut, and every suite took 3 h 14 min on a machine where a process start
+  # costs ~90 ms. The log is kept in logs/, not $TMPDIR, which a reboot empties.
+  say "checked out $LATEST (was $PREV); running doctor.sh ${SET:-(every suite)}"
+  DOC="$HOME/.claude/logs/harness-update-doctor.log"
+  if ! bash "$REPO/doctor.sh" $SET > "$DOC" 2>&1; then
     git -C "$REPO" checkout --quiet "$PREV" 2>/dev/null
-    say "doctor.sh failed on $LATEST; back on $PREV, nothing installed: $(grep '^SUMMARY:' "$DOC" || echo "see $DOC")"
+    say "doctor.sh failed on $LATEST; back on $PREV, nothing installed: $(doctor_says "$DOC")"
     exit 1
   fi
-  say "$(grep '^SUMMARY:' "$DOC")"; rm -f "$DOC"
+  say "$(doctor_says "$DOC")"
   if ! CCH_SKIP_SELFTEST=1 bash "$REPO/install.sh"; then
     say "install.sh failed on $LATEST; the clone stays at $LATEST, ~/.claude may hold a mix"; exit 1
   fi
@@ -267,11 +277,12 @@ unschedule() {
   esac
 }
 
-REPO="" OWN=0 CHECK=0 MODE=update CLI=""
+REPO="" OWN=0 CHECK=0 MODE=update CLI="" SET=--smoke
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO="$2"; shift 2 ;;
     --check) CHECK=1; shift ;;
+    --full) SET=""; shift ;;
     --with-cli) CLI=1; shift ;;
     --no-cli) CLI=0; shift ;;
     --schedule) MODE=schedule; shift ;;

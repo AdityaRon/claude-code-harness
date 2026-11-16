@@ -58,6 +58,8 @@ repo layout is for reading the repo, not for the installed tree.
     audit.log              ← append-only audit trail, 0600, rotated
     guard-timing.log       ← each Bash guard's seconds, status and decision per call, rotated at 10 MB
     harness-update.log     ← scheduled update runs
+    harness-update-doctor.log  ← the doctor run the last update was gated on
+    install-doctor.log     ← the doctor run the last install.sh verified with
   transcripts/
     transcript_<trigger>_<ts>_<session>.jsonl  ← pre-compact backups, newest 20
   state/
