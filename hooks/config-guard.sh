@@ -34,10 +34,35 @@ H=$HOME
 # Library/ lets a glob there in (~/Library/LaunchAgen*). Case-folded, as
 # level_of matches: macOS formats APFS case-insensitive, so ~/.CLAUDE/HOOKS is
 # ~/.claude/hooks there.
+FTARGET=$TARGET FCWD=$CWD
+# A job's scratch (~/.claude/jobs/<id>/tmp), ~/.claude/projects and ~/.claude/logs
+# hold nothing level_of protects: the filter reads the command with those
+# prefixes out, as typed after ~/, $HOME/ or the home path, and ending at a /,
+# space, quote or ; & | ) so ~/.claude/logs.sh stays. A command with .. is read
+# whole. A symlink there into hooks is written through unasked, as from /tmp
+# (docs/known-limitations.md). Not ${x//…}: bash 3.2 took 25 s on 8,000 bytes.
+if [[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && "$TARGET" != *..* ]]; then
+  if [[ "$TARGET" == *.claude/* ]]; then
+    f_rest=$TARGET FTARGET="" f_re='^(projects|logs|jobs/[A-Za-z0-9_-]+/tmp)(/|[[:space:]"'\'';&|)]|$)'
+    while [[ "$f_rest" == *.claude/* ]]; do
+      f_post=${f_rest#*.claude/}; f_pre=${f_rest:0:${#f_rest}-${#f_post}-8}; f_ok=""
+      # shellcheck disable=SC2088,SC2016  # the tilde and $HOME as typed
+      case "$f_pre" in *'~/'|*'$HOME/'|*'${HOME}/'|*"$H/") [[ "$f_post" =~ $f_re ]] && f_ok=${BASH_REMATCH[1]} ;; esac
+      if [[ -n "$f_ok" ]]; then FTARGET="$FTARGET$f_pre"; f_rest=${f_post:${#f_ok}}
+      else FTARGET="$FTARGET$f_pre.claude/"; f_rest=$f_post; fi
+    done
+    FTARGET="$FTARGET$f_rest"
+  fi
+  case "$CWD" in
+    */.claude|*/.claude/skills/*) ;;
+    "$H/.claude/projects"|"$H/.claude/projects/"*|"$H/.claude/logs"|"$H/.claude/logs/"*) FCWD=/ ;;
+    "$H/.claude/jobs/"*) f_post=${CWD#"$H/.claude/jobs/"}; [[ "$f_post" =~ ^[A-Za-z0-9_-]+/tmp(/|$) ]] && FCWD=/ ;;
+  esac
+fi
 shopt -s nocasematch
-[[ "$TOOL" == Bash || "$TOOL" == Monitor ]] && case "$TARGET" in
+[[ "$TOOL" == Bash || "$TOOL" == Monitor ]] && case "$FTARGET" in
   *.claude*|*.zsh*|*.zprofile*|*.zlog*|*.bashrc*|*.bash_profile*|*.bash_login*|*.profile*|*gitconfig*|*git/config*|*LaunchAgents*|*Library/*|*--global*) ;;
-  *) case "$CWD" in "$H/.claude"|"$H/.claude/"*|*/.claude|*/.claude/skills/*|"$H/Library/LaunchAgents") ;; *) exit 0 ;; esac ;;
+  *) case "$FCWD" in "$H/.claude"|"$H/.claude/"*|*/.claude|*/.claude/skills/*|"$H/Library/LaunchAgents") ;; *) exit 0 ;; esac ;;
 esac
 shopt -u nocasematch
 WORST=""; REASON=""; REMOVING=""; BASES=(); CD_BASES=""

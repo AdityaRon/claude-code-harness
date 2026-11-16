@@ -347,5 +347,59 @@ bash_is ask $'cp "a\nb" ~/.claude/settings.json'
 bash_is ask $'cp $\'a\nb\' ~/.claude/settings.json'
 bash_is allow $'cp x \\\ny'
 echo ""
+echo "=== scratch, projects and logs paths are out of the filter, and nothing else is ==="
+J='~/.claude/jobs/j/tmp'
+mkdir -p "$HOME/.claude/projects/p" "$HOME/.claude/logs" "$HOME/.claude/jobs/j/tmp/p/.claude"
+ln -s ../../../hooks "$HOME/.claude/jobs/j/tmp/h"
+bash_is ask "echo x > $J/../../../settings.json"
+bash_is ask 'echo x > ~/.claude/logs.sh'
+bash_is ask 'echo x > ~/.claude/projects.sh'
+bash_is ask "echo x > $J/p/.claude/settings.json"
+bash_is ask "ls $J;echo x > ~/.claude/settings.json"
+bash_is ask "cp $J/lib.sh ~/.claude/hooks/lib.sh"
+bash_is ask "ln -s ~/.claude/hooks $J/h2"
+bash_is ask "ls $J/out; echo x > $J/../../../hooks/lib.sh"
+bash_is ask 'echo x >> ~/.zshrc' "$HOME/.claude/logs"
+bash_is ask 'echo x > settings.json' "$HOME/.claude/jobs/j/tmp/p/.claude"
+bash_is ask 'echo x > hooks/lib.sh' "$HOME/.claude"
+bash_is allow 'echo x >> notes.md' "$HOME/.claude/projects/p"
+bash_is allow "tail -5 ~/.claude/logs/audit.log > $J/tail.txt"
+# Accepted (docs/known-limitations.md): a link already in scratch that leads into
+# hooks is written through unasked, as one in /tmp is. Before, each of these asked.
+bash_is allow "echo x > $J/h/lib.sh"
+bash_is allow "cp x.sh $J/h/"
+bash_is allow "cd $J/h && echo x > lib.sh"
+bash_is allow 'echo x > h/lib.sh' "$HOME/.claude/jobs/j/tmp"
+
+# Through the dispatcher, PATH shims logging each start: a command that names
+# .claude only by a scratch or logs path starts none of config-guard's processes.
+rm -rf "$TMP/hk"; cp -R hooks "$TMP/hk"; mkdir -p "$TMP/shim"
+for x in jq grep sed awk tr cat date head tail wc dirname basename stat mkdir chmod iconv bash sh perl sort cut; do
+  r=$(command -v "$x" 2>/dev/null) || continue
+  printf '#!/bin/sh\necho %s >> "%s"\nexec "%s" "$@"\n' "$x" "$TMP/started" "$r" > "$TMP/shim/$x"; chmod +x "$TMP/shim/$x"
+done
+sed "s#^export PATH=\"#export PATH=\"$TMP/shim:#" hooks/lib.sh > "$TMP/hk/lib.sh"
+started() {   # started COMMAND [CWD]: what one call starts, sorted, on one line
+  : > "$TMP/started"
+  jq -nc --arg c "$1" --arg d "${2:-$TMP/proj}" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"x"}' \
+    | CLAUDE_GUARD_TIMING_LOG=/dev/null CLAUDE_SHADOW_LOG=/dev/null bash "$TMP/hk/bash-guards.sh" >/dev/null 2>&1
+  sort "$TMP/started" | tr '\n' ' '
+}
+starts_two() {   # starts_two COMMAND [CWD]
+  local s; s=$(started "$@")
+  if [[ "$s" == "cat jq " ]]; then echo "  OK (cat and jq only): $1"; PASS=$((PASS+1))
+  else echo "  FAIL: want cat jq, started $s: $1"; FAIL=$((FAIL+1)); fi
+}
+cmp -s hooks/lib.sh "$TMP/hk/lib.sh" && { echo "  FAIL: test setup: lib.sh's PATH line was not found"; FAIL=$((FAIL+1)); }
+starts_two "ls $J/out"
+starts_two 'wc -l "$HOME/.claude/logs/audit.log"'
+starts_two 'ls' "$HOME/.claude/projects/p"
+for c in 'ls ~/.claude/hooks' 'cat ~/.claude/jobs/j/state.json'; do   # a job's folder is not its tmp
+  s=$(started "$c")
+  if [[ "$s" == *" sed "* ]]; then echo "  OK (read in full): $c"; PASS=$((PASS+1))
+  else echo "  FAIL: not read in full, started $s: $c"; FAIL=$((FAIL+1)); fi
+done
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
