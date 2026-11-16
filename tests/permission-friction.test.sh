@@ -170,17 +170,21 @@ ask5() {  # id reason stderr: a "command hook 2" ask, approved
   jq -nc --arg t "$NOW" --arg b "[command hook 2]: $SHELLINIT" '{type:"attachment", timestamp:$t, attachment:{type:"hook_blocking_error", hookEvent:"PreToolUse", hookName:"PreToolUse:Bash", toolUseID:"x1",
     blockingError:{blockingError:$b, command:"command hook 2"}}}'
   jq -nc --arg t "$NOW" --arg b "PreToolUse:Bash hook error: [command hook 2]: $SHELLINIT" '{type:"user", timestamp:$t, sessionId:"s5", message:{content:[{type:"tool_result", tool_use_id:"x1", is_error:true, content:$b}]}}'
+  call5 x4   # unlabelled: a {"decision": "block"} reason from stdout, here network-guard's words
+  jq -nc --arg t "$NOW" '{type:"attachment", timestamp:$t, attachment:{type:"hook_blocking_error", hookEvent:"PreToolUse", hookName:"PreToolUse:Bash", toolUseID:"x4",
+    blockingError:{blockingError:"curl/wget request to example.invalid is outside the default allowlist. Confirm this endpoint is safe.", command:"command hook 2"}}}'
   ask5 x2 "This deletes a branch" "$SHELLINIT"
   ask5 x3 "$SHELLINIT" ""   # the same words on stdout: tcc-check's, as a control
 } > "$H5/.claude/projects/p/s5.jsonl"
 HOME="$H5" python3 "$PF" --days 1 --out "$TMP/o5" >/dev/null 2>&1
-OUT=$(jq -r '[.hook_blocks[] | "\(.key)=\(.count)"] | join(",")' "$TMP/o5/friction.json" 2>/dev/null)
-[[ "$OUT" == "git-guard=1" ]] && pass "an exit 2's stderr (a hook_blocking_error) is not named tcc-check" || fail "blocking stderr" "$OUT"
+OUT=$(jq -r '[.hook_blocks[] | "\(.key)=\(.count)"] | sort | join(",")' "$TMP/o5/friction.json" 2>/dev/null)
+[[ "$OUT" == "git-guard=1,network-guard=1" ]] \
+  && pass "a hook_blocking_error labelled as an exit 2's stderr is not named tcc-check; an unlabelled one is read" || fail "blocking stderr" "$OUT"
 OUT=$(jq -r '[.guard_asks[] | "\(.key)=\(.count)"] | sort | join(",")' "$TMP/o5/friction.json" 2>/dev/null)
 [[ "$OUT" == "git-guard=1,tcc-check=1" ]] \
   && pass "a hook_success's stderr is not read; the same line in its stdout reason is tcc-check's" || fail "stderr field" "$OUT"
 N=$(jq -c '[.named_from_output, .named_by_number_only]' "$TMP/o5/friction.json" 2>/dev/null)
-[[ "$N" == '[{"tcc-check":1},{"git-guard":2}]' ]] && grep -q '^Of 3 answers recorded as "command hook N".* 1 are named by the guard.* and 2 by number alone' "$TMP/o5/report.md" \
+[[ "$N" == '[{"network-guard":1,"tcc-check":1},{"git-guard":2}]' ]] && grep -q '^Of 4 answers recorded as "command hook N".* 2 are named by the guard.* and 2 by number alone' "$TMP/o5/report.md" \
   && pass "the report counts the numbered records named from output and by number" || fail "naming counts" "$N"
 
 echo ""
