@@ -219,6 +219,11 @@ mkdir -p "$E/badgit/.git"; : > "$E/badgit/file"   # an empty .git: git would wal
 # A clean filter git status would run, and a signed stash gpg.program would verify: code a repo brings.
 clone "$E/filtered"; printf '* filter=x\n' > "$E/filtered/.git/info/attributes"
 in_ "$E/filtered" git config filter.x.clean "sh -c 'touch $TMP/pwned-filter; cat'"; age 1 "$E/filtered/f"
+clone "$E/filtered-inc"; printf '* filter=y\n' > "$E/filtered-inc/.git/info/attributes"; age 1 "$E/filtered-inc/f"
+printf '[filter "y"]\n\tclean = sh -c "touch %s/pwned-filter; cat"\n' "$TMP" > "$E/filtered-inc/.git/inc.conf"
+in_ "$E/filtered-inc" git config include.path inc.conf
+# git-lfs's own filter, as `git lfs install` writes it: the user's, so it keeps no repo.
+printf '[filter "lfs"]\n\tclean = git-lfs clean -- %%f\n\tprocess = git-lfs filter-process\n\trequired = true\n' > "$HOME/.gitconfig"
 clone "$E/signed"; printf '#!/bin/sh\ntouch %s/pwned-gpg\nexit 1\n' "$TMP" > "$TMP/fakegpg"; chmod +x "$TMP/fakegpg"
 SIGNED=$(cd "$E/signed" && git cat-file commit HEAD | awk '/^committer /{print; print "gpgsig -----BEGIN PGP SIGNATURE-----"; print " "; print " iQ=="; print " -----END PGP SIGNATURE-----"; next} {print}' | git hash-object -t commit -w --stdin)
 mkdir -p "$E/signed/.git/logs/refs"; echo "$SIGNED" > "$E/signed/.git/refs/stash"
@@ -288,7 +293,8 @@ e0000001/tmp/nested|nested/a/b/c: tracked files changed
 e0000001/tmp/untracked|untracked: untracked files
 e0000001/tmp/bare.git|bare.git: commits and no remote
 e0000001/tmp/badgit|badgit: git status --porcelain --untracked-files=normal --ignore-submodules=all failed: fatal: not a git repository
-e0000001/tmp/filtered|filtered: a git filter is configured
+e0000001/tmp/filtered|filtered: a git filter is configured in the repo (filter.x.clean)
+e0000001/tmp/filtered-inc|filtered-inc: a git filter is configured in the repo (filter.y.clean)
 e0000001/tmp/signed|signed: a stash
 e0000001/tmp/freshinside|freshinside/sub/fresh.txt changed 0.0 days ago
 e0000001/tmp/bazelbusy|Bazel output base $P2: its server is running
@@ -348,6 +354,18 @@ except m.Keep as k:
 [[ "$OUT2" == "keep: x/sub changed 0.0 days ago" ]] && pass "inside an entry too: a ctime from today keeps it" || fail "ctime inside" "$OUT2"
 
 echo ""
+echo "=== the first re-check, before the quarantine rename: an output base whose server started keeps it ==="
+mkdir -p "$TMP/ce/e/ws"
+OUT2=$(CE="$TMP/ce" pym 'import os, types
+d = os.environ["CE"]; st = os.lstat(d)
+ctx = types.SimpleNamespace(cutoff=float("inf"), unreadable=[], protected=[], cwds=[], cwd_note="",
+    bases=[{"name": "x", "ws_real": os.path.realpath(d + "/e/ws"), "server": "running", "pid": 7, "users": ""}])
+job = {"tmp": d, "tmp_real": os.path.realpath(d), "dev": st.st_dev, "live": False}
+print(m.check_entry(ctx, job, "e", cheap=True)[:2])')
+[ "$OUT2" = "('keep', 'Bazel output base x: its server is running (pid 7)')" ] \
+  && pass "kept before any rename, so a running build never sees its workspace move" || fail "cheap check bases" "$OUT2"
+
+echo ""
 echo "=== deletion helpers: chmod never through a link; a tree too deep is an error, not a crash ==="
 mkdir -p "$TMP/cm/real" "$TMP/cm/target"; chmod 000 "$TMP/cm/target"; ln -s "$TMP/cm/target" "$TMP/cm/lnk"
 OUT2=$(CM="$TMP/cm" pym 'import os
@@ -398,7 +416,7 @@ GONE=""; for p in "$E/clean" "$E/linkentry" "$E/linkout" "$E/plainfile" "$F/othe
 [ -z "$GONE" ] && [[ "$OUT" == *"deleted Bazel output base $P1"* ]] \
   && pass "the eligible entries and the clone's read-only output base are gone" || fail "deleted" "left:$GONE $OUT"
 LEFT=$(exists_all "$E/dirty" "$E/ahead" "$E/detached" "$E/tagonly" "$E/stash" "$E/hidden-au/f" "$E/hidden-sw/f" "$E/noremote" \
-  "$E/worktree/wt" "$E/nested/a/b/c/f" "$E/untracked" "$E/bare.git" "$E/badgit/file" "$E/filtered" "$E/signed" "$E/xjob/sub" \
+  "$E/worktree/wt" "$E/nested/a/b/c/f" "$E/untracked" "$E/bare.git" "$E/badgit/file" "$E/filtered" "$E/filtered-inc/f" "$E/signed" "$E/xjob/sub" \
   "$E/freshinside/sub/fresh.txt" "$E/bazelbusy/ws" "$E/procdir/inner" "$E/young" "$F/work/sub" "$H/hcwd" "$C5/deep" \
   "$TMP/outside2/keep" "$TMP/outside3/keep" "$TMP/outside4/old" "$PJ/notes.txt" "$PJ/deadbeef" "$PJ/b0000004/tmp" \
   "$PB/$P2" "$PB/$P3" "$PB/$P4" "$PB/$P5" "$PB/$P6" "$PB/$P7" "$PB/cache/x" "$PB/install/x" "$TMP/mainrepo/f" "$E/fifo" "$E/fifodir/pipe")

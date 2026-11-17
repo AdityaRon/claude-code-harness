@@ -448,9 +448,12 @@ def git_gate(repo, bare, tops, ceiling, allow_untracked, env):
             raise Keep("git %s failed: %s" % (" ".join(args), (p.stderr.strip().splitlines() or ["exit %d" % p.returncode])[0]))
         return p.stdout
 
-    # A clean or process filter runs while status hashes a changed file: the repo's own code.
-    if run("config", "--get-regexp", r"^filter\.", ok=(0, 1)).strip():
-        raise Keep("a git filter is configured, which git status would run")
+    # A clean or process filter runs while status hashes a changed file. One the repo's own config
+    # sets (includes too) is the repo's code; system and global ones, git-lfs's, are the user's.
+    for ln in run("config", "--show-scope", "--get-regexp", r"^filter\.", ok=(0, 1)).splitlines():
+        scope, _, key = ln.partition("\t")
+        if scope not in ("system", "global"):
+            raise Keep("a git filter is configured in the repo (%s), which git status would run" % shown(key.split(" ")[0]))
     if not bare:
         lines = run("status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=all").splitlines()
         if any(not ln.startswith("??") for ln in lines):
@@ -672,10 +675,7 @@ def check_entry(ctx, job, name, at=None, top_st=None, cheap=False):
             return "delete", st.st_blocks * 512, []
         if ctx.cwds is None and job["live"]:
             raise Keep("live, and process working folders are unknown (%s)" % ctx.cwd_note)
-        if cheap:
-            return "delete", None, []
-        size, repos = survey(phys, st.st_dev, ctx.cutoff, ctx.now, name)
-        bases = []
+        bases = []  # before the quarantine rename too: a server that started since the listing keeps it
         for b in ctx.bases:
             if b["ws_real"] and inside(b["ws_real"], logical):
                 if b["server"] != "not running":
@@ -683,6 +683,9 @@ def check_entry(ctx, job, name, at=None, top_st=None, cheap=False):
                 if b["users"]:
                     raise Keep("Bazel output base %s: %s" % (shown(b["name"]), b["users"]))
                 bases.append(b)
+        if cheap:
+            return "delete", None, bases
+        size, repos = survey(phys, st.st_dev, ctx.cutoff, ctx.now, name)
         for repo, bare, label in repos:
             try:
                 git_gate(repo, bare, sorted(reals), job["tmp_real"], ctx.a.allow_untracked, ctx.env)
