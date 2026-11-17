@@ -101,7 +101,7 @@ skip, except in CI, which clones it.
 | `sensitive-file-guard` | Read, Grep, file writes | Deny: `.env`, keys, SSH and cloud credentials, credential folders. Ask: a Grep at or above your home folder |
 | `secret-scanner` | file writes | Deny: high-confidence token shapes (AWS, GitHub, Slack, Stripe, Google, Anthropic, OpenAI, PEM) in written content |
 | `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, a broad `git add` that would stage a credential file or that it cannot check. Ask: deleting a remote branch whose tip no other ref holds, remote changes, stash drop. Runs: local branch deletes, `worktree remove --force`, identity and signing config |
-| `rm-guard` | Bash | Deny: recursive `rm` of home, root or a top-level folder. Shadow: `rm -rf` outside the session's scratch folder |
+| `rm-guard` | Bash | Deny: recursive `rm` of home, root or a top-level folder. Ask: `disk-space.py` with `--apply`, in any spelling. Shadow: `rm -rf` outside the session's scratch folder |
 | `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, the Bash guards' skip file, shell startup files, `~/.gitconfig`, LaunchAgents, Bash writes into a mod Claude Code loads by itself, and copies or extractions into a `.claude` folder. Deny: moving or emptying `~/.claude` |
 | `network-guard` | Bash | Deny: file uploads and pipe-to-shell. Ask: edits to the machine-local network allowlist. Shadow: request bodies, `DELETE`, `curl`/`wget` to hosts off the allowlist, `scp`/`rsync`, local servers. WebFetch is not guarded |
 | `interpreter-guard` | Bash | Shadow: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts. Auto mode drops `Bash(python3:*)`, so its classifier sees them |
@@ -222,7 +222,7 @@ bin/                     ← every file installed flat to ~/.claude by install.s
   spend-report.py        ← what sessions, subagents and loop ticks cost, from local transcripts
   disk-space.py          ← what job folders and Bazel output bases hold (report, bazel); harness-update.sh
                            records the totals once a day for session-start's warning (doctor.sh --disk);
-                           prune and bazel --sweep list what is safe to delete and delete it by digest
+                           prune, clone and bazel --sweep list what is safe to delete and delete it by digest
 tools/                   ← run from the clone only, by CI, releases and whoever maintains a fork
   upstream-check.sh      ← the daily breakage check
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run

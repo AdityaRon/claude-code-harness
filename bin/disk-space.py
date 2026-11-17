@@ -9,9 +9,13 @@
                                                tmp entries old enough and safe to delete, and a digest
   disk-space.py prune --apply DIGEST [FLAGS]   deletes exactly that listing, each entry checked again
   disk-space.py bazel --sweep [--apply DIGEST] output bases whose workspace is gone, the same way
+  disk-space.py clone PATH                     a clone anywhere in your home folder and its output
+                                               bases: the same checks, no age test
+  disk-space.py clone --apply DIGEST PATH      deletes them
 
-Only prune --apply and bazel --sweep --apply delete, and --apply must come right there, where the
-ask rules in settings.json look for it.
+Only --apply deletes, and it must come right after prune, clone or bazel --sweep, where the ask
+rules in settings.json look for it; rm-guard asks on any other spelling. Commits only a reflog
+holds are not looked for.
 
 Sizes come from one `du -k -d 1` over each root, so they are allocated space, and a GB is 10^9
 bytes. A job is live when `claude agents --json --all` gives it a pid; when that command is
@@ -228,7 +232,7 @@ def print_jobs(r):
                                                      days(j["newest_entry_days"]), live, idle, j["state"]))
     if r["other"]:
         print("")
-        print("Not job folders, left alone: " + ", ".join("%s (%s)" % (o["name"], o["kind"]) for o in r["other"]))
+        print("Not job folders, left alone: " + ", ".join("%s (%s)" % (shown(o["name"]), o["kind"]) for o in r["other"]))
 
 
 # ---- Bazel ------------------------------------------------------------------
@@ -272,9 +276,10 @@ def spellings(path):
     return s
 
 
-def server_state(base, procs):
+def server_state(base, procs, named=None):
     """(running | not running | unknown, pid). Running only when the pid in server/server.pid.txt is
-    alive and its command line names this output base: a reused pid is not this server."""
+    alive and its command line names this output base (NAMED, when BASE is its quarantine name): a
+    reused pid is not this server."""
     try:
         with open(os.path.join(base, "server", "server.pid.txt")) as f:
             txt = f.read(64).strip()
@@ -290,7 +295,23 @@ def server_state(base, procs):
     cmd = procs.get(pid)
     if cmd is None:
         return "not running", pid
-    return ("running" if any(s in cmd for s in spellings(base)) else "not running"), pid
+    return ("running" if any(s in cmd for s in spellings(named or base)) else "not running"), pid
+
+
+def base_users(base, cwds, procs):
+    """Why a process may be using output base BASE, whatever server.pid.txt says: a working folder
+    inside it, or a command line naming it. None when neither; a reason too when lsof or ps failed."""
+    if cwds is None or procs is None:
+        return "process working folders or command lines unknown"
+    real = os.path.realpath(base)
+    for pid, cwd in cwds:
+        if inside(cwd, real):
+            return "pid %d's working folder is inside" % pid
+    names = spellings(base)
+    for pid, cmd in procs.items():
+        if pid != os.getpid() and any(n in cmd for n in names):
+            return "pid %d's command line names it" % pid
+    return None
 
 
 def read_marker(base):
@@ -306,7 +327,7 @@ def read_marker(base):
     return txt[:-1] if txt.endswith("\n") else txt
 
 
-def bazel_report(root, procs="ps", sized=True):
+def bazel_report(root, procs="ps", sized=True, cwds="lsof"):
     """Every child of ROOT with a DO_NOT_BUILD_HERE file. cache/ and install/ are never output bases."""
     root = os.path.normpath(root)
     out = {"root": root, "exists": os.path.isdir(root), "bases": [], "total_bytes": None, "du_note": "",
@@ -316,6 +337,8 @@ def bazel_report(root, procs="ps", sized=True):
     sizes, out["total_bytes"], out["du_note"] = du_children(root) if sized else ({}, None, "not sized")
     if procs == "ps":
         procs = processes()
+    if cwds == "lsof":
+        cwds = process_cwds()[0]
     out["ps_ok"] = procs is not None
     for n in sorted(os.listdir(root)):
         if n in ("cache", "install"):
@@ -328,8 +351,8 @@ def bazel_report(root, procs="ps", sized=True):
             continue
         server, pid = server_state(base, procs)
         b = {"name": n, "path": base, "workspace": ws, "workspace_state": workspace_state(ws),
-             "bytes": sizes.get(n), "server": server, "pid": pid}
-        b["orphan"] = b["workspace_state"] == "gone" and server == "not running"
+             "bytes": sizes.get(n), "server": server, "pid": pid, "users": base_users(base, cwds, procs)}
+        b["orphan"] = b["workspace_state"] == "gone" and server == "not running" and not b["users"]
         if b["orphan"]:
             out["orphans"] += 1
             out["orphan_bytes"] += b["bytes"] or 0
@@ -346,27 +369,50 @@ def print_bazel(r):
           % (r["root"], len(r["bases"]), fmt(r["total_bytes"]), "; " + r["du_note"] if r["du_note"] else ""))
     print("Workspace: what DO_NOT_BUILD_HERE names. Unknown: an unmounted volume or a path this process may")
     print("not read; never counted as gone. Server: running only when server.pid.txt's pid is alive and its")
-    print("command line names the base" + ("." if r["ps_ok"] else "; ps failed, so unknown."))
+    print("command line names the base" + ("." if r["ps_ok"] else "; ps failed, so unknown.") + " In use: a process's")
+    print("working folder is inside the base, or its command line names it.")
     print("")
     print("%-32s %10s %-9s %-11s %s" % ("output base", "size", "workspace", "server", "workspace path"))
     for b in r["bases"]:
-        print("%-32s %10s %-9s %-11s %s" % (b["name"], fmt(b["bytes"]), b["workspace_state"], b["server"], b["workspace"]))
+        print("%-32s %10s %-9s %-11s %s%s" % (shown(b["name"]), fmt(b["bytes"]), b["workspace_state"], b["server"],
+                                               shown(b["workspace"]), "  (in use: %s)" % b["users"] if b["users"] else ""))
     print("")
-    print("Orphaned (workspace gone, no server running): %d output bases, %s" % (r["orphans"], fmt(r["orphan_bytes"])))
+    print("Orphaned (workspace gone, no server running, no process using it): %d output bases, %s"
+          % (r["orphans"], fmt(r["orphan_bytes"])))
 
 
-# ---- deletion: prune and bazel --sweep ------------------------------------------
-# Both list by default, with a digest of what they would delete; only --apply with that digest
-# deletes, and each target is checked again just before. Nothing here follows a symlink, crosses a
-# device, or touches state.json, timeline.jsonl, a job folder, cache/ or install/.
+# ---- deletion: prune, bazel --sweep and clone ---------------------------------
+# Each lists by default, with a digest of what it would delete; only --apply with that digest
+# deletes. A target is renamed to a quarantine name beside itself, checked again there, and
+# deleted only while it is the inode it was before the rename; one kept goes back to its name.
+# Nothing here follows a symlink, crosses a device, or touches state.json, timeline.jsonl, a job
+# folder, cache/ or install/. Commits only a reflog holds are not looked for.
 
 GIT = ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-       "-c", "core.untrackedCache=false"]
+       "-c", "core.untrackedCache=false", "-c", "log.showSignature=false"]
 PAUSE_ENV = "CLAUDE_DISK_SPACE_TEST_PAUSE"  # tests only: hold between the digest check and the first delete
+NOW_ENV = "CLAUDE_DISK_SPACE_NOW"  # tests only: the time ages count from, in epoch seconds
+MAX_DEPTH = 128  # folders deep; deeper is kept, as rm_tree holds a descriptor a level
+QUARANTINE = ".disk-space-quarantine-"
 
 
 class Keep(Exception):
     """Why an entry stays."""
+
+
+def clock():
+    v = os.environ.get(NOW_ENV)
+    return float(v) if v else time.time()
+
+
+def changed(st):
+    """When an inode last changed. ctime too: tar -x, cp -p, rsync -a and unzip set mtime back."""
+    return max(st.st_mtime, st.st_ctime)
+
+
+def shown(s):
+    """S as printed: plain, or as a Python literal, so a name holding a newline stays on its line."""
+    return s if re.match(r"^[A-Za-z0-9._+@%=:,/~-]*$", s) else repr(s)
 
 
 def git_env():
@@ -385,37 +431,44 @@ def under(path, top):
     return inside(os.path.realpath(path), os.path.realpath(top))
 
 
-def git_gate(repo, bare, entry, allow_untracked, env):
-    """Raise Keep when the repo at REPO holds work no remote has. A git error is a reason too."""
+def git_gate(repo, bare, tops, ceiling, allow_untracked, env):
+    """Raise Keep when the repo at REPO holds work no remote has, or would run code of its own.
+    TOPS: the names the entry has had (its own, its quarantine one). Git looks for no repo above
+    CEILING, so a folder with a broken .git is never judged by a repo around the entry."""
+    env = dict(env, GIT_CEILING_DIRECTORIES=ceiling)
     where = ["--git-dir=" + repo] if bare else ["-C", repo]
 
-    def run(*args):
+    def run(*args, ok=(0,)):
         try:
-            p = subprocess.run(GIT + where + list(args), capture_output=True, text=True, timeout=120, env=env,
-                               stdin=subprocess.DEVNULL)
+            p = subprocess.run(GIT + where + list(args), capture_output=True, text=True, errors="surrogateescape",
+                               timeout=120, env=env, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError) as e:
             raise Keep("git %s did not run: %s" % (args[0], e))
-        if p.returncode != 0:
+        if p.returncode not in ok:
             raise Keep("git %s failed: %s" % (" ".join(args), (p.stderr.strip().splitlines() or ["exit %d" % p.returncode])[0]))
         return p.stdout
 
+    # A clean or process filter runs while status hashes a changed file: the repo's own code.
+    if run("config", "--get-regexp", r"^filter\.", ok=(0, 1)).strip():
+        raise Keep("a git filter is configured, which git status would run")
     if not bare:
-        lines = run("status", "--porcelain", "--untracked-files=normal").splitlines()
+        lines = run("status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=all").splitlines()
         if any(not ln.startswith("??") for ln in lines):
             raise Keep("tracked files changed")
         if lines and not allow_untracked:
             raise Keep("untracked files (--allow-untracked deletes them)")
+        if any(ln[:1] == "S" or ln[:1].islower() for ln in run("ls-files", "-v").splitlines()):
+            raise Keep("files marked skip-worktree or assume-unchanged, whose edits status does not show")
     if not run("remote").strip() and run("rev-list", "-n", "1", "--all").strip():
         raise Keep("commits and no remote")
-    if run("log", "--branches", "--not", "--remotes", "--oneline").strip():
-        raise Keep("a branch has commits no remote has")
-    if run("log", "HEAD", "--not", "--remotes", "--oneline").strip():
-        raise Keep("HEAD has commits no remote has (a detached HEAD)")
     if (run("for-each-ref", "refs/stash") if bare else run("stash", "list")).strip():
         raise Keep("a stash")
+    if run("rev-list", "-n", "1", "--all", "--not", "--remotes").strip():
+        raise Keep("commits no remote has, on a branch, a tag or a detached HEAD")
     for ln in run("worktree", "list", "--porcelain").splitlines():
-        if ln.startswith("worktree ") and not under(ln[len("worktree "):], entry):
-            raise Keep("a worktree outside the entry: " + ln[len("worktree "):])
+        w = ln[len("worktree "):]
+        if ln.startswith("worktree ") and not any(under(w, t) for t in tops):
+            raise Keep("a worktree outside the entry: " + shown(w))
 
 
 def bare_looking(names):
@@ -424,36 +477,43 @@ def bare_looking(names):
                 and r.is_dir(follow_symlinks=False))
 
 
-def survey(entry, dev, cutoff, now):
-    """One walk of a tmp entry that follows no symlink: (bytes, [(repo, bare)]). Keep when anything
-    inside changed after CUTOFF, sits on another device, or cannot be read. Repos: a folder holding
-    .git (a folder or a file), and a bare-looking one, inside a .git folder too (a submodule's)."""
+def survey(entry, dev, cutoff, now, label):
+    """One walk of ENTRY that follows no symlink: (bytes, [(repo, bare, name)]). Keep when anything
+    inside changed (mtime or ctime) after CUTOFF, is a socket, fifo or device, sits on another
+    device, is nested past MAX_DEPTH, or cannot be read. Repos: a folder holding .git (a folder or a
+    file), and a bare-looking one, inside a .git folder too (a submodule's). LABEL names ENTRY."""
     size, repos = 0, []
-    stack = [(entry, 0)]  # 0: outside .git; 1: a .git folder itself; 2: inside one
-    top = os.path.dirname(entry)
+    stack = [(entry, 0, 0)]  # path; 0 outside .git, 1 a .git folder itself, 2 inside one; depth
+
+    def rel(p):
+        r = os.path.relpath(p, entry)
+        return shown(label if r == "." else label + "/" + r)
+
     while stack:
-        d, g = stack.pop()
+        d, g, depth = stack.pop()
+        if depth > MAX_DEPTH:
+            raise Keep("%s is nested deeper than %d folders" % (rel(d), MAX_DEPTH))
         try:
             with os.scandir(d) as it:
                 ents = list(it)
             names = {e.name: e for e in ents}
             if g == 0 and ".git" in names:
-                repos.append((d, False))
+                repos.append((d, False, rel(d)))
             elif g != 1 and bare_looking(names):
-                repos.append((d, True))
+                repos.append((d, True, rel(d)))
             for e in ents:
                 st = e.stat(follow_symlinks=False)
                 size += st.st_blocks * 512
-                if st.st_mtime >= cutoff:
-                    raise Keep("%s changed %.1f days ago" % (os.path.relpath(e.path, top), (now - st.st_mtime) / 86400))
+                if changed(st) >= cutoff:
+                    raise Keep("%s changed %.1f days ago" % (rel(e.path), max(0.0, now - changed(st)) / 86400))
                 if not (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode)):
-                    raise Keep("%s is a socket, fifo or device, which a process may use" % os.path.relpath(e.path, top))
+                    raise Keep("%s is a socket, fifo or device, which a process may use" % rel(e.path))
                 if stat.S_ISDIR(st.st_mode):
                     if st.st_dev != dev:
-                        raise Keep("%s is on another device" % os.path.relpath(e.path, top))
-                    stack.append((e.path, 1 if (g == 0 and e.name == ".git") else (2 if g else 0)))
+                        raise Keep("%s is on another device" % rel(e.path))
+                    stack.append((e.path, 1 if (g == 0 and e.name == ".git") else (2 if g else 0), depth + 1))
         except OSError as e:
-            raise Keep("cannot read %s: %s" % (os.path.relpath(d, top), e.strerror))
+            raise Keep("cannot read %s: %s" % (rel(d), e.strerror))
     return size, repos
 
 
@@ -463,7 +523,8 @@ def process_cwds():
     if not exe:
         return None, "no lsof"
     try:
-        p = subprocess.run([exe, "-n", "-P", "-d", "cwd", "-Fpn"], capture_output=True, text=True, timeout=120)
+        p = subprocess.run([exe, "-n", "-P", "-d", "cwd", "-Fpn"], capture_output=True, text=True,
+                           errors="surrogateescape", timeout=120)
     except (OSError, subprocess.SubprocessError) as e:
         return None, "lsof did not run: %s" % e
     cwds, pid = [], None
@@ -478,7 +539,7 @@ def process_cwds():
 
 
 def state_paths(job_dir):
-    """(key, folder, resolved) for each folder a live job's state.json names; None when it cannot be read."""
+    """(key, folder, resolved) for each folder a job's state.json names; None when it cannot be read."""
     try:
         with open(os.path.join(job_dir, "state.json")) as f:
             s = json.load(f)
@@ -492,28 +553,64 @@ def state_paths(job_dir):
 
 class Ctx:
     """What a listing, and each re-check, reads about the machine. A re-check reads claude agents,
-    lsof and ps again when the last read is over REFRESH seconds old: each costs about a second
-    together on an Apple M2, and an apply may re-check thousands of entries."""
+    lsof and ps again when the last read is over REFRESH seconds old: together they cost about a
+    second on an Apple M2, and an apply may re-check thousands of entries."""
     REFRESH = 5
 
-    def __init__(self, a):
-        self.a, self.env = a, git_env()
+    def __init__(self, a, ages=True):
+        self.a, self.ages, self.env = a, ages, git_env()
         self.refresh(sized=True)
 
     def recheck(self):
         if time.time() - self.read_at > self.REFRESH:
             self.refresh(sized=False)
-        self.now = time.time()
-        self.cutoff = self.now - self.a.days * 86400
+        self.set_clock()
+
+    def set_clock(self):
+        self.now = clock()
+        self.cutoff = self.now - self.a.days * 86400 if self.ages else float("inf")
 
     def refresh(self, sized):
-        self.read_at = self.now = time.time()
-        self.cutoff = self.now - self.a.days * 86400
+        self.read_at = time.time()
+        self.set_clock()
         self.pids, self.live_note = claude_agents()
         self.cwds, self.cwd_note = process_cwds()
-        self.bases = bazel_report(self.a.root, sized=sized)["bases"]
+        self.procs = processes()
+        self.bases = bazel_report(self.a.root, procs=self.procs, sized=sized, cwds=self.cwds)["bases"]
         for b in self.bases:
             b["ws_real"] = os.path.realpath(b["workspace"]) if b["workspace"].startswith("/") else None
+        self.live, self.protected, self.unreadable = live_jobs(self)
+
+
+def live_jobs(ctx):
+    """Every live job, with why; the folders their state.json files name, across all of them, since
+    a session may work in another job's tmp; and the live jobs whose state.json cannot be read."""
+    root = os.path.normpath(ctx.a.jobs)
+    live, protected, unreadable = {}, [], []
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return live, protected, unreadable
+    for n in names:
+        if not is_job(root, n):
+            continue
+        jd = os.path.join(root, n)
+        if ctx.pids is None:
+            why = "liveness unknown: " + ctx.live_note
+        elif ctx.pids.get(n):
+            why = "pid %d" % ctx.pids[n]
+        else:
+            seen = activity(jd)
+            if seen is None or ctx.now - seen >= ctx.a.live_hours * 3600:
+                continue
+            why = "active %.1f h ago" % (max(0.0, ctx.now - seen) / 3600)
+        live[n] = why
+        paths = state_paths(jd)
+        if paths is None:
+            unreadable.append(n)
+        else:
+            protected += [(n,) + p for p in paths]
+    return live, protected, unreadable
 
 
 def job_records(ctx, only=None):
@@ -527,8 +624,7 @@ def job_records(ctx, only=None):
     for n in names:
         if not is_job(root, n):
             continue
-        jd = os.path.join(root, n)
-        tmp = os.path.join(jd, "tmp")
+        tmp = os.path.join(root, n, "tmp")
         tst = lstat(tmp)
         if kind(tst) == "missing":
             continue
@@ -537,62 +633,61 @@ def job_records(ctx, only=None):
             continue
         tmp_real = os.path.realpath(tmp)
         if tmp_real != os.path.join(root_real, n, "tmp"):
-            skipped.append((n, "tmp resolves to " + tmp_real))
+            skipped.append((n, "tmp resolves to " + shown(tmp_real)))
             continue
-        live, why = False, ""
-        if ctx.pids is None:
-            live, why = True, "liveness unknown: " + ctx.live_note
-        elif ctx.pids.get(n):
-            live, why = True, "pid %d" % ctx.pids[n]
-        else:
-            seen = activity(jd)
-            if seen is not None and ctx.now - seen < ctx.a.live_hours * 3600:
-                live, why = True, "active %.1f h ago" % (max(0.0, ctx.now - seen) / 3600)
         jobs.append({"id": n, "tmp": tmp, "tmp_real": tmp_real, "dev": tst.st_dev, "ino": tst.st_ino,
-                     "live": live, "why": why, "protected": state_paths(jd) if live else []})
+                     "live": n in ctx.live})
     return jobs, skipped
 
 
-def check_entry(ctx, job, name):
-    """("delete", bytes, bases), ("keep", reason, None) or ("young", None, None) for tmp entry NAME."""
-    p = os.path.join(job["tmp"], name)
-    st = lstat(p)
+def check_entry(ctx, job, name, at=None, top_st=None, cheap=False):
+    """("delete", bytes, bases), ("keep", reason, None) or ("young", None, None) for entry NAME of
+    folder JOB["tmp"]. AT: its quarantine name, once renamed; TOP_ST: its stat from before the
+    rename, which set its ctime. CHEAP: only the checks that need no walk and no git."""
+    phys = os.path.join(job["tmp"], at or name)
+    st = top_st or lstat(phys)
     if st is None:
         return "keep", "gone", None
-    if st.st_mtime >= ctx.cutoff:
+    if changed(st) >= ctx.cutoff:
         return "young", None, None
-    real = os.path.realpath(p)  # once: compared below with folders resolved once per listing
+    logical = os.path.join(job["tmp_real"], name)
+    reals = {logical, os.path.join(job["tmp_real"], at or name)}
+    if kind(st) == "symlink":
+        reals.add(os.path.realpath(phys))  # a working folder through the link counts
     try:
         if st.st_dev != job["dev"]:
             raise Keep("on another device")
-        if job["protected"] is None:
-            raise Keep("the job is live and its state.json cannot be read")
-        for label, path, path_real in job["protected"]:
-            if inside(path_real, real):
-                raise Keep("the live job's %s is inside: %s" % (label, path))
+        if ctx.unreadable and kind(st) != "file":
+            raise Keep("live job %s's state.json cannot be read, so the folders it works in are unknown"
+                       % ctx.unreadable[0])
+        for jid, key, path, path_real in ctx.protected:
+            if any(inside(path_real, r) for r in reals):
+                raise Keep("live job %s's %s is inside: %s" % (jid, key, shown(path)))
         for pid, cwd in ctx.cwds or ():
-            if inside(cwd, real):
+            if any(inside(cwd, r) for r in reals):
                 raise Keep("pid %d's working folder is inside" % pid)
         if kind(st) == "other":
             raise Keep("a socket, fifo or device, which a process may use")
         if kind(st) != "dir":  # a file or a link goes by itself; a link's target is never touched
             return "delete", st.st_blocks * 512, []
-        if real != os.path.join(job["tmp_real"], name):
-            raise Keep("resolves outside tmp")
         if ctx.cwds is None and job["live"]:
-            raise Keep("the job is live and process working folders are unknown (%s)" % ctx.cwd_note)
-        size, repos = survey(p, st.st_dev, ctx.cutoff, ctx.now)
+            raise Keep("live, and process working folders are unknown (%s)" % ctx.cwd_note)
+        if cheap:
+            return "delete", None, []
+        size, repos = survey(phys, st.st_dev, ctx.cutoff, ctx.now, name)
         bases = []
         for b in ctx.bases:
-            if b["ws_real"] and inside(b["ws_real"], real):
+            if b["ws_real"] and inside(b["ws_real"], logical):
                 if b["server"] != "not running":
-                    raise Keep("Bazel output base %s: its server is %s (pid %s)" % (b["name"], b["server"], b["pid"]))
+                    raise Keep("Bazel output base %s: its server is %s (pid %s)" % (shown(b["name"]), b["server"], b["pid"]))
+                if b["users"]:
+                    raise Keep("Bazel output base %s: %s" % (shown(b["name"]), b["users"]))
                 bases.append(b)
-        for repo, bare in repos:
+        for repo, bare, label in repos:
             try:
-                git_gate(repo, bare, p, ctx.a.allow_untracked, ctx.env)
+                git_gate(repo, bare, sorted(reals), job["tmp_real"], ctx.a.allow_untracked, ctx.env)
             except Keep as e:
-                raise Keep("%s: %s" % (os.path.relpath(repo, job["tmp"]), e))
+                raise Keep("%s: %s" % (label, e))
     except Keep as e:
         return "keep", str(e), None
     return "delete", st.st_blocks * 512 + size, bases
@@ -607,10 +702,14 @@ def digest(targets):
     return hashlib.sha256("\n".join(sorted(rows)).encode("utf-8", "surrogateescape")).hexdigest()[:16]
 
 
+def base_rows(bases):
+    return [{k: b[k] for k in ("name", "path", "bytes", "workspace")} for b in bases]
+
+
 def prune_plan(ctx):
     jobs, skipped = job_records(ctx)
     plan = {"jobs_dir": os.path.normpath(ctx.a.jobs), "days": ctx.a.days, "targets": [], "kept": [], "young": 0,
-            "skipped_jobs": skipped, "live_jobs": [[j["id"], j["why"]] for j in jobs if j["live"]],
+            "skipped_jobs": skipped, "live_jobs": [[n, w] for n, w in sorted(ctx.live.items())],
             "cwd_note": ctx.cwd_note, "processes": len({p for p, _ in ctx.cwds or ()})}
     for j in jobs:
         try:
@@ -627,26 +726,43 @@ def prune_plan(ctx):
                 plan["kept"].append({"path": rel, "reason": val})
             else:
                 plan["targets"].append({"job": j["id"], "name": n, "rel": rel, "path": os.path.join(j["tmp"], n),
-                                        "bytes": val, "bases": [{k: b[k] for k in ("name", "path", "bytes", "workspace")}
-                                                                for b in bases]})
+                                        "bytes": val, "link": kind(lstat(os.path.join(j["tmp"], n))) == "symlink",
+                                        "bases": base_rows(bases)})
     plan["digest"] = digest(plan["targets"])
     return plan
 
 
-def rm_tree(dir_fd, name, dev):
+def chmod_dir(dir_fd, name, st):
+    """u+rwx on folder NAME, which must still be the folder ST describes; never through a link."""
+    now_st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(now_st.st_mode) or (now_st.st_dev, now_st.st_ino) != (st.st_dev, st.st_ino):
+        raise OSError(errno.ESTALE, "changed while being deleted", name)
+    mode = stat.S_IMODE(now_st.st_mode) | stat.S_IRWXU
+    try:
+        os.chmod(name, mode, dir_fd=dir_fd, follow_symlinks=False)
+    except NotImplementedError:  # Linux has no lchmod: the stat just above is the check
+        os.chmod(name, mode, dir_fd=dir_fd)
+
+
+def rm_tree(dir_fd, name, dev, depth=0, expect=None):
     """Delete NAME in the folder open at DIR_FD: a link or file by itself, a folder after its contents.
-    Opens each folder with O_NOFOLLOW, never leaves DEV, and adds u+rwx where a folder lacks it."""
+    Opens each folder with O_NOFOLLOW, never leaves DEV, adds u+rwx where a folder lacks it, and
+    with EXPECT, deletes NAME only while it is that (device, inode)."""
     st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    if expect is not None and (st.st_dev, st.st_ino) != expect:
+        raise OSError(errno.ESTALE, "not the inode that was checked", name)
     if not stat.S_ISDIR(st.st_mode):
         os.unlink(name, dir_fd=dir_fd)
         return
     if st.st_dev != dev:
         raise OSError(errno.EXDEV, "on another device", name)
+    if depth > MAX_DEPTH + 8:
+        raise OSError(errno.ELOOP, "nested deeper than %d folders" % MAX_DEPTH, name)
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         fd = os.open(name, flags, dir_fd=dir_fd)
     except PermissionError:
-        os.chmod(name, stat.S_IMODE(st.st_mode) | stat.S_IRWXU, dir_fd=dir_fd)  # a real folder: stat said so
+        chmod_dir(dir_fd, name, st)
         fd = os.open(name, flags, dir_fd=dir_fd)
     try:
         fst = os.fstat(fd)
@@ -655,43 +771,100 @@ def rm_tree(dir_fd, name, dev):
         if fst.st_mode & stat.S_IRWXU != stat.S_IRWXU:
             os.fchmod(fd, stat.S_IMODE(fst.st_mode) | stat.S_IRWXU)
         for child in os.listdir(fd):
-            rm_tree(fd, child, dev)
+            rm_tree(fd, child, dev, depth + 1)
     finally:
         os.close(fd)
     os.rmdir(name, dir_fd=dir_fd)
 
 
-def remove_at(parent, expect, name):
-    """Delete NAME inside PARENT, which must still be the folder EXPECT (dev, inode) names."""
+def delete_at(dir_fd, name, expect):
+    """rm_tree of NAME, the inode EXPECT names; a tree too deep for the stack is an OSError too."""
+    try:
+        rm_tree(dir_fd, name, expect[0], 0, expect)
+    except RecursionError:
+        raise OSError(errno.ELOOP, "nested too deep to delete", name)
+
+
+def put_back(fd, q, name):
+    """Rename quarantine name Q back to NAME: "" when it went back, else where it stays."""
+    if lstat_at(fd, name) is not None:
+        return "; left as %s, since %s exists again" % (shown(q), shown(name))
+    try:
+        os.rename(q, name, src_dir_fd=fd, dst_dir_fd=fd)
+        return ""
+    except OSError as e:
+        return "; left as %s: %s" % (shown(q), e.strerror)
+
+
+def lstat_at(fd, name):
+    try:
+        return os.stat(name, dir_fd=fd, follow_symlinks=False)
+    except OSError:
+        return None
+
+
+def pinned_delete(parent, parent_id, name, recheck):
+    """Rename NAME in folder PARENT to a quarantine name, ask RECHECK(qname, stat before) there, and
+    delete it only while it is the inode it was. (deleted | kept | failed, why, RECHECK's value)."""
     fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        st = os.fstat(fd)
-        if (st.st_dev, st.st_ino) != expect:
-            raise OSError(errno.ESTALE, "changed since it was checked", parent)
-        rm_tree(fd, name, st.st_dev)
+        pst = os.fstat(fd)
+        if (pst.st_dev, pst.st_ino) != parent_id:
+            return "kept", "%s changed since it was checked" % shown(parent), None
+        st0 = lstat_at(fd, name)
+        if st0 is None:
+            return "kept", "gone", None
+        q = "%s%d-%s" % (QUARANTINE, os.getpid(), os.urandom(4).hex())
+        os.rename(name, q, src_dir_fd=fd, dst_dir_fd=fd)
+        try:
+            stq = lstat_at(fd, q)
+            if stq is None or (stq.st_dev, stq.st_ino) != (st0.st_dev, st0.st_ino):
+                ok, why, val = False, "it changed as it was renamed", None
+            else:
+                ok, why, val = recheck(q, st0)
+        except BaseException:
+            put_back(fd, q, name)
+            raise
+        if not ok:
+            return "kept", why + put_back(fd, q, name), None
+        try:
+            delete_at(fd, q, (st0.st_dev, st0.st_ino))
+        except OSError as e:
+            return "failed", "%s, so it may be partly gone%s" % (e, put_back(fd, q, name)), None
+        return "deleted", "", val
     finally:
         os.close(fd)
 
 
-def base_recheck(root, name, workspace, want_gone):
-    """Why output base NAME may not go now, or None."""
-    base = os.path.join(root, name)
-    if name in ("cache", "install") or kind(lstat(base)) != "dir":
-        return "not an output base folder"
-    if read_marker(base) != workspace:
-        return "its DO_NOT_BUILD_HERE changed"
-    if want_gone and workspace_state(workspace) != "gone":
-        return "its workspace is %s" % workspace_state(workspace)
-    server, pid = server_state(base, processes())
-    if server != "not running":
-        return "its server is %s (pid %s)" % (server, pid)
-    return None
-
-
-def remove_base(root, name):
+def delete_base(root, name, workspace, want_gone):
+    """(deleted | kept | failed, why) for output base NAME, pinned and checked again as an entry is:
+    its marker, its workspace, its server, and any process using it."""
     real = os.path.realpath(os.path.normpath(root))
-    st = os.stat(real)
-    remove_at(real, (st.st_dev, st.st_ino), name)
+    rst = lstat(real)
+    if rst is None or name in ("cache", "install"):
+        return "kept", "not an output base"
+    logical = os.path.join(real, name)
+
+    def recheck(q, st0):
+        phys = os.path.join(real, q)
+        if not stat.S_ISDIR(st0.st_mode):
+            return False, "not a folder", None
+        if read_marker(phys) != workspace:
+            return False, "its DO_NOT_BUILD_HERE changed", None
+        if want_gone and workspace_state(workspace) != "gone":
+            return False, "its workspace is %s" % workspace_state(workspace), None
+        procs = processes()
+        server, pid = server_state(phys, procs, named=logical)
+        if server != "not running":
+            return False, "its server is %s (pid %s)" % (server, pid), None
+        cwds = process_cwds()[0]
+        users = base_users(logical, cwds, procs) or base_users(phys, cwds, procs)
+        if users:
+            return False, users, None
+        return True, "", None
+
+    status, why, _ = pinned_delete(real, (rst.st_dev, rst.st_ino), name, recheck)
+    return status, why
 
 
 def pause():
@@ -707,46 +880,67 @@ def pause():
     raise SystemExit("disk-space: %s never appeared; nothing deleted" % p)
 
 
+def report_base(status, why, b, sizes):
+    if status == "deleted":
+        print("deleted Bazel output base %s (%s)" % (shown(b["name"]), fmt(sizes.get(b["path"]))))
+    elif status == "kept":
+        print("kept at the re-check: Bazel output base %s: %s" % (shown(b["name"]), why))
+    else:
+        print("could not delete Bazel output base %s: %s" % (shown(b["name"]), why))
+    return status == "failed"
+
+
+def apply_targets(ctx, targets, job_for, days_note):
+    """Delete each target pinned and checked again, then its output bases. 1 when any delete failed."""
+    failed = 0
+    for t in targets:
+        ctx.recheck()
+        j = job_for(t)
+        verdict, val, _ = check_entry(ctx, j, t["name"], cheap=True) if j else ("keep", "its folder changed", None)
+        if verdict != "delete":
+            print("kept at the re-check: %s: %s" % (shown(t["rel"]), days_note if verdict == "young" else val))
+            continue
+        planned = {b["path"] for b in t["bases"]}
+
+        def recheck(q, st0):
+            verdict, val, bases = check_entry(ctx, j, t["name"], at=q, top_st=st0)
+            if verdict == "young":
+                return False, days_note, None
+            if verdict != "delete":
+                return False, val, None
+            if any(b["path"] not in planned for b in bases):
+                return False, "an output base the listing did not name now names it", None
+            return True, "", bases
+
+        status, why, bases = pinned_delete(j["tmp"], (j["dev"], j["ino"]), t["name"], recheck)
+        if status == "kept":
+            print("kept at the re-check: %s: %s" % (shown(t["rel"]), why))
+            continue
+        if status == "failed":
+            failed += 1
+            print("could not delete %s: %s" % (shown(t["rel"]), why))
+            continue
+        print(("unlinked %s (a link; its target stays)" % shown(t["rel"])) if t.get("link")
+              else "deleted %s (%s)" % (shown(t["rel"]), fmt(t["bytes"])))
+        sizes = {b["path"]: b["bytes"] for b in t["bases"]}
+        for b in bases:
+            status, why = delete_base(ctx.a.root, b["name"], b["workspace"], want_gone=False)
+            failed += report_base(status, why, b, sizes)
+    return 1 if failed else 0
+
+
 def apply_prune(ctx, plan, want):
     if want != plan["digest"]:
         print("Nothing deleted: this listing's digest is %s, not %s. Read it, then run the command it prints."
               % (plan["digest"], want))
         return 1
     pause()
-    failed = 0
-    for t in plan["targets"]:
-        ctx.recheck()
+
+    def job_for(t):
         jobs, _ = job_records(ctx, only=t["job"])
-        j = next((x for x in jobs if x["id"] == t["job"] and x["tmp"] == os.path.dirname(t["path"])), None)
-        verdict, val, bases = check_entry(ctx, j, t["name"]) if j else ("keep", "the job or its tmp changed", None)
-        if verdict == "young":
-            val = "newer than %g days now" % ctx.a.days
-        planned = {b["path"] for b in t["bases"]}
-        if verdict == "delete" and any(b["path"] not in planned for b in bases):
-            verdict, val = "keep", "an output base the listing did not name now names it"
-        if verdict != "delete":
-            print("kept at the re-check: %s: %s" % (t["rel"], val))
-            continue
-        try:
-            remove_at(j["tmp"], (j["dev"], j["ino"]), t["name"])
-        except OSError as e:
-            failed += 1
-            print("could not delete %s, which may be partly gone: %s" % (t["rel"], e))
-            continue
-        print("deleted %s (%s)" % (t["rel"], fmt(t["bytes"])))
-        sizes = {b["path"]: b["bytes"] for b in t["bases"]}
-        for b in bases:
-            why = base_recheck(ctx.a.root, b["name"], b["workspace"], want_gone=False)
-            if why:
-                print("kept at the re-check: Bazel output base %s: %s" % (b["name"], why))
-                continue
-            try:
-                remove_base(ctx.a.root, b["name"])
-                print("deleted Bazel output base %s (%s)" % (b["name"], fmt(sizes.get(b["path"]))))
-            except OSError as e:
-                failed += 1
-                print("could not delete Bazel output base %s, which may be partly gone: %s" % (b["name"], e))
-    return 1 if failed else 0
+        return next((x for x in jobs if x["tmp"] == os.path.dirname(t["path"])), None)
+
+    return apply_targets(ctx, plan["targets"], job_for, "newer than %g days now" % ctx.a.days)
 
 
 def shown_self():
@@ -755,10 +949,10 @@ def shown_self():
     return "~/" + p[len(h):] if p.startswith(h) and re.match(r"^[A-Za-z0-9._/-]+$", p[len(h):]) else shlex.quote(p)
 
 
-def apply_command(a, verb, d):
-    parts = list(verb) + ["--apply", d]
-    if verb == ["prune"]:
-        if a.days != 7:
+def apply_command(a, verb, d, tail=()):
+    parts = list(verb) + ["--apply", d] + list(tail)
+    if verb in (["prune"], ["clone"]):
+        if verb == ["prune"] and a.days != 7:
             parts += ["--days", "%g" % a.days]
         if a.live_hours != 24:
             parts += ["--live-hours", "%g" % a.live_hours]
@@ -771,33 +965,41 @@ def apply_command(a, verb, d):
     return "python3 %s %s" % (shown_self(), " ".join(shlex.quote(x) for x in parts))
 
 
+def print_targets(targets, kept):
+    for t in targets:
+        print("delete %10s  %s" % ("a link" if t.get("link") else fmt(t["bytes"]), shown(t["rel"])))
+        for b in t["bases"]:
+            print("       %10s    with Bazel output base %s" % (fmt(b["bytes"]), shown(b["name"])))
+    for k in kept:
+        print("keep   %10s  %s: %s" % ("", shown(k["path"]), k["reason"]))
+
+
+def print_total(targets, d, cmd):
+    print("")
+    if not targets:
+        print("Nothing to delete.")
+        return
+    nb = sum(len(t["bases"]) for t in targets)
+    print("To delete: %d, %s, with %d Bazel output bases, %s. Digest %s."
+          % (len(targets), fmt(sum(t["bytes"] or 0 for t in targets)), nb,
+             fmt(sum(b["bytes"] or 0 for t in targets for b in t["bases"])), d))
+    print("To delete exactly these: " + cmd)
+
+
 def print_prune(plan, cmd):
-    print("Prune: the top-level entries of each job's tmp/ in %s whose own mtime, and every mtime" % plan["jobs_dir"])
-    print("inside, is over %g days old. Kept: git work no remote has, a live job's or a process's working" % plan["days"])
-    print("folder, a running Bazel server's workspace. Never state.json, timeline.jsonl or a job folder (claude rm).")
+    print("Prune: the top-level entries of each job's tmp/ in %s whose own mtime and ctime, and every" % shown(plan["jobs_dir"]))
+    print("mtime and ctime inside, are over %g days old. Kept: git work no remote has, any live job's or" % plan["days"])
+    print("process's working folder, a Bazel output base in use. Never state.json, timeline.jsonl or a job folder.")
     live = ", ".join("%s (%s)" % (i, w) for i, w in plan["live_jobs"]) or "none"
     cwds = ("%d processes' working folders from lsof" % plan["processes"]) if not plan["cwd_note"] else \
         "process working folders unknown (%s): a live job's folders are kept" % plan["cwd_note"]
     print("Live jobs: %s. %s." % (live, cwds))
     print("")
-    for t in plan["targets"]:
-        print("delete %10s  %s" % (fmt(t["bytes"]), t["rel"]))
-        for b in t["bases"]:
-            print("       %10s    with Bazel output base %s" % (fmt(b["bytes"]), b["name"]))
-    for k in plan["kept"]:
-        print("keep   %10s  %s: %s" % ("", k["path"], k["reason"]))
+    print_targets(plan["targets"], plan["kept"])
     for n, why in plan["skipped_jobs"]:
-        print("skipped job %s: %s" % (n, why))
-    print("Entries newer than %g days by their own mtime, not listed: %d." % (plan["days"], plan["young"]))
-    print("")
-    if not plan["targets"]:
-        print("Nothing to delete.")
-        return
-    nb = sum(len(t["bases"]) for t in plan["targets"])
-    print("To delete: %d entries, %s, with %d Bazel output bases, %s. Digest %s."
-          % (len(plan["targets"]), fmt(sum(t["bytes"] or 0 for t in plan["targets"])), nb,
-             fmt(sum(b["bytes"] or 0 for t in plan["targets"] for b in t["bases"])), plan["digest"]))
-    print("To delete exactly these: " + cmd)
+        print("skipped job %s: %s" % (shown(n), why))
+    print("Entries newer than %g days by their own mtime and ctime, not listed: %d." % (plan["days"], plan["young"]))
+    print_total(plan["targets"], plan["digest"], cmd)
 
 
 def cmd_prune(a):
@@ -820,13 +1022,13 @@ def cmd_sweep(a):
     if a.json:
         print(json.dumps({"root": r["root"], "targets": targets, "digest": d}, indent=1))
     elif not r["exists"]:
-        print("No Bazel output root at %s." % r["root"])
+        print("No Bazel output root at %s." % shown(r["root"]))
     else:
-        print("Sweep: output bases in %s whose workspace is gone (not unknown) and whose server is not" % r["root"])
-        print("running. Never cache/ or install/, and never a server: a running one keeps its base.")
+        print("Sweep: output bases in %s whose workspace is gone (not unknown), whose server is not" % shown(r["root"]))
+        print("running and that no process uses. Never cache/ or install/, and never a server.")
         print("")
         for t in targets:
-            print("delete %10s  %s  (workspace was %s)" % (fmt(t["bytes"]), t["name"], t["workspace"]))
+            print("delete %10s  %s  (workspace was %s)" % (fmt(t["bytes"]), shown(t["name"]), shown(t["workspace"])))
         print("")
         if targets:
             print("To delete: %d output bases, %s. Digest %s." % (len(targets), fmt(sum(t["bytes"] or 0 for t in targets)), d))
@@ -842,25 +1044,75 @@ def cmd_sweep(a):
     pause()
     failed = 0
     for t in targets:
-        why = base_recheck(r["root"], t["name"], t["workspace"], want_gone=True)
-        if why:
-            print("kept at the re-check: %s: %s" % (t["name"], why))
-            continue
-        try:
-            remove_base(r["root"], t["name"])
-            print("deleted Bazel output base %s (%s)" % (t["name"], fmt(t["bytes"])))
-        except OSError as e:
-            failed += 1
-            print("could not delete Bazel output base %s, which may be partly gone: %s" % (t["name"], e))
+        status, why = delete_base(r["root"], t["name"], t["workspace"], want_gone=True)
+        failed += report_base(status, why, t, {t["path"]: t["bytes"]})
     return 1 if failed else 0
 
 
+def clone_path(a):
+    """The resolved clone A.path names, or raise SystemExit: a folder (not a link) holding .git,
+    inside your home folder, and inside ~/.claude only within a job's tmp."""
+    path = os.path.abspath(os.path.expanduser(a.path))
+    home = os.path.realpath(HOME)
+    claude = os.path.join(home, ".claude")
+    real = os.path.realpath(path)
+
+    def refuse(why):
+        raise SystemExit("disk-space: not a clone this deletes: %s %s. Nothing deleted." % (shown(path), why))
+
+    if kind(lstat(path)) != "dir":
+        refuse("is not a folder (a link is not followed)")
+    if real == home or not inside(real, home):
+        refuse("is not inside your home folder")
+    if inside(claude, real):
+        refuse("holds ~/.claude")
+    if inside(real, claude):
+        parts = os.path.relpath(real, os.path.join(claude, "jobs")).split("/")
+        if len(parts) < 3 or not JOB_RE.match(parts[0]) or parts[1] != "tmp":
+            refuse("is in ~/.claude, outside a job's tmp")
+    if lstat(os.path.join(real, ".git")) is None:
+        refuse("holds no .git")
+    return real
+
+
+def cmd_clone(a):
+    real = clone_path(a)
+    ctx = Ctx(a, ages=False)
+    parent = os.path.dirname(real)
+    pst = lstat(parent)
+    folder = {"id": "-", "tmp": parent, "tmp_real": parent, "dev": pst.st_dev, "ino": pst.st_ino, "live": True}
+    name = os.path.basename(real)
+    verdict, val, bases = check_entry(ctx, folder, name)
+    targets, kept = [], []
+    if verdict == "delete":
+        targets.append({"name": name, "rel": real, "path": real, "bytes": val, "bases": base_rows(bases)})
+    else:
+        kept.append({"path": real, "reason": val})
+    d = digest(targets)
+    if a.json:
+        print(json.dumps({"clone": real, "targets": targets, "kept": kept, "digest": d}, indent=1))
+    else:
+        print("Clone: kept when a git repo in it holds work no remote has, any live job's or process's working")
+        print("folder is inside, or a Bazel output base for it is in use; no age test. Its output bases go with it.")
+        print("")
+        print_targets(targets, kept)
+        print_total(targets, d, apply_command(a, ["clone"], d, [real]))
+    if a.apply is None:
+        return 0
+    print("")
+    if a.apply != d:
+        print("Nothing deleted: this listing's digest is %s, not %s. Read it, then run the command it prints." % (d, a.apply))
+        return 1
+    pause()
+    return apply_targets(ctx, targets, lambda t: folder if lstat(parent) else None, "")
+
+
 def apply_misplaced(argv):
-    """--apply anywhere but right after `prune` or `bazel --sweep`, where the ask rules look for it."""
+    """--apply anywhere but right after `prune`, `clone` or `bazel --sweep`, where the ask rules look."""
     at = [i for i, t in enumerate(argv) if t.startswith("--app")]
     if not at:
         return False
-    want = 1 if argv[:1] == ["prune"] else 2 if argv[:2] == ["bazel", "--sweep"] else None
+    want = 1 if argv[:1] in (["prune"], ["clone"]) else 2 if argv[:2] == ["bazel", "--sweep"] else None
     return want is None or at != [want] or argv[want] != "--apply"
 
 
@@ -907,9 +1159,11 @@ def days_arg(v):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    for f in (sys.stdout, sys.stderr):
+        f.reconfigure(errors="backslashreplace")  # a name or path no encoding can print still prints
     if apply_misplaced(argv):
-        print("disk-space: --apply goes right after `prune` or `bazel --sweep`, as the listing prints it,"
-              " so the ask rule in settings.json sees it. Nothing deleted.", file=sys.stderr)
+        print("disk-space: --apply goes right after `prune`, `clone` or `bazel --sweep`, as the listing"
+              " prints it, so the ask rule in settings.json sees it. Nothing deleted.", file=sys.stderr)
         return 2
     # No abbreviations: `--app` would be --apply where no ask rule looks.
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0], allow_abbrev=False)
@@ -935,8 +1189,16 @@ def main(argv=None):
     p.add_argument("--allow-untracked", action="store_true")
     p.add_argument("--json", action="store_true")
     p.add_argument("--apply", metavar="DIGEST", help="delete exactly the listing with this digest")
+    p = sub.add_parser("clone", help="a clone and its Bazel output bases, with a digest", allow_abbrev=False)
+    p.add_argument("--apply", metavar="DIGEST", help="delete exactly the listing with this digest")
+    p.add_argument("path")
+    p.add_argument("--jobs", default=jobs_default, help="the job folders whose live sessions keep their folders")
+    p.add_argument("--root", default=None, help="the Bazel output root")
+    p.add_argument("--live-hours", type=days_arg, default=24.0)
+    p.add_argument("--allow-untracked", action="store_true")
+    p.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
-    if getattr(a, "root", None) is None and a.cmd in ("bazel", "stamp", "prune"):
+    if getattr(a, "root", None) is None and a.cmd in ("bazel", "stamp", "prune", "clone"):
         a.root = default_bazel_root()
     now = time.time()
     if a.cmd == "report":
@@ -948,6 +1210,8 @@ def main(argv=None):
         return 0
     if a.cmd == "prune":
         return cmd_prune(a)
+    if a.cmd == "clone":
+        return cmd_clone(a)
     if a.cmd == "bazel" and a.sweep:
         return cmd_sweep(a)
     if a.cmd == "bazel":

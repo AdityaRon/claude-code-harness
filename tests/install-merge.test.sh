@@ -414,18 +414,19 @@ for r in "Bash(kubectl get secret:*)" "Bash(kubectl get secrets:*)" "Bash(kubect
   jq -e --arg r "$r" '.permissions.ask | index($r)' config/settings.json >/dev/null || MISSING="$MISSING $r"
 done
 [[ -z "$MISSING" ]] && pass "secret reads and config view --raw/--flatten ask, behind flags too" || fail "credential-read ask rules" "$MISSING"
-# disk-space.py deletes only with --apply right after prune or bazel --sweep (it refuses
-# any other place), so these ask before every deletion, auto mode included.
+# disk-space.py deletes only with --apply right after prune, clone or bazel --sweep (it
+# refuses any other place), so these ask before every deletion, auto mode included.
 MISSING=""
 OUT=$(merge '{}' "$(cat config/settings.json)")
 for r in "Bash(python3 ~/.claude/disk-space.py prune --apply:*)" "Bash(python3 ~/.claude/disk-space.py bazel --sweep --apply:*)" \
-         "Bash(~/.claude/disk-space.py prune --apply:*)" "Bash(~/.claude/disk-space.py bazel --sweep --apply:*)"; do
+         "Bash(~/.claude/disk-space.py prune --apply:*)" "Bash(~/.claude/disk-space.py bazel --sweep --apply:*)" \
+         "Bash(python3 ~/.claude/disk-space.py clone --apply:*)" "Bash(~/.claude/disk-space.py clone --apply:*)"; do
   jq -e --arg r "$r" '.permissions.ask | index($r)' config/settings.json >/dev/null || MISSING="$MISSING shipped:$r"
   printf '%s' "$OUT" | jq -e --arg r "$r" --arg t "${r//\~/$HOME}" '.permissions.ask | (index($r) != null) and (index($t) != null)' >/dev/null \
     || MISSING="$MISSING installed:$r"
   printf '%s' "$OUT" | jq -e --arg r "$r" '.permissions.allow | index($r) == null' >/dev/null || MISSING="$MISSING allowed:$r"
 done
-[[ -z "$MISSING" ]] && pass "disk-space.py prune and bazel --sweep --apply ask; the ~ and \$HOME spellings both install" || fail "disk-space ask rules" "$MISSING"
+[[ -z "$MISSING" ]] && pass "disk-space.py prune, clone and bazel --sweep --apply ask; the ~ and \$HOME spellings both install" || fail "disk-space ask rules" "$MISSING"
 unset RETIRED
 
 echo ""

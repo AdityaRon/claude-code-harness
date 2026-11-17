@@ -165,6 +165,8 @@
       "Bash(python3 ~/.claude/disk-space.py bazel --sweep --apply:*)",
       "Bash(~/.claude/disk-space.py prune --apply:*)",
       "Bash(~/.claude/disk-space.py bazel --sweep --apply:*)",
+      "Bash(python3 ~/.claude/disk-space.py clone --apply:*)",
+      "Bash(~/.claude/disk-space.py clone --apply:*)",
       "Bash(kubectl delete *)",
       "Bash(kubectl * delete *)",
       "Bash(kubectl apply *)",
