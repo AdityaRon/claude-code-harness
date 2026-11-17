@@ -375,10 +375,14 @@ def git_env():
     return env
 
 
+def inside(p, t):
+    """Resolved path P is resolved path T or inside it."""
+    return p == t or p.startswith(t.rstrip("/") + "/")
+
+
 def under(path, top):
     """PATH is TOP or inside it, both resolved."""
-    p, t = os.path.realpath(path), os.path.realpath(top)
-    return p == t or p.startswith(t.rstrip("/") + "/")
+    return inside(os.path.realpath(path), os.path.realpath(top))
 
 
 def git_gate(repo, bare, entry, allow_untracked, env):
@@ -454,7 +458,7 @@ def survey(entry, dev, cutoff, now):
 
 
 def process_cwds():
-    """[(pid, working folder)] for every process lsof may see, from one lsof; None when it fails."""
+    """[(pid, resolved working folder)] for every process lsof may see, from one lsof; None when it fails."""
     exe = shutil.which("lsof")
     if not exe:
         return None, "no lsof"
@@ -467,14 +471,14 @@ def process_cwds():
         if ln.startswith("p"):
             pid = int(ln[1:]) if ln[1:].isdigit() else None
         elif ln.startswith("n/") and pid is not None:
-            cwds.append((pid, ln[1:]))
+            cwds.append((pid, os.path.realpath(ln[1:])))
     if not cwds:
         return None, "lsof listed no working folders (exit %d)" % p.returncode
     return cwds, ""
 
 
 def state_paths(job_dir):
-    """The folders a live job's state.json names; None when state.json cannot be read."""
+    """(key, folder, resolved) for each folder a live job's state.json names; None when it cannot be read."""
     try:
         with open(os.path.join(job_dir, "state.json")) as f:
             s = json.load(f)
@@ -482,30 +486,42 @@ def state_paths(job_dir):
         return None
     if not isinstance(s, dict):
         return None
-    return [(k, s[k]) for k in ("cwd", "worktreePath", "originCwd") if isinstance(s.get(k), str) and s[k].startswith("/")]
+    return [(k, s[k], os.path.realpath(s[k])) for k in ("cwd", "worktreePath", "originCwd")
+            if isinstance(s.get(k), str) and s[k].startswith("/")]
 
 
 class Ctx:
-    """What a listing, and each re-check, reads about the machine."""
+    """What a listing, and each re-check, reads about the machine. A re-check reads claude agents,
+    lsof and ps again when the last read is over REFRESH seconds old: each costs about a second
+    together on an Apple M2, and an apply may re-check thousands of entries."""
+    REFRESH = 5
 
     def __init__(self, a):
         self.a, self.env = a, git_env()
         self.refresh(sized=True)
 
-    def refresh(self, sized):
+    def recheck(self):
+        if time.time() - self.read_at > self.REFRESH:
+            self.refresh(sized=False)
         self.now = time.time()
+        self.cutoff = self.now - self.a.days * 86400
+
+    def refresh(self, sized):
+        self.read_at = self.now = time.time()
         self.cutoff = self.now - self.a.days * 86400
         self.pids, self.live_note = claude_agents()
         self.cwds, self.cwd_note = process_cwds()
         self.bases = bazel_report(self.a.root, sized=sized)["bases"]
+        for b in self.bases:
+            b["ws_real"] = os.path.realpath(b["workspace"]) if b["workspace"].startswith("/") else None
 
 
-def job_records(ctx):
+def job_records(ctx, only=None):
     root = os.path.normpath(ctx.a.jobs)
     root_real = os.path.realpath(root)
     jobs, skipped = [], []
     try:
-        names = sorted(os.listdir(root))
+        names = [only] if only else sorted(os.listdir(root))
     except OSError as e:
         return [], [("-", "cannot read %s: %s" % (root, e.strerror))]
     for n in names:
@@ -545,29 +561,30 @@ def check_entry(ctx, job, name):
         return "keep", "gone", None
     if st.st_mtime >= ctx.cutoff:
         return "young", None, None
+    real = os.path.realpath(p)  # once: compared below with folders resolved once per listing
     try:
         if st.st_dev != job["dev"]:
             raise Keep("on another device")
         if job["protected"] is None:
             raise Keep("the job is live and its state.json cannot be read")
-        for label, path in job["protected"]:
-            if under(path, p):
+        for label, path, path_real in job["protected"]:
+            if inside(path_real, real):
                 raise Keep("the live job's %s is inside: %s" % (label, path))
         for pid, cwd in ctx.cwds or ():
-            if under(cwd, p):
+            if inside(cwd, real):
                 raise Keep("pid %d's working folder is inside" % pid)
         if kind(st) == "other":
             raise Keep("a socket, fifo or device, which a process may use")
         if kind(st) != "dir":  # a file or a link goes by itself; a link's target is never touched
             return "delete", st.st_blocks * 512, []
-        if os.path.realpath(p) != os.path.join(job["tmp_real"], name):
+        if real != os.path.join(job["tmp_real"], name):
             raise Keep("resolves outside tmp")
         if ctx.cwds is None and job["live"]:
             raise Keep("the job is live and process working folders are unknown (%s)" % ctx.cwd_note)
         size, repos = survey(p, st.st_dev, ctx.cutoff, ctx.now)
         bases = []
         for b in ctx.bases:
-            if b["workspace"].startswith("/") and under(b["workspace"], p):
+            if b["ws_real"] and inside(b["ws_real"], real):
                 if b["server"] != "not running":
                     raise Keep("Bazel output base %s: its server is %s (pid %s)" % (b["name"], b["server"], b["pid"]))
                 bases.append(b)
@@ -698,8 +715,8 @@ def apply_prune(ctx, plan, want):
     pause()
     failed = 0
     for t in plan["targets"]:
-        ctx.refresh(sized=False)
-        jobs, _ = job_records(ctx)
+        ctx.recheck()
+        jobs, _ = job_records(ctx, only=t["job"])
         j = next((x for x in jobs if x["id"] == t["job"] and x["tmp"] == os.path.dirname(t["path"])), None)
         verdict, val, bases = check_entry(ctx, j, t["name"]) if j else ("keep", "the job or its tmp changed", None)
         if verdict == "young":

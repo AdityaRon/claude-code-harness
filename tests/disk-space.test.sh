@@ -221,7 +221,7 @@ server() {  # server BASE: a live process whose command line names BASE, in its 
 }
 pbase $P1 "$TMP_RAW/pj/e0000001/tmp/clean/ws"   # the unresolved spelling: matched by realpath
 pbase $P2 "$E/bazelbusy/ws"; server $P2
-pbase $P3 "$TMP/gone-ws"
+pbase $P3 "$TMP/gone-ws"; mkdir -p "$PB/$P3/locked/deep"; : > "$PB/$P3/locked/deep/f"; chmod 000 "$PB/$P3/locked"
 pbase $P4 "/Volumes/cch-not-mounted-$$/ws"
 pbase $P5 "$TMP/gone-ws2"; server $P5
 for d in cache install; do mkdir -p "$PB/$d/x"; printf '%s' "$TMP/gone-ws3" > "$PB/$d/DO_NOT_BUILD_HERE"; done
@@ -310,7 +310,7 @@ for args in "prune --jobs $PJ --root $PB --apply $DIG" "prune --apply=$DIG --job
 done
 GO="$TMP/go"
 CLAUDE_DISK_SPACE_TEST_PAUSE="$GO" python3 "$DS" prune --apply "$DIG" --jobs "$PJ" --root "$PB" > "$TMP/apply.out" 2>&1 & APID=$!
-for _ in $(seq 300); do [ -e "$GO.ready" ] && break; sleep 0.1; done
+for _ in $(seq 1200); do [ -e "$GO.ready" ] && break; sleep 0.1; done
 # After the digest matched: a tracked file changes, its mtime set back, so only the git check sees it.
 echo three >> "$E/raced/f"; age 10 "$E/raced/f"
 : > "$GO"; wait $APID; RC=$?; OUT=$(cat "$TMP/apply.out")
@@ -342,13 +342,14 @@ OUT=$(ds bazel --root "$PB" --sweep --apply "$SD" 2>&1); RC=$?
 [ "$RC" = 2 ] && [ -d "$PB/$P3" ] && pass "--apply not right after bazel --sweep: refused" || fail "sweep misplaced" "rc=$RC $OUT"
 GO="$TMP/go2"
 CLAUDE_DISK_SPACE_TEST_PAUSE="$GO" python3 "$DS" bazel --sweep --apply "$SD" --root "$PB" > "$TMP/sweep.out" 2>&1 & APID=$!
-for _ in $(seq 300); do [ -e "$GO.ready" ] && break; sleep 0.1; done
+for _ in $(seq 1200); do [ -e "$GO.ready" ] && break; sleep 0.1; done
 mkdir "$TMP/gone-ws"; : > "$GO"; wait $APID; OUT=$(cat "$TMP/sweep.out"); rmdir "$TMP/gone-ws"
 [[ "$OUT" == *"kept at the re-check: $P3: its workspace is exists"* ]] && [ -d "$PB/$P3" ] \
   && pass "a workspace back after the listing keeps its base at the re-check" || fail "sweep re-check" "$OUT"
+if [ -r "$PB/$P3/locked" ]; then fail "a mode 000 folder is still readable (root?): the sweep below proves nothing about it" ""; fi
 OUT=$(ds bazel --sweep --apply "$SD" --root "$PB" 2>&1); RC=$?
 [ "$RC" = 0 ] && [ ! -e "$PB/$P3" ] && [ -z "$(exists_all "$PB/$P2" "$PB/$P4" "$PB/$P5" "$PB/cache/x" "$PB/install/x")" ] \
-  && pass "the orphan's read-only tree is gone; nothing else is" || fail "sweep" "rc=$RC $OUT"
+  && pass "the orphan's read-only and mode 000 folders are gone; nothing else is" || fail "sweep" "rc=$RC $OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
