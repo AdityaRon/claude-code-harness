@@ -220,7 +220,7 @@ mkdir -p "$E/badgit/.git"; : > "$E/badgit/file"   # an empty .git: git would wal
 clone "$E/filtered"; printf '* filter=x\n' > "$E/filtered/.git/info/attributes"
 in_ "$E/filtered" git config filter.x.clean "sh -c 'touch $TMP/pwned-filter; cat'"; age 1 "$E/filtered/f"
 clone "$E/filtered-inc"; printf '* filter=y\n' > "$E/filtered-inc/.git/info/attributes"; age 1 "$E/filtered-inc/f"
-git config -f "$E/filtered-inc/.git/inc.conf" filter.y.clean "sh -c 'touch $TMP/pwned-filter; cat'"
+in_ "$E/filtered-inc" git config -f .git/inc.conf filter.y.clean "sh -c 'touch $TMP/pwned-filter; cat'"
 in_ "$E/filtered-inc" git config include.path inc.conf
 # git-lfs's own filter, as `git lfs install` writes it: the user's, so it keeps no repo.
 printf '[filter "lfs"]\n\tclean = git-lfs clean -- %%f\n\tprocess = git-lfs filter-process\n\trequired = true\n' > "$HOME/.gitconfig"
