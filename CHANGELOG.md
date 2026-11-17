@@ -8,6 +8,94 @@ installed machine to the newest tag. After v1.4.2 the skills live in
 [claude-code-skills](https://github.com/AdityaRon/claude-code-skills), with their
 own changelog; `config/skills.pin` names the release each version installs.
 
+## v1.4.6 (2026-11-17)
+
+Merged since v1.4.5: 6 PRs.
+
+### Security
+- config-guard: the pre-filter skips paths under scratch, projects and logs (#257)
+- guards: a command naming no guard's word starts no process in them (#256)
+- shadow: only in auto mode; in any other mode the rule decides live (#254)
+
+### Speed
+- ci: the PR bench runs every payload; skipped when hooks/ and settings are unchanged (#253)
+
+### Other
+- skills.pin: claude-code-skills v1.1.0 (comms-hub fixes) (#258)
+- tools: name a numbered hook record from its own stdout, never stderr (#255)
+
+### Benchmark vs v1.4.5
+
+
+2026-11-17T02:07:55Z, Linux 7.0.0-1016-aws x86_64, Intel(R) Xeon(R) 6975P-C, python 3.14.4. Corpus tests/bench-corpus.jsonl: 492 payloads (372 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 MultiEdit, 2 NotebookEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, launched together as Claude Code does. Wait is from the first launch to the last exit, so hooks that share the cores pay for it; CPU is the sum of each hook's own. The per-hook table runs each hook alone. Process start here: `true` 0.4 ms, `bash -c :` 0.9 ms, `jq -n 1` 1.5 ms (p50 of 20), so only same-run comparisons are meaningful. A machine whose process start is slower pays it again for each process a hook starts: the last column is a hook's p50 past one `bash -c :`.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 372 | 56.1 → 51.6 ms (-8%) | 55.6 → 50.5 ms (-9%) | 96.2 → 91.1 ms (-5%) | 115.6 → 97.6 ms (-16%) |
+| WebFetch | 11 | 6.4 → 6.4 ms (+1%) | 6.4 → 6.4 ms (+1%) | 6.5 → 6.5 ms (+0%) | 6.3 → 6.3 ms (+1%) |
+| Read/Grep | 41 | 35.5 → 35.5 ms (-0%) | 38.9 → 38.9 ms (-0%) | 54.2 → 54.3 ms (+0%) | 48.8 → 48.9 ms (+0%) |
+| Write/Edit | 63 | 41.2 → 40.9 ms (-1%) | 43.3 → 43.0 ms (-1%) | 60.4 → 61.4 ms (+2%) | 102.6 → 102.6 ms (+0%) |
+| Monitor | 5 | 28.7 → 28.2 ms (-2%) | 40.3 → 37.8 ms (-6%) | 75.5 → 72.6 ms (-4%) | 80.9 → 70.1 ms (-13%) |
+| All | 492 | 47.2 → 43.7 ms (-7%) | 51.4 → 47.5 ms (-8%) | 94.6 → 89.6 ms (-5%) | 105.6 → 91.9 ms (-13%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean | p50 past bash start |
+|---|---:|---|---|---|---|
+| bash-guards.sh | 377 | 55.9 → 51.7 ms (-7%) | 94.7 → 91.9 ms (-3%) | 108.5 → 91.0 ms (-16%) | 55.0 → 50.9 ms |
+| config-guard.sh | 63 | 14.8 → 14.8 ms (+0%) | 31.0 → 30.9 ms (-0%) | 19.9 → 19.9 ms (-0%) | 13.9 → 13.9 ms |
+| mod-gate.sh | 63 | 3.1 → 3.1 ms (+0%) | 11.5 → 11.6 ms (+1%) | 3.5 → 3.5 ms (+0%) | 2.2 → 2.2 ms |
+| secret-scanner.sh | 63 | 19.0 → 19.1 ms (+0%) | 54.6 → 54.6 ms (+0%) | 23.1 → 23.0 ms (-0%) | 18.2 → 18.2 ms |
+| sensitive-file-guard.sh | 104 | 35.2 → 35.0 ms (-1%) | 49.2 → 49.9 ms (+1%) | 39.1 → 39.1 ms (-0%) | 34.4 → 34.1 ms |
+| subagent-cache-guard.sh | 492 | 6.7 → 6.8 ms (+1%) | 7.1 → 7.3 ms (+2%) | 6.5 → 6.6 ms (+1%) | 5.8 → 5.9 ms |
+
+Decisions: 492 of 492 payloads got the same answer on both sides.
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended).
+
+## v1.4.5 (2026-11-16)
+
+Merged since v1.4.4: 5 PRs.
+
+### Security
+- kubectl-guard: dynamic-verb asks live again (#250)
+- permission-friction: a numbered hook's reason names its guard (#248)
+- kubectl-guard: credential reads ask live again; verb rules stay in shadow (#246)
+
+### Other
+- skills.pin: claude-code-skills v1.0.1 (#249)
+- harness-update gates on the smoke set; doctor logs survive a reboot and name failed suites (#247)
+
+### Benchmark vs v1.4.4
+
+
+2026-11-16T19:53:32Z, Linux 7.0.0-1016-aws x86_64, Intel(R) Xeon(R) 6975P-C, python 3.14.4. Corpus tests/bench-corpus.jsonl: 492 payloads (372 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 NotebookEdit, 2 MultiEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, launched together as Claude Code does. Wait is from the first launch to the last exit, so hooks that share the cores pay for it; CPU is the sum of each hook's own. The per-hook table runs each hook alone. Process start here: `true` 0.4 ms, `bash -c :` 0.9 ms, `jq -n 1` 1.5 ms (p50 of 20), so only same-run comparisons are meaningful. A machine whose process start is slower pays it again for each process a hook starts: the last column is a hook's p50 past one `bash -c :`.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 372 | 56.4 → 56.0 ms (-1%) | 55.5 → 55.5 ms (+0%) | 95.3 → 95.8 ms (+0%) | 115.6 → 115.6 ms (-0%) |
+| WebFetch | 11 | 6.4 → 6.4 ms (-0%) | 6.4 → 6.4 ms (-0%) | 6.6 → 6.6 ms (-1%) | 6.3 → 6.3 ms (-0%) |
+| Read/Grep | 41 | 34.8 → 34.7 ms (-0%) | 38.3 → 38.2 ms (-0%) | 53.1 → 52.0 ms (-2%) | 48.1 → 48.1 ms (+0%) |
+| Write/Edit | 63 | 40.8 → 40.7 ms (-0%) | 42.8 → 42.8 ms (-0%) | 60.6 → 59.6 ms (-2%) | 101.6 → 101.7 ms (+0%) |
+| Monitor | 5 | 28.6 → 28.1 ms (-2%) | 40.8 → 40.7 ms (-0%) | 77.3 → 76.6 ms (-1%) | 80.6 → 81.2 ms (+1%) |
+| All | 492 | 47.3 → 47.1 ms (-0%) | 51.2 → 51.2 ms (+0%) | 93.7 → 94.4 ms (+1%) | 105.4 → 105.4 ms (-0%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean | p50 past bash start |
+|---|---:|---|---|---|---|
+| bash-guards.sh | 377 | 57.0 → 56.8 ms (-0%) | 96.0 → 96.8 ms (+1%) | 108.9 → 109.0 ms (+0%) | 56.2 → 56.0 ms |
+| config-guard.sh | 63 | 14.5 → 14.5 ms (+0%) | 30.7 → 30.7 ms (+0%) | 19.6 → 19.6 ms (+0%) | 13.6 → 13.7 ms |
+| mod-gate.sh | 63 | 3.0 → 3.0 ms (-1%) | 11.0 → 11.0 ms (-0%) | 3.4 → 3.4 ms (+0%) | 2.1 → 2.1 ms |
+| secret-scanner.sh | 63 | 18.6 → 18.7 ms (+0%) | 54.4 → 54.4 ms (+0%) | 22.6 → 22.7 ms (+0%) | 17.8 → 17.8 ms |
+| sensitive-file-guard.sh | 104 | 34.4 → 34.3 ms (-0%) | 48.0 → 48.5 ms (+1%) | 38.4 → 38.4 ms (+0%) | 33.5 → 33.5 ms |
+| subagent-cache-guard.sh | 492 | 6.7 → 6.7 ms (+0%) | 7.1 → 7.1 ms (+0%) | 6.5 → 6.5 ms (+0%) | 5.8 → 5.8 ms |
+
+Decisions: 490 of 492 payloads got the same answer on both sides.
+
+| Payload | base | head |
+|---|---|---|
+| friction-hole-kubectl-shellout-concat-kind `python3 - <<'EOF' import os os.system("kubectl get " + kind)` | allow (silent) | ask (bash-guards.sh) |
+| bash-kubectl-get-secret `kubectl get secret db-creds -n staging -o yaml` | allow (silent) | ask (bash-guards.sh) |
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended).
+
 ## v1.4.4 (2026-11-15)
 
 Merged since v1.4.3: 5 PRs.
