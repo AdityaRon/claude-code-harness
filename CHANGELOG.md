@@ -8,6 +8,17 @@ installed machine to the newest tag. After v1.4.2 the skills live in
 [claude-code-skills](https://github.com/AdityaRon/claude-code-skills), with their
 own changelog; `config/skills.pin` names the release each version installs.
 
+## v1.4.7 (2026-11-17)
+
+Merged since v1.4.6: 1 PR.
+
+### Other
+- tests: heredoc-openers' oracle lets a <( ) finish before it kills the group (#259)
+
+### Benchmark vs v1.4.6
+
+hooks/ and config/settings.json are unchanged since v1.4.6; benchmark skipped (both sides would run the same files).
+
 ## v1.4.6 (2026-11-17)
 
 Merged since v1.4.5: 6 PRs.
