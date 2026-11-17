@@ -29,7 +29,12 @@ oracle() {   # SHELL CMD: 0 if SHELL printed the marker line
   ( set -m
     (cd "$TMP/run" && exec env -i HOME="$TMP/home" PATH="$TMP/stub:/usr/bin:/bin" "$1" -c "$2" </dev/null >"$out" 2>/dev/null) & p=$!
     (sleep "$ORACLE_LIMIT"; kill -9 -- -"$p" && : > "$out.late") & w=$!
-    wait "$p"; kill -- -"$w"; wait "$w"; kill -9 -- -"$p" ) 2>/dev/null
+    wait "$p"
+    # A <( ) the shell started can still be writing the marker after the shell
+    # ends: up to 1 s for its group to empty before the kill. Under 8-way CPU
+    # load on a Mac the kill took it in 10 of 1,300 runs, and 0 of 1,300 so.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 -- -"$p" 2>/dev/null || break; sleep 0.1; done
+    kill -- -"$w"; wait "$w"; kill -9 -- -"$p" ) 2>/dev/null
   [ -e "$out.late" ] && { fail "$1 did not end within ${ORACLE_LIMIT}s" "[${2//$'\n'/\\n}]"; return 1; }
   grep -qx HDMARK "$out"
 }
