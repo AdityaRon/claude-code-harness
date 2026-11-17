@@ -6,6 +6,10 @@
 - Never root a long-running background job inside `.claude/worktrees/`.
 - Temp files go in the session's own job tmp directory, never `/tmp`, which
   parallel jobs share.
+- Delete large intermediate files from job tmp when a task ends
+  (`python3 ~/.claude/disk-space.py prune` lists what is old and safe).
+- A session removes a PR's clone, and its Bazel output base, once the PR merges or
+  closes (`disk-space.py` finds the base by its DO_NOT_BUILD_HERE).
 - Write memory files with Write or Edit, never a shell redirect or heredoc: only the
   file tools get the CLI's `modified` stamp and memory-lint.
 - An allow rule does not match past a leading `VAR=value` (a short safe list

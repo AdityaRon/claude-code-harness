@@ -6,7 +6,8 @@ release, installed into `~/.claude` once per machine, so they apply in every pro
 PreToolUse guards deny what is hard to undo or leaks secrets (force pushes,
 `rm -rf` of home or root, reading `.env`, writing a token to disk), and a few
 asks remain where shared state changes (cluster writes and secret reads, through
-native ask rules; writes to this harness's own config). Everything else is left
+native ask rules; writes to this harness's own config; `disk-space.py` deleting old job
+tmp entries or Bazel output bases). Everything else is left
 to Claude Code's auto mode and its classifier. The guards that auto mode may now
 cover run in shadow mode until 2026-11-29: in auto mode they log what they would
 have decided and decide nothing; in any other mode they decide as before
@@ -220,7 +221,8 @@ bin/                     ← every file installed flat to ~/.claude by install.s
   relocate-clones.sh     ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads (docs/known-limitations.md)
   spend-report.py        ← what sessions, subagents and loop ticks cost, from local transcripts
   disk-space.py          ← what job folders and Bazel output bases hold (report, bazel); harness-update.sh
-                           records the totals once a day for session-start's warning (doctor.sh --disk)
+                           records the totals once a day for session-start's warning (doctor.sh --disk);
+                           prune and bazel --sweep list what is safe to delete and delete it by digest
 tools/                   ← run from the clone only, by CI, releases and whoever maintains a fork
   upstream-check.sh      ← the daily breakage check
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
