@@ -162,8 +162,25 @@ OUT=$(inst "$U" HARNESS_SKILLS_URL="$SKSRC"); RC=$?
 AFTER=$(sig "${TREES[@]}")
 [[ $RC == 0 && "$(sed -n 's/^commit=//p' "$U/.claude/harness.version")" == "$HEAD_SHA" && "$(sed -n 's/^commit=//p' "$U/.claude/skills.version")" == "$PIN_COMMIT" ]] \
   && pass "the upgrade installs this tree and the pinned skills release" || fail "upgrade" "rc=$RC $(grep -iE 'skills|✗' <<<"$OUT" | head -5)"
-[[ -n "$AFTER" && "$AFTER" == "$BEFORE" ]] && pass "~/.claude/skills and the templates: every path, mode and byte as $FROM left them" \
-  || fail "the tree changed" "$(diff <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") | head -8)"
+# v1.0.0 is the split's own bytes (#239), so the pinned release may change only
+# what it changed since: those rows, each to the pin's blob; every other row as
+# $FROM left it. A file it adds, drops or moves under the templates fails here.
+CHANGED=$(git -C "$SKSRC" diff --name-only v1.0.0 "$PIN_COMMIT" -- skills/) || fail "the files the pin changed" "no v1.0.0 in $SKSRC"
+unchanged() { awk 'NR == FNR { c[$0] = 1; next } !($3 in c)' <(printf '%s\n' "$CHANGED") <(printf '%s\n' "$1"); }
+pinned_bytes() {   # AFTER BEFORE: each changed file installed holds the pin's blob
+  local p want
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    # Not installed either side (a skill's tests/): nothing to hold.
+    awk -v p="$p" '$3 == p { f = 1 } END { exit !f }' <<<"$1"$'\n'"$2" || continue
+    want=$(git -C "$SKSRC" rev-parse "$PIN_COMMIT:$p" 2>/dev/null)
+    [[ -n "$want" && "$(awk -v p="$p" '$3 == p { print $2 }' <<<"$1")" == "$want" ]] || { echo "$p"; return 1; }
+  done <<<"$CHANGED"
+}
+NCH=$(awk 'NR == FNR { c[$0] = 1; next } ($3 in c) { n++ } END { print n + 0 }' <(printf '%s\n' "$CHANGED") <(printf '%s\n' "$AFTER"))
+[[ -n "$AFTER" && "$(unchanged "$AFTER")" == "$(unchanged "$BEFORE")" ]] && WHY=$(pinned_bytes "$AFTER" "$BEFORE") \
+  && pass "~/.claude/skills and the templates: every path, mode and byte as $FROM left them, but the $NCH installed files the pin changed since v1.0.0, which hold its bytes" \
+  || fail "the tree changed" "${WHY:-}$(diff <(unchanged "$BEFORE") <(unchanged "$AFTER") | head -8)"
 [[ "$OUT" == *"pick up what changed since $(git -C "$REPO" rev-parse --short=12 "$FROM^{commit}")"* && "$OUT" != *"$U/.claude/skills/"* ]] \
   && pass "the report ran from $FROM, and names nothing under ~/.claude/skills as removed or kept" \
   || fail "the report" "$(grep -E 'since|Deleted' <<<"$OUT" | head -3) $(grep -F "$U/.claude/skills/" <<<"$OUT" | head -3)"
@@ -173,8 +190,8 @@ AFTER=$(sig "${TREES[@]}")
 F2="$TMP/fresh"
 OUT=$(inst "$F2" HARNESS_SKILLS_URL="$SKSRC"); RC=$?
 FRESH=$(sig "$F2/.claude/skills" "$F2/.local/share/skill-forge")
-[[ $RC == 0 && "${FRESH//$F2/}" == "${BEFORE//$U/}" ]] && pass "a fresh install yields the same tree" \
-  || fail "fresh tree" "rc=$RC $(diff <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$FRESH") | head -6)"
+[[ $RC == 0 && "${FRESH//$F2/}" == "${AFTER//$U/}" ]] && pass "a fresh install yields the tree the upgrade left" \
+  || fail "fresh tree" "rc=$RC $(diff <(printf '%s\n' "${AFTER//$U/}") <(printf '%s\n' "${FRESH//$F2/}") | head -6)"
 
 D="$TMP/down"
 OUT=$(inst "$D" HARNESS_SKILLS_URL="$TMP/nowhere"); RC=$?
@@ -188,7 +205,7 @@ DOWN=$(sig "$D/.claude/skills" "$D/.local/share/skill-forge")
 
 echo local > "$U/.claude/skills-src/README.md"
 OUT=$(inst "$U" HARNESS_SKILLS_URL="$SKSRC"); RC=$?
-[[ $RC == 0 && "$OUT" == *"has local changes"* && "$(sig "${TREES[@]}")" == "$BEFORE" ]] \
+[[ $RC == 0 && "$OUT" == *"has local changes"* && "$(sig "${TREES[@]}")" == "$AFTER" ]] \
   && pass "a refused clone on a later install leaves the tree as it was" || fail "refused later" "rc=$RC $(grep skills <<<"$OUT" | head -3)"
 
 results
