@@ -220,7 +220,7 @@ mkdir -p "$E/badgit/.git"; : > "$E/badgit/file"   # an empty .git: git would wal
 clone "$E/filtered"; printf '* filter=x\n' > "$E/filtered/.git/info/attributes"
 in_ "$E/filtered" git config filter.x.clean "sh -c 'touch $TMP/pwned-filter; cat'"; age 1 "$E/filtered/f"
 clone "$E/filtered-inc"; printf '* filter=y\n' > "$E/filtered-inc/.git/info/attributes"; age 1 "$E/filtered-inc/f"
-printf '[filter "y"]\n\tclean = sh -c "touch %s/pwned-filter; cat"\n' "$TMP" > "$E/filtered-inc/.git/inc.conf"
+git config -f "$E/filtered-inc/.git/inc.conf" filter.y.clean "sh -c 'touch $TMP/pwned-filter; cat'"
 in_ "$E/filtered-inc" git config include.path inc.conf
 # git-lfs's own filter, as `git lfs install` writes it: the user's, so it keeps no repo.
 printf '[filter "lfs"]\n\tclean = git-lfs clean -- %%f\n\tprocess = git-lfs filter-process\n\trequired = true\n' > "$HOME/.gitconfig"
@@ -230,6 +230,7 @@ mkdir -p "$E/signed/.git/logs/refs"; echo "$SIGNED" > "$E/signed/.git/refs/stash
 printf '%040d %s t <t@example.com> 1700000000 +0000\tOn main: x\n' 0 "$SIGNED" > "$E/signed/.git/logs/refs/stash"
 in_ "$E/signed" git config log.showSignature true; in_ "$E/signed" git config gpg.program "$TMP/fakegpg"
 mkdir -p "$E/linkout" "$TMP/outside2"; fill "$TMP/outside2/keep" 4096; ln -s "$TMP/outside2" "$E/linkout/to-outside"
+: > "$TMP/outside2/fresh"   # young (set below): a walk through the link would keep linkout
 mkdir -p "$E/freshinside/sub"; : > "$E/freshinside/sub/fresh.txt"
 mkdir -p "$E/young" "$TMP/outside3"; : > "$TMP/outside3/keep"; ln -s "$TMP/outside3" "$E/linkentry"
 fill "$E/plainfile" 4096; mkfifo "$E/fifo"; mkdir -p "$E/fifodir"; mkfifo "$E/fifodir/pipe"
@@ -260,7 +261,7 @@ pbase $P5 "$TMP/gone-ws2"; server $P5
 pbase $P6 "$TMP/gone-ws4"; (cd "$PB/$P6/execroot" && exec sleep 300) & SLEEPERS="$SLEEPERS $!"; P6PID=$!
 pbase $P7 "$TMP/gone-ws5"; (exec -a "some-tool --cache=$PB/$P7" sleep 300) & SLEEPERS="$SLEEPERS $!"; P7PID=$!
 for d in cache install; do mkdir -p "$PB/$d/x"; printf '%s' "$TMP/gone-ws3" > "$PB/$d/DO_NOT_BUILD_HERE"; done
-age -9 "$E/young"; age -10 "$E/freshinside/sub/fresh.txt"; age -10 "$PJ/a0000003/timeline.jsonl"
+age -9 "$E/young" "$TMP/outside2/fresh"; age -10 "$E/freshinside/sub/fresh.txt"; age -10 "$PJ/a0000003/timeline.jsonl"
 (cd "$E/procdir/inner" && exec sleep 300) & SLEEPERS="$SLEEPERS $!"; CWDPID=$!
 printf '[{"id":"f0000002","pid":4343},{"id":"e0000001","state":"done"},{"id":"a0000003","state":"done"}]' > "$TMP/agents.json"
 for _ in 1 2 3 4 5 6 7 8 9 10; do lsof -n -P -d cwd -p "$CWDPID" 2>/dev/null | grep -q procdir && break; sleep 0.2; done
