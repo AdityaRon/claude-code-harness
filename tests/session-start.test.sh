@@ -19,6 +19,8 @@ mkdir -p "$CLAUDE_MEMORY_PROJECTS_DIR"
 # Keep the real release record, which harness-update.sh writes on this machine.
 export CLAUDE_HARNESS_LATEST="$TMP/no-latest"
 export CLAUDE_HARNESS_VERSION="$TMP/no-version"
+# And the disk stamp, which harness-update.sh writes once a day.
+export CLAUDE_DISK_STAMP="$TMP/no-disk-stamp"
 # And the Bash guards' timing log, which the hook rotates.
 export CLAUDE_GUARD_TIMING_LOG="$TMP/guard-timing.log"
 # Room for every run: a loaded machine can spend the hook's 3 s budget on its
@@ -436,6 +438,58 @@ ERR=$(jq -nc '{source:"resume", session_id:"sess-clean", hook_event_name:"Sessio
   | env "${NUDGES[@]}" CLAUDE_STATE_DIR="$TMP/fresh-state" bash "$TREE/hooks/session-start.sh" 2>&1 >/dev/null)
 check_eq "no 'No such file' from reading a stamp not yet written" "" "$ERR"
 rm -f "$LATEST" "$VERSION"
+
+echo ""
+echo "=== disk: harness-update.sh's stamp warns once a measurement, and starts no du, find or python ==="
+DSTAMP="$TMP/disk-usage"
+export DRUNS="$TMP/disk-runs"
+# Where an installed hook would find disk-space.py: a call to it lands in DRUNS.
+for d in "$TREE" "$TREE/bin"; do printf 'import os\nopen(os.environ["DRUNS"], "a").write("run\\n")\n' > "$d/disk-space.py"; done
+dstamp() {  # JOBS_BYTES BAZEL_BYTES SECONDS_AGO: a stamp measured that long ago, not yet warned about
+  printf 'jobs_bytes=%s\nbazel_bytes=%s\norphan_bytes=120000000000\norphans=13\npartial=0\nmeasured=%s\ndate=2026-11-17\n' \
+    "$1" "$2" "$(( $(date +%s) - $3 ))" > "$DSTAMP"
+  rm -f "$CLAUDE_STATE_DIR/disk-warning" "$CLAUDE_STATE_DIR"/disk-warning.claim.*
+}
+dstart() { run_tree sess-clean CLAUDE_DISK_STAMP="$DSTAMP" "$@"; }
+dstamp 145500000000 0 3600
+OUT=$(dstart)
+check_contains "jobs over 50 GB: the size and the command" \
+  "Job folders in ~/.claude/jobs hold 145.5 GB (warns past 50 GB). Each job folder's size and tmp entries: python3 ~/.claude/disk-space.py report" "$OUT"
+check_not_contains "the Bazel root under its threshold is not named" "Bazel output root" "$OUT"
+check_not_contains "a second start: no second warning for the same measurement" "## Disk" "$(dstart)"
+sed -i.bak "s/^measured=.*/measured=$(( $(date +%s) - 60 ))/" "$DSTAMP" && rm -f "$DSTAMP.bak"
+check_contains "the next day's measurement warns again" "## Disk, as harness-update.sh measured it on 2026-11-17" "$(dstart)"
+dstamp 0 131000000000 3600
+OUT=$(dstart)
+check_contains "the Bazel root over 100 GB: its orphans and the command" \
+  "The Bazel output root holds 131.0 GB (warns past 100 GB), 120.0 GB of it in 13 output bases whose workspace is gone. Each base: python3 ~/.claude/disk-space.py bazel" "$OUT"
+check_not_contains "jobs under their threshold are not named" "Job folders in" "$OUT"
+dstamp 40000000000 90000000000 3600
+check_not_contains "both under their thresholds: silent" "## Disk" "$(dstart)"
+dstamp 20000000000 0 3600
+check_contains "CLAUDE_DISK_WARN_JOBS_GB lowers the threshold" "warns past 10 GB" "$(dstart CLAUDE_DISK_WARN_JOBS_GB=10)"
+dstamp 145500000000 0 $((3 * 86400))
+check_not_contains "a stamp three days old: silent" "## Disk" "$(dstart)"
+rm -f "$DSTAMP"
+check_not_contains "no stamp: silent" "## Disk" "$(dstart)"
+printf 'jobs_bytes=a[$(touch %s/pwned1)]\nmeasured=$(touch %s/pwned2)\n' "$TMP" "$TMP" > "$DSTAMP"
+OUT=$(dstart CLAUDE_DISK_WARN_JOBS_GB="a[\$(touch $TMP/pwned3)]")
+check_eq "no stamp field or threshold runs as code" "" "$(ls "$TMP"/pwned* 2>/dev/null)"
+dstamp 145500000000 0 3600
+rm -f "$DRUNS"
+TRACE=$(jq -nc '{source:"startup", session_id:"sess-clean", hook_event_name:"SessionStart"}' \
+  | env CLAUDE_DISK_STAMP="$DSTAMP" CLAUDE_GUARD_TIMING_LOG="$TMP/no-timing-log" bash -x "$TREE/hooks/session-start.sh" 2>&1)
+check_contains "traced start: the warning shows" "Job folders in ~/.claude/jobs hold 145.5 GB" "$TRACE"
+check_eq "and no du, find or python ran" "" \
+  "$(printf '%s\n' "$TRACE" | grep -E '^\++ *([^ ]*/)?(du|find|python3?|disk-space\.py)( |$)')"
+check_eq "and nothing called disk-space.py" "" "$(cat "$DRUNS" 2>/dev/null)"
+dstamp 145500000000 0 3600
+rm -rf "$TMP/fresh-disk-state"
+ERR=$(jq -nc '{source:"startup", session_id:"sess-clean", hook_event_name:"SessionStart"}' \
+  | env CLAUDE_DISK_STAMP="$DSTAMP" CLAUDE_STATE_DIR="$TMP/fresh-disk-state" bash "$TREE/hooks/session-start.sh" 2>&1 >/dev/null)
+check_eq "a fresh state folder: nothing on stderr" "" "$ERR"
+check_eq "and the measurement is recorded as warned" "$(sed -n 's/^measured=//p' "$DSTAMP")" "$(cat "$TMP/fresh-disk-state/disk-warning" 2>/dev/null)"
+rm -f "$DSTAMP"
 
 echo ""
 echo "=== resume drift hashes every edited file in one process ==="

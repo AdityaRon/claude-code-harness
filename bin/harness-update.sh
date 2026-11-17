@@ -8,6 +8,7 @@
 # --no-cli. Uses --repo DIR, else $HARNESS_UPDATE_CLONE or ~/.claude/harness-src.
 # --full gates the install on every doctor suite, not the smoke set.
 # Refuses local changes or commits; never resets or replaces work the tag lacks.
+# Once a day it first records disk use for session-start (disk-space.py stamp).
 set -uo pipefail
 # launchd and cron start with a PATH that has no Homebrew; appended, so a
 # caller's own PATH still wins.
@@ -26,7 +27,7 @@ DEFAULT_URL=${HARNESS_UPDATE_URL:-https://github.com/AdityaRon/claude-code-harne
 # Local time, minute 17: a tag is installed within six hours.
 HOURS="1 7 13 19"
 
-usage() { sed -n '2,10s/^# \{0,1\}//p' "$0"; exit 2; }
+usage() { sed -n '2,11s/^# \{0,1\}//p' "$0"; exit 2; }
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 # doctor's SUMMARY line and the suites it names, on one line, then where its log is.
 doctor_says() {
@@ -144,7 +145,21 @@ cli_update() {
   fi
 }
 
+# Once a day, what the job folders and the Bazel output root hold, for
+# session-start's warning, which reads the stamp and sizes nothing. First in
+# update(), so a run that stops at "up to date" or a failed fetch measures too.
+# Never fails the run; a du that fails writes no stamp.
+disk_stamp() {
+  local tool="$HOME/.claude/disk-space.py" stamp="$HOME/.claude/state/disk-usage" out
+  [[ -f "$tool" ]] || return 0
+  [[ "$(sed -n 's/^date=//p' "$stamp" 2>/dev/null)" == "$(date +%Y-%m-%d)" ]] && return 0
+  if out=$(python3 "$tool" stamp --out "$stamp" 2>&1); then say "$out"
+  else say "disk-space: ${out:-no stamp written}"; fi
+  return 0
+}
+
 update() {
+  disk_stamp
   if [[ "$CLI" == 1 ]]; then cli_update; fi
   find_repo
   if ! git -C "$REPO" fetch --tags --quiet origin 2>>"$LOG"; then

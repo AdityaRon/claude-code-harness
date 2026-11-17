@@ -166,6 +166,45 @@ if [[ -f "$LATEST_FILE" && -f "$VERSION_FILE" ]] && in_budget release-nudge; the
   fi
 fi
 
+# --- job folders and Bazel output bases past a size -------------------------
+# harness-update.sh measures once a day (disk-space.py stamp); this reads its
+# stamp with builtins and sizes nothing. Over a threshold, one warning per
+# measurement, so once a day. A stamp over two days old says nothing: its
+# numbers may no longer hold. The one process, date, runs once per measurement.
+DISK_STAMP=$(expand_tilde "${CLAUDE_DISK_STAMP:-$HOME/.claude/state/disk-usage}")
+if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
+  D_JOBS=0 D_BAZEL=0 D_ORPH=0 D_N=0 D_AT=0 D_DATE=""
+  while IFS='=' read -r k v || [[ -n "$k" ]]; do
+    case "$k" in date) [[ "$v" =~ ^[0-9-]+$ ]] && D_DATE=$v; continue ;; esac
+    [[ "$v" =~ ^[0-9]{1,15}$ ]] || continue
+    case "$k" in
+      jobs_bytes) D_JOBS=$v ;; bazel_bytes) D_BAZEL=$v ;; orphan_bytes) D_ORPH=$v ;;
+      orphans) D_N=$v ;; measured) D_AT=$v ;;
+    esac
+  done < "$DISK_STAMP"
+  D_JL=${CLAUDE_DISK_WARN_JOBS_GB:-50} D_BL=${CLAUDE_DISK_WARN_BAZEL_GB:-100}
+  [[ "$D_JL" =~ ^[0-9]{1,6}$ ]] || D_JL=50
+  [[ "$D_BL" =~ ^[0-9]{1,6}$ ]] || D_BL=100
+  if (( D_AT > 0 )) && (( D_JOBS > D_JL * 1000000000 || D_BAZEL > D_BL * 1000000000 )); then
+    STAMP_FILE="$STATE_DIR/disk-warning"
+    CUR="" && { { read -r CUR < "$STAMP_FILE"; } 2>/dev/null || true; }
+    [[ "$CUR" != "$D_AT" && ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR" 2>/dev/null
+    if [[ "$CUR" != "$D_AT" ]] && claim "$STAMP_FILE" "$D_AT"; then
+      NOW=${EPOCHSECONDS:-}
+      [[ "$NOW" =~ ^[0-9]+$ ]] || NOW=$(date +%s)
+      if (( NOW - D_AT <= 2 * 86400 )); then
+        gb() { local t=$(( ($2 + 50000000) / 100000000 )); printf -v "$1" '%d.%d GB' $((t / 10)) $((t % 10)); }
+        gb G_JOBS "$D_JOBS"; gb G_BAZEL "$D_BAZEL"; gb G_ORPH "$D_ORPH"
+        echo ""
+        echo "## Disk, as harness-update.sh measured it on ${D_DATE:-its last run}"
+        (( D_JOBS > D_JL * 1000000000 )) && echo "Job folders in ~/.claude/jobs hold $G_JOBS (warns past $D_JL GB). Each job folder's size and tmp entries: python3 ~/.claude/disk-space.py report"
+        (( D_BAZEL > D_BL * 1000000000 )) && echo "The Bazel output root holds $G_BAZEL (warns past $D_BL GB), $G_ORPH of it in $D_N output bases whose workspace is gone. Each base: python3 ~/.claude/disk-space.py bazel"
+      fi
+      printf '%s\n' "$D_AT" > "$STAMP_FILE" 2>/dev/null
+    fi
+  fi
+fi
+
 # --- the Bash guards' timing log ----------------------------------------------
 # bash-guards.sh appends a line a call with a builtin and never sizes the file.
 # Past 10 MB it moves to .1, replacing the last one; detached, as the prune is.

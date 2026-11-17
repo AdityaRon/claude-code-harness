@@ -349,5 +349,34 @@ chmod 755 "$CLONE"
   && pass "HARNESS_UPDATE_URL replaces the default URL, for a fork" || fail "HARNESS_UPDATE_URL" "rc=$RC $OUT"
 
 echo ""
+echo "=== once a day, before any early exit, disk-space.py stamps disk use for session-start ==="
+# A stand-in where install.sh puts the real one: it logs its arguments and writes today's stamp.
+DSP="$HOME/.claude/disk-space.py" DST="$HOME/.claude/state/disk-usage"
+cat > "$DSP" <<'PY'
+import os, sys, time
+h = os.environ["HOME"]
+open(h + "/disk.calls", "a").write(" ".join(sys.argv[1:]) + "\n")
+if os.path.exists(h + "/disk.fail"):
+    print("not stamped: du timed out")
+    sys.exit(1)
+open(sys.argv[sys.argv.index("--out") + 1], "w").write("date=%s\n" % time.strftime("%Y-%m-%d"))
+print("disk: stand-in measured")
+PY
+calls() { wc -l < "$HOME/disk.calls" 2>/dev/null | tr -d ' '; }
+printf 'version=v1.0.6\norigin=%s\n' "$TMP/no-origin.git" > "$HV"
+OUT=$(HARNESS_UPDATE_CLONE="$TMP/no-src" bash "$UPD" --no-cli 2>&1); RC=$?
+[ "$RC" = 1 ] && [[ "$OUT" == *"git clone of $TMP/no-origin.git failed"* && "$OUT" == *"disk: stand-in measured"* ]] \
+  && [ "$(cat "$HOME/disk.calls")" = "stamp --out $DST" ] && pass "a run that stops at a failed clone has stamped first" || fail "stamp first" "rc=$RC $OUT"
+HARNESS_UPDATE_CLONE="$TMP/no-src" bash "$UPD" --no-cli >/dev/null 2>&1
+[ "$(calls)" = 1 ] && pass "a second run the same day measures nothing" || fail "once a day" "$(cat "$HOME/disk.calls")"
+echo date=2000-01-01 > "$DST"; touch "$HOME/disk.fail"; old_record; echo "origin=$TMP/origin.git" >> "$HV"
+OUT=$(bash "$UPD" --no-cli --check 2>&1); RC=$?
+[ "$RC" = 0 ] && [ "$(calls)" = 2 ] && [[ "$OUT" == *"disk-space: not stamped: du timed out"* && "$OUT" == *"v1.0.8 is available"* ]] \
+  && pass "an older stamp is measured again; a failure is named and changes no exit status" || fail "stamp fails" "rc=$RC $(calls) $OUT"
+rm -f "$DSP" "$HOME/disk.fail"
+bash "$UPD" --no-cli --check >/dev/null 2>&1
+[ "$(calls)" = 2 ] && [ "$(cat "$DST")" = date=2000-01-01 ] && pass "no disk-space.py installed: nothing runs" || fail "no tool" "$(calls)"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
