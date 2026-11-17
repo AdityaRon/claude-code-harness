@@ -26,7 +26,8 @@ In the 30 days to 2026-11-15 (`tools/permission-friction.py --days 30`), 476
 guard asks drew 1 rejection, a `kubectl delete`; the asks that were always
 approved are gone and the kubectl one is a native ask rule (#237).
 On your own machine, `bash doctor.sh --latency` reads each hook's wall time per day from
-Claude Code's transcripts, and `bash doctor.sh --census` counts claude processes and their memory.
+Claude Code's transcripts, `bash doctor.sh --census` counts claude processes and their memory,
+and `bash doctor.sh --disk` sizes job folders and Bazel output bases.
 
 ## Install and update
 
@@ -110,7 +111,7 @@ skip, except in CI, which clones it.
 | `memory-lint` | file writes | Advise: name, type, description, `verify:` block and index tier of a memory file |
 | `comment-budget` | file writes | Advise: a comment block an edit grew past 6 lines |
 | `tcc-check` | Bash results and failures | Advise: names macOS privacy control (TCC) when a Bash call prints an "Operation not permitted" error (a tool's, zsh's or python's) for a path in `~/Desktop`, `~/Documents`, `~/Downloads` or iCloud Drive, or for no path while the cwd (or a `cd` in the command) is in one. A line quoting one, in backticks or after grep -n's `file:line:`, is not an error; a log line printed whole still is |
-| `session-start` | SessionStart | Inject: branch, status and recent commits; on resume, files that drifted since the last session |
+| `session-start` | SessionStart | Inject: branch, status and recent commits; on resume, files that drifted since the last session; once a day, a warning when job folders or Bazel output bases pass a size |
 | `session-snapshot` | Stop, SessionEnd | Record: hashes of the files the session edited, for the resume drift check |
 | `pre-compact` | PreCompact | Back up: the transcript before compaction, newest 20 kept |
 | `notify` | Notification | Notify: a desktop alert titled with the session name |
@@ -158,6 +159,7 @@ What `install.sh` does with a value you set, from `config/merge-settings.jq`:
   - `CLAUDE_NET_ALLOWLIST`: extra hosts for network-guard, per project.
   - `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: when auto-compact fires; a bare integer.
   - `CCH_KEEP_BACKUPS`, in the shell that runs `install.sh`: how many `settings.json` backups it keeps (default 10).
+  - `CLAUDE_DISK_WARN_JOBS_GB`, `CLAUDE_DISK_WARN_BAZEL_GB`: the sizes of `~/.claude/jobs` and the Bazel output root that session-start warns past (default 50 and 100).
 - **Sandbox:** run `~/.claude/sandbox.sh on`, `off` or `status` yourself (a `!` message or a terminal), then ask Claude to run `~/.claude/sandbox-trial.sh`.
 
 Each of these in full: [docs/customization.md](docs/customization.md).
@@ -217,6 +219,8 @@ bin/                     ← every file installed flat to ~/.claude by install.s
   session-route.sh       ← which session owns this PR (docs/session-routing.md)
   relocate-clones.sh     ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads (docs/known-limitations.md)
   spend-report.py        ← what sessions, subagents and loop ticks cost, from local transcripts
+  disk-space.py          ← what job folders and Bazel output bases hold (report, bazel); harness-update.sh
+                           records the totals once a day for session-start's warning (doctor.sh --disk)
 tools/                   ← run from the clone only, by CI, releases and whoever maintains a fork
   upstream-check.sh      ← the daily breakage check
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
@@ -226,7 +230,8 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   hooknames.py           ← names the hook a transcript record numbers, for the two above: by the guard
                            whose words are in the reason on its own stdout, else by settings.json
   shadow-report.py       ← what each shadowed guard or rule would have decided, and what happened instead
-  session-census.py      ← claude processes, their memory, and idle background jobs (doctor.sh --census)
+  session-census.py      ← claude processes, their memory, and idle background jobs (doctor.sh --census;
+                           --sizes adds disk-space.py's report)
   pickup-report.sh       ← after an install, how running sessions pick up each change; install.sh runs it with
                            --prune, which removes what install wrote that the clone deleted
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json,

@@ -7,7 +7,10 @@ Two sources, reported apart because neither maps onto the other:
   - ~/.claude/jobs/*/state.json: each background job's state, and its last activity (the newer
     of state.json and timeline.jsonl). A job that is not done and idle past --idle-hours is named.
 
-  tools/session-census.py [--idle-hours 12]
+With --sizes, also each job folder's size, its tmp entries and liveness, from bin/disk-space.py's
+report (one du over every job folder; slower than the rest).
+
+  tools/session-census.py [--idle-hours 12] [--sizes]
   bash doctor.sh --census [ARGS]
 """
 import argparse
@@ -92,6 +95,7 @@ def main():
     ap.add_argument("--idle-hours", type=float, default=12)
     ap.add_argument("--jobs", default=os.path.join(HOME, ".claude", "jobs"))
     ap.add_argument("--ps", default="", help="read `ps -ax -o pid=,rss=,command=` output from this file")
+    ap.add_argument("--sizes", action="store_true", help="also each job folder's size (disk-space.py report)")
     a = ap.parse_args()
     now = time.time()
 
@@ -109,7 +113,21 @@ def main():
     print(f"not done and idle over {a.idle_hours:g} h: {len(idle)}")
     for j, k, h in sorted(idle, key=lambda x: -x[2]):
         print(f"  {j}  {k}, last activity {h:.0f} h ago")
+    if a.sizes:
+        print("")
+        return sizes(a.jobs)
     return 0
+
+
+def sizes(jobs_dir):
+    """disk-space.py's report, from this clone's bin/ or else the installed copy."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for tool in (os.path.join(here, "..", "bin", "disk-space.py"), os.path.join(HOME, ".claude", "disk-space.py")):
+        if os.path.isfile(tool):
+            sys.stdout.flush()
+            return subprocess.run([sys.executable, tool, "report", "--jobs", jobs_dir]).returncode
+    print("sizes: no disk-space.py in this clone's bin/ or in ~/.claude")
+    return 1
 
 
 if __name__ == "__main__":
