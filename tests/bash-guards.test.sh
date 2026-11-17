@@ -409,6 +409,10 @@ for c in 'X=1 python3 ~/.claude/disk-space.py prune --apply 0123456789abcdef' "p
 done
 disp hooks "$(payload 'python3 ~/.claude/disk-space.py prune --days 3')"
 [[ "$(dec "$OUT")" == allow ]] && pass "the listing itself: no ask" || fail "disk-space listing" "$OUT"
+for c in 'python3 ~/.claude/disk-space.py prune --apply x; rm -rf ~' 'rm -rf ~ # disk-space.py --apply'; do
+  disp hooks "$(payload "$c")"
+  [[ "$(dec "$OUT")" == deny ]] && pass "a deny still wins: $c" || fail "disk-space ask over a deny: $c" "$OUT"
+done
 
 echo ""
 results

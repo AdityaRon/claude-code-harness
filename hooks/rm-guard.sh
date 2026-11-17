@@ -10,14 +10,18 @@ require_parsable_or_deny
 CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
 joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
-# disk-space.py deletes only with --apply. Its native ask rules see four
-# prefixes, and Bash(python3:*) allows the rest, so any text naming both asks.
-if word_filter 'disk-space\.py' "$CMD" && word_filter '[-][-]apply' "$CMD"; then
-  decide ask disk-space-apply "disk-space.py with --apply deletes old job tmp entries, a clone or Bazel output bases. Read the listing it printed, then approve."
-fi
+# disk-space.py deletes only with --apply. Its native ask rules see four prefixes,
+# and Bash(python3:*) allows the rest, so any text naming both asks wherever this
+# guard would allow; a deny below still wins.
+DS_APPLY=0
+word_filter 'disk-space\.py' "$CMD" && word_filter '[-][-]apply' "$CMD" && DS_APPLY=1
+rm_allow() {
+  [[ $DS_APPLY -eq 1 ]] && decide ask disk-space-apply "disk-space.py with --apply deletes old job tmp entries, a clone or Bazel output bases. Read the listing it printed, then approve."
+  exit 0
+}
 # A quote may follow: subprocess.run(['rm', '-rf', x]) in an inline script.
 RM_WORD='(^|[^[:alnum:]_.-])rm([[:space:]"'\'']|$)'
-[[ "$CMD" =~ $RM_WORD ]] || exit 0
+[[ "$CMD" =~ $RM_WORD ]] || rm_allow
 # A script's shell-outs are checked as commands of their own (lib.sh).
 check_inline_shellouts rm flat
 
@@ -124,4 +128,4 @@ while IFS= read -r seg; do
     fi
   fi
 done <<<"$SEGS"
-exit 0
+rm_allow

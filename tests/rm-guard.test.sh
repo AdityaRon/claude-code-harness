@@ -75,6 +75,10 @@ check "run directly"              ask '~/.claude/disk-space.py clone --apply 012
 check "a listing: no ask"         allow 'python3 ~/.claude/disk-space.py prune --days 3'
 check "a report: no ask"          allow 'python3 ~/.claude/disk-space.py report'
 check "--apply, no disk-space.py" allow 'some-tool --apply x'
+check "and rm -rf ~ after: deny"  deny 'python3 ~/.claude/disk-space.py prune --apply x; rm -rf ~'
+check "rm -rf ~, both in a comment" deny 'rm -rf ~ # disk-space.py --apply'
+check "rm -rf / first: deny"      deny 'rm -rf / && python3 disk-space.py clone --apply x y'
+check "a scratch rm -rf, then it" ask 'rm -rf "$CLAUDE_JOB_DIR/tmp/x" && python3 ~/.claude/disk-space.py prune --apply x'
 
 echo ""
 echo "=== rm -rf inside this session's scratch folder runs ==="
