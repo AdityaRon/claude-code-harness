@@ -355,8 +355,9 @@ d = os.environ["CM"]; fd = os.open(d, os.O_RDONLY); st = os.lstat(os.path.join(d
 try:
     m.chmod_dir(fd, "lnk", st); print("chmodded")
 except OSError as e:
-    print("refused")')
-[ "$OUT2" = refused ] && [ "$(stat -f %Lp "$TMP/cm/target" 2>/dev/null || stat -c %a "$TMP/cm/target")" = 0 ] \
+    print("refused")
+print(oct(os.stat(os.path.join(d, "target")).st_mode & 0o777))')
+[ "$OUT2" = "refused"$'\n'"0o0" ] \
   && pass "chmod_dir refuses a name that is now a link, and its target keeps mode 000" || fail "chmod through link" "$OUT2"
 chmod 700 "$TMP/cm/target"
 mkdir -p "$TMP/rt/deep"; (cd "$TMP/rt/deep" && mkdir -p "$(printf 'a/%.0s' $(seq 1 100))")
