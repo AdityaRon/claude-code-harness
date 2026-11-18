@@ -426,6 +426,9 @@ dispatch_is() {   # dispatch_is WANT COMMAND: the answer through hooks/bash-guar
   else echo "  FAIL: want $1, got ${got:-allow} through the dispatcher: $2"; FAIL=$((FAIL+1)); fi
 }
 for c in "${SPLIT[@]}"; do dispatch_is ask "$c"; done
+# Split by a quote and a line's end at once: only the joined command without quotes
+# shows the name (the dispatcher's jq makes it, PRESET_JBARE).
+dispatch_is ask $'cp x ~/.cl""au\\\nde/settings.json'
 # Reads still pass, and a projects path split the same way is still out of the filter.
 bash_is allow 'cat ~/.cl"aude"/settings.json'
 bash_is allow 'cp x ~/.cl"aude"/projects/p/notes.md'

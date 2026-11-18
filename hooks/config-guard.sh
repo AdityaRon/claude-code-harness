@@ -35,11 +35,11 @@ H=$HOME
 # level_of matches: macOS formats APFS case-insensitive, so ~/.CLAUDE/HOOKS is
 # ~/.claude/hooks there. It reads the command with quotes and backslashes out too,
 # as bash runs it (`~/.cl''aude/hooks` is ~/.claude/hooks): the dispatcher's jq made
-# that text (PRESET_BARE, cmd_bare in lib/io.sh), the unjoined command's on the
-# joined pass; run alone, tr makes it, only for a command holding one.
+# that text (PRESET_BARE, cmd_bare in lib/io.sh), and the joined command's too
+# (PRESET_JBARE); run alone, tr makes it, only for a command holding one.
 FSRC=$TARGET
 if [[ "$TOOL" == Bash || "$TOOL" == Monitor ]]; then
-  if [[ -n "${HARNESS_PRESET:-}" && -n "${PRESET_BARE+x}" ]]; then FSRC=$TARGET$'\n'$PRESET_BARE
+  if [[ -n "${HARNESS_PRESET:-}" && -n "${PRESET_BARE+x}" ]]; then FSRC=$TARGET$'\n'$PRESET_BARE${PRESET_JBARE:+$'\n'$PRESET_JBARE}
   elif [[ "$TARGET" == *[\"\'\\]* ]]; then FSRC=$TARGET$'\n'$(printf '%s' "$TARGET" | tr -d '"'\''\\'); fi
 fi
 FTARGET=$FSRC FCWD=$CWD

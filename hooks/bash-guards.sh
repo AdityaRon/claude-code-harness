@@ -76,12 +76,17 @@ unset BG_F bg_f
 [[ "$PRESET_OK" == ok ]] || { BG_DONE=1; require_parsable_or_deny; BG_DONE=""; exit 1; }
 
 # The command with its lines joined as bash joins them, made once here for
-# every guard's second run on it (joined_pass, lib/io.sh).
+# every guard's second run on it (joined_pass, lib/io.sh). The same jq gives that
+# command with " ' and \ out too (PRESET_JBARE), for config-guard's filter: a name
+# split by a quote and a line's end shows only there.
 # shellcheck disable=SC2034  # lib.sh reads them in each guard's fork
-PRESET_JOINED="" PRESET_JINPUT=""
+PRESET_JOINED="" PRESET_JINPUT="" PRESET_JBARE=""
 # shellcheck disable=SC2034
 if [[ "$PRESET_CMD" == *$'\n'* && "$PRESET_CMD" == *[\"\'\\]* ]] && PRESET_JOINED=$(join_continued_lines "$PRESET_CMD"); then
-  PRESET_JINPUT=$(printf '%s' "$INPUT" | jq -c --arg c "$PRESET_JOINED" '.tool_input.command = $c' 2>/dev/null) || PRESET_JOINED=""
+  bg_j=$(printf '%s' "$INPUT" | jq -j --arg c "$PRESET_JOINED" '(.tool_input.command = $c | tojson), "\n",
+    ($c | split("\"") | join("") | split("\u0027") | join("") | split("\\") | join(""))' 2>/dev/null) || PRESET_JOINED=""
+  PRESET_JINPUT=${bg_j%%$'\n'*} PRESET_JBARE=${bg_j#*$'\n'}
+  unset bg_j
 fi
 # bash-guards.skip beside this hook (~/.claude/hooks/) names guards to leave out,
 # one a line. It only takes names off the list above, so a missing or empty file
