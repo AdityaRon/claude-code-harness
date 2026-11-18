@@ -5,6 +5,8 @@
 - Do not stop between steps to report and wait. Finish the chain, report once.
 - Ask only where the answer changes what gets built and no sane default exists.
   Otherwise state the assumption and continue.
+- The exception: after three rounds of fix and re-run on the same failing check,
+  stop and bring the evidence.
 
 ## Evidence
 
