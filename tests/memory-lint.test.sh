@@ -486,21 +486,25 @@ check_eq "a pruned ledger under 20 KB with its archive beside it: silent" "" "$(
 
 L2="$TMP/l2/trackers"; mkdir -p "$L2"
 tracker "$L2/grown.md" "$NOWS" "$CR" "$(head -c 25000 /dev/zero | tr '\0' x)"
-OUT=$(lint "$L2/grown.md")
-check_contains "a handoff grown past 20 KB is a ledger" "ledger lint on grown.md" "$OUT"
-check_contains "with its size" "is 25" "$OUT"
-check_contains "and the prune command for it" "python3 ~/.claude/tracker-prune.py '$L2/grown.md'" "$OUT"
-check_eq "one finding, not the handoff's" "1" "$(printf '%s\n' "$OUT" | grep -c '^  - ')"
-check_eq "exit 2" "2" "$(lint_rc "$L2/grown.md")"
-check_contains "TRACKER_LEDGER_BYTES moves the line" "past 5000" "$(TRACKER_LEDGER_BYTES=30000 lint "$L2/grown.md")"
+check_eq "a handoff grown past 20 KB is a ledger: its own edit is silent, exit 0" "0" "$(lint_rc "$L2/grown.md" 2>/dev/null)"
+check_eq "and prints nothing" "" "$(lint "$L2/grown.md")"
+check_contains "TRACKER_LEDGER_BYTES moves the line: then it is a handoff again" "past 5000" "$(TRACKER_LEDGER_BYTES=30000 lint "$L2/grown.md")"
 L2B="$TMP/l2b/trackers"; mkdir -p "$L2B"
 pad "$L2B/shapeless.md" 6000
-OUT=$(lint "$L2B/shapeless.md")
-check_contains "a shapeless 6 KB file is a handoff: headings" "once each, in that order" "$OUT"
-check_contains "past 5000" "past 5000" "$OUT"
-check_contains "no STATE" "no \`STATE:\` line" "$OUT"
-check_contains "no Crons" "no \`Crons:\` line" "$OUT"
-check_eq "four findings" "4" "$(printf '%s\n' "$OUT" | grep -c '^  - ')"
+check_eq "a 6 KB file with no STATE: and no Next on restart is not a handoff: silent" "0" "$(lint_rc "$L2B/shapeless.md")"
+{ printf '# Open items\n\n## Open\n'; for i in $(seq 1 1500); do printf '| OI-%d | thing %d | open |\n' "$i" "$i"; done; printf '## Settled\nx\n'; } > "$L2B/open-items.md"
+check_eq "a 113 KB-class open-items tracker with ## Open and ## Settled: silent" "" "$(lint "$L2B/open-items.md" Edit)"
+printf '# Report\n\n## Open\nfindings\n' > "$L2B/report.md"
+check_eq "a small report with an ## Open heading: silent" "0" "$(lint_rc "$L2B/report.md")"
+printf '## Scope\nx\n## Next on restart\nx\n' > "$L2B/marked.md"
+OUT=$(lint "$L2B/marked.md")
+check_contains "a ## Next on restart heading marks a handoff" "no \`STATE:\` line" "$OUT"
+check_contains "and its other findings stand" "once each, in that order" "$OUT"
+printf 'STATE: %s\n## Scope\nx\n' "$NOWS" > "$L2B/stated.md"
+check_contains "a STATE: line marks a handoff" "no \`Crons:\` line" "$(lint "$L2B/stated.md")"
+check_eq "CLAUDE_TRACKER_LINT=off: a handoff with findings is silent" "0" "$(CLAUDE_TRACKER_LINT=off lint_rc "$L2B/marked.md")"
+pad "$L2B/big-stated.md" 6000; printf '\nSTATE: %s\n' "$NOWS" >> "$L2B/big-stated.md"
+check_contains "a handoff past 5000: move, never delete" "never delete what has no other copy" "$(lint "$L2B/big-stated.md")"
 
 L3="$TMP/l3/trackers"; mkdir -p "$L3"
 tracker "$L3/handoff.md" "$NOWS" "$CR"
