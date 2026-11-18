@@ -60,8 +60,13 @@ program, which is what costs on a machine whose endpoint agent inspects every
 process start. The same jq hands over the command with its quotes and
 backslashes out, and each guard's first question, whether the command names
 any of its words, is a builtin match on that text (`word_filter`,
-`hooks/lib/io.sh`). A command that names none, `ls -la` say, starts two
-processes in all: the dispatcher's `cat` and `jq`. Each guard file still runs alone as before
+`hooks/lib/io.sh`). A command that names none, `ls -la` say, starts one
+process in all: the dispatcher's `jq` (the payload is read with `$(</dev/stdin)`,
+bash reading it itself, where `cat` was). git-guard asks a second builtin
+question of a git command: whether it names one of the words its checks need
+(`push`, `reset`, `add`, `config`, `hooks` and the rest), or holds `$`, a
+backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
+`commit -m` and `fetch` hold none, and start nothing past that `jq`. Each guard file still runs alone as before
 (`bash ~/.claude/hooks/kubectl-guard.sh < payload.json`).
 
 - **Answers.** A deny beats an ask, and an ask beats a silent allow. One guard answering is passed on byte for byte; when several do, the reasons of those with the strongest answer are joined, in the order above. Each guard writes its own audit line, under its own name.

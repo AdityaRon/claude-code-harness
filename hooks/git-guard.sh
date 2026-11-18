@@ -24,12 +24,27 @@ CMD=$(jq_get '.tool_input.command')
 [[ -z "$CMD" ]] && exit 0
 joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Every check below names git. Normalizing drops quotes and backslashes, lowers
-# case, and removes paths and prefixes, but never adds a letter, so a command
-# with no git once quotes and backslashes are gone is done, before ~35 ms of it.
+# case, and removes paths and prefixes; what it puts in (below) makes no git, so
+# a command with no git once quotes and backslashes are gone is done, before
+# ~35 ms of it.
 # tr, not ${CMD//…}: bash 3.2's substitution took 30 s on an 8,000-byte command.
 # Under the dispatcher its jq already made that text (cmd_bare, lib/io.sh).
 cmd_bare "$CMD" && R=$BARE || R=$(printf '%s' "$CMD" | tr -d '"'\''\\')
 [[ "$R" == *[Gg][Ii][Tt]* ]] || exit 0
+# The same for the words of the gate further down ("Each check below contains
+# one of these"), where git status, log, diff, show, commit and fetch end after
+# ~7 more processes. A command naming none of them is done here, with a builtin
+# match, unless it holds what lets it mean more than its text: $ or a backtick
+# (an expansion; the subcommand-in-a-variable ask), << or (( (unreadable_check),
+# or an interpreter (check_inline_shellouts, which asks on a shell-out it cannot
+# read). The lines bash joins were checked above, by joined_pass. Sound only if
+# no step below makes one of these words where R has none: they drop text, lower
+# case, or put in `;`, `msg` (strip_message_args), %3B, %26 or %7C
+# (neutralize_quoted_separators) or .envTEMPLATE, and none of those completes one.
+GG_GATE='hooks|push|reset|clean|branch|checkout|restore|stash|worktree|add|config|remote|filter-|update-ref|reflog|[$`]|<<|\(\(|python|node|ruby|perl|php|bun|deno'
+shopt -s nocasematch
+[[ "$R" =~ $GG_GATE ]] || exit 0
+shopt -u nocasematch
 CMD=$(strip_inert_heredocs "$CMD")
 unreadable_check git-guard "$CMD"
 # A script's shell-outs are checked as commands (lib.sh). The .git/hooks check

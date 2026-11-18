@@ -390,15 +390,15 @@ started() {   # started COMMAND [CWD]: what one call starts, sorted, on one line
     | CLAUDE_GUARD_TIMING_LOG=/dev/null CLAUDE_SHADOW_LOG=/dev/null bash "$TMP/hk/bash-guards.sh" >/dev/null 2>&1
   sort "$TMP/started" | tr '\n' ' '
 }
-starts_two() {   # starts_two COMMAND [CWD]
+starts_one() {   # starts_one COMMAND [CWD]: the dispatcher's jq, and nothing else
   local s; s=$(started "$@")
-  if [[ "$s" == "cat jq " ]]; then echo "  OK (cat and jq only): $1"; PASS=$((PASS+1))
-  else echo "  FAIL: want cat jq, started $s: $1"; FAIL=$((FAIL+1)); fi
+  if [[ "$s" == "jq " ]]; then echo "  OK (jq only): $1"; PASS=$((PASS+1))
+  else echo "  FAIL: want jq, started $s: $1"; FAIL=$((FAIL+1)); fi
 }
 cmp -s hooks/lib.sh "$TMP/hk/lib.sh" && { echo "  FAIL: test setup: lib.sh's PATH line was not found"; FAIL=$((FAIL+1)); }
-starts_two "ls $J/out"
-starts_two 'wc -l "$HOME/.claude/logs/audit.log"'
-starts_two 'ls' "$HOME/.claude/projects/p"
+starts_one "ls $J/out"
+starts_one 'wc -l "$HOME/.claude/logs/audit.log"'
+starts_one 'ls' "$HOME/.claude/projects/p"
 for c in 'ls ~/.claude/hooks' 'cat ~/.claude/jobs/j/state.json'; do   # a job's folder is not its tmp
   s=$(started "$c")
   if [[ "$s" == *" sed "* ]]; then echo "  OK (read in full): $c"; PASS=$((PASS+1))

@@ -4,6 +4,7 @@
 #   release-notes.sh --since TAG [--prs FILE] [--bench FILE] [--version V]   the notes
 #   release-notes.sh --since TAG [--prs FILE] --next-version [--bump auto|patch|minor|major]
 #   release-notes.sh --since TAG [--prs FILE] --intended     ids from `intended-decisions:` lines
+#   release-notes.sh --since TAG [--prs FILE] --intended-launches   ids from `intended-launches:` lines
 #   release-notes.sh --changelog NOTES.md [--file CHANGELOG.md]
 #   release-notes.sh --entry VERSION [--file CHANGELOG.md]    an entry already written
 #   release-notes.sh --missing [--file CHANGELOG.md]  tags newer than the newest entry, oldest first
@@ -16,9 +17,9 @@
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-usage() { sed -n '2,15s/^# \{0,1\}//p' "$0"; exit 2; }
+usage() { sed -n '2,16s/^# \{0,1\}//p' "$0"; exit 2; }
 
-SINCE="" PRS="" BENCH="" VERSION="" DATE="" BUMP=auto MODE=notes NOTES="" FILE=""
+SINCE="" PRS="" BENCH="" VERSION="" DATE="" BUMP=auto MODE=notes NOTES="" FILE="" LINE=intended-decisions
 SINCE_SET=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -30,7 +31,8 @@ while [[ $# -gt 0 ]]; do
     --date) DATE="$2"; shift 2 ;;
     --bump) BUMP="$2"; shift 2 ;;
     --next-version) MODE=version; shift ;;
-    --intended) MODE=intended; shift ;;
+    --intended) MODE=intended; LINE=intended-decisions; shift ;;
+    --intended-launches) MODE=intended; LINE=intended-launches; shift ;;
     --changelog) MODE=changelog; NOTES="$2"; shift 2 ;;
     --entry) MODE=entry; VERSION="$2"; shift 2 ;;
     --missing) MODE=missing; shift ;;
@@ -115,8 +117,8 @@ fi
 
 case "$MODE" in
   intended)
-    printf '%s' "$PRS_JSON" | jq -r '.[].body // "" | split("\n")[] | select(test("^intended-decisions:"))
-                                     | sub("^intended-decisions:[[:space:]]*"; "") | split("[,[:space:]]+"; "") | .[]' \
+    printf '%s' "$PRS_JSON" | jq -r --arg l "$LINE" '.[].body // "" | split("\n")[] | select(test("^" + $l + ":"))
+                                     | sub("^" + $l + ":[[:space:]]*"; "") | split("[,[:space:]]+"; "") | .[]' \
       | grep -v '^$' | sort -u | tr '\n' ' '; echo
     exit 0 ;;
   version)

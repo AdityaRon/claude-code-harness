@@ -733,6 +733,20 @@ check "branch -D, then a subcommand in a variable" ask 'git branch -D topic; git
 check "config user.name, then a ! alias"      deny  "git config user.name x; git config alias.x '!sh'"
 check "worktree remove -f, then reset --hard" deny  'git worktree remove --force ../wt; git reset --hard'
 check "branch -D, then a force push"          deny  'git branch -D topic && git push origin main --force'
+
+echo ""
+echo "=== a git command naming none of the gate's words ends early, unless it can mean more than its text ==="
+# Each case below has git and none of the gate's words: only what the second word
+# filter passes through on keeps it from ending there.
+check "git log ends early"                    allow 'git log --oneline -5'
+check "subcommand from a substitution"        ask   'git $(cat sub) origin main'
+check "subcommand from backticks"             ask   'git `cat sub` origin main'
+check "two heredoc openers on one line"       ask   'git log <<A <<B'
+check "a (( that is two subshells"            ask   '((git log) )'
+check "python joins a force push with +"      deny  "python3 -c \"import os; os.system('git pu' + 'sh --force origin main')\""
+check "node joins a force push with +"        deny  "node -e \"require('child_process').execSync('git pu' + 'sh --force origin main')\""
+check "ruby joins a force push with +"        deny  "ruby -e \"system('git pu' + 'sh --force origin main')\""
+check "bun joins a force push with +"         deny  "bun -e \"require('child_process').execSync('git pu' + 'sh --force origin main')\""
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

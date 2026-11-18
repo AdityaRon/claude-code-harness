@@ -289,7 +289,7 @@ disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
   && pass "a lib without word_filter: exit 2, not seven guards that allow" || fail "a lib without word_filter" "rc=$RC out=$OUT err=$ERR"
 
 echo ""
-echo "=== a command that names no guard's word starts two processes ==="
+echo "=== a command that names no guard's word starts one process ==="
 # Each name on lib.sh's PATH is a shim that logs it and runs the real one.
 copy_hooks
 mkdir -p "$TMP/shim"
@@ -305,9 +305,17 @@ started() {   # started COMMAND: the processes one call starts, sorted, on one l
   sort "$TMP/started" | tr '\n' ' '
 }
 S=$(started 'ls -la')
-[[ "$S" == "cat jq " ]] && pass "ls -la: the dispatcher's cat and jq, and no guard starts one" || fail "ls -la starts" "$S"
+[[ "$S" == "jq " ]] && pass "ls -la: the dispatcher's jq, and no guard starts one (read_input starts no cat)" || fail "ls -la starts" "$S"
 S=$(started 'grep -rn "it'\''s" src/ | head -20')
-[[ "$S" == "cat jq " ]] && pass "quotes in it: still cat and jq" || fail "a quoted command starts" "$S"
+[[ "$S" == "jq " ]] && pass "quotes in it: still only jq" || fail "a quoted command starts" "$S"
+# git-guard's second word filter: a git command naming none of its gate's words is done with a builtin match.
+BADG=""
+for c in 'git log' 'git status' 'git diff HEAD~1' 'git show HEAD' 'git commit -m "fix: x"' 'git fetch origin' 'git log --oneline -5 | head'; do
+  S=$(started "$c"); [[ "$S" == "jq " ]] || BADG="$BADG [$c: $S]"
+done
+[[ -z "$BADG" ]] && pass "git log, status, diff, show, commit -m and fetch: only the dispatcher's jq" || fail "git commands start" "$BADG"
+S=$(started 'git push origin x')
+[[ "$S" == *" grep "* || "$S" == *" sed "* ]] && pass "git push still goes through git-guard's checks" || fail "git push starts" "$S"
 S=$(started 'kube"ctl" delete pod web')
 [[ "$S" == *" sed "* && "$S" != *" grep grep grep grep "* ]] \
   && pass "a guard whose word is named goes on; the others start none" || fail "kube\"ctl\" starts" "$S"
@@ -371,6 +379,27 @@ envcase git-guard "$(payload "python3 -c 'import os; os.system(\"git push --forc
 OUT=$(payload "python3 -c 'import os; os.system(\"git push --force origin main\")'" \
   | env HARNESS_PRESET=1 GUARD_SELF=/usr/bin/true GUARD_NAME=x bash hooks/bash-guards.sh 2>/dev/null)
 [[ "$(dec "$OUT")" == deny ]] && pass "bash-guards with them set still denies an inline force push" || fail "dispatcher with them set" "$OUT"
+
+echo ""
+echo "=== a payload handed over a socketpair is read as one over a pipe ==="
+# read_input reads $(</dev/stdin). Linux cannot open a socket by that path, and a
+# spawner may hand a hook one end of a socketpair: an empty read was an allow.
+via_socket() {   # via_socket CMD...: CMD with this stdin handed over a socketpair
+  python3 -c '
+import socket, subprocess, sys, threading
+data = sys.stdin.buffer.read()
+a, b = socket.socketpair()
+p = subprocess.Popen(sys.argv[1:], stdin=b, stdout=subprocess.PIPE)
+b.close()
+threading.Thread(target=lambda: (a.sendall(data), a.shutdown(socket.SHUT_WR)), daemon=True).start()
+out, _ = p.communicate(timeout=120)
+sys.stdout.buffer.write(out)
+sys.exit(p.returncode)' "$@"
+}
+OUT=$(payload 'rm -rf ~/' | via_socket bash hooks/bash-guards.sh 2>/dev/null)
+[[ "$(dec "$OUT")" == deny ]] && pass "bash-guards over a socketpair: rm -rf ~/ is denied" || fail "socketpair, dispatcher" "$OUT"
+OUT=$(payload 'rm -rf ~/' | via_socket bash hooks/rm-guard.sh 2>/dev/null)
+[[ "$(dec "$OUT")" == deny ]] && pass "rm-guard run alone over a socketpair: denied" || fail "socketpair, guard alone" "$OUT"
 
 echo ""
 echo "=== the timing log: one line a call, keyed by tool_use_id ==="
