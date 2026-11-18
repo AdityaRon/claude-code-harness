@@ -381,6 +381,27 @@ OUT=$(payload "python3 -c 'import os; os.system(\"git push --force origin main\"
 [[ "$(dec "$OUT")" == deny ]] && pass "bash-guards with them set still denies an inline force push" || fail "dispatcher with them set" "$OUT"
 
 echo ""
+echo "=== a payload handed over a socketpair is read as one over a pipe ==="
+# read_input reads $(</dev/stdin). Linux cannot open a socket by that path, and a
+# spawner may hand a hook one end of a socketpair: an empty read was an allow.
+via_socket() {   # via_socket CMD...: CMD with this stdin handed over a socketpair
+  python3 -c '
+import socket, subprocess, sys, threading
+data = sys.stdin.buffer.read()
+a, b = socket.socketpair()
+p = subprocess.Popen(sys.argv[1:], stdin=b, stdout=subprocess.PIPE)
+b.close()
+threading.Thread(target=lambda: (a.sendall(data), a.shutdown(socket.SHUT_WR)), daemon=True).start()
+out, _ = p.communicate(timeout=120)
+sys.stdout.buffer.write(out)
+sys.exit(p.returncode)' "$@"
+}
+OUT=$(payload 'rm -rf ~/' | via_socket bash hooks/bash-guards.sh 2>/dev/null)
+[[ "$(dec "$OUT")" == deny ]] && pass "bash-guards over a socketpair: rm -rf ~/ is denied" || fail "socketpair, dispatcher" "$OUT"
+OUT=$(payload 'rm -rf ~/' | via_socket bash hooks/rm-guard.sh 2>/dev/null)
+[[ "$(dec "$OUT")" == deny ]] && pass "rm-guard run alone over a socketpair: denied" || fail "socketpair, guard alone" "$OUT"
+
+echo ""
 echo "=== the timing log: one line a call, keyed by tool_use_id ==="
 rm -f "$CLAUDE_GUARD_TIMING_LOG"
 T0=$(date +%s)

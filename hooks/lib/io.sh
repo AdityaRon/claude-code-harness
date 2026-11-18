@@ -4,13 +4,17 @@
 # Read full stdin once into $INPUT. Safe to call with no stdin. $(</dev/stdin)
 # is bash reading the file itself: the same text as $(cat), trailing newlines
 # and NULs dropped alike, and one program fewer started on every hook run. Not
-# `read -d ''`, which reads a pipe a byte at a time.
+# `read -d ''`, which reads a pipe a byte at a time. bash opens /dev/stdin by
+# its path, and Linux cannot open a socket that way (ENXIO): a spawner that
+# hands the hook one end of a socketpair got an empty INPUT, which every guard
+# reads as no call at all, and allows. So when that open fails having read
+# nothing, cat reads it, as before.
 read_input() {
   [[ -n "${HARNESS_PRESET:-}" ]] && return 0
   if [[ -t 0 ]]; then
     INPUT=""
   else
-    INPUT=$(</dev/stdin)
+    { INPUT=$(</dev/stdin); } 2>/dev/null || [[ -n "$INPUT" ]] || INPUT=$(cat)
   fi
   export INPUT
 }

@@ -33,6 +33,17 @@ deep(){ jq -nc --arg f "$D/a/b/c/d/e/f/g/register.js" '{tool_name:"Write",tool_i
   | CLAUDE_MOD_GATE_CLI="$1" bash "$HOOK"; }
 [[ "$(decision "$(deep "$TMP/cli-fails")")" == "ask" ]] && pass "validate fails: ask, seven folders down" || fail "validate fails" "$(deep "$TMP/cli-fails")"
 [[ "$(decision "$(deep "$TMP/cli-junk")")" == "ask" ]] && pass "validate prints no JSON: ask" || fail "validate junk" "$(deep "$TMP/cli-junk")"
+# Its stdin handed over a socketpair, which Linux cannot open as /dev/stdin: still read.
+OUT=$(jq -nc --arg f "$D/a/b/c/d/e/f/g/register.js" '{tool_name:"Write",tool_input:{file_path:$f,content:"x"}}' \
+  | CLAUDE_MOD_GATE_CLI="$TMP/cli-fails" python3 -c '
+import socket, subprocess, sys, threading
+data = sys.stdin.buffer.read()
+a, b = socket.socketpair()
+p = subprocess.Popen(sys.argv[1:], stdin=b, stdout=subprocess.PIPE)
+b.close()
+threading.Thread(target=lambda: (a.sendall(data), a.shutdown(socket.SHUT_WR)), daemon=True).start()
+sys.stdout.buffer.write(p.communicate(timeout=120)[0])' bash "$HOOK")
+[[ "$(decision "$OUT")" == "ask" ]] && pass "over a socketpair the payload is read: ask" || fail "socketpair" "$OUT"
 
 CLI=${CLAUDE_MOD_GATE_CLI:-$(command -v claude)}
 if [[ -z "$CLI" ]] || ! "$CLI" plugin validate --help >/dev/null 2>&1; then
