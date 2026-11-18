@@ -32,6 +32,8 @@ echo ""
 echo "=== count: count_mark counts what bytes.count counts ==="
 gp --only count --n 300
 [ "$RC" = 0 ] && grep -q ': 0 counted wrong\.$' "$TMP/out" && pass "the shipped count_mark" || fail "count" "rc=$RC $(cat "$TMP/out")"
+grep -qE '; [1-9][0-9]* overlapping pairs placed\)' "$TMP/out" && pass "the run places two copies of a mark sharing a border" \
+  || fail "overlapping pairs" "$(cat "$TMP/out")"
 TAIL='tail = buf[max(i, len(buf) - (k - 1)):]'
 grep -qF "$TAIL" bin/disk-space.py || fail "test setup" "the count_mark tail line was not found"
 cm_mutant() {  # NAME REPLACEMENT GREP: count_mark's tail line replaced, the property run, GREP among the miscounts
@@ -40,7 +42,7 @@ cm_mutant() {  # NAME REPLACEMENT GREP: count_mark's tail line replaced, the pro
   gp --only count --n 300 --disk-space "$TMP/ds.py"
   [ "$RC" = 1 ] && grep -qE "$3" "$TMP/out" && pass "$1 fails, and names a file it miscounts" || fail "$1" "rc=$RC $(tail -2 "$TMP/out")"
 }
-# The real mark goes in only on chunk boundaries, and overlaps itself only as two copies placed sharing its quote.
+# Each mutant must miscount the mark disk-space.py counts, not only the short ones.
 cm_mutant "a tail one byte short" 'tail = buf[max(i, len(buf) - (k - 2)):]' "^  mark b'\"subtype\":\"compact_boundary\"'"
 cm_mutant "a tail that starts before the last match" 'tail = buf[len(buf) - (k - 1):]' "^  mark b'\"subtype\":\"compact_boundary\"'"
 cm_mutant "a 1-byte mark carrying the whole buffer" 'tail = buf[max(i, len(buf) - (k - 1)):] if k > 1 else buf' "^  mark b'.', chunk"
