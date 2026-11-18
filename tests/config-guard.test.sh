@@ -328,6 +328,11 @@ bash_is ask $'cat <<EOF > /dev/null\n$(cd .claude && cp x hooks/lib.sh)\nEOF' "$
 # this change allowed the first.
 bash_is ask $'cat <<EOF > /dev/null\n$(cd /tmp)\nEOF\ncd .claude && cp x hooks/lib.sh' "$HOME"
 bash_is ask $'cat <<EOF > /dev/null\n$(cd /tmp; true)\nEOF\ncd .claude && cp x hooks/lib.sh' "$HOME"
+# A body's other reading (a quote spanning its lines) is replayed after the
+# command: a script runs where it is sourced, not where it was written. bash
+# writes ~/.claude/statusline.sh here; replayed in the body, the cd read .claude
+# from the session's folder and allowed it.
+bash_is ask $'cat > ~/n.sh <<EOF\n$(true) x=\'\n\';cd .claude\nEOF\ncd ~ && source n.sh && echo x > statusline.sh'
 bash_is ask 'd=$(pwd); cp "a;b" ~/.claude/settings.json'
 
 echo "=== a monitor's command is checked as a Bash command ==="

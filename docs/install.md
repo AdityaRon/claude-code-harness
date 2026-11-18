@@ -13,6 +13,13 @@ tested. Moved from the README.
 
 Then open Claude Code and run `/hooks` to confirm everything is registered.
 
+**zsh's options.** session-start puts `setopt no_nomatch no_equals` in each
+session's `$CLAUDE_ENV_FILE`, so Claude's zsh reads an unmatched glob and
+`=word` as bash does. If a Bash call still fails with `no matches found`
+(a Claude Code version that does not source that file, or hooks turned off),
+the same effect from `~/.zshenv`, for Claude's shells only:
+`[[ -n $CLAUDECODE ]] && setopt no_nomatch no_equals`.
+
 **On a new machine**, put the machine-local files in place before
 `bash install.sh`: rules in `~/.claude/rules/local-*.md`, and allow rules for
 work tools and hosts in `~/.claude/local-settings/<name>.json`. This repo is public and
@@ -41,7 +48,8 @@ repo layout is for reading the repo, not for the installed tree.
   net-allowlist.sh  sandbox.sh  sandbox-trial.sh
   spend-report.py          ← what sessions, subagents and loop ticks cost; comms-hub's tick runs it daily
   disk-space.py            ← what job folders and Bazel output bases hold; harness-update.sh runs its
-                             stamp once a day into state/disk-usage, which session-start reads;
+                             stamp once a day into state/disk-usage (sizes, transcripts of 150 MB
+                             or more, the guards' p90), which session-start reads;
                              prune, clone and bazel --sweep delete by digest, behind ask rules
   relocate-clones.sh       ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads
   harness-update.sh        ← moves this machine to the newest release

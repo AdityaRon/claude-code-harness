@@ -31,5 +31,8 @@
   be, then measure the effect.
 - Fix the class, not the instance: enumerate the siblings from the built artifact
   and push the fix upstream.
-- Before compacting or clearing, write state into a durable tracker: settled,
-  open, next.
+- Before compacting or clearing, write state into a durable tracker,
+  `trackers/<name>.md`, replaced in place: `## Scope`, `## Open`, `## Owed`,
+  `## Settled`, `## Next on restart`; a `STATE:` line from `date -u`; and
+  `Crons:` with each session cron as its expression and prompt, or `none`.
+  Under 5 KB. memory-lint checks the shape.

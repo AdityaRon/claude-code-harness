@@ -17,6 +17,19 @@ if command -v jq &>/dev/null; then
   eval "$(printf '%s\n' "$INPUT" | jq -r '@sh "SOURCE=\(.source // "") SESSION_ID=\(.session_id // "") LAUNCH_DIR=\(.cwd // "")"' 2>/dev/null)"
 fi
 
+# zsh's NOMATCH and EQUALS abort bash-shaped commands. $CLAUDE_ENV_FILE is sourced
+# before each Bash call only, so interactive shells keep their options. `if`, not
+# `&&`: status 0 under bash. Outside the budget, so no start skips it.
+ZSH_OPTS='if [ -n "${ZSH_VERSION:-}" ]; then setopt no_nomatch no_equals; fi'
+if [[ -n "${CLAUDE_ENV_FILE:-}" && "${CLAUDE_ZSH_OPTS:-on}" != off ]]; then
+  _have=""
+  if [[ -f "$CLAUDE_ENV_FILE" ]]; then
+    while IFS= read -r _l || [[ -n "$_l" ]]; do [[ "$_l" == "$ZSH_OPTS" ]] && { _have=1; break; }; done < "$CLAUDE_ENV_FILE"
+  fi
+  [[ -n "$_have" ]] || printf '%s\n' "$ZSH_OPTS" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+  unset _have _l
+fi
+
 # --- time budget -------------------------------------------------------------
 # Every section below is context or housekeeping the session can start without.
 # One that would start past the budget (bash's whole-second SECONDS: 3.2 has no
@@ -93,8 +106,11 @@ STORE_SLUG=$(store_slug "$LAUNCH_DIR")
 MEM_DIR="$PROJECTS_DIR/$STORE_SLUG/memory"
 IDX_LINES=0 IDX_BYTES=0
 [[ -f "$MEM_DIR/MEMORY.md" ]] && read -r IDX_LINES IDX_BYTES < <(wc -lc < "$MEM_DIR/MEMORY.md")
-# The stamp and the lock are read only under pressure, the rare case.
-if { [[ "$IDX_LINES" -ge "${MEMORY_INDEX_PRESSURE_LINES:-180}" ]] || [[ "$IDX_BYTES" -ge "${MEMORY_INDEX_PRESSURE_CHARS:-20000}" ]]; } \
+# The stamp and the lock are read only under pressure, the rare case. Pressure is
+# memory-lint's definition, from the file both read; unreadable, no reorder.
+_hook_dir=${0%/*}; [[ "$_hook_dir" == "$0" ]] && _hook_dir=.
+# shellcheck source=lib/memory-limits.sh
+if source "$_hook_dir/lib/memory-limits.sh" 2>/dev/null && memory_pressure "$IDX_LINES" "$IDX_BYTES" \
    && in_budget memory-index; then
   STAMP_FILE="$STATE_DIR/memory-index/$STORE_SLUG"
   STAMP="$(date -r "$MEM_DIR/MEMORY.md" +%s 2>/dev/null) $IDX_BYTES"
@@ -173,13 +189,19 @@ fi
 # numbers may no longer hold. The one process, date, runs once per measurement.
 DISK_STAMP=$(expand_tilde "${CLAUDE_DISK_STAMP:-$HOME/.claude/state/disk-usage}")
 if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
-  D_JOBS=0 D_BAZEL=0 D_ORPH=0 D_N=0 D_AT=0 D_DATE=""
+  D_JOBS=0 D_BAZEL=0 D_ORPH=0 D_N=0 D_AT=0 D_DATE="" D_TB="" D_TC="" D_GP=0 D_GC=0
   while IFS='=' read -r k v || [[ -n "$k" ]]; do
-    case "$k" in date) [[ "$v" =~ ^[0-9-]+$ ]] && D_DATE=$v; continue ;; esac
+    case "$k" in
+      date) [[ "$v" =~ ^[0-9-]+$ ]] && D_DATE=$v; continue ;;
+      transcript)  # SESSION BYTES COMPACTIONS; only this session's, only on resume
+        [[ "$SOURCE" == resume && -n "$SESSION_ID" && "$v" =~ ^([A-Za-z0-9_-]+)\ ([0-9]{1,15})\ ([0-9]{1,6})$ \
+           && "${BASH_REMATCH[1]}" == "$SESSION_ID" ]] && D_TB=${BASH_REMATCH[2]} D_TC=${BASH_REMATCH[3]}
+        continue ;;
+    esac
     [[ "$v" =~ ^[0-9]{1,15}$ ]] || continue
     case "$k" in
       jobs_bytes) D_JOBS=$v ;; bazel_bytes) D_BAZEL=$v ;; orphan_bytes) D_ORPH=$v ;;
-      orphans) D_N=$v ;; measured) D_AT=$v ;;
+      orphans) D_N=$v ;; measured) D_AT=$v ;; guard_p90_ms) D_GP=$v ;; guard_calls) D_GC=$v ;;
     esac
   done < "$DISK_STAMP"
   D_JL=${CLAUDE_DISK_WARN_JOBS_GB:-50} D_BL=${CLAUDE_DISK_WARN_BAZEL_GB:-100}
@@ -201,6 +223,34 @@ if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
         (( D_BAZEL > D_BL * 1000000000 )) && echo "The Bazel output root holds $G_BAZEL (warns past $D_BL GB), $G_ORPH of it in $D_N output bases whose workspace is gone. Each base: python3 ~/.claude/disk-space.py bazel"
       fi
       printf '%s\n' "$D_AT" > "$STAMP_FILE" 2>/dev/null
+    fi
+  fi
+  # Once per session and measurement: claim's file is per session.
+  if [[ -n "$D_TB" ]] && (( D_AT > 0 )); then
+    [[ -d "$STATE_DIR" ]] || mkdir -p "$STATE_DIR" 2>/dev/null
+    if claim "$STATE_DIR/$SESSION_ID.transcript" "$D_AT"; then
+      NOW=${EPOCHSECONDS:-}
+      [[ "$NOW" =~ ^[0-9]+$ ]] || NOW=$(date +%s)
+      if (( NOW - D_AT <= 2 * 86400 )); then
+        echo ""
+        echo "## This session's transcript"
+        echo "It held $(( (D_TB + 500000) / 1000000 )) MB after $D_TC compactions when harness-update.sh measured it on ${D_DATE:-its last run}. Consider writing a handoff (settled, open, next) and continuing in a fresh session. Every large transcript: python3 ~/.claude/disk-space.py report"
+      fi
+    fi
+  fi
+  D_GL=${CLAUDE_GUARD_P90_WARN_MS:-1000}
+  [[ "$D_GL" =~ ^[0-9]{1,7}$ ]] || D_GL=1000
+  if (( D_GP > D_GL && D_AT > 0 )); then
+    [[ -d "$STATE_DIR" ]] || mkdir -p "$STATE_DIR" 2>/dev/null
+    if claim "$STATE_DIR/guard-latency" "$D_AT"; then
+      NOW=${EPOCHSECONDS:-}
+      [[ "$NOW" =~ ^[0-9]+$ ]] || NOW=$(date +%s)
+      if (( NOW - D_AT <= 2 * 86400 )); then
+        t=$(( (D_GP + 50) / 100 )) l=$(( (D_GL + 50) / 100 ))
+        echo ""
+        echo "## Bash guards"
+        echo "In the last $D_GC Bash calls before ${D_DATE:-the last measurement}, 1 in 10 waited $((t / 10)).$((t % 10)) s or more for its slowest guard (says so past $((l / 10)).$((l % 10)) s). Which guard: bash ~/.claude/harness-src/doctor.sh --latency"
+      fi
     fi
   fi
 fi

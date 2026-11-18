@@ -41,30 +41,46 @@ days_ago() {
     || date -d "$1 days ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null
 }
 
-# A stub `gh` that answers only for known refs, so tests assert on our parsing
-# and comparison rather than on GitHub.
+# A stub `gh` that answers `gh api graphql` only for known refs, so tests assert
+# on our parsing and comparison rather than on GitHub. It fails the way gh did
+# when probed on 2026-11-18: a number it does not know comes back `null` with an
+# errors[] entry, the rest of the data is still on stdout, and it exits 1. An
+# unknown repo is `"r": null`. Each call appends one line to $FAKEGH_LOG.
 cat > "$TMP/fakegh" <<'STUB'
 #!/usr/bin/env bash
-sub="$1"; shift
-repo=""; num=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --repo) repo="$2"; shift 2 ;;
-    --json|-q) shift 2 ;;
-    view) shift ;;
-    *) [ -z "$num" ] && num="$1"; shift ;;
-  esac
-done
-case "$sub:$repo#$num" in
-  pr:acme/api#4821) echo "MERGED" ;;
-  pr:acme/web#900)    echo "OPEN" ;;
-  issue:acme/tools#42)    echo "CLOSED" ;;
-  pr:acme/tools#42)       exit 1 ;;   # falls through to the issue lookup
-  *) exit 1 ;;                            # unknown ref: lookup fails
+[ "$1 $2" = "api graphql" ] || exit 1
+q=""
+for a in "$@"; do case "$a" in query=*) q=${a#query=} ;; esac; done
+owner=$(printf '%s\n' "$q" | sed -n 's/.*repository(owner: "\([^"]*\)".*/\1/p')
+name=$(printf '%s\n' "$q" | sed -n 's/.*name: "\([^"]*\)".*/\1/p')
+nums=$(printf '%s\n' "$q" | sed -n 's/^n\([0-9]*\): issueOrPullRequest(number: \1).*/\1/p')
+echo "$owner/$name $(printf '%s\n' "$nums" | grep -c .)" >> "${FAKEGH_LOG:-/dev/null}"
+[ "${FAKEGH_DOWN:-0}" = 1 ] && { echo "gh: connection refused" >&2; exit 1; }
+case "$owner/$name" in
+  acme/api|acme/web|acme/tools|acme/bulk) ;;
+  *) echo '{"data":{"r":null},"errors":[{"type":"NOT_FOUND","path":["r"],"message":"Could not resolve to a Repository"}]}'
+     echo "gh: Could not resolve to a Repository" >&2; exit 1 ;;
 esac
+body=""; errs=""; rc=0
+for n in $nums; do
+  case "$owner/$name#$n" in
+    acme/api#4821) v='{"__typename":"PullRequest","state":"MERGED"}' ;;
+    acme/web#900)  v='{"__typename":"PullRequest","state":"OPEN"}' ;;
+    acme/tools#42) v='{"__typename":"Issue","state":"CLOSED"}' ;;
+    acme/bulk#*)   v='{"__typename":"PullRequest","state":"OPEN"}' ;;
+    *) v=null; rc=1
+       errs="$errs${errs:+,}{\"type\":\"NOT_FOUND\",\"path\":[\"r\",\"n$n\"],\"message\":\"Could not resolve to an issue or pull request with the number of $n.\"}" ;;
+  esac
+  body="$body${body:+,}\"n$n\":$v"
+done
+printf '{"data":{"r":{%s}}%s}\n' "$body" "${errs:+,\"errors\":[$errs]}"
+[ "$rc" = 0 ] || echo "gh: Could not resolve to an issue or pull request" >&2
+exit "$rc"
 STUB
 chmod +x "$TMP/fakegh"
 export MEMORY_VERIFY_GH_CMD="$TMP/fakegh"
+export FAKEGH_LOG="$TMP/gh.log"
+calls() { if [ -f "$FAKEGH_LOG" ]; then wc -l < "$FAKEGH_LOG" | tr -d ' '; else echo 0; fi; }
 
 mem() {  # mem <filename> <age_days> <body...>
   local name="$1" age="$2"; shift 2
@@ -106,7 +122,7 @@ check_contains "shows reality"        "actual=MERGED"  "$OUT"
 check_eq       "exit 1 on stale"      "1" "$(run_rc)"
 
 echo ""
-echo "=== Falls back to the issue API when the number is not a PR ==="
+echo "=== An issue number resolves too (issueOrPullRequest answers for either) ==="
 rm -f "$STORE"/*.md
 mem issue.md 40 "verify:" "  - gh acme/tools#42 open"
 OUT=$(run)
@@ -614,6 +630,127 @@ echo "=== A hook pointing at a missing or frontmatter-less file is not guessed a
 echo "- [Gone](nosuchfile.md) — trails off…" > "$STORE/MEMORY.md"
 check_absent "missing target skipped" "HOOK" "$(run)"
 rm -f "$STORE"/MEMORY.md
+
+echo ""
+echo "=== gh claims are looked up in one GraphQL call per repo, not one per claim ==="
+rm -f "$STORE"/*.md "$FAKEGH_LOG"
+mem b1.md 40 "verify:" "  - gh acme/bulk#1 open" "  - gh acme/bulk#2 open" "  - gh acme/api#4821 merged"
+mem b2.md 40 "verify:" "  - gh acme/bulk#3 open" "  - gh acme/bulk#1 open"
+mem b3.md 40 "verify:" "  - gh acme/bulk#4 open" "  - gh acme/bulk#5 open" "  - gh acme/bulk#6 open"
+OUT=$(run --all)
+check_eq       "8 claims, 7 refs, 2 repos: 2 calls"  "2" "$(calls)"
+check_contains "and every claim is answered"          "8 verified" "$OUT"
+check_eq       "the repeated ref is asked once"      "acme/bulk 6" "$(grep bulk "$FAKEGH_LOG")"
+rm -f "$FAKEGH_LOG"
+MEMORY_VERIFY_GH_BATCH=4 run >/dev/null
+check_eq       "a batch of 4: 6 numbers take 2 calls, plus 1" "3" "$(calls)"
+
+echo ""
+echo "=== a wrong merged claim is STALE: merged is looked up like any other ==="
+rm -f "$STORE"/*.md "$FAKEGH_LOG"
+mem wrongmerged.md 40 "verify:" "  - gh acme/web#900 merged"
+OUT=$(run)
+check_contains "flagged STALE"       "acme/web#900 expected=merged actual=OPEN" "$OUT"
+check_eq       "exit 1"              "1" "$(run_rc)"
+
+echo ""
+echo "=== one null alias is a SKIP for its claim; its batch still resolves ==="
+# gh exits 1 here with the other aliases' data on stdout, as the probe showed.
+rm -f "$STORE"/*.md "$FAKEGH_LOG"
+mem partial.md 40 "verify:" "  - gh acme/api#4821 merged" "  - gh acme/api#77 open" "  - gh acme/api#4821 open"
+OUT=$(run --all)
+check_eq       "one call"                          "1" "$(calls)"
+check_contains "the missing number is SKIP"        "acme/api#77 not-found" "$OUT"
+check_contains "its neighbour is still VERIFIED"   "acme/api#4821 is MERGED, as recorded" "$OUT"
+check_contains "and still caught when wrong"       "expected=open actual=MERGED" "$OUT"
+check_contains "counted once each"                 "1 stale, 0 triage, 0 need-mcp, 1 skipped, 1 verified" "$OUT"
+
+echo ""
+echo "=== a repo GitHub does not know, or no answer at all, is lookup-failed ==="
+rm -f "$STORE"/*.md "$FAKEGH_LOG"
+mem norepo.md 40 "verify:" "  - gh acme/nope#1 merged" "  - gh acme/api#4821 merged"
+OUT=$(run --all)
+check_contains "the unknown repo is SKIP"  "acme/nope#1 lookup-failed" "$OUT"
+check_contains "the other repo resolves"   "acme/api#4821 is MERGED"   "$OUT"
+OUT=$(FAKEGH_DOWN=1 run --all)
+check_contains "gh down: SKIP, not a pass" "acme/api#4821 lookup-failed" "$OUT"
+check_absent   "and nothing is VERIFIED"   "VERIFIED" "$OUT"
+check_eq       "exit 2"                    "2" "$(FAKEGH_DOWN=1 run_rc)"
+
+echo ""
+echo "=== a ref the query cannot carry is refused before any call ==="
+rm -f "$STORE"/*.md "$FAKEGH_LOG"
+mem shapes.md 40 "verify:" "  - gh acme/api/x#1 merged" "  - gh acme/a\"pi#1 merged" "  - gh acme/api#04821 merged"
+OUT=$(run --all)
+check_contains "two slashes"                 "acme/api/x#1 ref-malformed" "$OUT"
+check_contains "a quote in the name"         "ref-malformed" "$(printf '%s\n' "$OUT" | grep 'a"pi')"
+check_contains "a leading zero is the same number" "acme/api#04821 is MERGED" "$OUT"
+check_eq       "only the good one was asked" "acme/api 1" "$(cat "$FAKEGH_LOG")"
+
+echo ""
+echo "=== --jira-keys prints the jira claims' keys as JQL, 50 to a line ==="
+rm -f "$STORE"/*.md "$FAKEGH_LOG"
+mem j1.md 40 "verify:" "  - jira ABC-123 Done" "  - jira XYZ-1 In Progress" "  - gh acme/api#4821 merged"
+mem j2.md 40 "verify:" "  - jira ABC-7 Done" "  - jira ABC-123 Done" "  - jira abc-9 Done" "  - jira DEF-2"
+OUT=$(run --jira-keys)
+check_eq "deduped, numeric order, gh and malformed left out" "key in (ABC-7, ABC-123, XYZ-1)" "$OUT"
+check_eq "no lookup made"                                    "0" "$(calls)"
+rm -f "$STORE"/*.md
+{ echo "---"; echo "name: many"; echo "description: d"; echo "---"; echo "verify:"
+  i=1; while [ "$i" -le 120 ]; do echo "  - jira ABC-$i Done"; i=$((i+1)); done; } > "$STORE/many.md"
+OUT=$(run --jira-keys)
+check_eq "120 keys: 3 lines"           "3" "$(printf '%s\n' "$OUT" | grep -c '^key in (')"
+check_eq "50 on the first"             "50" "$(printf '%s\n' "$OUT" | head -1 | tr ',' '\n' | grep -c 'ABC-')"
+check_eq "20 on the last"              "20" "$(printf '%s\n' "$OUT" | tail -1 | tr ',' '\n' | grep -c 'ABC-')"
+check_eq "exit 0"                      "0" "$(run_rc --jira-keys)"
+
+echo ""
+echo "=== verify: none <reason> in the frontmatter waives TRIAGE, and is counted ==="
+waiver_mem() {  # waiver_mem <file> <frontmatter line> <body...>
+  local name="$1" w="$2"; shift 2
+  { echo "---"; echo "name: ${name%.md}"; echo "description: d"; echo "$w"
+    echo "metadata:"; echo "  type: project"; echo "  modified: $(days_ago 40)"
+    echo "---"; printf '%s\n' "$@"; } > "$STORE/$name"
+}
+rm -f "$STORE"/*.md
+waiver_mem waived.md "verify: none describes a recurring rota, not one ticket" "Each week the rota is awaiting a volunteer."
+printf -- '- [W](waived.md) — the rota still awaiting a volunteer\n' > "$STORE/MEMORY.md"
+OUT=$(run)
+check_absent   "no TRIAGE for the memory"     "TRIAGE" "$OUT"
+check_contains "counted in the Results line"  "1 waived" "$OUT"
+check_eq       "exit 0"                       "0" "$(run_rc)"
+check_contains "--all lists it with its reason" "verify: none, describes a recurring rota" "$(run --all)"
+waiver_mem waived.md "  verify: none indented under metadata counts too" "Still pending review."
+check_absent   "indented in the frontmatter" "TRIAGE" "$(run)"
+
+waiver_mem waived.md "verify: none" "Each week the rota is awaiting a volunteer."
+OUT=$(run)
+check_contains "an empty reason is SKIP"       "verify: none gives no reason" "$OUT"
+check_contains "and waives nothing"            "TRIAGE" "$OUT"
+check_contains "nor is counted"                "0 waived" "$OUT"
+
+{ echo "---"; echo "name: inbody"; echo "description: d"; echo "metadata:"; echo "  type: project"
+  echo "---"; echo "verify: none in the body is not the frontmatter"; echo "Still pending review."; } > "$STORE/waived.md"
+check_contains "outside the frontmatter it is no waiver" "TRIAGE" "$(run)"
+rm -f "$STORE"/MEMORY.md
+
+echo ""
+echo "=== ORPHAN: a memory nothing links to ==="
+rm -f "$STORE"/*.md
+mem linked.md 40 "plain"; mem archived.md 40 "plain"; mem hubbed.md 40 "plain"; mem lost.md 40 "plain"
+mem feedback_hub_x.md 40 "- [[hubbed]] the instance"
+printf -- '- [L](linked.md) — hook\n- [H](feedback_hub_x.md) — hub\n' > "$STORE/MEMORY.md"
+printf -- '# archive\n- [A](archived.md) — hook\n' > "$STORE/MEMORY_ARCHIVE.md"
+OUT=$(run)
+check_contains "the unlinked one is ORPHAN"     "ORPHAN   lost.md" "$OUT"
+check_absent   "an index line reaches it"       "linked.md " "$(printf '%s\n' "$OUT" | grep ORPHAN)"
+check_absent   "an archive line reaches it"     "archived.md" "$OUT"
+check_absent   "a hub [[link]] reaches it"      "hubbed.md" "$OUT"
+check_contains "counted"                        "1 orphans" "$OUT"
+check_eq       "and needs attention: exit 2"    "2" "$(run_rc)"
+rm -f "$STORE"/MEMORY.md "$STORE"/MEMORY_ARCHIVE.md
+check_absent   "no index at all: nothing to orphan from" "ORPHAN" "$(run)"
+rm -f "$STORE"/*.md
 
 echo "--- Results: $PASS passed, $FAIL failed"
 exit "$FAIL"

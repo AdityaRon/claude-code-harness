@@ -386,5 +386,91 @@ printf 'not an entry line\n' >> "$STORE/MEMORY.md"
 ERR=$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s"}}' "$STORE/MEMORY.md" | bash "$HOOK" 2>&1 >/dev/null)
 check_contains "on stderr" "neither an entry nor a tier marker" "$ERR"
 
+echo ""
+echo "=== verify: none <reason> in the frontmatter stands in for a verify: block ==="
+wmem() {  # wmem <stem> <frontmatter line> <body>
+  { echo "---"; echo "name: $1"; echo "description: what this is about"; echo "$2"
+    echo "metadata:"; echo "  type: project"; echo "  originSessionId: 11111111-2222-3333-4444-555555555555"
+    echo "---"; echo ""; echo "$3"; } > "$STORE/$1.md"
+  echo "- [T]($1.md) — hook" > "$STORE/MEMORY.md"
+}
+wmem waived "verify: none a weekly rota, not one ticket" "The rota is awaiting a volunteer each week."
+check_eq "a reason: silent" "" "$(lint "$STORE/waived.md")"
+wmem waived "  verify: none indented under the frontmatter's keys" "The rota is awaiting a volunteer each week."
+check_eq "indented: silent too" "" "$(lint "$STORE/waived.md")"
+wmem waived "verify: none" "The rota is awaiting a volunteer each week."
+OUT=$(lint "$STORE/waived.md")
+check_contains "no reason: flagged"        "gives no reason" "$OUT"
+wmem waived "  verify: none" "The rota is awaiting a volunteer each week."
+OUT=$(lint "$STORE/waived.md")
+check_contains "no reason, indented: flagged" "gives no reason" "$OUT"
+check_contains "and the claim still needs a block" "no \`verify:\` block" "$OUT"
+{ echo "---"; echo "name: waived"; echo "description: d"; echo "metadata:"; echo "  type: project"
+  echo "  originSessionId: 11111111-2222-3333-4444-555555555555"; echo "---"
+  echo "  verify: none in the body is not the frontmatter"; echo "The rota is awaiting a volunteer."; } > "$STORE/waived.md"
+check_contains "outside the frontmatter: no waiver" "no \`verify:\` block" "$(lint "$STORE/waived.md")"
+
+echo ""
+echo "=== an archived project or reference memory is not called unindexed ==="
+: > "$STORE/MEMORY.md"; rm -f "$STORE"/feedback_hub_*.md
+mkmem project_done project; mkmem reference_old reference; mkmem feedback_alone feedback; mkmem user_pref user
+printf '%s\n' "# archive" "- [T](project_done.md) — hook" "- [T](reference_old.md) — hook" \
+  "- [T](feedback_alone.md) — hook" "- [T](user_pref.md) — hook" > "$STORE/MEMORY_ARCHIVE.md"
+check_eq "project: silent"   "" "$(lint "$STORE/project_done.md")"
+check_eq "reference: silent" "" "$(lint "$STORE/reference_old.md")"
+OUT=$(lint "$STORE/feedback_alone.md")
+check_contains "feedback alone in the archive is still a finding" "never archived on its own" "$OUT"
+check_contains "and says what to do"                             "Move the line back into MEMORY.md" "$OUT"
+check_absent   "not the old wording"                             "will never be recalled" "$OUT"
+check_contains "a user memory is a rule too" "never archived on its own" "$(lint "$STORE/user_pref.md")"
+mkmem feedback_hub_b feedback
+OUT=$(lint "$STORE/feedback_alone.md")
+check_contains "with hubs, names them"       "[[feedback_hub_b]]" "$OUT"
+check_absent   "and not the new-memory advice" "do NOT add a MEMORY.md line" "$OUT"
+rm -f "$STORE/MEMORY_ARCHIVE.md"
+check_contains "no archive line: the old finding stands" "no line in MEMORY.md points at project_done.md" "$(lint "$STORE/project_done.md")"
+
+echo ""
+echo "=== a handoff tracker: the shape, size, STATE stamp and crons ==="
+TRK="$TMP/trackers"; mkdir -p "$TRK"
+tracker() {  # FILE STAMP CRONS_BLOCK [EXTRA_SECTION]
+  { printf '# t\n\nSTATE: %s\n\n## Scope\nx\n\n## Open\nx\n\n## Owed\nx\n\n## Settled\nx\n\n## Next on restart\n%s\n' "$2" "$3"
+    [ -n "${4:-}" ] && printf '%s\n' "$4"; } > "$1"
+}
+NOWS=$(date -u +%Y-%m-%dT%H:%MZ)
+CR=$'Crons:\n- */30 9-17 * * 1-5 check the PR queue\n- 0 8 * * * morning re-gate'
+tracker "$TRK/good.md" "$NOWS" "$CR"
+check_eq "a well-formed tracker: silent, exit 0" "0" "$(lint_rc "$TRK/good.md")"
+tracker "$TRK/none.md" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "Crons: none"
+check_eq "Crons: none and a stamp with seconds: silent" "0" "$(lint_rc "$TRK/none.md")"
+tracker "$TRK/twice.md" "$NOWS" "$CR" $'\n## Scope\ny'
+check_contains "a second Scope: appended, not replaced" "once each, in that order" "$(lint "$TRK/twice.md")"
+tracker "$TRK/order.md" "$NOWS" "$CR"; sed -i.bak 's/^## Owed$/## Debts/' "$TRK/order.md"
+check_contains "a renamed heading" "Scope|Open|Debts|Settled|Next on restart" "$(lint "$TRK/order.md")"
+tracker "$TRK/big.md" "$NOWS" "$CR" "$(head -c 6000 /dev/zero | tr '\0' x)"
+check_contains "past 5,000 bytes" "past 5000" "$(lint "$TRK/big.md")"
+check_eq "TRACKER_MAX_BYTES raises it" "" "$(TRACKER_MAX_BYTES=9000 lint "$TRK/big.md" | grep 'past ')"
+tracker "$TRK/ahead.md" "$(date -u -r $(( $(date +%s) + 720 )) +%Y-%m-%dT%H:%MZ 2>/dev/null || date -u -d @$(( $(date +%s) + 720 )) +%Y-%m-%dT%H:%MZ)" "$CR"
+check_contains "a stamp 12 min ahead of the clock" "min ahead of the clock" "$(lint "$TRK/ahead.md")"
+tracker "$TRK/old.md" "2026-01-01T00:00Z" "$CR"
+check_contains "an old stamp" "min old, older than this write" "$(lint "$TRK/old.md")"
+tracker "$TRK/bad.md" "yesterday afternoon" "$CR"
+check_contains "a stamp that is not UTC ISO" "is not a UTC time" "$(lint "$TRK/bad.md")"
+{ printf '## Scope\n## Open\n## Owed\n## Settled\n## Next on restart\nCrons: none\n'; } > "$TRK/nostamp.md"
+check_contains "no STATE line" "no \`STATE:\` line" "$(lint "$TRK/nostamp.md")"
+tracker "$TRK/nocron.md" "$NOWS" "next: merge"
+check_contains "no Crons line" "no \`Crons:\` line" "$(lint "$TRK/nocron.md")"
+tracker "$TRK/prose.md" "$NOWS" $'Crons:\n- every half hour, check the queue'
+check_contains "a cron in prose, not five fields" "without five fields and a prompt" "$(lint "$TRK/prose.md")"
+tracker "$TRK/inline.md" "$NOWS" "Crons: every morning"
+check_contains "Crons: with prose on its own line" "takes \`none\` or entries" "$(lint "$TRK/inline.md")"
+tracker "$TRK/noprompt.md" "$NOWS" $'Crons:\n- 0 8 * * *'
+check_contains "a cron with no prompt" "without five fields and a prompt" "$(lint "$TRK/noprompt.md")"
+tracker "$TRK/noneplus.md" "$NOWS" $'Crons: none\n- 0 8 * * * morning re-gate'
+check_contains "Crons: none with an entry under it" "\`Crons: none\` with entries under it" "$(lint "$TRK/noneplus.md")"
+check_eq "a tracker finding exits 2 (handed to the model)" "2" "$(lint_rc "$TRK/nocron.md")"
+mkdir -p "$TMP/notes"; cp "$TRK/nocron.md" "$TMP/notes/nocron.md"
+check_eq "the same file outside trackers/: not checked" "0" "$(lint_rc "$TMP/notes/nocron.md")"
+
 echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
