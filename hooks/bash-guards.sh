@@ -83,9 +83,12 @@ unset BG_F bg_f
 PRESET_JOINED="" PRESET_JINPUT="" PRESET_JBARE=""
 # shellcheck disable=SC2034
 if [[ "$PRESET_CMD" == *$'\n'* && "$PRESET_CMD" == *[\"\'\\]* ]] && PRESET_JOINED=$(join_continued_lines "$PRESET_CMD"); then
+  # The payload is jq's first line (tojson holds no newline), the bare text the rest. read
+  # and an offset split them: ${bg_j#*$'\n'} took 2.5 s on a 64 KB command under bash 3.2.
   bg_j=$(printf '%s' "$INPUT" | jq -j --arg c "$PRESET_JOINED" '(.tool_input.command = $c | tojson), "\n",
-    ($c | split("\"") | join("") | split("\u0027") | join("") | split("\\") | join(""))' 2>/dev/null) || PRESET_JOINED=""
-  PRESET_JINPUT=${bg_j%%$'\n'*} PRESET_JBARE=${bg_j#*$'\n'}
+    ($c | split("\"") | join("") | split("\u0027") | join("") | split("\\") | join(""))' 2>/dev/null) \
+    && IFS= read -r PRESET_JINPUT <<< "$bg_j" && PRESET_JBARE=${bg_j:${#PRESET_JINPUT}+1} \
+    || PRESET_JOINED="" PRESET_JINPUT="" PRESET_JBARE=""
   unset bg_j
 fi
 # bash-guards.skip beside this hook (~/.claude/hooks/) names guards to leave out,

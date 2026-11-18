@@ -67,24 +67,23 @@ if [[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && "$FSRC" != *..* ]]; then
     "$H/.claude/jobs/"*) f_post=${CWD#"$H/.claude/jobs/"}; [[ "$f_post" =~ ^[A-Za-z0-9_-]+/tmp(/|$) ]] && FCWD=/ ;;
   esac
 fi
-# A glob in a dot-name (~/.cla*, .bash?c, ~/.[bz]shrc, .config/gi?/config) can name
-# one of these, and the full read expands it: a command with one that can is read
-# in full. jq's .[] or .items[0] cannot, so it is not.
-f_dotglob() {   # f_dotglob TEXT
-  local rest=$1 g n t='[^/[:space:];&|<>()"'\'']'
-  local re="(^|[[:space:]/])[.](config/)?($t*[*?[]$t*)"
-  # shellcheck disable=SC2053  # $g is the command's glob, matched as one
-  while [[ "$rest" =~ $re ]]; do
-    rest=${rest#*"${BASH_REMATCH[0]}"} g=${BASH_REMATCH[3]}
-    if [[ -n "${BASH_REMATCH[2]}" ]]; then [[ git == $g ]] && return 0; continue; fi
-    for n in claude config zshrc zshenv zprofile zlogin zlogout bashrc bash_profile bash_login profile gitconfig; do
-      [[ $n == $g ]] && return 0
-    done
-  done
-  return 1
-}
+# A glob in a dot-name (~/.cla*, ~/.bash?c, ~/.[bz]shrc, ~/.config/gi?/config) can
+# name one of these, and the full read expands it: such a command is read in full.
+# The name before the glob must begin one of them, a [ ] must be able to hold a
+# letter, and a bare .* or .? must be right under home (~/.*rc), so jq's .[] and
+# .items[0] and a regex's s/.*x/ are not one. One regex, no loop: a ${x#*…} strip
+# took 5 s on 64 KB under bash 3.2.
+F_PRE='c(l(a(u(d(e)?)?)?)?|o(n(f(i(g)?)?)?)?)?|p(r(o(f(i(l(e)?)?)?)?)?)?|g(i(t(c(o(n(f(i(g)?)?)?)?)?)?)?)?'
+F_PRE=$F_PRE'|z(s(h[[:alnum:]_]*)?|p(r(o(f(i(l(e)?)?)?)?)?)?|l(o(g[[:alnum:]_]*)?)?)?'
+F_PRE=$F_PRE'|b(a(s(h(r(c)?|_(p(r(o(f(i(l(e)?)?)?)?)?)?|l(o(g(i(n)?)?)?)?)?)?)?)?)?'
+F_PRE=$F_PRE'|config/(git/(c(o(n(f(i(g)?)?)?)?)?)?|(g(i(t)?)?)?)'
+F_CLASS='\[([!^]|][^]/[:space:]]+|[0-9:-]*[^]0-9:-])[^]/[:space:]]*\]'
+F_GLOB="(^|[[:space:]/;&|<>(=])[.](($F_PRE)([*?]|$F_CLASS)|$F_CLASS)|(~|HOME[}]?)/[.][*?]"
+# Run from home, a bare .* or .? on its own counts too (.*rc). The full read expands
+# a glob from the session's folder, not after a cd, so neither does this.
+[[ "$FCWD" == "$H" ]] && F_GLOB="$F_GLOB|(^|[[:space:];&|<>(=])[.][*?]"
 shopt -s nocasematch
-[[ "$TOOL" == Bash || "$TOOL" == Monitor ]] && ! f_dotglob "$FTARGET" && case "$FTARGET" in
+[[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && ! "$FTARGET" =~ $F_GLOB ]] && case "$FTARGET" in
   *.claude*|*.zsh*|*.zprofile*|*.zlog*|*.bashrc*|*.bash_profile*|*.bash_login*|*.profile*|*gitconfig*|*git/config*|*LaunchAgents*|*Library/*|*--global*) ;;
   *) case "$FCWD" in "$H/.claude"|"$H/.claude/"*|*/.claude|*/.claude/skills/*|"$H/Library/LaunchAgents") ;; *) exit 0 ;; esac ;;
 esac
