@@ -52,6 +52,7 @@ repo layout is for reading the repo, not for the installed tree.
                              or more, the guards' p90), which session-start reads; report also
                              sizes ~/.claude/projects and pre-compact.sh's copies;
                              prune, clone and bazel --sweep delete by digest, behind ask rules
+  tracker-prune.py         ← moves a tracker's settled rows to <name>-archive.md; a dry run unless --write
   relocate-clones.sh       ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads
   harness-update.sh        ← moves this machine to the newest release
   harness-update.conf      ← with_cli=1 or 0, from --with-cli or --no-cli
