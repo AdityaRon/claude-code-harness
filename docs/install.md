@@ -73,7 +73,7 @@ repo layout is for reading the repo, not for the installed tree.
     harness-update-doctor.log  ← the doctor run the last update was gated on
     install-doctor.log     ← the doctor run the last install.sh verified with
   transcripts/
-    transcript_<trigger>_<ts>_<session>.jsonl  ← pre-compact backups, newest 20
+    transcript_<trigger>_<ts>_<session>.jsonl  ← pre-compact backups: one per session, newest 20, 1000 MB
   state/
     sessions/<session_id>.json  ← per-session edit snapshot, 0600, newest 50 kept
     sessions/memory-index/      ← when session-start last reordered each memory index
