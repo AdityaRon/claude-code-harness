@@ -245,7 +245,7 @@ hooks/                   ← one file per hook, plus lib.sh, which sources lib/:
                            scratch, io, inline, net, host and shadow; bash-guards.sh runs the Bash guards
 rules/                   ← installed to ~/.claude/rules, loaded in every session
   prose-and-comments.md  collaboration.md  working-agreement.md  environment.md
-  python-tests.md        ← path-scoped: loads only when Claude opens Python
+  python-tests.md        ← path-scoped: loads only when Claude opens Python or a file under tests/
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
                            heredoc-openers, repo-layout, shadow, token-shapes and workflow-gates cut across
