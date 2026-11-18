@@ -11,12 +11,13 @@ Counts and tool_use_ids only: never a command or a reason, since a reason can qu
 
   tools/shadow-report.py               # the last 14 days, markdown to stdout
   tools/shadow-report.py --days 30
+  tools/shadow-report.py --since 2026-10-19T08:00:00Z
 """
 import argparse, collections, datetime as dt, importlib.util, json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from hooknames import read_timing  # noqa: E402
+from hooknames import add_window, read_timing, window  # noqa: E402
 
 HOME = os.path.expanduser('~')
 
@@ -133,7 +134,7 @@ def outcome(r, denied, timing, results, asks, hblocks):
     return 'ran_other'
 
 
-def render(rows, days, now, nbad, ndenied, nfiles, shadow_path):
+def render(rows, words, now, nbad, ndenied, nfiles, shadow_path):
     per = collections.defaultdict(lambda: dict(ask=0, deny=0, not_auto=0, ids=collections.defaultdict(list),
                                                **{k: 0 for k, _ in OUTCOMES}))
     for r in rows:
@@ -144,7 +145,7 @@ def render(rows, days, now, nbad, ndenied, nfiles, shadow_path):
         if r['uid']:
             c['ids'][r['out']].append(r['uid'])
     head = ['Guard', 'Rule', 'Would ask', 'Would deny', 'Not in auto mode'] + [t for _, t in OUTCOMES]
-    L = [f'# Shadow report: the last {days} days', '',
+    L = [f'# Shadow report: {"the " if words.startswith("last") else ""}{words}', '',
          f"{len(rows)} shadowed decisions from {len({r['uid'] for r in rows if r['uid']})} calls, read from "
          f"{shadow_path.replace(HOME, '~')} up to {now:%Y-%m-%d %H:%M} UTC"
          + (f", {nbad} unreadable lines skipped" if nbad else '') + '.',
@@ -173,10 +174,10 @@ def render(rows, days, now, nbad, ndenied, nfiles, shadow_path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('--days', type=int, default=14)
+    add_window(ap, 14, int)
     a = ap.parse_args()
     now = dt.datetime.now(dt.timezone.utc)
-    cut = now - dt.timedelta(days=a.days)
+    cut, words = window(a, now)
     shadow_path = os.path.expanduser(os.environ.get('CLAUDE_SHADOW_LOG') or '~/.claude/logs/shadow.log')
     audit_path = os.path.expanduser(os.environ.get('CLAUDE_AUDIT_LOG') or '~/.claude/logs/audit.log')
     rows, nbad = shadow_lines(shadow_path, cut)
@@ -185,7 +186,7 @@ def main():
     timing = read_timing()
     for r in rows:
         r['out'] = outcome(r, denied, timing, results, asks, hblocks)
-    sys.stdout.write(render(rows, a.days, now, nbad, len(denied), len(files), shadow_path))
+    sys.stdout.write(render(rows, words, now, nbad, len(denied), len(files), shadow_path))
     return 0
 
 

@@ -102,6 +102,8 @@ bench_case "hooks edit" hook_edit
 [[ " $BENCH_ARGV " != *" --quick "* ]] && pass "the PR bench runs every payload (no --quick)" || fail "no --quick" "argv=[$BENCH_ARGV]"
 [[ "$BENCH_ARGV" == *"--intended id-a id-b"* ]] && pass "the PR body's intended-decisions ids reach the gate" \
   || fail "intended ids" "argv=[$BENCH_ARGV]"
+[[ " $BENCH_ARGV " == *" --launches strace "* ]] && pass "the PR bench counts each hook's processes under strace" \
+  || fail "--launches strace" "argv=[$BENCH_ARGV]"
 bench_case "settings edit" settings_edit
 [ "$BENCH_ARGV" != "not run" ] && pass "a config/settings.json edit runs the bench" || fail "settings edit runs the bench" "not run"
 

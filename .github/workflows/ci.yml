@@ -23,10 +23,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install jq (Linux)
+      # strace: tests/hook-bench.test.sh's --launches strace cases, which skip without it.
+      - name: Install jq and strace (Linux)
         if: runner.os == 'Linux'
         # See .github/install-apt-deps.sh for why this is not a plain apt-get.
-        run: .github/install-apt-deps.sh jq
+        run: .github/install-apt-deps.sh jq strace
 
       - name: Install jq (macOS)
         if: runner.os == 'macOS'
@@ -57,14 +58,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install jq
-        run: .github/install-apt-deps.sh jq
+      - name: Install jq and strace
+        run: .github/install-apt-deps.sh jq strace
 
       # Every payload, as the release gate runs them: every third (--quick) let a
       # decision change through that the release then blocked on (#251). With
       # hooks/ and config/settings.json as on the base, both sides would run the
       # same files, so it is skipped, as release.yml does. A decision the PR means
       # to change is declared in its body: `intended-decisions: <payload ids>`.
+      # --launches strace adds the processes each hook starts per payload to the
+      # table, report only.
       - name: Benchmark this PR's hooks against the base branch
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -76,7 +79,7 @@ jobs:
           fi
           INTENDED=$(printf '%s\n' "$PR_BODY" | sed -nE 's/^intended-decisions:[[:space:]]*//p' | tr '\n' ' ')
           set +e
-          python3 tools/hook-bench.py --base "origin/$BASE" --head HEAD --gate --intended "$INTENDED" --md bench.md >/dev/null
+          python3 tools/hook-bench.py --base "origin/$BASE" --head HEAD --gate --intended "$INTENDED" --launches strace --md bench.md >/dev/null
           RC=$?
           cat bench.md >> "$GITHUB_STEP_SUMMARY"
           [ "$RC" = 0 ] || echo "::error::the benchmark gate failed; see the job summary."

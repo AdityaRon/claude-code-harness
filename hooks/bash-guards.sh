@@ -46,19 +46,21 @@ command -v jq &>/dev/null || { BG_DONE=1; require_jq_or_deny; BG_DONE=""; exit 1
 # fails on what follows (`{...} oops`), so its exit status is the last field, and
 # NUL is taken out of each string or one would shift every field after it. Each
 # field is jq_get's own `EXPR // ""`, and a field jq cannot read is "", as there.
-# The last is the command as `tr -d` leaves it with " ' and \ out, for the guards'
+# Then the command as `tr -d` leaves it with " ' and \ out, for the guards'
 # word filters (word_filter, lib/io.sh): made here, no guard starts tr or grep
-# to find it names none of its words.
+# to find it names none of its words. Last, the epoch second for the timing log:
+# bash 3.2 has no clock that starts no process, and this jq runs anyway.
 BG_F=()
 while IFS= read -r -d '' bg_f; do BG_F[${#BG_F[@]}]=$bg_f; done < <(
   printf '%s' "$INPUT" | jq -j 'def f(p): try ((p // "") | if type == "string" then split("\u0000") | join("") else . end) catch "";
     f(.tool_name), "\u0000", f(.tool_input.command), "\u0000", f(.cwd), "\u0000", f(.session_id), "\u0000",
     f(.tool_input.url), "\u0000", f(.tool_input.ws.url), "\u0000", f(.tool_use_id), "\u0000", f(.permission_mode), "\u0000",
     (f(.tool_input.command) | if type == "string" then . else tojson end
-      | split("\"") | join("") | split("\u0027") | join("") | split("\\") | join("")), "\u0000"' 2>/dev/null
+      | split("\"") | join("") | split("\u0027") | join("") | split("\\") | join("")), "\u0000",
+    (now | floor | tostring), "\u0000"' 2>/dev/null
   printf 'rc=%s\0' "$?")
 PRESET_OK=no
-[[ ${#BG_F[@]} -eq 10 && "${BG_F[9]}" == rc=0 ]] && PRESET_OK=ok
+[[ ${#BG_F[@]} -eq 11 && "${BG_F[10]}" == rc=0 ]] && PRESET_OK=ok
 # Whitespace alone is no document and no error; each guard allowed it.
 [[ ${#BG_F[@]} -eq 1 && "${BG_F[0]}" == rc=0 ]] && { PRESET_OK=ok; BG_F=(); }
 # shellcheck disable=SC2034  # lib.sh reads them in each guard's fork
@@ -68,6 +70,7 @@ PRESET_OK=no
   PRESET_BARE=${BG_F[8]:-}
   HARNESS_PRESET=$$   # lib.sh honours it only where $$ is this, in these forks
 }
+BG_AT=${BG_F[9]:-}; BG_AT=${BG_AT//[!0-9]/}
 unset BG_F bg_f
 # A payload that does not parse is denied once, here, under this hook's name.
 [[ "$PRESET_OK" == ok ]] || { BG_DONE=1; require_parsable_or_deny; BG_DONE=""; exit 1; }
@@ -161,10 +164,13 @@ fi
   || bg_static_deny "Blocked: a Bash guard's answer was lost before it could be passed on, so this call is denied. Retry; if it repeats, run each guard by hand on the payload."
 
 # One line a call, keyed by tool_use_id: the per-guard seconds, status and
-# decision, written with a builtin (no exec). session-start.sh rotates it.
+# decision, then at= and the epoch second jq read the call at, written with a
+# builtin (no exec). A payload of whitespace alone has no epoch and no at=.
+# session-start.sh rotates the file.
 BG_LOG=${CLAUDE_GUARD_TIMING_LOG:-$HOME/.claude/logs/guard-timing.log}
 BG_LOG=${BG_LOG/#\~/$HOME}
 bg_id=${PRESET_ID:--} bg_tool=${PRESET_TOOL:--}
+[[ -n "$BG_AT" ]] && BG_TIMES="$BG_TIMES"$'\t'"at=$BG_AT"
 { printf '%s\t%s%s\n' "${bg_id//[$'\t\n']/ }" "${bg_tool//[$'\t\n']/ }" "$BG_TIMES" >> "$BG_LOG"; } 2>/dev/null
 
 printf '%s' "$BG_OUT"
