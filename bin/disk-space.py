@@ -5,8 +5,9 @@
   disk-space.py bazel [--root DIR] [--json]    each Bazel output base: its workspace, size, server
   disk-space.py stamp [--out FILE]             the totals session-start warns from; harness-update.sh
                                                runs it once a day
-  disk-space.py prune [--days 7] [--live-hours 24] [--allow-untracked]
-                                               tmp entries old enough and safe to delete, and a digest
+  disk-space.py prune [--days 7] [--live-hours 24] [--allow-untracked] [--now EPOCH]
+                                               tmp entries old enough and safe to delete, and a digest;
+                                               --now moves the time ages count from (tests)
   disk-space.py prune --apply DIGEST [FLAGS]   deletes exactly that listing, each entry checked again
   disk-space.py bazel --sweep [--apply DIGEST] output bases whose workspace is gone, the same way
   disk-space.py clone PATH                     a clone anywhere in your home folder and its output
@@ -15,25 +16,28 @@
 
 Only --apply deletes, and it must come right after prune, clone or bazel --sweep, where the ask
 rules in settings.json look for it; rm-guard asks on any other spelling. Commits only a reflog
-holds are not looked for.
+holds are not looked for. An apply stopped by TERM or HUP puts the entry it holds back; one stopped
+harder leaves it under a quarantine name, which each listing names with the mv that restores it.
 
 Sizes come from one `du -k -d 1` over each root, so they are allocated space, and a GB is 10^9
 bytes. A job is live when `claude agents --json --all` gives it a pid; when that command is
 missing or fails, liveness is unknown, never "not live". state.json's own `state` field is shown
 as reported and is not used for liveness. An output base's workspace counts as gone only when
 stat says it does not exist: an unmounted /Volumes/<name>, or a path this process may not read
-(a launchd job and ~/Desktop), is "unknown". CLAUDE_BAZEL_ROOT and CLAUDE_CLI_BIN override the
+(a launchd job and ~/Desktop), is "unknown", as is one holding whitespace. CLAUDE_BAZEL_ROOT and CLAUDE_CLI_BIN override the
 output root and the claude binary.
 """
 import argparse
 import errno
 import hashlib
 import json
+import math
 import os
 import pwd
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -238,8 +242,9 @@ def print_jobs(r):
 # ---- Bazel ------------------------------------------------------------------
 
 def workspace_state(path):
-    """exists, gone, or unknown. Only a missing path is gone; an unmounted volume or a refusal is unknown."""
-    if not path.startswith("/"):
+    """exists, gone, or unknown. Only a missing path is gone; an unmounted volume, a refusal, or a
+    path holding whitespace (a trailing space, a second line) is unknown."""
+    if not path.startswith("/") or any(c.isspace() for c in path):
         return "unknown"
     try:
         os.lstat(path)
@@ -341,7 +346,7 @@ def bazel_report(root, procs="ps", sized=True, cwds="lsof"):
         cwds = process_cwds()[0]
     out["ps_ok"] = procs is not None
     for n in sorted(os.listdir(root)):
-        if n in ("cache", "install"):
+        if n in ("cache", "install") or n.startswith(QUARANTINE):
             continue
         base = os.path.join(root, n)
         if kind(lstat(base)) != "dir":
@@ -391,18 +396,13 @@ def print_bazel(r):
 GIT = ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
        "-c", "core.untrackedCache=false", "-c", "log.showSignature=false"]
 PAUSE_ENV = "CLAUDE_DISK_SPACE_TEST_PAUSE"  # tests only: hold between the digest check and the first delete
-NOW_ENV = "CLAUDE_DISK_SPACE_NOW"  # tests only: the time ages count from, in epoch seconds
 MAX_DEPTH = 128  # folders deep; deeper is kept, as rm_tree holds a descriptor a level
 QUARANTINE = ".disk-space-quarantine-"
+QUARANTINE_RE = re.compile(r"^\.disk-space-quarantine-\d+-[0-9a-f]{8}(?:-(.+))?$", re.S)
 
 
 class Keep(Exception):
     """Why an entry stays."""
-
-
-def clock():
-    v = os.environ.get(NOW_ENV)
-    return float(v) if v else time.time()
 
 
 def changed(st):
@@ -570,8 +570,10 @@ class Ctx:
         self.set_clock()
 
     def set_clock(self):
-        self.now = clock()
-        self.cutoff = self.now - self.a.days * 86400 if self.ages else float("inf")
+        """NOW, which liveness goes by, is the clock; ages count from --now when it is given."""
+        self.now = time.time()
+        self.age_now = getattr(self.a, "now", None) or self.now
+        self.cutoff = self.age_now - self.a.days * 86400 if self.ages else float("inf")
 
     def refresh(self, sized):
         self.read_at = time.time()
@@ -582,6 +584,7 @@ class Ctx:
         self.bases = bazel_report(self.a.root, procs=self.procs, sized=sized, cwds=self.cwds)["bases"]
         for b in self.bases:
             b["ws_real"] = os.path.realpath(b["workspace"]) if b["workspace"].startswith("/") else None
+        self.jobs_note = ""
         self.live, self.protected, self.unreadable = live_jobs(self)
 
 
@@ -592,7 +595,16 @@ def live_jobs(ctx):
     live, protected, unreadable = {}, [], []
     try:
         names = sorted(os.listdir(root))
-    except OSError:
+    except OSError as e:
+        try:  # only the default folder, missing, means no jobs; anything else, liveness is unknown
+            os.lstat(root)
+            missing = False
+        except FileNotFoundError:
+            missing = root == os.path.join(HOME, ".claude", "jobs")
+        except OSError:
+            missing = False
+        if not missing:
+            ctx.jobs_note = "the jobs folder %s cannot be read (%s)" % (shown(root), e.strerror)
         return live, protected, unreadable
     for n in names:
         if not is_job(root, n):
@@ -660,6 +672,8 @@ def check_entry(ctx, job, name, at=None, top_st=None, cheap=False):
     try:
         if st.st_dev != job["dev"]:
             raise Keep("on another device")
+        if ctx.jobs_note:
+            raise Keep("%s, so which sessions are live is unknown" % ctx.jobs_note)
         if ctx.unreadable and kind(st) != "file":
             raise Keep("live job %s's state.json cannot be read, so the folders it works in are unknown"
                        % ctx.unreadable[0])
@@ -685,7 +699,7 @@ def check_entry(ctx, job, name, at=None, top_st=None, cheap=False):
                 bases.append(b)
         if cheap:
             return "delete", None, bases
-        size, repos = survey(phys, st.st_dev, ctx.cutoff, ctx.now, name)
+        size, repos = survey(phys, st.st_dev, ctx.cutoff, ctx.age_now, name)
         for repo, bare, label in repos:
             try:
                 git_gate(repo, bare, sorted(reals), job["tmp_real"], ctx.a.allow_untracked, ctx.env)
@@ -696,9 +710,9 @@ def check_entry(ctx, job, name, at=None, top_st=None, cheap=False):
     return "delete", st.st_blocks * 512 + size, bases
 
 
-def digest(targets):
-    """sha256 over the sorted target paths with their sizes, output bases included."""
-    rows = []
+def digest(targets, now=None):
+    """sha256 over the sorted target paths with their sizes, output bases included, and --now."""
+    rows = ["now\t%r" % now] if now else []
     for t in targets:
         rows.append("%s\t%s" % (t["path"], t["bytes"]))
         rows += ["%s\t%s" % (b["path"], b["bytes"]) for b in t.get("bases", [])]
@@ -711,7 +725,7 @@ def base_rows(bases):
 
 def prune_plan(ctx):
     jobs, skipped = job_records(ctx)
-    plan = {"jobs_dir": os.path.normpath(ctx.a.jobs), "days": ctx.a.days, "targets": [], "kept": [], "young": 0,
+    plan = {"jobs_dir": os.path.normpath(ctx.a.jobs), "days": ctx.a.days, "now": ctx.a.now, "targets": [], "kept": [], "young": 0,
             "skipped_jobs": skipped, "live_jobs": [[n, w] for n, w in sorted(ctx.live.items())],
             "cwd_note": ctx.cwd_note, "processes": len({p for p, _ in ctx.cwds or ()})}
     for j in jobs:
@@ -721,6 +735,8 @@ def prune_plan(ctx):
             plan["skipped_jobs"].append((j["id"], "cannot read tmp: %s" % e.strerror))
             continue
         for n in names:
+            if n.startswith(QUARANTINE):
+                continue  # listed below, never deleted here
             verdict, val, bases = check_entry(ctx, j, n)
             rel = "%s/tmp/%s" % (j["id"], n)
             if verdict == "young":
@@ -731,7 +747,8 @@ def prune_plan(ctx):
                 plan["targets"].append({"job": j["id"], "name": n, "rel": rel, "path": os.path.join(j["tmp"], n),
                                         "bytes": val, "link": kind(lstat(os.path.join(j["tmp"], n))) == "symlink",
                                         "bases": base_rows(bases)})
-    plan["digest"] = digest(plan["targets"])
+    plan["quarantined"] = leftovers([j["tmp"] for j in jobs] + [ctx.a.root])
+    plan["digest"] = digest(plan["targets"], ctx.a.now)
     return plan
 
 
@@ -806,10 +823,57 @@ def lstat_at(fd, name):
         return None
 
 
+def quarantine_name(fd, name):
+    """A quarantine name for NAME that nothing in the folder open at FD holds yet, carrying NAME when
+    it fits, so a listing can print the mv that restores it. None when ten tries found none free."""
+    for _ in range(10):
+        q = "%s%d-%s" % (QUARANTINE, os.getpid(), os.urandom(4).hex())
+        if len(("%s-%s" % (q, name)).encode("utf-8", "surrogateescape")) <= 255:
+            q = "%s-%s" % (q, name)
+        if lstat_at(fd, q) is None:
+            return q
+    return None
+
+
+def leftovers(folders):
+    """What an interrupted apply left under a quarantine name in FOLDERS, each with the mv that
+    restores it when its first name is known, printable and free. Listed, never deleted."""
+    out = []
+    for d in folders:
+        try:
+            names = sorted(n for n in os.listdir(d) if n.startswith(QUARANTINE))
+        except OSError:
+            continue
+        for n in names:
+            m = QUARANTINE_RE.match(n)
+            first = m.group(1) if m else None
+            p, back = os.path.join(d, n), os.path.join(d, first or "")
+            if not first or not (p + back).isprintable():
+                how = "its first name is not in this one, or does not print: rename it back by hand"
+            elif lstat(back) is not None:
+                how = "%s exists again: rename it back by hand" % shown(first)
+            else:
+                how = "mv -n -- %s %s" % (shlex.quote(p), shlex.quote(back))
+            out.append({"path": p, "restore": how})
+    return out
+
+
+def print_leftovers(lo):
+    if not lo:
+        return
+    print("")
+    print("Left under a quarantine name by an apply that was stopped; part may be gone if it was being")
+    print("deleted. Never deleted here. To restore each:")
+    for x in lo:
+        print("  %s: %s" % (shown(x["path"]), x["restore"]))
+
+
 def pinned_delete(parent, parent_id, name, recheck):
     """Rename NAME in folder PARENT to a quarantine name, ask RECHECK(qname, stat before) there, and
-    delete it only while it is the inode it was. (deleted | kept | failed, why, RECHECK's value)."""
+    delete it only while it is the inode it was. (deleted | kept | failed, why, RECHECK's value).
+    Whatever stops it, an exception or TERM or HUP (main), puts back what is left under NAME."""
     fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    q = None
     try:
         pst = os.fstat(fd)
         if (pst.st_dev, pst.st_ino) != parent_id:
@@ -817,24 +881,31 @@ def pinned_delete(parent, parent_id, name, recheck):
         st0 = lstat_at(fd, name)
         if st0 is None:
             return "kept", "gone", None
-        q = "%s%d-%s" % (QUARANTINE, os.getpid(), os.urandom(4).hex())
-        os.rename(name, q, src_dir_fd=fd, dst_dir_fd=fd)
+        q = quarantine_name(fd, name)
+        if q is None:
+            return "kept", "no free quarantine name beside it", None
         try:
-            stq = lstat_at(fd, q)
-            if stq is None or (stq.st_dev, stq.st_ino) != (st0.st_dev, st0.st_ino):
-                ok, why, val = False, "it changed as it was renamed", None
-            else:
-                ok, why, val = recheck(q, st0)
-        except BaseException:
-            put_back(fd, q, name)
-            raise
+            os.rename(name, q, src_dir_fd=fd, dst_dir_fd=fd)
+        except OSError as e:
+            q = None
+            return "kept", "could not rename (%s)" % e.strerror, None
+        stq = lstat_at(fd, q)
+        if stq is None or (stq.st_dev, stq.st_ino) != (st0.st_dev, st0.st_ino):
+            ok, why, val = False, "it changed as it was renamed", None
+        else:
+            ok, why, val = recheck(q, st0)
         if not ok:
             return "kept", why + put_back(fd, q, name), None
         try:
             delete_at(fd, q, (st0.st_dev, st0.st_ino))
         except OSError as e:
             return "failed", "%s, so it may be partly gone%s" % (e, put_back(fd, q, name)), None
+        q = None
         return "deleted", "", val
+    except BaseException:
+        if q is not None and lstat_at(fd, q) is not None:
+            put_back(fd, q, name)
+        raise
     finally:
         os.close(fd)
 
@@ -957,6 +1028,8 @@ def apply_command(a, verb, d, tail=()):
     if verb in (["prune"], ["clone"]):
         if verb == ["prune"] and a.days != 7:
             parts += ["--days", "%g" % a.days]
+        if verb == ["prune"] and a.now:
+            parts += ["--now", repr(a.now)]
         if a.live_hours != 24:
             parts += ["--live-hours", "%g" % a.live_hours]
         if a.allow_untracked:
@@ -997,11 +1070,15 @@ def print_prune(plan, cmd):
     cwds = ("%d processes' working folders from lsof" % plan["processes"]) if not plan["cwd_note"] else \
         "process working folders unknown (%s): a live job's folders are kept" % plan["cwd_note"]
     print("Live jobs: %s. %s." % (live, cwds))
+    if plan["now"]:
+        print("Ages count from --now %r (%s UTC), not the clock; which jobs are live still goes by the clock."
+              % (plan["now"], time.strftime("%Y-%m-%d %H:%M", time.gmtime(plan["now"]))))
     print("")
     print_targets(plan["targets"], plan["kept"])
     for n, why in plan["skipped_jobs"]:
         print("skipped job %s: %s" % (shown(n), why))
     print("Entries newer than %g days by their own mtime and ctime, not listed: %d." % (plan["days"], plan["young"]))
+    print_leftovers(plan["quarantined"])
     print_total(plan["targets"], plan["digest"], cmd)
 
 
@@ -1022,8 +1099,9 @@ def cmd_sweep(a):
     r = bazel_report(a.root)
     targets = [{k: b[k] for k in ("name", "path", "bytes", "workspace")} for b in r["bases"] if b["orphan"]]
     d = digest(targets)
+    lo = leftovers([r["root"]])
     if a.json:
-        print(json.dumps({"root": r["root"], "targets": targets, "digest": d}, indent=1))
+        print(json.dumps({"root": r["root"], "targets": targets, "quarantined": lo, "digest": d}, indent=1))
     elif not r["exists"]:
         print("No Bazel output root at %s." % shown(r["root"]))
     else:
@@ -1032,6 +1110,7 @@ def cmd_sweep(a):
         print("")
         for t in targets:
             print("delete %10s  %s  (workspace was %s)" % (fmt(t["bytes"]), shown(t["name"]), shown(t["workspace"])))
+        print_leftovers(lo)
         print("")
         if targets:
             print("To delete: %d output bases, %s. Digest %s." % (len(targets), fmt(sum(t["bytes"] or 0 for t in targets)), d))
@@ -1052,12 +1131,29 @@ def cmd_sweep(a):
     return 1 if failed else 0
 
 
+def same(x, y):
+    try:
+        return os.path.samefile(x, y)
+    except OSError:
+        return False
+
+
+def lineage(p):
+    """P and each folder above it, to /."""
+    out = [p]
+    while os.path.dirname(out[-1]) != out[-1]:
+        out.append(os.path.dirname(out[-1]))
+    return out
+
+
 def clone_path(a):
     """The resolved clone A.path names, or raise SystemExit: a folder (not a link) holding .git,
-    inside your home folder, and inside ~/.claude only within a job's tmp."""
+    inside your home folder, inside ~/.claude only within a job's tmp, and holding none of ~/.claude,
+    the jobs folder, the Bazel root or this script. Compared by inode (samefile), so a link such as
+    ~/.claude -> dotfiles/claude, or ~/.CLAUDE on a case-blind disk, is seen for what it is."""
     path = os.path.abspath(os.path.expanduser(a.path))
     home = os.path.realpath(HOME)
-    claude = os.path.join(home, ".claude")
+    claude = os.path.join(HOME, ".claude")
     real = os.path.realpath(path)
 
     def refuse(why):
@@ -1065,14 +1161,19 @@ def clone_path(a):
 
     if kind(lstat(path)) != "dir":
         refuse("is not a folder (a link is not followed)")
-    if real == home or not inside(real, home):
+    if same(real, home) or not inside(real, home):
         refuse("is not inside your home folder")
-    if inside(claude, real):
-        refuse("holds ~/.claude")
-    if inside(real, claude):
-        parts = os.path.relpath(real, os.path.join(claude, "jobs")).split("/")
-        if len(parts) < 3 or not JOB_RE.match(parts[0]) or parts[1] != "tmp":
-            refuse("is in ~/.claude, outside a job's tmp")
+    for label, g in (("~/.claude", claude), ("the jobs folder", a.jobs), ("the Bazel output root", a.root),
+                     ("this script's folder", os.path.dirname(os.path.realpath(__file__)))):
+        g = os.path.abspath(os.path.expanduser(g))
+        if any(same(x, real) for x in lineage(os.path.realpath(g)) + lineage(g)):
+            refuse("is or holds %s (%s)" % (label, shown(g)))
+    for x in lineage(real):
+        if same(x, claude):
+            parts = os.path.relpath(real, x).split("/")
+            if len(parts) < 4 or parts[0] != "jobs" or not JOB_RE.match(parts[1]) or parts[2] != "tmp":
+                refuse("is in ~/.claude, outside a job's tmp")
+            break
     if lstat(os.path.join(real, ".git")) is None:
         refuse("holds no .git")
     return real
@@ -1092,13 +1193,15 @@ def cmd_clone(a):
     else:
         kept.append({"path": real, "reason": val})
     d = digest(targets)
+    lo = leftovers([parent, a.root])
     if a.json:
-        print(json.dumps({"clone": real, "targets": targets, "kept": kept, "digest": d}, indent=1))
+        print(json.dumps({"clone": real, "targets": targets, "kept": kept, "quarantined": lo, "digest": d}, indent=1))
     else:
         print("Clone: kept when a git repo in it holds work no remote has, any live job's or process's working")
         print("folder is inside, or a Bazel output base for it is in use; no age test. Its output bases go with it.")
         print("")
         print_targets(targets, kept)
+        print_leftovers(lo)
         print_total(targets, d, apply_command(a, ["clone"], d, [real]))
     if a.apply is None:
         return 0
@@ -1160,10 +1263,30 @@ def days_arg(v):
     return f
 
 
+def now_arg(v):
+    try:
+        f = float(v)
+    except ValueError:
+        f = float("nan")
+    if not (math.isfinite(f) and f > 0):
+        raise argparse.ArgumentTypeError("not a time in epoch seconds: %s" % v)
+    return f
+
+
+def stop(signum, frame):
+    """TERM or HUP: unwind, so an entry under a quarantine name goes back (pinned_delete). A second
+    signal is ignored, so it cannot cut that short."""
+    for s in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(s, signal.SIG_IGN)
+    raise SystemExit(128 + signum)
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     for f in (sys.stdout, sys.stderr):
         f.reconfigure(errors="backslashreplace")  # a name or path no encoding can print still prints
+    for s in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(s, stop)
     if apply_misplaced(argv):
         print("disk-space: --apply goes right after `prune`, `clone` or `bazel --sweep`, as the listing"
               " prints it, so the ask rule in settings.json sees it. Nothing deleted.", file=sys.stderr)
@@ -1190,6 +1313,7 @@ def main(argv=None):
     p.add_argument("--days", type=days_arg, default=7.0)
     p.add_argument("--live-hours", type=days_arg, default=24.0)
     p.add_argument("--allow-untracked", action="store_true")
+    p.add_argument("--now", type=now_arg, metavar="EPOCH", help="count ages from this time, not the clock")
     p.add_argument("--json", action="store_true")
     p.add_argument("--apply", metavar="DIGEST", help="delete exactly the listing with this digest")
     p = sub.add_parser("clone", help="a clone and its Bazel output bases, with a digest", allow_abbrev=False)

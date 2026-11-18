@@ -183,10 +183,10 @@ OUT=$(bash "$REPO/doctor.sh" --disk 2>&1)
 
 echo ""
 echo "=== prune: old tmp entries no git work, live job, process or server holds ==="
-# Ages count from CLAUDE_DISK_SPACE_NOW, ten days ahead: a ctime cannot be set back, so the fixture
-# is old because the clock is late, and a fresh file is one whose mtime is set ahead.
+# Ages count from --now, ten days ahead: a ctime cannot be set back, so the fixture is old
+# because the clock is late, and a fresh file is one whose mtime is set ahead.
 FUT=$(( $(date +%s) + 10 * 86400 ))
-dsf() { CLAUDE_DISK_SPACE_NOW=$FUT python3 "$DS" "$@"; }
+dsf() { python3 "$DS" "$@" --now "$FUT"; }
 PJ="$TMP/pj" PB="$TMP/pb" E="$TMP/pj/e0000001/tmp" F="$TMP/pj/f0000002/tmp" H="$TMP/pj/a0000003/tmp" C5="$TMP/pj/c0000005/tmp"
 G="git -c user.email=t@example.com -c user.name=t -c init.defaultBranch=main -c commit.gpgsign=false"
 $G init -q --bare "$TMP/remote.git"
@@ -245,7 +245,7 @@ mkdir -p "$PJ/b0000004" "$TMP/outside4/old"; printf '{}' > "$PJ/b0000004/state.j
 : > "$PJ/notes.txt"; mkdir -p "$PJ/deadbeef"
 P1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa P2=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb P3=cccccccccccccccccccccccccccccccc
 P4=dddddddddddddddddddddddddddddddd P5=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee P6=ffffffffffffffffffffffffffffffff
-P7=abababababababababababababababab P8=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
+P7=abababababababababababababababab P8=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd P9=a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9
 pbase() {  # pbase NAME WORKSPACE: an output base with a read-only tree, as Bazel leaves one
   mkdir -p "$PB/$1/execroot/ro" "$PB/$1/server"; printf '%s' "$2" > "$PB/$1/DO_NOT_BUILD_HERE"
   fill "$PB/$1/execroot/ro/blob" 65536; chmod 444 "$PB/$1/execroot/ro/blob"; chmod 555 "$PB/$1/execroot/ro"
@@ -260,8 +260,11 @@ pbase $P4 "/Volumes/cch-not-mounted-$$/ws"
 pbase $P5 "$TMP/gone-ws2"; server $P5
 pbase $P6 "$TMP/gone-ws4"; (cd "$PB/$P6/execroot" && exec sleep 300) & SLEEPERS="$SLEEPERS $!"; P6PID=$!
 pbase $P7 "$TMP/gone-ws5"; (exec -a "some-tool --cache=$PB/$P7" sleep 300) & SLEEPERS="$SLEEPERS $!"; P7PID=$!
+pbase $P9 "$TMP/gone-ws6 "   # a trailing space: unknown, never swept
 for d in cache install; do mkdir -p "$PB/$d/x"; printf '%s' "$TMP/gone-ws3" > "$PB/$d/DO_NOT_BUILD_HERE"; done
-age -9 "$E/young" "$TMP/outside2/fresh"; age -10 "$E/freshinside/sub/fresh.txt"; age -10 "$PJ/a0000003/timeline.jsonl"
+age -9 "$E/young" "$TMP/outside2/fresh"; age -10 "$E/freshinside/sub/fresh.txt"
+# Liveness goes by the clock, not --now: only a0000003 was active in the last 24 h.
+age 2 "$PJ"/e0000001/*.json* "$PJ"/c0000005/*.json* "$PJ"/b0000004/state.json "$PJ"/f0000002/*.json*
 (cd "$E/procdir/inner" && exec sleep 300) & SLEEPERS="$SLEEPERS $!"; CWDPID=$!
 printf '[{"id":"f0000002","pid":4343},{"id":"e0000001","state":"done"},{"id":"a0000003","state":"done"}]' > "$TMP/agents.json"
 for _ in 1 2 3 4 5 6 7 8 9 10; do lsof -n -P -d cwd -p "$CWDPID" 2>/dev/null | grep -q procdir && break; sleep 0.2; done
@@ -315,8 +318,9 @@ ROWS
 [[ "$(jqr "$OUT" '.live_jobs | map(join(" ")) | join(";")')" == "a0000003 active 0.0 h ago;f0000002 pid 4343" ]] \
   && pass "live: a pid from claude agents, or activity within 24 h" || fail "live jobs" "$(jqr "$OUT" .live_jobs)"
 TXT=$(dsf prune --jobs "$PJ" --root "$PB")
-[[ "$TXT" == *"Digest $DIG."* && "$TXT" == *"To delete exactly these: python3 "*" prune --apply $DIG --jobs $PJ --root $PB" ]] \
-  && pass "the text names the digest and the exact command, --apply right after prune" || fail "prune text" "$TXT"
+[[ "$TXT" == *"Digest $DIG."* && "$TXT" == *"To delete exactly these: python3 "*" prune --apply $DIG --now $FUT.0 --jobs $PJ --root $PB" ]] \
+  && [[ "$TXT" == *"Ages count from --now $FUT.0 ("*" UTC), not the clock"* ]] \
+  && pass "the text names --now, the digest and the exact command, --apply right after prune" || fail "prune text" "$TXT"
 [ "$(printf '%s\n' "$TXT" | grep -c '^keep .*e0000001/tmp/clean: forged$')" = 0 ] && [[ "$TXT" == *"c0000005/tmp/forge\\nkeep"* ]] \
   && pass "a name holding a newline prints as a literal on its own line: no forged row" || fail "forged row" "$TXT"
 OUT3=$(PYTHONIOENCODING=ascii dsf prune --jobs "$PJ" --root "$PB" 2>&1); RC=$?
@@ -327,7 +331,7 @@ rule_prefix() {  # rule_prefix VERB: the shipped ask rule's command prefix for t
   r=${r#Bash(}; printf '%s' "${r%:\*)}"
 }
 mkdir -p "$HOME/.claude"; cp "$DS" "$HOME/.claude/disk-space.py"
-CMD=$(CLAUDE_DISK_SPACE_NOW=$FUT python3 "$HOME/.claude/disk-space.py" prune --jobs "$PJ" --root "$PB" | sed -n 's/^To delete exactly these: //p')
+CMD=$(python3 "$HOME/.claude/disk-space.py" prune --now "$FUT" --jobs "$PJ" --root "$PB" | sed -n 's/^To delete exactly these: //p')
 RP=$(rule_prefix "prune --apply")
 [[ -n "$RP" && "$CMD" == "$RP $DIG "* ]] && pass "installed, the printed command is one the ask rule names: $RP" || fail "rule prefix" "rule=$RP cmd=$CMD"
 OUT2=$(dsf prune --jobs "$PJ" --root "$PB" --allow-untracked --json)
@@ -341,6 +345,19 @@ PJ2="$TMP/pj2"; mkdir -p "$PJ2/d0000007/tmp/extracted/sub"; printf '{"cwd":"/"}'
 OUT2=$(ds prune --jobs "$PJ2" --root "$PB" --json)
 [ "$(jqr "$OUT2" '.targets | length') $(jqr "$OUT2" .young)" = "0 1" ] \
   && pass "an entry whose mtimes are 30 days back but which was made today is young" || fail "ctime" "$(jqr "$OUT2" '[.targets[].rel, .young]')"
+D0=$(jqr "$OUT2" .digest)
+OUT2=$(CLAUDE_DISK_SPACE_NOW=$FUT ds prune --jobs "$PJ2" --root "$PB" --json)
+[ "$(jqr "$OUT2" '[.now, .young, .digest] | map(tostring) | join(" ")')" = "null 1 $D0" ] \
+  && pass "the old CLAUDE_DISK_SPACE_NOW does nothing" || fail "env clock" "$(jqr "$OUT2" '[.now, .young, .digest]')"
+OUT2=$(ds prune --jobs "$PJ2" --root "$PB" --now "$(date +%s)" --json)
+[ "$(jqr "$OUT2" '.targets | length')" = 0 ] && [ "$(jqr "$OUT2" .digest)" != "$D0" ] \
+  && pass "the same listing with --now has another digest, so an apply must repeat it" || fail "now in digest" "$OUT2"
+BADNOW=""
+for v in x inf nan 0 -5; do
+  OUT2=$(ds prune --jobs "$PJ2" --root "$PB" --now "$v" 2>&1); RC=$?
+  [ "$RC" = 2 ] && [[ "$OUT2" == *"not a time in epoch seconds: $v"* ]] || BADNOW="$BADNOW [$v: rc=$RC]"
+done
+[ -z "$BADNOW" ] && pass "--now refuses x, inf, nan, 0 and -5" || fail "--now values" "$BADNOW"
 pym() {  # pym CODE: run CODE with the script under test imported as m
   python3 -c 'import importlib.util, sys
 spec = importlib.util.spec_from_file_location("ds", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -359,7 +376,7 @@ echo "=== the first re-check, before the quarantine rename: an output base whose
 mkdir -p "$TMP/ce/e/ws"
 OUT2=$(CE="$TMP/ce" pym 'import os, types
 d = os.environ["CE"]; st = os.lstat(d)
-ctx = types.SimpleNamespace(cutoff=float("inf"), unreadable=[], protected=[], cwds=[], cwd_note="",
+ctx = types.SimpleNamespace(cutoff=float("inf"), unreadable=[], protected=[], cwds=[], cwd_note="", jobs_note="",
     bases=[{"name": "x", "ws_real": os.path.realpath(d + "/e/ws"), "server": "running", "pid": 7, "users": ""}])
 job = {"tmp": d, "tmp_real": os.path.realpath(d), "dev": st.st_dev, "live": False}
 print(m.check_entry(ctx, job, "e", cheap=True)[:2])')
@@ -388,6 +405,15 @@ try:
 except OSError as e:
     print("error:", e.strerror)' 2>&1)
 [[ "$OUT2" == "error: nested too deep to delete" ]] && pass "a tree deeper than the stack: an error naming why, no RecursionError" || fail "recursion" "$OUT2"
+OUT2=$(QD="$TMP/qd" pym 'import itertools, os
+d = os.environ["QD"]; os.makedirs(d)
+open(os.path.join(d, "e"), "w").write("entry")
+taken = os.path.join(d, "%s%d-00000000-e" % (m.QUARANTINE, os.getpid())); open(taken, "w").write("precious")
+seq = itertools.chain([bytes(4)], itertools.repeat(b"\x01" * 4)); m.os.urandom = lambda n: next(seq)
+st = os.stat(d)
+r = m.pinned_delete(d, (st.st_dev, st.st_ino), "e", lambda q, st0: (False, "no", None))
+print(r[0], open(taken).read(), open(os.path.join(d, "e")).read())' 2>&1)
+[ "$OUT2" = "kept precious entry" ] && pass "a quarantine name already taken is passed over, not overwritten" || fail "quarantine clash" "$OUT2"
 
 echo ""
 echo "=== prune --apply: only with the listing's digest; each entry quarantined and checked again ==="
@@ -405,7 +431,7 @@ for args in "prune --jobs $PJ --root $PB --apply $DIG" "prune --apply=$DIG --job
     && pass "refused, nothing deleted: ${args%% --jobs*}${args##*"$PB"}" || fail "misplaced --apply" "rc=$RC $OUT"
 done
 GO="$TMP/go"
-CLAUDE_DISK_SPACE_NOW=$FUT CLAUDE_DISK_SPACE_TEST_PAUSE="$GO" python3 "$DS" prune --apply "$DIG" --jobs "$PJ" --root "$PB" > "$TMP/apply.out" 2>&1 & APID=$!
+CLAUDE_DISK_SPACE_TEST_PAUSE="$GO" python3 "$DS" prune --apply "$DIG" --now "$FUT" --jobs "$PJ" --root "$PB" > "$TMP/apply.out" 2>&1 & APID=$!
 for _ in $(seq 1200); do [ -e "$GO.ready" ] && break; sleep 0.1; done
 echo three >> "$E/raced/f"   # after the digest matched: only the re-check can see it
 : > "$GO"; wait $APID; RC=$?; OUT=$(cat "$TMP/apply.out")
@@ -420,7 +446,7 @@ LEFT=$(exists_all "$E/dirty" "$E/ahead" "$E/detached" "$E/tagonly" "$E/stash" "$
   "$E/worktree/wt" "$E/nested/a/b/c/f" "$E/untracked" "$E/bare.git" "$E/badgit/file" "$E/filtered" "$E/filtered-inc/f" "$E/signed" "$E/xjob/sub" \
   "$E/freshinside/sub/fresh.txt" "$E/bazelbusy/ws" "$E/procdir/inner" "$E/young" "$F/work/sub" "$H/hcwd" "$C5/deep" \
   "$TMP/outside2/keep" "$TMP/outside3/keep" "$TMP/outside4/old" "$PJ/notes.txt" "$PJ/deadbeef" "$PJ/b0000004/tmp" \
-  "$PB/$P2" "$PB/$P3" "$PB/$P4" "$PB/$P5" "$PB/$P6" "$PB/$P7" "$PB/cache/x" "$PB/install/x" "$TMP/mainrepo/f" "$E/fifo" "$E/fifodir/pipe")
+  "$PB/$P2" "$PB/$P3" "$PB/$P4" "$PB/$P5" "$PB/$P6" "$PB/$P7" "$PB/$P9" "$PB/cache/x" "$PB/install/x" "$TMP/mainrepo/f" "$E/fifo" "$E/fifodir/pipe")
 [ -z "$LEFT" ] && pass "every kept entry, each link's target, the strays, the other bases, cache/ and install/ are still there" || fail "kept" "missing: $LEFT"
 LEFT=$(for j in e0000001 f0000002 a0000003 c0000005; do exists_all "$PJ/$j/state.json" "$PJ/$j/timeline.jsonl" "$PJ/$j/tmp"; done)
 [ -z "$LEFT" ] && pass "state.json, timeline.jsonl and every job folder stay" || fail "job files" "missing: $LEFT"
@@ -445,18 +471,77 @@ exec "$REALGIT" "\$@"
 SH
 chmod +x "$TMP/shim/git"
 D4=$(dsf prune --jobs "$PJ4" --root "$PB" --json | jq -r .digest)
-CLAUDE_DISK_SPACE_NOW=$FUT CLAUDE_DISK_SPACE_TEST_PAUSE="$GO4" PATH="$TMP/shim:$PATH" python3 "$DS" prune --apply "$D4" --jobs "$PJ4" --root "$PB" > "$TMP/apply4.out" 2>&1 & APID=$!
+CLAUDE_DISK_SPACE_TEST_PAUSE="$GO4" PATH="$TMP/shim:$PATH" python3 "$DS" prune --apply "$D4" --now "$FUT" --jobs "$PJ4" --root "$PB" > "$TMP/apply4.out" 2>&1 & APID=$!
 for _ in $(seq 1200); do [ -e "$GO4.ready" ] && break; sleep 0.1; done
 : > "$GO4"; wait $APID; OUT=$(cat "$TMP/apply4.out")
 [ -e "$TMP/shim.done" ] && [ -f "$E4/victim/precious.txt" ] && [ -f "$TMP/away/f" ] && [[ "$OUT" == *"not the inode that was checked"* ]] \
   && pass "the swapped-in clone survives, back under the entry's name, and the checked one too" || fail "A1 swap" "$(ls "$E4" "$E4/victim" 2>&1) $OUT"
 
 echo ""
+echo "=== prune --apply stopped by TERM or HUP during the re-check: the entry goes back under its name ==="
+PJ6="$TMP/pj6" E6="$TMP/pj6/e0000006/tmp"; mkdir -p "$E6"; printf '{"cwd":"/"}' > "$PJ6/e0000006/state.json"
+mkdir -p "$TMP/shim6"
+cat > "$TMP/shim6/git" <<SH
+#!/usr/bin/env bash
+if [ -e "\$GO6.ready" ] && [ ! -e "\$GO6.sent" ] && [[ " \$* " == *" worktree list "* ]]; then
+  : > "\$GO6.sent"; kill -"\$SIG6" "\$PPID"; sleep 2
+fi
+exec "$REALGIT" "\$@"
+SH
+chmod +x "$TMP/shim6/git"
+for sig in TERM HUP; do
+  clone "$E6/victim6"; GO6="$TMP/go6-$sig"
+  D6=$(dsf prune --jobs "$PJ6" --root "$PB" --json | jq -r .digest)
+  GO6=$GO6 SIG6=$sig CLAUDE_DISK_SPACE_TEST_PAUSE="$GO6" PATH="$TMP/shim6:$PATH" python3 "$DS" prune --apply "$D6" --now "$FUT" --jobs "$PJ6" --root "$PB" > "$TMP/apply6.out" 2>&1 & APID=$!
+  for _ in $(seq 1200); do [ -e "$GO6.ready" ] && break; sleep 0.1; done
+  : > "$GO6"; wait $APID; RC=$?
+  LEFT6=$(find "$E6" -maxdepth 1 -name '.disk-space-quarantine-*')
+  [ -e "$GO6.sent" ] && [ "$RC" != 0 ] && [ -f "$E6/victim6/f" ] && [ -z "$LEFT6" ] \
+    && pass "$sig: stopped (rc $RC), victim6 back under its name, no quarantine name left" || fail "$sig" "rc=$RC sent=$([ -e "$GO6.sent" ] && echo y) left=$LEFT6 $(cat "$TMP/apply6.out")"
+  [ -n "$LEFT6" ] && mv "$LEFT6" "$TMP/moved-$sig"   # so the next pass starts clean
+  [ -d "$E6/victim6" ] && mv "$E6/victim6" "$TMP/victim6-$sig"
+done
+
+echo ""
+echo "=== a quarantine name left behind is listed with the mv that restores it, and never deleted ==="
+QA="$E6/.disk-space-quarantine-123-abcdef01-lost" QB="$E6/.disk-space-quarantine-123-abcdef02-here" QC="$E6/.disk-space-quarantine-123-abcdef03"
+mkdir -p "$QA" "$QB" "$QC" "$E6/here"; : > "$QA/f"
+OUT=$(dsf prune --jobs "$PJ6" --root "$PB" --json)
+rest() { jqr "$OUT" ".quarantined[] | select(.path == \"$1\") | .restore"; }
+[ "$(jqr "$OUT" '[.targets[].name] | join(" ")')" = "here" ] && [ "$(rest "$QA")" = "mv -n -- $QA $E6/lost" ] \
+  && [[ "$(rest "$QB")" == *"here exists again"* && "$(rest "$QC")" == *"rename it back by hand"* ]] \
+  && pass "listed, not targets: the mv when the first name is free, by hand when it is taken or unknown" || fail "leftovers" "$OUT"
+TXT=$(dsf prune --jobs "$PJ6" --root "$PB")
+[[ "$TXT" == *"Never deleted here"*"mv -n -- $QA $E6/lost"* ]] && pass "the text names it too" || fail "leftover text" "$TXT"
+dsf prune --apply "$(jqr "$OUT" .digest)" --jobs "$PJ6" --root "$PB" >/dev/null 2>&1
+[ -f "$QA/f" ] && [ -d "$QB" ] && [ -d "$QC" ] && [ ! -e "$E6/here" ] && pass "an apply deletes the listed entry and none of them" || fail "leftovers kept" "$(ls -a "$E6")"
+
+echo ""
+echo "=== prune --apply: a rename refused (tmp mode 555) keeps that entry and goes on ==="
+PJ7="$TMP/pj7"; for j in 10000008 20000009; do mkdir -p "$PJ7/$j/tmp"; printf '{"cwd":"/"}' > "$PJ7/$j/state.json"; done
+fill "$PJ7/10000008/tmp/plainA" 4096; fill "$PJ7/20000009/tmp/plainB" 4096; chmod 555 "$PJ7/10000008/tmp"
+if [ -w "$PJ7/10000008/tmp" ]; then
+  echo "  SKIP: a mode 555 folder is still writable here (root): no refused rename to test"
+else
+  D7=$(dsf prune --jobs "$PJ7" --root "$PB" --json | jq -r .digest)
+  OUT=$(dsf prune --apply "$D7" --jobs "$PJ7" --root "$PB" 2>&1); RC=$?
+  [ "$RC" = 0 ] && [[ "$OUT" == *"kept at the re-check: 10000008/tmp/plainA: could not rename (Permission denied)"* ]] \
+    && [ -f "$PJ7/10000008/tmp/plainA" ] && [ ! -e "$PJ7/20000009/tmp/plainB" ] \
+    && pass "kept: could not rename, and the next target is still deleted" || fail "refused rename" "rc=$RC $OUT"
+fi
+chmod 755 "$PJ7/10000008/tmp"
+
+echo ""
 echo "=== bazel --sweep: output bases whose workspace is gone, whose server is not running, no process uses ==="
+QBASE="$PB/.disk-space-quarantine-9-abcdef04-$P3"; mkdir -p "$QBASE"; printf '%s' "$TMP/gone-ws" > "$QBASE/DO_NOT_BUILD_HERE"
 OUT=$(ds bazel --sweep --root "$PB" --json); SD=$(jqr "$OUT" .digest)
 [ "$(jqr "$OUT" '[.targets[].name] | join(" ")')" = $P3 ] \
-  && pass "only the orphan: not a live workspace, an unknown one, a running server, cache/ or install/" || fail "sweep targets" "$(jqr "$OUT" .targets)"
+  && pass "only the orphan: not a live workspace, an unknown one, a running server, a leftover, cache/ or install/" || fail "sweep targets" "$(jqr "$OUT" .targets)"
+[[ "$(jqr "$OUT" '.quarantined[0].restore')" == "$P3 exists again: rename it back by hand" ]] \
+  && pass "a leftover base in the root is listed, not swept" || fail "sweep leftover" "$(jqr "$OUT" .quarantined)"
 OUT=$(ds bazel --root "$PB" --json)
+[ "$(jqr "$OUT" ".bases[] | select(.name == \"$P9\") | .workspace_state")" = unknown ] \
+  && pass "a DO_NOT_BUILD_HERE with a trailing space names an unknown workspace, never a gone one" || fail "marker space" "$(jqr "$OUT" ".bases[] | select(.name == \"$P9\")")"
 bu() { jqr "$OUT" ".bases[] | select(.name == \"$1\") | .users"; }
 [ "$(bu $P6)" = "pid $P6PID's working folder is inside" ] && [ "$(bu $P7)" = "pid $P7PID's command line names it" ] \
   && pass "a base a process works in, or whose path a command line names, is in use, whatever server.pid.txt says" || fail "base users" "$(bu $P6) / $(bu $P7)"
@@ -475,7 +560,7 @@ mkdir "$TMP/gone-ws"; : > "$GO"; wait $APID; OUT=$(cat "$TMP/sweep.out"); rmdir 
   && pass "a workspace back after the listing keeps its base at the re-check" || fail "sweep re-check" "$OUT"
 if [ -r "$PB/$P3/locked" ]; then fail "a mode 000 folder is still readable (root?): the sweep below proves nothing about it" ""; fi
 OUT=$(ds bazel --sweep --apply "$SD" --root "$PB" 2>&1); RC=$?
-[ "$RC" = 0 ] && [ ! -e "$PB/$P3" ] && [ -z "$(exists_all "$PB/$P2" "$PB/$P4" "$PB/$P5" "$PB/$P6" "$PB/$P7" "$PB/cache/x" "$PB/install/x")" ] \
+[ "$RC" = 0 ] && [ ! -e "$PB/$P3" ] && [ -z "$(exists_all "$PB/$P2" "$PB/$P4" "$PB/$P5" "$PB/$P6" "$PB/$P7" "$PB/$P9" "$QBASE" "$PB/cache/x" "$PB/install/x")" ] \
   && pass "the orphan's read-only and mode 000 folders are gone; nothing else is" || fail "sweep" "rc=$RC $OUT"
 
 echo ""
@@ -506,6 +591,31 @@ OUT=$(cl "$HOME/.claude/jobs/abcdef01/tmp/x" 2>&1)
 CMD=$(python3 "$HOME/.claude/disk-space.py" clone "$CL/prclone" --jobs "$PJ" --root "$PB" | sed -n 's/^To delete exactly these: //p')
 RP=$(rule_prefix "clone --apply")
 [[ -n "$RP" && "$CMD" == "$RP $CD $CL/prclone "* ]] && pass "installed, the clone command is one the ask rule names: $RP" || fail "clone rule prefix" "rule=$RP cmd=$CMD"
+for jd in "$TMP/nojobs" "$PJ/notes.txt"; do
+  got=$(ds clone "$CL/prclone" --jobs "$jd" --root "$PB" --json | jq -r '.kept[0].reason')
+  [[ "$got" == "the jobs folder $jd cannot be read ("*"), so which sessions are live is unknown" ]] \
+    && pass "clone kept: --jobs ${jd#"$TMP/"} cannot be read" || fail "clone jobs $jd" "$got"
+done
+H4="$TMP/h4"; mkdir -p "$H4"; clone "$H4/c"
+[ "$(HOME="$H4" python3 "$DS" clone "$H4/c" --root "$PB" --json | jq -r '.targets | length')" = 1 ] \
+  && pass "clone: the default jobs folder missing means no jobs, so it is listed" || fail "default jobs missing" ""
+# ~/.claude a link into a dotfiles clone (N1): refused, and an apply with any digest deletes nothing.
+H2="$TMP/h2"; mkdir -p "$H2"; clone "$H2/dot"; mkdir -p "$H2/dot/claude/jobs/abcdef02/tmp"; printf '{}' > "$H2/dot/claude/jobs/abcdef02/state.json"
+printf '/claude/\n' >> "$H2/dot/.git/info/exclude"; ln -s dot/claude "$H2/.claude"
+OUT=$(HOME="$H2" python3 "$DS" clone "$H2/dot" --root "$PB" 2>&1); RC=$?
+D2=$(HOME="$H2" python3 "$DS" clone "$H2/dot" --root "$PB" --json 2>/dev/null | jq -r '.digest // empty')
+HOME="$H2" python3 "$DS" clone --apply "${D2:-0000000000000000}" "$H2/dot" --root "$PB" >/dev/null 2>&1
+[ "$RC" = 1 ] && [[ "$OUT" == *"is or holds ~/.claude"* ]] && [ -f "$H2/dot/claude/jobs/abcdef02/state.json" ] \
+  && pass "a clone ~/.claude links into is refused, and its state.json stays" || fail "dotfiles clone" "rc=$RC $OUT"
+H3="$TMP/h3"; mkdir -p "$H3"; clone "$H3/.claude"
+OUT=$(HOME="$H3" python3 "$DS" clone "$H3/.claude" --root "$PB" 2>&1); RC=$?
+[ "$RC" = 1 ] && [[ "$OUT" == *"is or holds ~/.claude"* ]] && pass "~/.claude itself, a clone: refused" || fail "~/.claude clone" "rc=$RC $OUT"
+if [ -d "$H3/.CLAUDE" ]; then
+  OUT=$(HOME="$H3" python3 "$DS" clone "$H3/.CLAUDE" --root "$PB" 2>&1); RC=$?
+  [ "$RC" = 1 ] && [[ "$OUT" == *"is or holds ~/.claude"* ]] && pass "~/.CLAUDE on a case-blind disk: refused" || fail "~/.CLAUDE" "rc=$RC $OUT"
+else
+  echo "  SKIP: case-sensitive disk, no ~/.CLAUDE to test"
+fi
 OUT=$(ds clone --apply 0000000000000000 "$CL/prclone" --jobs "$PJ" --root "$PB" 2>&1); RC=$?
 [ "$RC" = 1 ] && [ -d "$CL/prclone" ] && [ -d "$PB/$P8" ] && pass "a wrong digest deletes no clone" || fail "clone wrong digest" "rc=$RC $OUT"
 OUT=$(ds clone "$CL/prclone" --apply "$CD" --jobs "$PJ" --root "$PB" 2>&1); RC=$?

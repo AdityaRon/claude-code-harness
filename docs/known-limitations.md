@@ -28,3 +28,7 @@ These guards are defense-in-depth, not a security boundary. Be clear-eyed about 
   - A filter set in a repo's own config, or a file that config includes, keeps the repo unjudged, since `git status` would run it. One in system or global config (`git-lfs`'s) is yours and runs, as on any `git status` in that repo.
   - A clone holding a linked worktree of itself is kept once quarantined, since git records the worktree by its absolute path; `git worktree remove` it first.
   - An output base whose workspace sits on a mount that is not mounted counts as `unknown` only under `/Volumes/<name>`. A workspace under an empty mount point elsewhere (Linux `/mnt/x`) counts as gone, so `bazel --sweep` may list its base.
+  - A `DO_NOT_BUILD_HERE` holding any whitespace past one trailing newline names an `unknown` workspace, so its base is never swept. That includes a workspace path with a space in it.
+  - A global `[include]` whose absolute path points into a clone makes git run that clone's filter during the listing, as any `git status` there already would.
+  - An apply stopped by TERM, HUP or Ctrl-C puts the entry it holds back under its name. One stopped harder (`kill -9`, a crash) leaves it as `.disk-space-quarantine-<pid>-<hex>-<name>`. Each listing names such an entry, with the `mv` that restores it, and never deletes it.
+  - `prune --now EPOCH` moves the time ages count from, for tests. Which jobs are live still goes by the clock.
