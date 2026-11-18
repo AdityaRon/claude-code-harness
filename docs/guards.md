@@ -80,6 +80,30 @@ backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
 - **Timing.** Each call adds one line to `~/.claude/logs/guard-timing.log` (`CLAUDE_GUARD_TIMING_LOG`): the call's `tool_use_id`, the tool, `guard=seconds:status:decision` for each guard that ran, then `at=` and the epoch second the call was read, which the dispatcher's one jq supplies (bash 3.2 has no clock that starts no process). A line from before that column has no `at=`. The seconds are wall time while the guards run side by side, so they overstate what a guard costs alone. `session-start` moves the file to `.1` once it passes 10 MB. `bash doctor.sh --latency` (`tools/hook-latency.py`) prints this log's table first, since it does not depend on Claude Code writing a hook record, and flags a week whose hook records in the transcripts fall under a tenth of the weeks before.
 - **What a call costs.** A tool call's hooks run together, so the call waits for its slowest hook. For Bash that is the dispatcher's fixed start plus its slowest guard; `subagent-cache-guard` runs alongside it. Two PreToolUse command hooks on one Bash call, each sleeping 2 s, started 15 µs apart and both ended 2.07 s later (headless probe, Claude Code 2.1.327, the maintainer's Mac).
 
+## Property checks
+
+`tools/guard-props.py` checks three properties a test case by case would not:
+
+- **fastpath.** Each guard's `word_filter ... || exit 0` line is a fast path:
+  a command naming none of its words is done before the guard reads it. A copy
+  of `hooks/` with every such line taken out must answer as `hooks/` does
+  through `bash-guards.sh` (decision, exit code and shadow rules) on the bench
+  corpus's Bash payloads and N generated commands (guard words with quotes,
+  backslashes, case and suffixes, some in a notes heredoc). rm-guard's
+  `word_filter` sets a flag rather than exiting, so it stays.
+- **heredoc.** Where `strip_inert_heredocs` drops a heredoc body as inert, the
+  same command with another body it also drops gets the same answer from the
+  guards that read past such bodies (those calling `strip_inert_heredocs` or
+  `drop_data_heredocs`; rm-guard reads them, by design, and is left out).
+- **count.** `count_mark` in `bin/disk-space.py`, read in chunks, counts what
+  `bytes.count` counts, marks across chunk boundaries included.
+
+CI runs it on a PR that changes `hooks/`, the script, `bin/disk-space.py` or
+the corpus, on seed 1; the Release workflow's daily cron runs it on a new seed,
+printed first, beside the release rather than gating it. A failure prints each
+input with a line for `tests/bench-corpus.jsonl`: add that line by PR with the
+fix, so the bench and every later run hold it; `--seed N` repeats the run.
+
 ## Allowlisting a wrapper script bypasses every guard
 
 A PreToolUse hook sees only the top-level Bash command, never the `kubectl` or

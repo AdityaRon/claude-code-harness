@@ -269,3 +269,28 @@ jobs:
           else
             gh issue create --title "$TITLE" --body-file issue.md --assignee "${{ github.repository_owner }}"
           fi
+
+  # tools/guard-props.py once a day on a new seed, beside the release and not
+  # gating it: a counterexample is most likely older than the PRs being
+  # released. The seed is printed so a failure repeats; its input goes into
+  # tests/bench-corpus.jsonl by PR (docs/guards.md). PRs run it on a fixed seed.
+  guard-props:
+    name: guard properties, random seed
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check the guard properties on a random seed
+        run: |
+          command -v jq >/dev/null || .github/install-apt-deps.sh jq
+          S=$SECONDS; RC=0
+          python3 tools/guard-props.py --seed random > props.txt || RC=$?
+          { echo '```'; cat props.txt; echo '```'; echo "$((SECONDS - S)) s."; } >> "$GITHUB_STEP_SUMMARY"
+          cat props.txt
+          [ "$RC" = 0 ] || echo "::error::a guard property failed; the summary has the seed, each input and its corpus line."
+          exit $RC

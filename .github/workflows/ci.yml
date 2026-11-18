@@ -88,6 +88,36 @@ jobs:
           [ "$RC" = 0 ] || echo "::error::the benchmark gate failed; see the job summary."
           exit $RC
 
+  # tools/guard-props.py: a guard's word_filter fast path answers as the full
+  # guard does, a heredoc body strip_inert_heredocs drops cannot change an
+  # answer, and count_mark counts as bytes.count does (docs/guards.md). Only
+  # when hooks/ or what it checks changed, on a fixed seed; release.yml runs it
+  # daily on a random one.
+  guard-props:
+    name: guard properties
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check the guard properties
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          if git diff --quiet "origin/$BASE" HEAD -- hooks tools/guard-props.py bin/disk-space.py tests/bench-corpus.jsonl; then
+            echo "hooks/, tools/guard-props.py, bin/disk-space.py and the corpus match origin/$BASE; property check skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          command -v jq >/dev/null || .github/install-apt-deps.sh jq
+          S=$SECONDS; RC=0
+          python3 tools/guard-props.py > props.txt || RC=$?
+          { echo '```'; cat props.txt; echo '```'; echo "$((SECONDS - S)) s."; } >> "$GITHUB_STEP_SUMMARY"
+          cat props.txt
+          [ "$RC" = 0 ] || echo "::error::a guard property failed; the job summary has each input and its corpus line."
+          exit $RC
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest

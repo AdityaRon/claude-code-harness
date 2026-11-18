@@ -228,6 +228,7 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   upstream-check.sh      ← the daily breakage check
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
+  guard-props.py         ← property checks: guard fast paths, inert heredocs, count_mark (docs/guards.md)
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts
   hook-latency.py        ← each hook's wall time per day, from local transcripts (doctor.sh --latency)
   hooknames.py           ← names the hook a transcript record numbers, for the two above: by the guard
