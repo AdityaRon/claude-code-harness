@@ -499,5 +499,6 @@
 {"id": "config-split-bashrc", "tool_name": "Bash", "tool_input": {"command": "echo x >> ~/.bash\"rc\""}, "source": "guard-props"}
 {"id": "config-split-profile", "tool_name": "Bash", "tool_input": {"command": "echo x >> ~/.pro\"file\""}, "source": "guard-props"}
 {"id": "config-split-gitconfig-backslash", "tool_name": "Bash", "tool_input": {"command": "echo x >> ~/.git\\config"}, "source": "guard-props"}
+{"id": "config-split-continuation", "tool_name": "Bash", "tool_input": {"command": "cp x ~/.cl\"\"au\\\nde/settings.json"}, "source": "guard-props"}
 {"id": "config-split-read-passes", "tool_name": "Bash", "tool_input": {"command": "cat ~/.cl\"aude\"/settings.json"}, "source": "guard-props"}
 {"id": "config-split-projects-passes", "tool_name": "Bash", "tool_input": {"command": "cp x ~/.cl\"aude\"/projects/p/notes.md"}, "source": "guard-props"}
