@@ -172,6 +172,38 @@ OUT=$(ds stamp --out "$TMP/state/second" 2>&1); RC=$?
 rm -f "$TMP/bin/du"
 
 echo ""
+echo "=== transcripts: the large session transcripts, with their compactions ==="
+PR="$TMP/projects"; mkdir -p "$PR/-p1/sub" "$PR/-p2"
+MARK='{"type":"system","subtype":"compact_boundary"}'
+{ for i in 1 2 3; do printf '%s\n' "$MARK"; head -c 400000 /dev/zero | tr '\0' x; echo; done; } > "$PR/-p1/aaaa-1111.jsonl"
+{ printf '%s\n' "$MARK"; head -c 2000000 /dev/zero | tr '\0' y; echo; } > "$PR/-p2/bbbb-2222.jsonl"
+head -c 100000 /dev/zero > "$PR/-p2/small-3333.jsonl"
+# Size order matches neither name order in -p1 (a 1.2, m 1.8, z 1.5 MB), so a missing sort shows.
+{ for i in 1 2; do printf '%s\n' "$MARK"; head -c 900000 /dev/zero | tr '\0' m; echo; done; } > "$PR/-p1/mmmm-6666.jsonl"
+head -c 1500000 /dev/zero | tr '\0' z > "$PR/-p1/zzzz-7777.jsonl"
+cp "$PR/-p2/bbbb-2222.jsonl" "$PR/-p1/sub/cccc-4444.jsonl"
+ln -s "$PR/-p2/bbbb-2222.jsonl" "$PR/-p1/link-5555.jsonl"
+sz() { wc -c < "$1" | tr -d ' '; }
+SA=$(sz "$PR/-p1/aaaa-1111.jsonl"); SB=$(sz "$PR/-p2/bbbb-2222.jsonl"); SM=$(sz "$PR/-p1/mmmm-6666.jsonl"); SZ=$(sz "$PR/-p1/zzzz-7777.jsonl")
+OUT=$(ds stamp --out "$TMP/state/tx" --projects "$PR" --transcript-mb 1 2>&1); RC=$?
+[ "$RC" = 0 ] && [ "$(grep '^transcript=' "$TMP/state/tx")" = "transcript=bbbb-2222 $SB 1
+transcript=mmmm-6666 $SM 2
+transcript=zzzz-7777 $SZ 0
+transcript=aaaa-1111 $SA 3" ] \
+  && pass "stamp lists transcripts past the size, largest first, with compactions; not a subfolder's, a link or a small one" \
+  || fail "stamp transcripts" "$RC $(grep '^transcript=' "$TMP/state/tx")"
+[ "$(ds report --projects "$PR" --transcript-mb 1 --json | jq -c '[.transcripts[] | [.session, .compactions]]')" = '[["bbbb-2222",1],["mmmm-6666",2],["zzzz-7777",0],["aaaa-1111",3]]' ] \
+  && pass "report --json carries the same list" || fail "report transcripts" "$(ds report --projects "$PR" --transcript-mb 1 --json | jq -c .transcripts)"
+[[ "$(ds report --projects "$PR" --transcript-mb 1)" == *"3 compactions"*"aaaa-1111.jsonl"* ]] \
+  && pass "report prints them" || fail "report text" "$(ds report --projects "$PR" --transcript-mb 1)"
+cm() { python3 -c 'import importlib.util as u, sys
+s = u.spec_from_file_location("ds", sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)
+print(m.count_mark(sys.argv[2], chunk=int(sys.argv[3])))' "$DS" "$@"; }
+CMS=""; for c in 1 7 28 29 30 4096; do CMS="$CMS $(cm "$PR/-p1/aaaa-1111.jsonl" $c)"; done
+[ "$CMS" = " 3 3 3 3 3 3" ] && pass "a mark across a chunk boundary counts once, at any chunk size" || fail "count_mark chunks" "$CMS"
+[ "$(grep -c '^transcript=' "$TMP/state/disk-usage")" = 0 ] && pass "no projects folder: no transcript lines" || fail "no projects" "$(cat "$TMP/state/disk-usage")"
+
+echo ""
 echo "=== session-census.py --sizes and doctor.sh --disk run the report ==="
 : > "$TMP/ps.txt"
 OUT=$(python3 "$REPO/tools/session-census.py" --ps "$TMP/ps.txt" --jobs "$J" --sizes 2>&1)
