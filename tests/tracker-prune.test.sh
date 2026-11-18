@@ -224,4 +224,30 @@ check_contains "and the rows" "| W-2 |" "$(cat "$T/work.md")"
 gone "the archive it made is removed" "$T/work-archive.md"
 
 echo ""
+echo "=== two --write runs in one folder: the second refuses; a row is never in neither file ==="
+T="$TMP/r/trackers"; mkdir -p "$T"; ledger "$T/work.md"; cp "$T/work.md" "$TMP/r/orig.md"
+GO="$TMP/r/go"
+CLAUDE_TRACKER_PRUNE_TEST_PAUSE="$GO" python3 "$TP" "$T/work.md" --write --date 2026-11-18 > "$TMP/r/out" 2>&1 & PID=$!
+n=0; while [ ! -e "$GO.ready" ] && [ $n -lt 200 ]; do sleep 0.05; n=$((n+1)); done
+OUT=$(tp "$T/work.md" --write 2>&1); RC=$?
+check_eq "a second --write while the first holds the folder: exit 3" "3" "$RC"
+check_contains "and says why" "another tracker-prune --write is running" "$OUT"
+check_eq "a dry run meanwhile is not held up" "0" "$(tp "$T/work.md" >/dev/null 2>&1; echo $?)"
+: > "$GO"; wait "$PID"
+check_eq "the first finishes" "0" "$?"
+check_eq "W-2 is in exactly one file" "1" "$(cat "$T/work.md" "$T/work-archive.md" | grep -c '| W-2 |')"
+
+T="$TMP/r2/trackers"; mkdir -p "$T"; ledger "$T/work.md"; printf '# old archive\n' > "$T/work-archive.md"
+GO="$TMP/r2/go"
+CLAUDE_TRACKER_PRUNE_TEST_PAUSE="$GO" python3 "$TP" "$T/work.md" --write --date 2026-11-18 > "$TMP/r2/out" 2>&1 & PID=$!
+n=0; while [ ! -e "$GO.ready" ] && [ $n -lt 200 ]; do sleep 0.05; n=$((n+1)); done
+printf '| W-9 | appended by someone else | done |\n' >> "$T/work-archive.md"
+printf '| W-8 | a late edit | open |\n' >> "$T/work.md"
+: > "$GO"; wait "$PID"; RC=$?
+check_eq "a tracker edited mid-run: exit 3" "3" "$RC"
+check_contains "an archive written to after the append keeps the block, and says so" "rows are in both files" "$(cat "$TMP/r2/out")"
+check_contains "the other writer's line stays" "appended by someone else" "$(cat "$T/work-archive.md")"
+check_eq "W-2 is in the tracker and the archive, never neither" "2" "$(cat "$T/work.md" "$T/work-archive.md" | grep -c '| W-2 |')"
+
+echo ""
 results

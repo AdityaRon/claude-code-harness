@@ -33,34 +33,32 @@ TRACKER=""
 case "$FILE" in
   */memory/*.md) ;;
   */trackers/*-archive.md) exit 0 ;;   # tracker-prune.py's archive: grows by design, read by grep only
-  */trackers/*.md) TRACKER=1 ;;
+  */trackers/*.md) [ "${CLAUDE_TRACKER_LINT:-on}" = off ] && exit 0; TRACKER=1 ;;
   *) exit 0 ;;
 esac
 BASE=${FILE##*/}
 [ -f "$FILE" ] || exit 0
 
-# ---- trackers/: a handoff, or a ledger ---------------------------------------
-# A handoff is what a restart reads whole: the shape rules/working-agreement.md
-# gives it. A ledger is a log past TRACKER_LEDGER_BYTES, or one tracker-prune.py
-# has archived from; it is read by slice, so only its size is checked.
+# ---- trackers/: only a handoff is linted -------------------------------------
+# A handoff is what a restart reads whole (rules/working-agreement.md): at most
+# TRACKER_LEDGER_BYTES, no archive beside it, and marked by a STATE: or Crons:
+# line or a "## Next on restart" heading. Everything else in a trackers/ folder (ledgers,
+# reports, logs) is not linted on its own writes: a finding there could lead a
+# session to cut a file that has no other copy.
 if [ -n "$TRACKER" ]; then
   LB=${TRACKER_LEDGER_BYTES:-20000}
   TB=$(( $(wc -c < "$FILE") ))
   PRUNE="python3 ~/.claude/tracker-prune.py"
-  if [ "$TB" -gt "$LB" ] || [ -f "${FILE%.md}-archive.md" ]; then
-    [ "$TB" -gt "$LB" ] || exit 0
-    printf "ledger lint on %s:\n  - it is %s bytes, past %s. Read it by slice (grep, sed -n), never whole. \`%s '%s'\` lists the settled rows it would move to %s; --write moves them.\n" \
-      "$BASE" "$TB" "$LB" "$PRUNE" "$FILE" "${BASE%.md}-archive.md" >&2
-    exit 2
-  fi
+  [ "$TB" -le "$LB" ] && [ ! -f "${FILE%.md}-archive.md" ] || exit 0
+  grep -qE '^(STATE:|Crons:|##[[:space:]]*Next on restart[[:space:]]*$)' "$FILE" || exit 0
   TF=""
   tadd() { TF="${TF}  - $1
 "; }
   WANT="Scope|Open|Owed|Settled|Next on restart"
   GOT=$(sed -n 's/^## *//p' "$FILE" | sed 's/[[:space:]]*$//' | paste -sd '|' -)
-  [ "$GOT" = "$WANT" ] || tadd "its ## headings are \"${GOT:-none}\". A handoff has Scope, Open, Owed, Settled, Next on restart, once each, in that order; a second set means it was appended to, not replaced in place."
+  [ "$GOT" = "$WANT" ] || tadd "its ## headings are \"${GOT:-none}\". A handoff has Scope, Open, Owed, Settled, Next on restart, once each, in that order. If this file is not a handoff, leave it as it is."
   TMAX=${TRACKER_MAX_BYTES:-5000}
-  [ "$TB" -le "$TMAX" ] || tadd "it is $TB bytes, past $TMAX. Keep what a restart needs; settled detail belongs in a memory or the PR."
+  [ "$TB" -le "$TMAX" ] || tadd "it is $TB bytes, past $TMAX. Move what a restart does not need into a memory, the PR or a ledger; never delete what has no other copy."
   STAMP=$(sed -n 's/^STATE:[[:space:]]*//p' "$FILE" | sed 's/[[:space:]]*$//' | head -1)
   if [ -z "$STAMP" ]; then
     tadd "no \`STATE:\` line. Take it from \`date -u +%Y-%m-%dT%H:%MZ\`, not from the conversation."
@@ -120,7 +118,6 @@ if [ -n "$TRACKER" ]; then
         if (index($0, "/") == 0) next
         p = $0; sub(/^[ \t]*[0-9]+[ \t]/, "", p); b = p; sub(/.*\//, "", b)
         n++; nm[n] = tolower(b); bn[n] = b; sz[n] = $1
-        if (n <= 5) printf "  - ledger %s beside this handoff is %d bytes, past %d. Read it by slice (grep, sed -n), never whole; `%s \047%s\047` moves its settled rows out.\n", b, $1, lb, prune, p
         next
       }
       {
@@ -142,7 +139,7 @@ EOF
 "
   fi
   [ -n "$TF" ] || exit 0
-  printf 'handoff lint on %s:\n%s' "$BASE" "$TF" >&2
+  printf 'handoff lint on %s:\n%s(CLAUDE_TRACKER_LINT=off in settings.json env turns this off.)\n' "$BASE" "$TF" >&2
   exit 2
 fi
 
