@@ -237,8 +237,9 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
                            --sizes adds disk-space.py's report)
   pickup-report.sh       ← after an install, how running sessions pick up each change; install.sh runs it with
                            --prune, which removes what install wrote that the clone deleted
+  verify-changed.sh      ← the checklist rows and suites a branch's changes call for (doctor.sh --changed)
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json,
-                           skills.pin
+                           skills.pin, verify-checklist.tsv
 hooks/                   ← one file per hook, plus lib.sh, which sources lib/: command, paths,
                            scratch, io, inline, net, host and shadow; bash-guards.sh runs the Bash guards
 rules/                   ← installed to ~/.claude/rules, loaded in every session
