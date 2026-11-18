@@ -23,9 +23,11 @@
 # Usage:  bash memory-verify.sh [--store SLUG] [--json] [--all]
 #   --store SLUG  only this store (default: every store under ~/.claude/projects)
 #   --json        one JSON object per finding, for the skill to consume
-#   --all         also list VERIFIED memories (default: only what needs attention)
+#   --all         also list VERIFIED and WAIVED memories (default: only what needs attention)
 #   --curate      also report merge candidates and settled entries (advisory; never deletes,
 #                 and deliberately proposes no retirements — see the note by CLOSED_RE)
+#   --jira-keys   print only the keys of every `jira` verify claim, deduped, as
+#                 `key in (...)` lines of 50: one JQL search per line, ready to paste
 #
 # The index has TWO limits and the line one usually binds first: 200 lines and
 # ~25,000 characters. One line per memory means a store with more than ~200
@@ -36,14 +38,17 @@
 #   TRIAGE     asserts open state with no way to check it - needs a verify block
 #   NEEDS_MCP  a well-formed claim only the skill can resolve (Jira is MCP-only)
 #   SKIP       malformed or unrecognised claim - the memory needs fixing
+#   ORPHAN     no index line, archive line or feedback_hub_* [[link]] reaches it
 #   OVERSIZE   the index is past a load limit and its tail is being dropped
 #   SETTLED    advisory, --curate only: a project memory whose work is finished,
 #              so its index line can be archived. Reversible, never a deletion —
 #              the file, its links and its lessons all stay exactly where they are.
 #   CANDIDATE  advisory, --curate only: two memories make the same claims
+#   WAIVED     counted, listed with --all: frontmatter `verify: none <reason>`
+#              stops TRIAGE for it; an empty reason is a SKIP and waives nothing
 #
-# Exit: 0 nothing needs attention · 1 at least one STALE · 2 only TRIAGE/SKIP
-#       3 could not run
+# Exit: 0 nothing needs attention · 1 at least one STALE · 2 only TRIAGE, SKIP,
+#       NEEDS_MCP, ORPHAN or OVERSIZE · 3 could not run
 #
 # Portability: macOS ships bash 3.2 — no associative arrays, no mapfile.
 set -u
@@ -61,6 +66,13 @@ INDEX_MAX_LINES="${MEMORY_INDEX_MAX_LINES:-200}"
 # overrides keep working; the value it carries is and always was bytes.
 INDEX_MAX_BYTES="${MEMORY_INDEX_MAX_CHARS:-25000}"
 CURATE=0
+JIRA_KEYS=0
+# GitHub claims are looked up this many to one GraphQL call, per repo.
+GH_BATCH="${MEMORY_VERIFY_GH_BATCH:-100}"
+case "$GH_BATCH" in ''|*[!0-9]*|0) GH_BATCH=100 ;; esac
+NL='
+'
+TAB='	'
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -68,13 +80,16 @@ while [ $# -gt 0 ]; do
     --json)  AS_JSON=1; shift ;;
     --all)   SHOW_ALL=1; shift ;;
     --curate) CURATE=1; shift ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    --jira-keys) JIRA_KEYS=1; shift ;;
+    -h|--help) sed -n '2,51p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 3 ;;
   esac
 done
 
 command -v jq >/dev/null 2>&1 || { echo "FATAL: jq is required." >&2; exit 3; }
 [ -d "$PROJECTS" ] || { echo "FATAL: no projects dir at $PROJECTS" >&2; exit 3; }
+TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/memory-verify.XXXXXX") || { echo "FATAL: no temp dir" >&2; exit 3; }
+trap 'rm -rf "$TMP_DIR"' EXIT
 
 # Testing seam: MEMORY_VERIFY_GH_CMD replaces how gh is invoked, so
 # tests/memory-verify.test.sh can stub GitHub and stay hermetic in CI, where
@@ -83,7 +98,7 @@ GH_CMD="${MEMORY_VERIFY_GH_CMD:-gh}"
 HAVE_GH=0
 if [ -n "${MEMORY_VERIFY_GH_CMD:-}" ]; then
   HAVE_GH=1
-elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+elif [ "$JIRA_KEYS" -eq 0 ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   HAVE_GH=1
 fi
 
@@ -96,6 +111,8 @@ N_VERIFIED=0
 N_OVERSIZE=0
 N_CANDIDATE=0
 N_HOOK=0
+N_ORPHAN=0
+N_WAIVED=0
 HEADER_SHOWN=""
 
 # Emit one finding. Fields are positional to stay bash-3.2 friendly.
@@ -111,6 +128,8 @@ emit() {
     OVERSIZE) N_OVERSIZE=$((N_OVERSIZE+1)) ;;
     CANDIDATE) N_CANDIDATE=$((N_CANDIDATE+1)) ;;
     HOOK)     N_HOOK=$((N_HOOK+1)) ;;
+    ORPHAN)   N_ORPHAN=$((N_ORPHAN+1)) ;;
+    WAIVED)   N_WAIVED=$((N_WAIVED+1)); [ "$SHOW_ALL" -eq 1 ] || return 0 ;;
   esac
   if [ "$AS_JSON" -eq 1 ]; then
     jq -nc --arg s "$status" --arg st "$store" --arg f "$file" --arg d "$detail" \
@@ -162,27 +181,106 @@ verify_lines() {
   ' "$1" 2>/dev/null
 }
 
-# Resolve one "gh owner/repo#N expected" claim. Echoes "ok <actual>",
-# "mismatch <actual>", or "skip <reason>".
+# One awk pass over a store's memories, before any lookup. Prints, tab-separated:
+#   G <owner/repo> <number>   a gh claim resolve_gh will ask for
+#   J <key>                   a jira claim's key
+#   W <file> <reason>         a frontmatter `verify: none` waiver; reason may be empty
+# The block rules are verify_lines', and the ref shape is resolve_gh's: a claim
+# missing here is a lookup-failed SKIP there, never a silent pass.
+store_prepass() {
+  awk -v OFS='\t' '
+    FNR == 1 {
+      skip = (FILENAME ~ /(^|\/)MEMORY(_ARCHIVE)?\.md$/); inblock = 0
+      base = FILENAME; sub(/.*\//, "", base)
+      fm = ($0 == "---"); if (fm) next
+    }
+    skip { next }
+    fm && /^---[[:space:]]*$/ { fm = 0; next }
+    # The same pattern hooks/memory-lint.sh accepts the waiver by.
+    fm && /^[[:space:]]*verify:[[:space:]]*none([[:space:]]|$)/ {
+      r = $0; sub(/^[[:space:]]*verify:[[:space:]]*none[[:space:]]*/, "", r); sub(/[[:space:]]+$/, "", r)
+      print "W", base, r; next
+    }
+    /^verify:[[:space:]]*$/ { inblock = 1; next }
+    inblock && /^[[:space:]]*-[[:space:]]/ {
+      s = $0; sub(/^[[:space:]]*-[[:space:]]*/, "", s); n = split(s, a, " ")
+      if (n >= 3 && a[1] == "gh" && a[2] ~ /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+$/) {
+        k = index(a[2], "#"); num = substr(a[2], k + 1)
+        # A GraphQL Int takes no leading zero; 9 digits keeps it inside 32 bits.
+        sub(/^0+/, "", num); if (num == "") num = "0"
+        if (length(num) <= 9) print "G", substr(a[2], 1, k - 1), num
+      }
+      if (n >= 3 && a[1] == "jira") print "J", a[2]
+      next
+    }
+    inblock && /^[^[:space:]]/ { inblock = 0 }
+  ' "$@" 2>/dev/null
+}
+
+# "<owner/repo>#<n><TAB><STATE>" lines: STATE as GitHub gives it, or "!<error
+# type>" for an alias that came back null. A ref with no line was not answered.
+GH_STATES="$NL"
+
+# One GraphQL call per repo per GH_BATCH numbers, replacing a `gh pr view` per
+# claim (plus an `issue view` fallback) that took minutes on a store of a few
+# hundred claims. issueOrPullRequest answers for either kind.
+gh_prefetch() {  # gh_prefetch <file of sorted, unique "owner/repo<TAB>number" lines>
+  local repo num cur="" q="" n=0
+  [ "$HAVE_GH" -eq 1 ] && [ -s "$1" ] || return 0
+  while IFS="$TAB" read -r repo num; do
+    if [ "$repo" != "$cur" ] || [ "$n" -ge "$GH_BATCH" ]; then
+      [ "$n" -gt 0 ] && gh_batch "$cur" "$q"
+      cur="$repo"; q=""; n=0
+    fi
+    q="${q}n$num: issueOrPullRequest(number: $num) { ... on PullRequest { state } ... on Issue { state } }$NL"
+    n=$((n + 1))
+  done < "$1"
+  [ "$n" -gt 0 ] && gh_batch "$cur" "$q"
+  return 0
+}
+
+# gh exits 1 when any alias fails, and stdout still carries every other alias
+# (measured with gh api graphql on 2026-11-18: one PR and one missing number
+# gave exit 1, the PR's state, `null` for the other and an errors[] entry). So
+# the status is ignored and stdout read whole: one bad ref costs its own claim,
+# not the batch. Output that is not JSON leaves every ref unanswered.
+gh_batch() {  # gh_batch <owner/repo> <alias lines>
+  local out
+  out=$($GH_CMD api graphql -f query="query {${NL}r: repository(owner: \"${1%%/*}\", name: \"${1#*/}\") {${NL}${2}}${NL}}" 2>/dev/null)
+  GH_STATES="$GH_STATES$(printf '%s' "$out" | jq -r --arg repo "$1" '
+      ((.errors // []) | map(select((.path | length) == 2) | {key: .path[1], value: (.type // "ERROR")}) | from_entries) as $e
+      | (.data.r // {}) | to_entries[]
+      | "\($repo)#\(.key | ltrimstr("n"))\t\(.value.state // ("!" + ($e[.key] // "NULL")))"' 2>/dev/null)$NL"
+}
+
+# Resolve one "gh owner/repo#N expected" claim from GH_STATES. Sets R_KIND to
+# ok, mismatch or skip, and R_VAL to the state or the reason. No subshell.
 resolve_gh() {
-  local ref="$1" expected="$2" repo num actual
+  local ref="$1" expected="$2" repo num rest actual
   repo="${ref%%#*}"
   num="${ref##*#}"
-  case "$repo" in */*) : ;; *) echo "skip ref-not-repo-qualified"; return ;; esac
-  case "$num" in ''|*[!0-9]*) echo "skip ref-has-no-number"; return ;; esac
-  [ "$HAVE_GH" -eq 1 ] || { echo "skip gh-unavailable-or-unauthenticated"; return; }
+  R_KIND=skip
+  case "$repo" in */*) : ;; *) R_VAL="ref-not-repo-qualified"; return ;; esac
+  case "$num" in ''|*[!0-9]*) R_VAL="ref-has-no-number"; return ;; esac
+  case "$repo" in */*/*|/*|*/|*[!A-Za-z0-9_./-]*) R_VAL="ref-malformed"; return ;; esac
+  num=$((10#$num))
+  [ "${#num}" -le 9 ] || { R_VAL="ref-malformed"; return; }
+  [ "$HAVE_GH" -eq 1 ] || { R_VAL="gh-unavailable-or-unauthenticated"; return; }
 
-  actual=$($GH_CMD pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null)
-  if [ -z "$actual" ]; then
-    actual=$($GH_CMD issue view "$num" --repo "$repo" --json state -q .state 2>/dev/null)
-  fi
-  [ -z "$actual" ] && { echo "skip lookup-failed"; return; }
+  case "$GH_STATES" in
+    *"$NL$repo#$num$TAB"*) rest=${GH_STATES#*"$NL$repo#$num$TAB"}; actual=${rest%%"$NL"*} ;;
+    *) R_VAL="lookup-failed"; return ;;
+  esac
+  case "$actual" in
+    '!NOT_FOUND') R_VAL="not-found"; return ;;
+    '!'*)         R_VAL="lookup-failed (${actual#!})"; return ;;
+  esac
 
-  # Case-insensitive compare; gh returns OPEN/MERGED/CLOSED.
-  local a e
-  a=$(printf '%s' "$actual"   | tr 'A-Z' 'a-z')
-  e=$(printf '%s' "$expected" | tr 'A-Z' 'a-z')
-  if [ "$a" = "$e" ]; then echo "ok $actual"; else echo "mismatch $actual"; fi
+  # Case-insensitive compare; GitHub returns OPEN/MERGED/CLOSED.
+  R_VAL="$actual"
+  shopt -s nocasematch
+  if [[ "$actual" == "$expected" ]]; then R_KIND=ok; else R_KIND=mismatch; fi
+  shopt -u nocasematch
 }
 
 # Open-state language, i.e. the memory asserts something is still in flight.
@@ -252,6 +350,7 @@ scan_index() {
     n=$((n + 1))
     printf '%s' "$line" | grep -qiE "$OPEN_RE" || continue
     target=$(printf '%s' "$line" | sed -n 's/.*](\([^)]*\.md\)).*/\1/p' | head -1)
+    [ -n "$target" ] && case "$WAIVED_FILES" in *"$NL$target$NL"*) continue ;; esac
     if [ -n "$target" ] && [ -f "$dir/$target" ]; then
       age=$(age_days "$dir/$target")
       [ "$age" -lt "$TRIAGE_MIN_AGE_DAYS" ] && continue
@@ -260,6 +359,33 @@ scan_index() {
       emit TRIAGE "$slug" "MEMORY.md:$n" "index line asserts open state"
     fi
   done < "$idx"
+}
+
+# A memory nothing links to is never recalled. Reached means named by a link
+# in MEMORY.md or MEMORY_ARCHIVE.md, or by a [[stem]] in a feedback_hub_*.md,
+# the hubs memory-lint.sh reads. One `comm` of two sorted lists, so the cost
+# does not grow with a grep per file. No index, no finding: nothing to orphan from.
+scan_orphans() {
+  local dir="$1" slug="$2" f
+  [ -f "$dir/MEMORY.md" ] || return 0
+  for f in "$dir"/*.md; do
+    [ -f "$f" ] || continue
+    f=${f##*/}
+    [ "$f" = MEMORY.md ] || [ "$f" = MEMORY_ARCHIVE.md ] || printf '%s\n' "$f"
+  done | LC_ALL=C sort -u > "$TMP_DIR/files"
+  { grep -oh '](\([^)]*\))' "$dir/MEMORY.md" "$dir/MEMORY_ARCHIVE.md" 2>/dev/null \
+      | sed 's/^](//; s/)$//; s/#.*//; s#^\./##'
+    for f in "$dir"/feedback_hub_*.md; do
+      [ -f "$f" ] || break
+      grep -oh '\[\[[^]]*\]\]' "$dir"/feedback_hub_*.md 2>/dev/null | sed 's/^\[\[//; s/\]\]$/.md/'
+      break
+    done
+  } | LC_ALL=C sort -u > "$TMP_DIR/links"
+  while IFS= read -r f; do
+    [ -n "$f" ] && emit ORPHAN "$slug" "$f" "no index line, archive line or hub [[link]] reaches it, so nothing recalls it"
+  done <<EOF
+$(LC_ALL=C comm -23 "$TMP_DIR/files" "$TMP_DIR/links")
+EOF
 }
 
 # The index is the one file loaded into context every session, so passing
@@ -392,17 +518,38 @@ scan_curation() {
 }
 
 scan_store() {
-  local dir="$1" slug="$2" f base claims line kind ref expected result actual age ids id_count note
-  local settled recorded_only mtype
+  local dir="$1" slug="$2" f base claims line kind ref expected _rest age ids id_count note
+  local settled recorded_only mtype waived waiver
+
+  # Every gh claim in the store, looked up in batches before the first emit.
+  : > "$TMP_DIR/waivers"
+  store_prepass "$dir"/*.md \
+    | awk -F'\t' -v w="$TMP_DIR/waivers" '$1 == "G" { print $2 "\t" $3 } $1 == "W" { print $2 "\t" $3 > w }' \
+    | LC_ALL=C sort -u > "$TMP_DIR/gh-refs"
+  gh_prefetch "$TMP_DIR/gh-refs"
+  WAIVERS="$NL$(cat "$TMP_DIR/waivers")$NL"
+  WAIVED_FILES="$NL"
 
   for f in "$dir"/*.md; do
     [ -f "$f" ] || continue
-    base=$(basename "$f")
+    base=${f##*/}
     [ "$base" = "MEMORY.md" ] && continue
     # Neither index is a memory. The archive carries index lines whose hooks
     # quote the memories they point at, so scanning it re-reports their claims
     # against a file with no frontmatter, no type and no verify block.
     [ "$base" = "MEMORY_ARCHIVE.md" ] && continue
+
+    waived=0
+    case "$WAIVERS" in
+      *"$NL$base$TAB"*)
+        waiver=${WAIVERS#*"$NL$base$TAB"}; waiver=${waiver%%"$NL"*}
+        if [ -n "$waiver" ]; then
+          waived=1; WAIVED_FILES="$WAIVED_FILES$base$NL"
+          emit WAIVED "$slug" "$base" "verify: none, $waiver"
+        else
+          emit SKIP "$slug" "$base" "verify: none gives no reason, so the waiver is ignored; say why it cannot be checked"
+        fi ;;
+    esac
 
     claims=$(verify_lines "$f")
     if [ -n "$claims" ]; then
@@ -412,9 +559,7 @@ scan_store() {
       # N_* counters incremented inside it would be discarded on exit.
       while IFS= read -r line; do
         [ -z "$line" ] && continue
-        kind=$(printf '%s' "$line" | awk '{print $1}')
-        ref=$(printf '%s' "$line" | awk '{print $2}')
-        expected=$(printf '%s' "$line" | awk '{print $3}')
+        read -r kind ref expected _rest <<< "$line"
         if [ -z "$ref" ] || [ -z "$expected" ]; then
           emit SKIP "$slug" "$base" "malformed verify claim: $line"
           settled=0
@@ -422,15 +567,14 @@ scan_store() {
         fi
         case "$kind" in
           gh)
-            result=$(resolve_gh "$ref" "$expected")
-            actual=$(printf '%s' "$result" | awk '{print $2}')
-            case "$result" in
-              ok*)       emit VERIFIED "$slug" "$base" "$ref is $actual, as recorded"
-                         printf '%s' "$actual" | grep -qiE '^(merged|closed)$' || settled=0 ;;
-              mismatch*) emit STALE "$slug" "$base" "$ref expected=$expected actual=$actual"
-                         settled=0 ;;
-              *)         emit SKIP  "$slug" "$base" "$ref $(printf '%s' "$result" | cut -d' ' -f2-)"
-                         settled=0 ;;
+            resolve_gh "$ref" "$expected"
+            case "$R_KIND" in
+              ok)       emit VERIFIED "$slug" "$base" "$ref is $R_VAL, as recorded"
+                        case "$R_VAL" in MERGED|CLOSED|merged|closed) ;; *) settled=0 ;; esac ;;
+              mismatch) emit STALE "$slug" "$base" "$ref expected=$expected actual=$R_VAL"
+                        settled=0 ;;
+              *)        emit SKIP  "$slug" "$base" "$ref $R_VAL"
+                        settled=0 ;;
             esac
             ;;
           jira)
@@ -483,7 +627,7 @@ scan_store() {
     # this corpus that asserted three PRs were open when all three had merged
     # the same day - a 14-day gate would have hidden it for two weeks, and it
     # sat in the most-read block of the index the whole time.
-    if grep -qiE "$OPEN_RE" "$f" 2>/dev/null; then
+    if [ "$waived" -eq 0 ] && grep -qiE "$OPEN_RE" "$f" 2>/dev/null; then
       age=$(age_days "$f")
       # Advisory context for the skill, which reads the file itself anyway — so
       # bias to high signal over completeness. Standards tokens (SHA-256,
@@ -505,21 +649,27 @@ scan_store() {
   done
 }
 
-[ "$AS_JSON" -eq 0 ] && {
+[ "$AS_JSON" -eq 0 ] && [ "$JIRA_KEYS" -eq 0 ] && {
   echo "Checking memories against external truth."
   [ "$HAVE_GH" -eq 1 ] || echo "NOTE: gh unavailable or unauthenticated — GitHub claims will be SKIPped."
 }
 
 STORES_SCANNED=0
+: > "$TMP_DIR/jira-keys"
 for store in "$PROJECTS"/*; do
   [ -d "$store/memory" ] || continue
   slug=$(basename "$store")
   [ -n "$ONLY_STORE" ] && [ "$slug" != "$ONLY_STORE" ] && continue
   STORES_SCANNED=$((STORES_SCANNED+1))
+  if [ "$JIRA_KEYS" -eq 1 ]; then
+    store_prepass "$store/memory"/*.md | awk -F'\t' '$1 == "J" { print $2 }' >> "$TMP_DIR/jira-keys"
+    continue
+  fi
   scan_store "$store/memory" "$slug"
   scan_index "$store/memory" "$slug"
   scan_index_size "$store/memory" "$slug"
   scan_index_hooks "$store/memory" "$slug"
+  scan_orphans "$store/memory" "$slug"
   if [ "$CURATE" -eq 1 ]; then scan_curation "$store/memory" "$slug"; fi
 done
 
@@ -534,9 +684,20 @@ if [ "$STORES_SCANNED" -eq 0 ]; then
   exit 3
 fi
 
+# A key JQL would reject (lowercase, no number) is left out rather than
+# breaking the whole search it would sit in.
+if [ "$JIRA_KEYS" -eq 1 ]; then
+  grep -E '^[A-Z][A-Z0-9_]*-[0-9]+$' "$TMP_DIR/jira-keys" | LC_ALL=C sort -t- -k1,1 -k2,2n -u \
+    | awk '{ k[n++] = $0 }
+           END { for (i = 0; i < n; i += 50) {
+                   s = "key in ("; for (j = i; j < n && j < i + 50; j++) s = s (j > i ? ", " : "") k[j]
+                   print s ")" } }'
+  exit 0
+fi
+
 if [ "$AS_JSON" -eq 0 ]; then
   echo ""
-  echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_NEEDS_MCP need-mcp, $N_SKIP skipped, $N_VERIFIED verified, $N_OVERSIZE oversize, $N_SETTLED settled, $N_CANDIDATE candidates, $N_HOOK thin-hooks"
+  echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_NEEDS_MCP need-mcp, $N_SKIP skipped, $N_VERIFIED verified, $N_OVERSIZE oversize, $N_SETTLED settled, $N_CANDIDATE candidates, $N_HOOK thin-hooks, $N_ORPHAN orphans, $N_WAIVED waived"
   [ "$N_TRIAGE" -gt 0 ] && echo "Run /memory-audit to resolve the TRIAGE entries and give them verify: blocks."
   if [ "$N_OVERSIZE" -gt 0 ] && [ "$CURATE" -eq 0 ]; then
     echo "The index is over its load limit, so its tail is dropped at session start."
@@ -546,5 +707,5 @@ if [ "$AS_JSON" -eq 0 ]; then
 fi
 
 [ "$N_STALE" -gt 0 ] && exit 1
-[ $((N_TRIAGE + N_SKIP + N_NEEDS_MCP + N_OVERSIZE)) -gt 0 ] && exit 2
+[ $((N_TRIAGE + N_SKIP + N_NEEDS_MCP + N_OVERSIZE + N_ORPHAN)) -gt 0 ] && exit 2
 exit 0
