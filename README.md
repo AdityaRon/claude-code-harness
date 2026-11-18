@@ -114,7 +114,7 @@ skip, except in CI, which clones it.
 | `tcc-check` | Bash results and failures | Advise: names macOS privacy control (TCC) when a Bash call prints an "Operation not permitted" error (a tool's, zsh's or python's) for a path in `~/Desktop`, `~/Documents`, `~/Downloads` or iCloud Drive, or for no path while the cwd (or a `cd` in the command) is in one. A line quoting one, in backticks or after grep -n's `file:line:`, is not an error; a log line printed whole still is |
 | `session-start` | SessionStart | Inject: branch, status and recent commits; on resume, files that drifted since the last session; once a day, a warning when job folders or Bazel output bases pass a size |
 | `session-snapshot` | Stop, SessionEnd | Record: hashes of the files the session edited, for the resume drift check |
-| `pre-compact` | PreCompact | Back up: the transcript before compaction, newest 20 kept |
+| `pre-compact` | PreCompact | Back up: the transcript before compaction, one per session, newest 20 within 1000 MB |
 | `notify` | Notification | Notify: a desktop alert titled with the session name |
 | `plan-to-html` | ExitPlanMode | Render: the plan as HTML in your browser, without delaying the prompt |
 | status line | every refresh | Show: model and effort, branch, context, cost, rate limits, plan and workflow links, a cold-cache warning |
