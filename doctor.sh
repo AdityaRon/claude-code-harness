@@ -45,6 +45,8 @@ fi
 # shadow log. A suite that forgets to point them elsewhere would fill the real logs.
 AUDIT_TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$AUDIT_TMP"' EXIT
 export CLAUDE_AUDIT_LOG="$AUDIT_TMP/audit.log" CLAUDE_GUARD_TIMING_LOG="$AUDIT_TMP/guard-timing.log" CLAUDE_SHADOW_LOG="$AUDIT_TMP/shadow.log"
+# A suite that CI runs in a job of its own skips here (tests/guard-props.test.sh).
+export CCH_DOCTOR=1
 
 TOTAL_SUITES=0
 FAILED_SUITES=0

@@ -1231,18 +1231,27 @@ COMPACT_MARK = b'"subtype":"compact_boundary"'
 
 
 def count_mark(path, mark=COMPACT_MARK, chunk=1 << 20):
-    """How many times MARK occurs in PATH, read in chunks; None when it cannot be read. The carried
-    tail is one byte short of MARK, so a mark across a chunk boundary counts once."""
-    n, tail = 0, b""
+    """How many times MARK occurs in PATH, read in chunks, as bytes.count counts it (left to right,
+    no overlaps); None when it cannot be read. The carried tail is at most one byte short of MARK, so
+    a mark across a chunk boundary counts once, and starts past the last match, so a mark that
+    overlaps itself (b"aa" in b"aaa") is not counted twice. Any mark but an empty one."""
+    if not mark:
+        raise ValueError("count_mark: an empty mark")
+    n, tail, k = 0, b"", len(mark)
     try:
         with open(path, "rb") as f:
             while True:
                 b = f.read(chunk)
                 if not b:
                     return n
-                buf = tail + b
-                n += buf.count(mark)
-                tail = buf[-(len(mark) - 1):]
+                buf, i = tail + b, 0
+                while True:
+                    j = buf.find(mark, i)
+                    if j < 0:
+                        break
+                    n, i = n + 1, j + k
+                # buf[-(k - 1):] was the whole buffer for a 1-byte mark.
+                tail = buf[max(i, len(buf) - (k - 1)):]
     except OSError:
         return None
 

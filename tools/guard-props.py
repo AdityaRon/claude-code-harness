@@ -6,8 +6,10 @@
   tools/guard-props.py --only fastpath --n 200
   tools/guard-props.py --hooks DIR        # another hooks/ folder, e.g. a mutant
 
-fastpath: a guard's `word_filter ... || exit 0` line is its fast path. A copy of
-hooks/ with every such line taken out must answer as hooks/ does through
+fastpath: a guard's `word_filter ... || exit 0` line is its fast path, as are
+git-guard's two gates and rm-guard's RM_WORD (config-guard's path test with
+--force config-paths: a quote-split path gets past it on main today).
+A copy of hooks/ with every one of them made to pass must answer as hooks/ does through
 bash-guards.sh (decision, exit code, shadow rules) on the bench corpus's Bash
 payloads and N generated commands: guard words with quotes, backslashes, case
 and suffixes, some inside a notes heredoc. rm-guard's word_filter sets a flag
@@ -21,9 +23,8 @@ Those guards drop such a body together, so this cannot see a strip that drops on
 it should keep; a body that runs or goes to a script must stay, checked directly.
 
 count: count_mark, read in chunks, must equal data.count(mark) on random data and
-chunk sizes, with marks placed across chunk boundaries. Marks are 2 bytes or more,
-and data where a mark overlaps itself is left out: count_mark is not meant for
-either (a 1-byte mark recounts each chunk; JSONL never repeats the mark's quote).
+chunk sizes, with marks placed across chunk boundaries: the real mark, a 1-byte
+one, and marks placed as two copies sharing their border (b"aba" + b"ba").
 
 Exit 1 on a counterexample, printed with a line for tests/bench-corpus.jsonl;
 exit 2 when a check cannot run. Stdlib only.
@@ -32,16 +33,30 @@ import argparse, concurrent.futures, hashlib, importlib.util, json, os, random, 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FAST_PATH = re.compile(r'^([ \t]*)word_filter[ \t].*\|\|[ \t]*exit 0[ \t]*$', re.M)
+# The other guards' fast paths, each a line that must be in its file once: (key, name, file, line,
+# made to pass, forced unless asked). config-paths is off by default: forced, it answers differently
+# on a quote-split path (`cp x ~/.cl''aude/hooks/lib.sh`), which config-guard's filter lets go
+# unasked; --force config-paths turns it on for the fix that closes that.
+OTHER_PATHS = [
+    ('git', "git-guard's git", 'git-guard.sh', r'^\[\[ "\$R" == \*\[Gg\]\[Ii\]\[Tt\]\* \]\] \|\| exit 0$', ':', True),
+    ('gg-gate', "git-guard's GG_GATE", 'git-guard.sh', r'^\[\[ "\$R" =~ \$GG_GATE \]\] \|\| exit 0$', ':', True),
+    ('rm-word', "rm-guard's RM_WORD", 'rm-guard.sh', r'^\[\[ "\$CMD" =~ \$RM_WORD \]\] \|\| rm_allow$', ':', True),
+    ('config-paths', "config-guard's paths", 'config-guard.sh', r'^([ \t]*\*\) case "\$FCWD" in .*\*\) )exit 0( ;; esac ;;)$', r'\1:\2', False),
+]
 # Words from the guards' word_filter lines, and the commands they sit in.
 WORDS = ['kubectl', 'printenv', 'env', 'export', 'set', 'declare', 'compgen', 'eval', 'nc', 'ncat', 'socat', 'dd',
          '.env', 'environ', '.aws/credentials', '.netrc', 'id_rsa', 'server.pem', 'tls.key', 'credentials', '.npmrc',
          '.kube/config', '.ssh/id_ed25519', 'gcloud', 'kubeconfig', '.claude.json', 'service_account.json', 'tfstate',
          'secret', 'password', '$API_KEY', 'token', 'curl', 'wget', 'scp', 'rsync', 'sftp', 'http://example.com',
-         'python3', 'node', 'ruby', 'perl', 'php', 'bash', 'zsh', 'sh', 'deno', 'bun', 'net-allowlist', 'local-settings']
+         'python3', 'node', 'ruby', 'perl', 'php', 'bash', 'zsh', 'sh', 'deno', 'bun', 'net-allowlist', 'local-settings',
+         'git', 'push', 'reset', 'clean', 'add', 'config', 'stash', 'worktree', 'rm', '.claude/settings.json',
+         '.claude/hooks/lib.sh', '.gitconfig', '.bashrc', '.zshrc', 'Library/LaunchAgents/x.plist']
 TEMPLATES = ['{w}', '{w} get pods', '{w} --context prod delete pod api-1', 'echo hi | {w}', '{w} -c "import os; print(os.environ)"',
              'cat ~/{w}', '{w} https://example.com/x', 'ls; {w} -la', 'x=$({w} version)', 'grep -rn "{w}" docs/',
              '{w} -d @body.json https://api.example.com/v1', 'git commit -m "{w} fix"',
-             "cat >> notes.md <<'EOF'\n{w} delete pod x\nEOF", 'cat > notes/todo.md <<EOF\nrun {w} later\nEOF']
+             "cat >> notes.md <<'EOF'\n{w} delete pod x\nEOF", 'cat > notes/todo.md <<EOF\nrun {w} later\nEOF',
+             'git {w} --force origin main', 'git {w} -A', '{w} -rf build/ /var/lib/app', 'echo x >> ~/{w}', 'cp x ~/{w}',
+             '{w} --hard HEAD~1']
 SUFFIXES = ['2', '_x', '.sh', '-cli', 's', '.exe']
 # Commands a heredoc body is written by or fed to; the property holds only where both bodies drop.
 CARRIERS = ["cat >> notes.md <<'EOF'\n{b}\nEOF", 'cat > notes/todo.md <<EOF\n{b}\nEOF', "tee -a log.txt <<'X'\n{b}\nX",
@@ -116,10 +131,11 @@ class Runner:
             out, rc = p.stdout.decode('utf-8', 'replace').strip(), p.returncode
         except subprocess.TimeoutExpired:
             out, rc = '', 'timeout'
-        dec = 'allow'
+        dec, why = 'allow', ''
         if out:
             try:
-                dec = json.loads(out)['hookSpecificOutput']['permissionDecision']
+                h = json.loads(out)['hookSpecificOutput']
+                dec, why = h['permissionDecision'], h.get('permissionDecisionReason') or ''
             except (ValueError, KeyError, TypeError):
                 dec = 'unreadable'
         rules = []
@@ -129,10 +145,12 @@ class Runner:
                     try:
                         j = json.loads(line)
                         rules.append(f"{j.get('guard')}:{j.get('rule')}")
+                        why = why or f"(shadow) {j.get('reason') or ''}"
                     except ValueError:
                         rules.append('unreadable')
             os.unlink(log)
-        return dec, rc, tuple(sorted(rules))
+        # The answer compared, and a reason only printed, so a counterexample names its guard.
+        return (dec, rc, tuple(sorted(rules))), why[:240]
 
 
 def pmap(fn, items, jobs):
@@ -160,6 +178,17 @@ def fastpath(a, rng, run, tmp):
             took.append(f'{name[:-3]} ({k})')
     if not took:
         die(f'no `word_filter ... || exit 0` line in {a.hooks}/*.sh to force')
+    took = ['word_filter in ' + ', '.join(took)]
+    for key, label, name, line, to, on in OTHER_PATHS:
+        if not on and key not in a.force:
+            continue
+        p = os.path.join(forced, name)
+        text = open(p).read() if os.path.isfile(p) else ''
+        new, k = re.subn(line, to, text, flags=re.M)
+        if k != 1:
+            die(f'{label}: {k} lines like {line!r} in {name}, not one, so it cannot be forced')
+        open(p, 'w').write(new)
+        took.append(label)
     rows = []
     try:
         with open(a.corpus) as f:
@@ -171,12 +200,12 @@ def fastpath(a, rng, run, tmp):
     gen = [c for c in generate(rng, a.n) if not (c in seen or seen.add(c))]
     inputs += [(f'gen-{i}', c, None) for i, c in enumerate(gen)]
     res = pmap(lambda x: (run.answer(a.hooks, x[1], x[2]), run.answer(forced, x[1], x[2])), inputs, a.jobs)
-    diffs = [(x, r, f) for x, (r, f) in zip(inputs, res) if r != f]
-    print(f"fastpath: {len(inputs)} commands ({len(rows)} corpus, {len(gen)} generated), filters forced in "
-          f"{', '.join(took)}: {len(diffs)} answered differently.")
+    diffs = [(x, r, f) for x, (r, f) in zip(inputs, res) if r[0] != f[0]]
+    print(f"fastpath: {len(inputs)} commands ({len(rows)} corpus, {len(gen)} generated), forced to pass: "
+          f"{'; '.join(took)}: {len(diffs)} answered differently.")
     for (rid, cmd, _), r, f in diffs:
         line = 'in the corpus already' if not rid.startswith('gen-') else corpus_line(cmd, 'fastpath')
-        print(f'  {rid}: {cmd!r}\n    hooks: {r}\n    forced: {f}\n    corpus: {line}')
+        print(f'  {rid}: {cmd!r}\n    hooks: {r[0]}\n    forced: {f[0]}\n    reason: {f[1] or r[1]}\n    corpus: {line}')
     return not diffs
 
 
@@ -211,21 +240,21 @@ def heredoc(a, rng, run, tmp):
     first, bad = {}, []
     for (carrier, body, cmd), ans in zip(dropped, answers):
         f = first.setdefault(carrier, (body, cmd, ans))
-        if ans != f[2]:
+        if ans[0] != f[2][0]:
             bad.append((f, (body, cmd, ans)))
     print(f"heredoc: {len(cmds)} commands ({len(CARRIERS) + len(RUNS)} carriers x {len(bodies)} bodies), {len(dropped)} with "
           f"the body dropped, guards {', '.join(keep)}: {len(bad)} answered differently from their carrier's first; "
           f"{len(lost)} bodies dropped that run or go to a script.")
     for (b1, c1, a1), (b2, c2, a2) in bad:
-        print(f'  {c1!r}\n    -> {a1}\n  {c2!r}\n    -> {a2}\n    corpus: {corpus_line(c2, "heredoc")}')
+        print(f'  {c1!r}\n    -> {a1[0]} {a1[1]}\n  {c2!r}\n    -> {a2[0]} {a2[1]}\n    corpus: {corpus_line(c2, "heredoc")}')
     for _, _, c in lost[:20]:
         print(f'  dropped: {c!r}\n    corpus: {corpus_line(c, "heredoc")}')
     return not bad and not lost
 
 
-def overlaps(data, mark):
-    """MARK occurs in DATA overlapping itself, which data.count does not count and count_mark may."""
-    return len(re.findall(b'(?=' + re.escape(mark) + b')', data)) != data.count(mark)
+def borders(mark):
+    """Lengths k where MARK's first k bytes are its last k: two copies can share them."""
+    return [k for k in range(1, len(mark)) if mark[:k] == mark[-k:]]
 
 
 def count(a, rng, tmp):
@@ -235,31 +264,35 @@ def count(a, rng, tmp):
         spec.loader.exec_module(ds)
     except Exception as e:  # any import failure means the check cannot run
         die(f'{a.disk_space}: {e}')
-    marks = [ds.COMPACT_MARK] + [bytes(rng.choice(b'abcd"{}:') for _ in range(rng.randint(2, 8))) for _ in range(5)]
-    bad, skipped, path, trials = [], 0, os.path.join(tmp, 'count.bin'), max(1, a.n)
+    # The real mark, a 1-byte one, marks that overlap themselves, and random ones.
+    marks = [ds.COMPACT_MARK, bytes([rng.choice(b'abc"')]), b'aa', b'aba', b'"x"']
+    marks += [bytes(rng.choice(b'abcd"{}:') for _ in range(rng.randint(1, 8))) for _ in range(4)]
+    bad, shared, path, trials = [], 0, os.path.join(tmp, 'count.bin'), max(1, a.n)
     for t in range(trials):
         mark = marks[t % len(marks)]
-        chunk = rng.choice([1, 2, len(mark) - 1, len(mark), len(mark) + 1, rng.randint(1, 4 * len(mark) + 8), 64])
+        chunk = rng.choice([1, 2, max(1, len(mark) - 1), len(mark), len(mark) + 1, rng.randint(1, 4 * len(mark) + 8), 64])
         data = bytearray(bytes(rng.choice(mark + b'xy\n') for _ in range(rng.randint(0, 6 * chunk + 3 * len(mark)))))
         # Marks across chunk boundaries, each starting 0 to len(mark) bytes before one, placed
-        # in order so a later one does not shift an earlier one off its boundary.
+        # in order so a later one does not shift an earlier one off its boundary. A mark with
+        # a border sometimes goes in as two copies sharing it (b"aba" + b"ba").
         lo = 0
         for b in sorted(rng.sample(range(1, len(data) // chunk + 2), min(4, len(data) // chunk + 1))):
             at = b * chunk - rng.randint(0, len(mark))
             if at >= lo:
-                data[at:at] = mark
-                lo = at + len(mark)
+                ins = mark
+                if borders(mark) and rng.random() < .5:
+                    ins, shared = mark + mark[rng.choice(borders(mark)):], shared + 1
+                data[at:at] = ins
+                lo = at + len(ins)
         data = bytes(data)
-        if overlaps(data, mark):
-            skipped += 1
-            continue
         with open(path, 'wb') as f:
             f.write(data)
         got, want = ds.count_mark(path, mark=mark, chunk=chunk), data.count(mark)
         if got != want:
             bad.append((mark, chunk, len(data), got, want, data[:200]))
-    print(f'count: {trials - skipped} files ({skipped} left out with a mark overlapping itself), {len(marks)} marks of '
-          f'2 to {max(map(len, marks))} bytes, chunks of 1 to {4 * max(map(len, marks)) + 8}: {len(bad)} counted wrong.')
+    print(f'count: {trials} files, {len(marks)} marks of {min(map(len, marks))} to {max(map(len, marks))} bytes '
+          f'({sum(1 for m in marks if borders(m))} that can overlap themselves; {shared} overlapping pairs placed), chunks of 1 '
+          f'to {4 * max(map(len, marks)) + 8}: {len(bad)} counted wrong.')
     for mark, chunk, n, got, want, head in bad[:5]:
         print(f'  mark {mark!r}, chunk {chunk}, {n} bytes: count_mark {got}, data.count {want}; starts {head!r}')
     return not bad
@@ -275,11 +308,15 @@ def main():
     ap.add_argument('--corpus', default=os.path.join(ROOT, 'tests', 'bench-corpus.jsonl'))
     ap.add_argument('--disk-space', default=os.path.join(ROOT, 'bin', 'disk-space.py'))
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 2)
+    ap.add_argument('--force', default='', help='fastpath: comma-separated fast paths off by default to force too (config-paths)')
     a = ap.parse_args()
     seed = random.SystemRandom().randrange(1 << 31) if a.seed == 'random' else int(a.seed)
     print(f'guard-props: seed {seed} (repeat with --seed {seed}), n {a.n}')
     sys.stdout.flush()
     a.hooks = os.path.abspath(a.hooks)
+    a.force = set(filter(None, a.force.split(',')))
+    if a.force - {k for k, *_ in OTHER_PATHS}:
+        die(f"--force: unknown {', '.join(sorted(a.force - {k for k, *_ in OTHER_PATHS}))}")
     only = set(a.only.split(','))
     if only - {'fastpath', 'heredoc', 'count'}:
         die(f"--only: unknown {', '.join(sorted(only - {'fastpath', 'heredoc', 'count'}))}")

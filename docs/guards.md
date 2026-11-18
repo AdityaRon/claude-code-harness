@@ -84,13 +84,19 @@ backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
 
 `tools/guard-props.py` checks three properties a test case by case would not:
 
-- **fastpath.** Each guard's `word_filter ... || exit 0` line is a fast path:
-  a command naming none of its words is done before the guard reads it. A copy
-  of `hooks/` with every such line taken out must answer as `hooks/` does
-  through `bash-guards.sh` (decision, exit code and shadow rules) on the bench
-  corpus's Bash payloads and N generated commands (guard words with quotes,
-  backslashes, case and suffixes, some in a notes heredoc). rm-guard's
-  `word_filter` sets a flag rather than exiting, so it stays.
+- **fastpath.** A guard's early exit is a fast path: a command naming none of
+  its words is done before the guard reads it. A copy of `hooks/` with each one
+  made to pass must answer as `hooks/` does through `bash-guards.sh` (decision,
+  exit code and shadow rules) on the bench corpus's Bash payloads and N
+  generated commands (guard words with quotes, backslashes, case, suffixes and
+  paths, some in a notes heredoc). Forced: every `word_filter ... || exit 0`
+  line (env-guard, interpreter-guard, kubectl-guard, network-guard), git-guard's
+  two gates (no `git`, then `GG_GATE`) and rm-guard's `RM_WORD`. Each must be
+  found once, or the run stops (exit 2) rather than pass on less. rm-guard's
+  `word_filter` sets a flag rather than exiting, so it stays. config-guard's
+  path test is forced only with `--force config-paths`: forced, it asks where
+  `hooks/` allows a quote-split path such as `cp x ~/.cl''aude/hooks/lib.sh`,
+  which that test lets go today.
 - **heredoc.** Where `strip_inert_heredocs` drops a heredoc body as inert, the
   same command with another body it also drops gets the same answer from the
   guards that read past such bodies (those calling `strip_inert_heredocs` or
@@ -99,15 +105,21 @@ backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
   that should stay; a body piped to a shell, fed to one or written to a script
   is checked directly to stay.
 - **count.** `count_mark` in `bin/disk-space.py`, read in chunks, counts what
-  `bytes.count` counts, marks across chunk boundaries included.
+  `bytes.count` counts: marks across chunk boundaries, a 1-byte mark, and two
+  copies of a mark sharing a border (`aba` then `ba`).
 
-CI runs it on a PR that changes `hooks/`, the script, `bin/disk-space.py` or
-the corpus, on seed 1; the Release workflow's daily cron runs it on a new seed,
-printed first, beside the release rather than gating it. A failure prints each
-input with a line for `tests/bench-corpus.jsonl`: add that line by PR with the
-fix, so the bench and every later run hold it; `--seed N` repeats the run. The
-bench gate takes a new id as it is, so where the fix changes that payload's
-answer, the PR names it on an `intended-decisions:` line ([releases.md](releases.md)).
+CI's `guard properties` job runs it on a PR that changes `hooks/`, the script
+or its suite, `bin/disk-space.py` or the corpus, on seed 1, then runs
+`tests/guard-props.test.sh`, its mutants. doctor.sh skips that suite (it sets
+`CCH_DOCTOR`); `bash tests/guard-props.test.sh` runs it by hand. The Release
+workflow's daily cron runs the properties on a new seed, printed first, beside
+the release rather than gating it; a counterexample opens an issue titled
+"guard properties: counterexample (seed N)", or comments on the one open. A
+failure prints each input, the reason the full guard gave, and a line for
+`tests/bench-corpus.jsonl`: add that line by PR with the fix, so the bench and
+every later run hold it; `--seed N` repeats the run. The bench gate takes a new
+id as it is, so where the fix changes that payload's answer, the PR names it on
+an `intended-decisions:` line ([releases.md](releases.md)).
 
 ## Allowlisting a wrapper script bypasses every guard
 
