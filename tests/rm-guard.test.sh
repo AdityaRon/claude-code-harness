@@ -57,6 +57,30 @@ check "another session's scratch" deny 'rm -rf ~/.claude/jobs/ffffffff/tmp/x'
 check "no scratch: interactive"   deny 'rm -rf "$CLAUDE_JOB_DIR/tmp/x"' "$TMP" "not-a-session-id"
 
 echo ""
+echo "=== disk-space.py with --apply asks in every spelling the native rules miss (live) ==="
+check "the shipped spelling"      ask 'python3 ~/.claude/disk-space.py prune --apply 0123456789abcdef'
+check "an env prefix"             ask 'X=1 python3 ~/.claude/disk-space.py prune --apply 0123456789abcdef'
+check "python3 -u"                ask 'python3 -u ~/.claude/disk-space.py prune --apply 0123456789abcdef'
+check "python"                    ask 'python ~/.claude/disk-space.py prune --apply 0123456789abcdef'
+check "/usr/bin/python3"          ask '/usr/bin/python3 ~/.claude/disk-space.py bazel --sweep --apply 0123456789abcdef'
+check "an absolute path"          ask "python3 $HOME/.claude/disk-space.py prune --apply 0123456789abcdef"
+check "a quoted --apply"          ask "python3 ~/.claude/disk-space.py prune '--apply' 0123456789abcdef"
+check "a split --apply"           ask 'python3 ~/.claude/disk-space.py prune -""-apply 0123456789abcdef'
+check "a backslash in --apply"    ask 'python3 ~/.claude/disk-space.py prune --ap\ply 0123456789abcdef'
+check "a double space"            ask 'python3 ~/.claude/disk-space.py prune  --apply 0123456789abcdef'
+check "bash -c"                   ask "bash -c 'python3 ~/.claude/disk-space.py prune --apply 0123456789abcdef'"
+check "cd, then a relative path"  ask 'cd ~/.claude && python3 disk-space.py prune --apply 0123456789abcdef'
+check "the clone's bin/"          ask 'python3 bin/disk-space.py clone --apply 0123456789abcdef ~/code/x'
+check "run directly"              ask '~/.claude/disk-space.py clone --apply 0123456789abcdef ~/code/x'
+check "a listing: no ask"         allow 'python3 ~/.claude/disk-space.py prune --days 3'
+check "a report: no ask"          allow 'python3 ~/.claude/disk-space.py report'
+check "--apply, no disk-space.py" allow 'some-tool --apply x'
+check "and rm -rf ~ after: deny"  deny 'python3 ~/.claude/disk-space.py prune --apply x; rm -rf ~'
+check "rm -rf ~, both in a comment" deny 'rm -rf ~ # disk-space.py --apply'
+check "rm -rf / first: deny"      deny 'rm -rf / && python3 disk-space.py clone --apply x y'
+check "a scratch rm -rf, then it" ask 'rm -rf "$CLAUDE_JOB_DIR/tmp/x" && python3 ~/.claude/disk-space.py prune --apply x'
+
+echo ""
 echo "=== rm -rf inside this session's scratch folder runs ==="
 check "\$CLAUDE_JOB_DIR/tmp/x"     allow 'rm -rf "$CLAUDE_JOB_DIR/tmp/x"'
 check "\${CLAUDE_JOB_DIR}/tmp/x"   allow 'rm -rf ${CLAUDE_JOB_DIR}/tmp/x'

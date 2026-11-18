@@ -401,4 +401,18 @@ unset -f dirname
 [[ -z "$BADD" ]] && pass "same answer on 19 paths" || fail "dirname differs" "$BADD"
 
 echo ""
+echo "=== through the dispatcher, disk-space.py with --apply asks in any spelling ==="
+for c in 'X=1 python3 ~/.claude/disk-space.py prune --apply 0123456789abcdef' "python3 ~/.claude/disk-space.py prune '--apply' x" \
+         'python3 -u /abs/.claude/disk-space.py bazel --sweep -""-apply x' "bash -c 'python3 disk-space.py clone --apply x y'"; do
+  disp hooks "$(payload "$c")"
+  [[ "$(dec "$OUT")" == ask && "$(why "$OUT")" == *"disk-space.py with --apply"* ]] && pass "asks: $c" || fail "disk-space ask: $c" "$OUT"
+done
+disp hooks "$(payload 'python3 ~/.claude/disk-space.py prune --days 3')"
+[[ "$(dec "$OUT")" == allow ]] && pass "the listing itself: no ask" || fail "disk-space listing" "$OUT"
+for c in 'python3 ~/.claude/disk-space.py prune --apply x; rm -rf ~' 'rm -rf ~ # disk-space.py --apply'; do
+  disp hooks "$(payload "$c")"
+  [[ "$(dec "$OUT")" == deny ]] && pass "a deny still wins: $c" || fail "disk-space ask over a deny: $c" "$OUT"
+done
+
+echo ""
 results
