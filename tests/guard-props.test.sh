@@ -71,9 +71,19 @@ mutant strip-bash lib/command.sh "s/^INERT_SEG='\^\(\(cat\|/INERT_SEG='^((bash|s
 gp --only heredoc --n 0 --hooks "$TMP/strip-bash"
 [ "$RC" = 1 ] && grep -q "| bash" "$TMP/out" \
   && pass "a strip that drops a body piped to bash fails" || fail "strip mutant" "rc=$RC $(cat "$TMP/out")"
-grep -E '^    corpus: \{' "$TMP/out" | head -1 | sed 's/^    corpus: //' \
+cp "$TMP/out" "$TMP/strip-bash.out"
+# inert_rest keeps an unquoted body holding $ or a backtick, which bash expands; this one drops it.
+mutant expand lib/command.sh 's/^(    body \{ if \(hd_end\(\$0\)\) \{ )if \(buf ~ \/\[\$`\]\/\) printf "%s", buf; (body = 0; buf = "" \})$/\1\2/'
+gp --only heredoc --n 0 --hooks "$TMP/expand"
+[ "$RC" = 1 ] && grep -q ': 1 answered differently' "$TMP/out" && grep -q ' 0 bodies dropped that run' "$TMP/out" \
+  && pass "a strip that drops a body bash expands fails on the guards' answers alone" || fail "expand mutant" "rc=$RC $(cat "$TMP/out")"
+mutant sh-prose lib/command.sh "s/grep -qvE '\\\\\.\(md\|txt\|rst\|log\|csv\)\\\$'/grep -qvE '\\\\.(md|txt|rst|log|csv|sh)\$'/"
+gp --only heredoc --n 0 --hooks "$TMP/sh-prose"
+[ "$RC" = 1 ] && grep -q ': 0 answered differently' "$TMP/out" && grep -q '^  dropped: "cat > run.sh' "$TMP/out" \
+  && pass "a strip that takes run.sh for prose fails the direct check, which the guards' answers miss" || fail "sh mutant" "rc=$RC $(cat "$TMP/out")"
+grep -E '^    corpus: \{' "$TMP/strip-bash.out" | head -1 | sed 's/^    corpus: //' \
   | jq -e '.tool_name == "Bash" and (.id | startswith("props-")) and (.tool_input.command | test("[|] bash"))' >/dev/null \
-  && pass "each counterexample comes with a line for tests/bench-corpus.jsonl" || fail "corpus line" "$(grep corpus "$TMP/out" | head -2)"
+  && pass "each counterexample comes with a line for tests/bench-corpus.jsonl" || fail "corpus line" "$(grep corpus "$TMP/strip-bash.out" | head -2)"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

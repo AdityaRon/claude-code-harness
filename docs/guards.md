@@ -95,6 +95,9 @@ backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
   same command with another body it also drops gets the same answer from the
   guards that read past such bodies (those calling `strip_inert_heredocs` or
   `drop_data_heredocs`; rm-guard reads them, by design, and is left out).
+  Those guards drop a body together, so the answers cannot show a body dropped
+  that should stay; a body piped to a shell, fed to one or written to a script
+  is checked directly to stay.
 - **count.** `count_mark` in `bin/disk-space.py`, read in chunks, counts what
   `bytes.count` counts, marks across chunk boundaries included.
 
