@@ -414,6 +414,11 @@ st = os.stat(d)
 r = m.pinned_delete(d, (st.st_dev, st.st_ino), "e", lambda q, st0: (False, "no", None))
 print(r[0], open(taken).read(), open(os.path.join(d, "e")).read())' 2>&1)
 [ "$OUT2" = "kept precious entry" ] && pass "a quarantine name already taken is passed over, not overwritten" || fail "quarantine clash" "$OUT2"
+OUT2=$(QD="$TMP/qd" pym 'import os
+fd = os.open(os.environ["QD"], os.O_RDONLY)
+for n in ("lost", "x" * 240):
+    print(m.QUARANTINE_RE.match(m.quarantine_name(fd, n)).group(1) == n)')
+[ "$OUT2" = "True"$'\n'"False" ] && pass "a quarantine name carries the first name when it fits in 255 bytes" || fail "quarantine name" "$OUT2"
 
 echo ""
 echo "=== prune --apply: only with the listing's digest; each entry quarantined and checked again ==="
@@ -607,12 +612,19 @@ D2=$(HOME="$H2" python3 "$DS" clone "$H2/dot" --root "$PB" --json 2>/dev/null | 
 HOME="$H2" python3 "$DS" clone --apply "${D2:-0000000000000000}" "$H2/dot" --root "$PB" >/dev/null 2>&1
 [ "$RC" = 1 ] && [[ "$OUT" == *"is or holds ~/.claude"* ]] && [ -f "$H2/dot/claude/jobs/abcdef02/state.json" ] \
   && pass "a clone ~/.claude links into is refused, and its state.json stays" || fail "dotfiles clone" "rc=$RC $OUT"
-H3="$TMP/h3"; mkdir -p "$H3"; clone "$H3/.claude"
+clone "$H2/dot/claude/proj"
+OUT=$(HOME="$H2" python3 "$DS" clone "$H2/dot/claude/proj" --root "$PB" 2>&1); RC=$?
+[ "$RC" = 1 ] && [[ "$OUT" == *"is in ~/.claude, outside a job's tmp"* ]] \
+  && pass "a clone inside ~/.claude by its link's target: refused" || fail "inside linked ~/.claude" "rc=$RC $OUT"
+H3="$TMP/h3"; mkdir -p "$H3"; clone "$H3/.claude"; clone "$H3/.claude/proj"
 OUT=$(HOME="$H3" python3 "$DS" clone "$H3/.claude" --root "$PB" 2>&1); RC=$?
 [ "$RC" = 1 ] && [[ "$OUT" == *"is or holds ~/.claude"* ]] && pass "~/.claude itself, a clone: refused" || fail "~/.claude clone" "rc=$RC $OUT"
 if [ -d "$H3/.CLAUDE" ]; then
   OUT=$(HOME="$H3" python3 "$DS" clone "$H3/.CLAUDE" --root "$PB" 2>&1); RC=$?
   [ "$RC" = 1 ] && [[ "$OUT" == *"is or holds ~/.claude"* ]] && pass "~/.CLAUDE on a case-blind disk: refused" || fail "~/.CLAUDE" "rc=$RC $OUT"
+  OUT=$(HOME="$H3" python3 "$DS" clone "$H3/.CLAUDE/proj" --root "$PB" 2>&1); RC=$?
+  [ "$RC" = 1 ] && [[ "$OUT" == *"is in ~/.claude, outside a job's tmp"* ]] \
+    && pass "~/.CLAUDE/proj on a case-blind disk: refused" || fail "~/.CLAUDE/proj" "rc=$RC $OUT"
 else
   echo "  SKIP: case-sensitive disk, no ~/.CLAUDE to test"
 fi
