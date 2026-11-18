@@ -502,6 +502,8 @@ check_contains "a ## Next on restart heading marks a handoff" "no \`STATE:\` lin
 check_contains "and its other findings stand" "once each, in that order" "$OUT"
 printf 'STATE: %s\n## Scope\nx\n' "$NOWS" > "$L2B/stated.md"
 check_contains "a STATE: line marks a handoff" "no \`Crons:\` line" "$(lint "$L2B/stated.md")"
+printf '## Scope\nx\nCrons: none\n' > "$L2B/crons-only.md"
+check_contains "a Crons: line alone marks a handoff" "no \`STATE:\` line" "$(lint "$L2B/crons-only.md")"
 check_eq "CLAUDE_TRACKER_LINT=off: a handoff with findings is silent" "0" "$(CLAUDE_TRACKER_LINT=off lint_rc "$L2B/marked.md")"
 pad "$L2B/big-stated.md" 6000; printf '\nSTATE: %s\n' "$NOWS" >> "$L2B/big-stated.md"
 check_contains "a handoff past 5000: move, never delete" "never delete what has no other copy" "$(lint "$L2B/big-stated.md")"
@@ -511,14 +513,23 @@ tracker "$L3/handoff.md" "$NOWS" "$CR"
 check_eq "a handoff with no big sibling: silent" "" "$(lint "$L3/handoff.md")"
 pad "$L3/log.md" 26000
 pad "$L3/log-archive.md" 40000
+check_eq "a big sibling the handoff does not name: silent (nothing the handoff can change clears it)" "" "$(lint "$L3/handoff.md")"
+for i in 1 2 3 4 5 6 7; do pad "$L3/big$i.md" 30000; done
+check_eq "eight big siblings, none named: silent, exit 0" "0" "$(lint_rc "$L3/handoff.md")"
+cp "$L3/handoff.md" "$TMP/l3/handoff.keep"
+printf 'Read log.md first for the full list.\n' >> "$L3/handoff.md"
 OUT=$(lint "$L3/handoff.md")
-check_contains "a big sibling: named, with its size" "ledger log.md beside this handoff is 26000 bytes" "$OUT"
-check_contains "and the prune command for it" "tracker-prune.py '$L3/log.md'" "$OUT"
-check_absent "an archive is not a big sibling" "log-archive.md" "$OUT"
+check_contains "a handoff telling sessions to read a big sibling first: the line, the file and its size" "tells a session to read log.md (26000 bytes) first" "$OUT"
+check_absent "no finding prints --write" "--write" "$OUT"
+check_contains "and where the switch goes" "CLAUDE_TRACKER_LINT=off in settings.json env" "$OUT"
 check_eq "exit 2" "2" "$(lint_rc "$L3/handoff.md")"
 check_eq "TRACKER_LEDGER_BYTES moves the find too" "" "$(TRACKER_LEDGER_BYTES=50000 lint "$L3/handoff.md")"
+printf 'Read log-archive.md first.\n' > "$TMP/l3/arch-line"; cat "$TMP/l3/handoff.keep" "$TMP/l3/arch-line" > "$L3/handoff.md"
+check_eq "an archive named read-first is not a ledger" "" "$(lint "$L3/handoff.md")"
+cp "$TMP/l3/handoff.keep" "$L3/handoff.md"; printf 'Read log.md first.\n' >> "$L3/handoff.md"
 mkdir -p "$TMP/l3/elsewhere"; mv "$L3/log.md" "$TMP/l3/elsewhere/log.md"; ln -s "$TMP/l3/elsewhere/log.md" "$L3/log.md"
-check_contains "a linked ledger is measured at its target" "log.md beside this handoff is 26000 bytes" "$(lint "$L3/handoff.md")"
+check_contains "a linked ledger is measured at its target" "read log.md (26000 bytes) first" "$(lint "$L3/handoff.md")"
+cp "$TMP/l3/handoff.keep" "$L3/handoff.md"
 
 echo ""
 echo "=== a handoff line that sends a session to read a ledger whole ==="
@@ -550,6 +561,11 @@ OUT=$(rf "Read tracker.md first." "Read tracker.md first, again." "Start: read t
 check_eq "at most three lines named" "3" "$(printf '%s\n' "$OUT" | grep -c 'tells a session to read')"
 check_contains "the rest counted" "and 2 more like that" "$OUT"
 check_contains "by line number" "line 21 tells" "$OUT"
+
+# Nothing a tracker finding says may read as an order to cut, overwrite or move with --write.
+check_eq "no tracker finding says --write, replaced in place, trim, cut or delete (never delete aside)" "" \
+  "$(sed -n '/^# ---- trackers\/: only a handoff is linted/,/^fi$/p' "$HOOK" | grep -E 'tadd|printf' \
+     | grep -E -- '--write|replaced in place|[Tt]rim|[^a-z]cut[^a-z]|(^|[^r] )[Dd]elete')"
 
 echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

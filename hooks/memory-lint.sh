@@ -41,8 +41,8 @@ BASE=${FILE##*/}
 
 # ---- trackers/: only a handoff is linted -------------------------------------
 # A handoff is what a restart reads whole (rules/working-agreement.md): at most
-# TRACKER_LEDGER_BYTES, no archive beside it, and marked by a STATE: line or a
-# "## Next on restart" heading. Everything else in a trackers/ folder (ledgers,
+# TRACKER_LEDGER_BYTES, no archive beside it, and marked by a STATE: or Crons:
+# line or a "## Next on restart" heading. Everything else in a trackers/ folder (ledgers,
 # reports, logs) is not linted on its own writes: a finding there could lead a
 # session to cut a file that has no other copy.
 if [ -n "$TRACKER" ]; then
@@ -50,13 +50,13 @@ if [ -n "$TRACKER" ]; then
   TB=$(( $(wc -c < "$FILE") ))
   PRUNE="python3 ~/.claude/tracker-prune.py"
   [ "$TB" -le "$LB" ] && [ ! -f "${FILE%.md}-archive.md" ] || exit 0
-  grep -qE '^(STATE:|##[[:space:]]*Next on restart[[:space:]]*$)' "$FILE" || exit 0
+  grep -qE '^(STATE:|Crons:|##[[:space:]]*Next on restart[[:space:]]*$)' "$FILE" || exit 0
   TF=""
   tadd() { TF="${TF}  - $1
 "; }
   WANT="Scope|Open|Owed|Settled|Next on restart"
   GOT=$(sed -n 's/^## *//p' "$FILE" | sed 's/[[:space:]]*$//' | paste -sd '|' -)
-  [ "$GOT" = "$WANT" ] || tadd "its ## headings are \"${GOT:-none}\". A handoff has Scope, Open, Owed, Settled, Next on restart, once each, in that order; a second set means it was appended to, not replaced in place."
+  [ "$GOT" = "$WANT" ] || tadd "its ## headings are \"${GOT:-none}\". A handoff has Scope, Open, Owed, Settled, Next on restart, once each, in that order. If this file is not a handoff, leave it as it is."
   TMAX=${TRACKER_MAX_BYTES:-5000}
   [ "$TB" -le "$TMAX" ] || tadd "it is $TB bytes, past $TMAX. Move what a restart does not need into a memory, the PR or a ledger; never delete what has no other copy."
   STAMP=$(sed -n 's/^STATE:[[:space:]]*//p' "$FILE" | sed 's/[[:space:]]*$//' | head -1)
@@ -118,7 +118,6 @@ if [ -n "$TRACKER" ]; then
         if (index($0, "/") == 0) next
         p = $0; sub(/^[ \t]*[0-9]+[ \t]/, "", p); b = p; sub(/.*\//, "", b)
         n++; nm[n] = tolower(b); bn[n] = b; sz[n] = $1
-        if (n <= 5) printf "  - ledger %s beside this handoff is %d bytes, past %d. Read it by slice (grep, sed -n), never whole; `%s \047%s\047` moves its settled rows out.\n", b, $1, lb, prune, p
         next
       }
       {
@@ -140,7 +139,7 @@ EOF
 "
   fi
   [ -n "$TF" ] || exit 0
-  printf 'handoff lint on %s:\n%s' "$BASE" "$TF" >&2
+  printf 'handoff lint on %s:\n%s(CLAUDE_TRACKER_LINT=off in settings.json env turns this off.)\n' "$BASE" "$TF" >&2
   exit 2
 fi
 
