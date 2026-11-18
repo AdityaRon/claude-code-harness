@@ -49,7 +49,10 @@ line in the PR body (a release reads the merged PRs' lines, as for the
 That check runs even when the benchmark is skipped, since a deletion merged
 alone would be gone from the next PR's base. A change that edits
 `tools/hook-bench.py` runs the gate a second time with its own copy, and fails
-if either run fails. The workflow files and `.github/bench-gate.sh` themselves
+if either run fails. The base's script is given only flags it has, so a flag
+added to `tools/hook-bench.py` can be passed by `.github/bench-gate.sh` once a
+release holds it (the release gate runs the previous tag's script); v1.4.11's
+takes every flag passed today. The workflow files and `.github/bench-gate.sh` themselves
 still come from the PR under `pull_request`, so an edit to them is the one way
 a PR changes its own gate, and it shows in the diff under `.github/`.
 
