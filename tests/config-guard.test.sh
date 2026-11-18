@@ -429,6 +429,7 @@ for c in "${SPLIT[@]}"; do dispatch_is ask "$c"; done
 # Split by a quote and a line's end at once: only the joined command without quotes
 # shows the name (the dispatcher's jq makes it, PRESET_JBARE).
 dispatch_is ask $'cp x ~/.cl""au\\\nde/settings.json'
+bash_is ask $'cp x ~/.cl""au\\\nde/settings.json'
 # Reads still pass, and a projects path split the same way is still out of the filter.
 bash_is allow 'cat ~/.cl"aude"/settings.json'
 bash_is allow 'cp x ~/.cl"aude"/projects/p/notes.md'
@@ -444,6 +445,7 @@ bash_is allow 'rm -rf .pytest_cache/*'
 bash_is allow 'ls ./*.py'
 starts_one 'ls .pytest_cache/*'
 starts_one 'ls ./*.py *.md'
+starts_one "grep -E '(\\.[0-9]+)?' notes.md"   # a regex's \. is no dot-name
 # Accepted (docs/known-limitations.md): the full read does not put a variable or a
 # brace in place either, so the filter letting these go answers as it does.
 bash_is allow 'd=.claude; cp x ~/$d/settings.json'
