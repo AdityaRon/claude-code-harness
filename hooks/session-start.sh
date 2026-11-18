@@ -17,6 +17,19 @@ if command -v jq &>/dev/null; then
   eval "$(printf '%s\n' "$INPUT" | jq -r '@sh "SOURCE=\(.source // "") SESSION_ID=\(.session_id // "") LAUNCH_DIR=\(.cwd // "")"' 2>/dev/null)"
 fi
 
+# zsh's NOMATCH and EQUALS abort bash-shaped commands. $CLAUDE_ENV_FILE is sourced
+# before each Bash call only, so interactive shells keep their options. `if`, not
+# `&&`: status 0 under bash. Outside the budget, so no start skips it.
+ZSH_OPTS='if [ -n "${ZSH_VERSION:-}" ]; then setopt no_nomatch no_equals; fi'
+if [[ -n "${CLAUDE_ENV_FILE:-}" && "${CLAUDE_ZSH_OPTS:-on}" != off ]]; then
+  _have=""
+  if [[ -f "$CLAUDE_ENV_FILE" ]]; then
+    while IFS= read -r _l || [[ -n "$_l" ]]; do [[ "$_l" == "$ZSH_OPTS" ]] && { _have=1; break; }; done < "$CLAUDE_ENV_FILE"
+  fi
+  [[ -n "$_have" ]] || printf '%s\n' "$ZSH_OPTS" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+  unset _have _l
+fi
+
 # --- time budget -------------------------------------------------------------
 # Every section below is context or housekeeping the session can start without.
 # One that would start past the budget (bash's whole-second SECONDS: 3.2 has no

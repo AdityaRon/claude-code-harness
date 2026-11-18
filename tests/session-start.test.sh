@@ -510,5 +510,34 @@ check_contains "a file the hasher cannot read has drifted" "drifted: $SHUT" "$OU
 check_not_contains "an unchanged file after it is not named" "drifted: $LAST" "$OUT"
 
 echo ""
+echo "=== zsh options go into Claude's env file, once ==="
+ZLINE='if [ -n "${ZSH_VERSION:-}" ]; then setopt no_nomatch no_equals; fi'
+ENVF="$TMP/session-env/hook-0.sh"; mkdir -p "${ENVF%/*}"; printf 'export KEEP=1\n' > "$ENVF"
+for src in startup resume; do
+  jq -nc --arg s "$src" '{source:$s, session_id:"sess-clean", hook_event_name:"SessionStart"}' \
+    | env CLAUDE_ENV_FILE="$ENVF" bash "$TREE/hooks/session-start.sh" >/dev/null 2>&1
+done
+check_eq "two starts write the line once" "1" "$(grep -cxF "$ZLINE" "$ENVF")"
+check_eq "and keep what was there" "export KEEP=1" "$(head -1 "$ENVF")"
+rm -f "$ENVF"
+run_tree sess-clean CLAUDE_ENV_FILE="$ENVF" >/dev/null
+check_eq "a missing env file is created with it" "$ZLINE" "$(cat "$ENVF" 2>/dev/null)"
+check_eq "under bash the hook's file is status 0 with set -u" "0" "$(bash -uc ". '$ENVF'; echo \$?" 2>&1)"
+if command -v zsh >/dev/null 2>&1; then
+  check_eq "zsh alone: an unmatched glob fails the command (the trap)" "no matches found" \
+    "$(cd "$TMP" && zsh -fc 'echo nothing-here-*' 2>&1 | grep -o 'no matches found')"
+  check_eq "zsh with the hook's file: the glob reaches the command" "nothing-here-*" \
+    "$(cd "$TMP" && zsh -fc ". '$ENVF'; echo nothing-here-*" 2>&1)"
+  check_eq "zsh alone: ==== is read as =cmd (the trap)" "not found" \
+    "$(zsh -fc 'setopt equals; echo ====' 2>&1 | grep -o 'not found')"
+  check_eq "zsh with the hook's file: ==== prints" "====" "$(zsh -fc "setopt equals; . '$ENVF'; echo ====" 2>&1)"
+  # no_nomatch alone keeps a failed =word as typed; =ls names a real command.
+  check_eq "zsh with the hook's file: =ls stays as typed" "=ls" "$(zsh -fc "setopt equals; . '$ENVF'; echo =ls" 2>&1)"
+fi
+rm -f "$ENVF"
+run_tree sess-clean CLAUDE_ENV_FILE="$ENVF" CLAUDE_ZSH_OPTS=off >/dev/null
+check_eq "CLAUDE_ZSH_OPTS=off writes nothing" "no" "$([ -e "$ENVF" ] && echo yes || echo no)"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
