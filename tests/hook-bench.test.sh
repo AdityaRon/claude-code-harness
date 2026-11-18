@@ -318,10 +318,12 @@ fi
 add_line 'sleep 4'
 head -1 "$TMP/c3.jsonl" > "$TMP/c1.jsonl"
 python3 "$BENCH" --repo "$F3" --corpus "$TMP/c1.jsonl" --base base --head worktree --launches shim --hook-timeout 2 \
-  --json "$TMP/l.json" --md "$TMP/l.md" >/dev/null 2>"$TMP/lerr"
+  --gate --intended ls --intended-launches all --json "$TMP/l.json" --md "$TMP/l.md" >/dev/null 2>"$TMP/lerr"; LRC=$?
 [ "$(jq -c '.launches.per_payload.ls | [.base["bash-guards.sh"][0], .head["bash-guards.sh"]]' "$TMP/l.json")" = '[1,null]' ] \
   && grep -qE '^\| bash-guards\.sh \|.*\| 1 \|$' "$TMP/l.md" \
   && pass "a hook that runs past the timeout: null for that payload, and 1 not counted" || fail "timeout" "$(jq -c '.launches.per_payload' "$TMP/l.json" 2>/dev/null) $(grep bash-guards "$TMP/l.md" | tail -1)"
+[ "$LRC" = 1 ] && [ "$(gfail)" = "launches not counted on head: ls|" ] \
+  && pass "the gate fails a payload a side could not count, even with --intended-launches all" || fail "gate on not counted" "rc=$LRC $(gfail)"
 
 ( cd "$F3" && git checkout -q -- hooks )
 grep -v '^export PATH=' "$F3/hooks/lib.sh" > "$TMP/lib" && cat "$TMP/lib" > "$F3/hooks/lib.sh"
