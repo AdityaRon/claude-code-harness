@@ -518,6 +518,28 @@ check_eq "a transcript line runs nothing" "" "$(ls "$TMP"/pwned4 2>/dev/null)"
 rm -f "$DSTAMP"
 
 echo ""
+echo "=== slow Bash guards: once per measurement, past 1 s ==="
+gstamp() {  # P90_MS SECONDS_AGO
+  dstamp 0 0 "$2"; printf 'guard_p90_ms=%s\nguard_calls=200\n' "$1" >> "$DSTAMP"
+  rm -f "$CLAUDE_STATE_DIR"/guard-latency*
+}
+gstamp 1440 3600
+OUT=$(dstart)
+check_contains "past 1 s: the p90 and the command" "1 in 10 waited 1.4 s or more for its slowest guard (says so past 1.0 s). Which guard: bash ~/.claude/harness-src/doctor.sh --latency" "$OUT"
+check_not_contains "a second start, same measurement: silent" "## Bash guards" "$(dstart)"
+gstamp 1440 3600
+check_contains "any start, not only a resume" "## Bash guards" \
+  "$(jq -nc '{source:"startup", session_id:"sess-clean", hook_event_name:"SessionStart"}' \
+     | env CLAUDE_DISK_STAMP="$DSTAMP" bash "$TREE/hooks/session-start.sh" 2>/dev/null)"
+gstamp 900 3600
+check_not_contains "under 1 s: silent" "## Bash guards" "$(dstart)"
+gstamp 900 3600
+check_contains "CLAUDE_GUARD_P90_WARN_MS lowers the line" "waited 0.9 s or more" "$(dstart CLAUDE_GUARD_P90_WARN_MS=500)"
+gstamp 5000 $((3 * 86400))
+check_not_contains "a stamp over two days old: silent" "## Bash guards" "$(dstart)"
+rm -f "$DSTAMP"
+
+echo ""
 echo "=== resume drift hashes every edited file in one process ==="
 SAME="$TMP/same.txt" MOVED="$TMP/with space.txt" SHUT="$TMP/shut.txt" LAST="$TMP/last.txt"
 printf 'a\n' > "$SAME"; printf 'b\n' > "$MOVED"; printf 'c\n' > "$SHUT"; printf 'd\n' > "$LAST"

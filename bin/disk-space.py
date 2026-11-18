@@ -1284,6 +1284,39 @@ def print_transcripts(ts, mb):
         print("  %s  %d compactions  %s" % (fmt(t["bytes"]), t["compactions"], shown(t["path"])))
 
 
+def guard_p90(log, calls=200, floor=50):
+    """(ms, n): the p90 of each Bash call's slowest guard over the newest CALLS lines of bash-guards'
+    timing log and its .1. A call's guards run together, so it waits for the slowest. ms is None
+    under FLOOR calls. A column with no status (`at=EPOCH`) is not a guard's."""
+    costs = []
+    for p in (log, log + ".1"):
+        try:
+            with open(p, errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            secs = []
+            for c in line.rstrip("\n").split("\t")[2:]:
+                v = c.partition("=")[2]
+                t, _, rest = v.partition(":")
+                if rest:
+                    try:
+                        secs.append(float(t))
+                    except ValueError:
+                        pass
+            if secs:
+                costs.append(max(secs))
+                if len(costs) == calls:
+                    break
+        if len(costs) == calls:
+            break
+    if len(costs) < floor:
+        return None, len(costs)
+    costs.sort()
+    return int(round(costs[math.ceil(0.9 * len(costs)) - 1] * 1000)), len(costs)
+
+
 # ---- stamp ------------------------------------------------------------------
 
 def cmd_stamp(a):
@@ -1311,6 +1344,9 @@ def cmd_stamp(a):
     lines += ["transcript=%s %d %d" % (t["session"], t["bytes"], t["compactions"])
               for t in big_transcripts(a.projects, a.transcript_mb * 1e6)
               if re.match(r"^[A-Za-z0-9_-]+$", t["session"])]
+    ms, n = guard_p90(a.timing_log)
+    if ms is not None:
+        lines += ["guard_p90_ms=%d" % ms, "guard_calls=%d" % n]
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     new = a.out + ".new"
     with open(new, "w") as f:
@@ -1378,6 +1414,8 @@ def main(argv=None):
     p.add_argument("--out", default=os.path.join(HOME, ".claude", "state", "disk-usage"))
     p.add_argument("--projects", default=projects_default)
     p.add_argument("--transcript-mb", type=days_arg, default=150.0, help="list session transcripts this size or more")
+    p.add_argument("--timing-log", default=os.path.expanduser(
+        os.environ.get("CLAUDE_GUARD_TIMING_LOG") or os.path.join(HOME, ".claude", "logs", "guard-timing.log")))
     p = sub.add_parser("prune", help="old job tmp entries safe to delete, with a digest", allow_abbrev=False)
     p.add_argument("--jobs", default=jobs_default)
     p.add_argument("--root", default=None, help="the Bazel output root, for output bases inside an entry")

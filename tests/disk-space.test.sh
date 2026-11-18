@@ -204,6 +204,24 @@ CMS=""; for c in 1 7 28 29 30 4096; do CMS="$CMS $(cm "$PR/-p1/aaaa-1111.jsonl" 
 [ "$(grep -c '^transcript=' "$TMP/state/disk-usage")" = 0 ] && pass "no projects folder: no transcript lines" || fail "no projects" "$(cat "$TMP/state/disk-usage")"
 
 echo ""
+echo "=== stamp: the p90 of each Bash call's slowest guard ==="
+TL="$TMP/timing.log"
+tline() {  # ID SECONDS...: one call's line, guards a.., with an at= column as newer hooks write
+  local id=$1 i=0 c; shift; printf '%s\tBash' "$id"
+  for c in "$@"; do i=$((i + 1)); printf '\tg%d=%s:0:allow' "$i" "$c"; done; printf '\tat=1790000000\n'; }
+: > "$TL"; for i in $(seq 1 220); do tline "t$i" 0.001 "$(printf '0.%03d' $((i > 200 ? 999 : i)))" >> "$TL"; done
+# the newest 200 are calls 21..220: slowest 0.021..0.200 then twenty 0.999; p90 is the 180th
+printf 'tx\tBash\tat=1790000001\n' >> "$TL"
+gs() { ds stamp --out "$TMP/state/g" --timing-log "$TL" >/dev/null 2>&1; sed -n "s/^$1=//p" "$TMP/state/g"; }
+[ "$(gs guard_p90_ms)" = 200 ] && [ "$(gs guard_calls)" = 200 ] \
+  && pass "p90 of the slowest guard over the newest 200 calls; a line with no guard is skipped" || fail "guard p90" "$(cat "$TMP/state/g")"
+: > "$TL"; for i in $(seq 1 30); do tline "a$i" 0.5 0.1 >> "$TL"; done
+: > "$TL.1"; for i in $(seq 1 30); do tline "b$i" 1.0 >> "$TL.1"; done
+[ "$(gs guard_p90_ms)" = 1000 ] && [ "$(gs guard_calls)" = 60 ] && pass "the rotated .1 fills in" || fail "guard p90 .1" "$(cat "$TMP/state/g")"
+rm -f "$TL.1"
+[ -z "$(gs guard_p90_ms)" ] && pass "under 50 calls: no p90" || fail "guard p90 floor" "$(cat "$TMP/state/g")"
+
+echo ""
 echo "=== session-census.py --sizes and doctor.sh --disk run the report ==="
 : > "$TMP/ps.txt"
 OUT=$(python3 "$REPO/tools/session-census.py" --ps "$TMP/ps.txt" --jobs "$J" --sizes 2>&1)
