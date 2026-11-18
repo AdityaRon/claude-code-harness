@@ -584,6 +584,10 @@ CD=$(jqr "$OUT" .digest)
 QL="$CL/.disk-space-quarantine-7-abcdef05-prclone2"; mkdir -p "$QL"
 [ "$(cl "$CL/prclone" --json | jq -r ".quarantined[] | select(.path == \"$QL\") | .restore")" = "mv -n -- $QL $CL/prclone2" ] \
   && pass "a leftover beside the clone is listed with its mv" || fail "clone leftover" "$(cl "$CL/prclone" --json | jq -c .quarantined)"
+# The retry lands on the stopped clone's own name, now gone: it names the leftover there too.
+OUTG=$(cl "$CL/prclone2" 2>&1); RCG=$?
+[[ $RCG != 0 && "$OUTG" == *"mv -n -- $QL $CL/prclone2"* && "$OUTG" == *"Nothing deleted"* ]] \
+  && pass "clone on the stopped clone's own name names its leftover and the mv" || fail "clone retry leftover" "rc=$RCG $OUTG"
 for row in "dirtyclone|dirtyclone: tracked files changed" "busyclone|live job f0000002's originCwd is inside" "cwdclone|pid $CLPID's working folder is inside"; do
   n=${row%%|*}; want=${row#*|}; got=$(cl "$CL/$n" --json | jq -r '.kept[0].reason')
   [[ "$got" == *"$want"* ]] && pass "clone kept: $want" || fail "clone $n" "want *$want* got: $got"

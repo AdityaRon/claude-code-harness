@@ -1160,6 +1160,9 @@ def clone_path(a):
         raise SystemExit("disk-space: not a clone this deletes: %s %s. Nothing deleted." % (shown(path), why))
 
     if kind(lstat(path)) != "dir":
+        # A clone whose apply was stopped sits beside its name under a quarantine one: say so
+        # here, where the retry lands, as well as in a sibling's listing.
+        print_leftovers(leftovers([os.path.dirname(path)]))
         refuse("is not a folder (a link is not followed)")
     if same(real, home) or not inside(real, home):
         refuse("is not inside your home folder")
