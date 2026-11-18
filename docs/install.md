@@ -13,6 +13,13 @@ tested. Moved from the README.
 
 Then open Claude Code and run `/hooks` to confirm everything is registered.
 
+**zsh's options.** session-start puts `setopt no_nomatch no_equals` in each
+session's `$CLAUDE_ENV_FILE`, so Claude's zsh reads an unmatched glob and
+`=word` as bash does. If a Bash call still fails with `no matches found`
+(a Claude Code version that does not source that file, or hooks turned off),
+the same effect from `~/.zshenv`, for Claude's shells only:
+`[[ -n $CLAUDECODE ]] && setopt no_nomatch no_equals`.
+
 **On a new machine**, put the machine-local files in place before
 `bash install.sh`: rules in `~/.claude/rules/local-*.md`, and allow rules for
 work tools and hosts in `~/.claude/local-settings/<name>.json`. This repo is public and
