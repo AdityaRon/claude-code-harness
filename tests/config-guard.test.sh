@@ -446,10 +446,13 @@ bash_is allow 'ls ./*.py'
 starts_one 'ls .pytest_cache/*'
 starts_one 'ls ./*.py *.md'
 starts_one "grep -E '(\\.[0-9]+)?' notes.md"   # a regex's \. is no dot-name
-# Accepted (docs/known-limitations.md): the full read does not put a variable or a
-# brace in place either, so the filter letting these go answers as it does.
+# Accepted (docs/known-limitations.md): the full read does not put a variable, a
+# brace, a glob above the file or a split option in place either, so the filter
+# letting these go answers as it does.
 bash_is allow 'd=.claude; cp x ~/$d/settings.json'
 bash_is allow 'cp x ~/.{claude,x}/settings.json'
+bash_is allow 'cp x ~/Library/Launch*/x.plist'
+bash_is allow 'git config --glo"bal" user.name x'
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
