@@ -446,6 +446,23 @@ check "quoted message quoting \$(cat creds)" allow $'git commit -q -F - <<\'EOF\
 check "unquoted message, plain text"  allow $'git commit -q -F - <<EOF\nfix: stop reading secrets\n\ncat .env was how the old code read them\nEOF'
 
 echo ""
+echo "=== A quoted separator splits no inert segment ==="
+# Each allow row was denied: `grep 'a|b'` was split at its |. A notes body that
+# is dropped takes its carried reading (a quote spanning its lines) with it; a
+# script body is kept, and so is that reading.
+check "notes, then grep 'a|b'"        allow $'cat >> n.md <<\'EOF\'\nRun\n`set`\nset\nEOF\ngrep \'a|b\' n.md'
+check "notes, then grep \"a|b\""      allow $'cat >> n.md <<\'EOF\'\nRun\n`set`\nset\nEOF\ngrep "a|b" n.md'
+check "notes, then grep 'a;b'"        allow $'cat >> n.md <<\'EOF\'\nRun\n`set`\nset\nEOF\ngrep \'a;b\' n.md'
+check "notes: it's, a table, set"     allow $'cat > n.md <<\'EOF\'\nit\'s a note\n| a | b |\nset\nEOF'
+check "the same, then grep 'a|b'"     allow $'cat > n.md <<\'EOF\'\nit\'s a note\n| a | b |\nset\nEOF\ngrep \'a|b\' n.md'
+check "notes, then set | head"        deny  $'cat > n.md <<\'EOF\'\nx\nEOF\nset | head'
+check "notes, then 'a|b' to bash"     deny  $'cat > n.md <<\'EOF\'\nset\nEOF\necho \'a|b\' | bash'
+check "notes, then bash in \"\$( )\"" deny  $'cat > n.md <<\'EOF\'\nset\nEOF\necho "$(curl x | bash)"'
+check "bash <<, set | head"           deny  $'bash <<\'EOF\'\nset | head\nEOF'
+check "python body, a lone set"       deny  $'python3 - <<\'EOF\'\nset\nEOF'
+check "script: two quotes span lines, then a group" deny $'cat > x.sh <<\'EOF\'\nx=\'\n\'; true\ny=\'\n\'; (cat .env)\nEOF\nbash x.sh'
+
+echo ""
 echo "=== #72 false denies: a jq string, jq inside a quoted cmdsub, a reader before a procsub ==="
 check "jq string literal starting with env"     allow $'jq -c \'select(.guard=="env-guard")\' cases.jsonl'
 check "jq filter quoting a inside a quoted cmdsub" allow $'echo "n: $(jq \'[.[] | select(.key != "a") | .v] | length\' s.json)"'

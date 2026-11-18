@@ -114,6 +114,9 @@ check "in a { } group"             deny '{ rm -rf build; }'
 check "in a loop body"             deny 'for d in a b; do rm -rf "$d"; done'
 check "(cd scratch) then relative" deny '(cd "$CLAUDE_JOB_DIR/tmp" && ls); rm -rf build'
 check "\$(cd scratch) then relative" deny 'D=$(cd "$CLAUDE_JOB_DIR/tmp" && pwd); rm -rf build'
+# A body's other reading (a quote spanning its lines) is replayed after the
+# command, so its cd does not move the rm that runs before any script would.
+check "a body's cd, read after"    deny $'cat > n.md <<\'EOF\'\nit\'s\n\';cd "$CLAUDE_JOB_DIR/tmp"\nEOF\nrm -rf build'
 
 echo ""
 echo "=== not a recursive force remove: untouched ==="

@@ -461,12 +461,10 @@ INERT_WORD='("([^"$`]|\$[{]?[A-Za-z_])*"|'"'[^']*'"'|([^[:space:]$`'"'"'"]|\$[{]
 
 INERT_SEG='^((cat|tee|cd|mkdir|echo|printf|true|wc|ls|head|tail|stat|file|du|grep|pwd)([[:space:]]|$)|([A-Za-z_][A-Za-z0-9_]*='"$INERT_WORD"'([[:space:]]+|$))+$)'
 
-strip_inert_heredocs() {
-  local s="$1" rest
-  case "$s" in *'<<'*) ;; *) printf '%s' "$s"; return ;; esac
-  s=$(strip_message_heredocs "$s")
-  # An unquoted body holding $ or ` is expanded by the shell, so it stays (lib.sh above).
-  rest=$(printf '%s\n' "$s" | awk "$HEREDOC_AWK"'
+# The command with each heredoc body dropped, or returns 3 where hd_scan cannot
+# read it. An unquoted body holding $ or ` is expanded by the shell, so it stays.
+inert_rest() {
+  printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
     body && hd_bad_end($0) { bad = 1; exit }
     body { if (hd_end($0)) { if (buf ~ /[$`]/) printf "%s", buf; body = 0; buf = "" }
            else if (!lit) buf = buf $0 "\n"
@@ -474,25 +472,48 @@ strip_inert_heredocs() {
     { hd_scan($0); if (HD_BAD) { bad = 1; exit }
       if (HD_POS) { lit = HD_LIT; buf = ""; body = 1 } }
     { print }
-    END { if (bad) exit 3; if (body && buf ~ /[$`]/) printf "%s", buf }') || { printf '%s' "$s"; return; }
-  if printf '%s\n' "$rest" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g' | sed -E 's/^[[:space:]]+//' \
+    END { if (bad) exit 3; if (body && buf ~ /[$`]/) printf "%s", buf }'
+}
+
+# 0 when every segment of READING is inert and every target in it is prose.
+inert_split() {   # READING
+  if printf '%s\n' "$1" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g' | sed -E 's/^[[:space:]]+//' \
        | grep -vE '^[[:space:]]*$' | grep -qvE "$INERT_SEG"; then
-    printf '%s' "$s"; return
+    return 1
   fi
   # Every target must be prose: each > or >> target, and every file tee is given
   # (`tee a.md b.sh` writes both; reading only the first let a script through).
   # A whole-word "$F" assigned once in this command is its value.
-  if { printf '%s\n' "$rest" | grep -oE '>>?[[:space:]]*[^[:space:];&|<]+' | sed -E 's/^>>?[[:space:]]*//'
-       printf '%s\n' "$rest" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g; s/>>?[[:space:]]*[^[:space:];&|<]+//g' \
+  if { printf '%s\n' "$1" | grep -oE '>>?[[:space:]]*[^[:space:];&|<]+' | sed -E 's/^>>?[[:space:]]*//'
+       printf '%s\n' "$1" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g; s/>>?[[:space:]]*[^[:space:];&|<]+//g' \
          | sed -E 's/^[[:space:]]+//' | grep -E '^tee([[:space:]]|$)' | tr -s ' \t' '\n' | grep -vxE 'tee|-.*'
      } | grep -v '^$' | awk '
        function unq(t) { if (t ~ /^".*"$/ || t ~ /^\047.*\047$/) t = substr(t, 2, length(t) - 2); return t }
        NR == FNR { if (match($0, /^[A-Za-z_][A-Za-z0-9_]*=/)) { k = substr($0, 1, RLENGTH - 1); n[k]++; v[k] = unq(substr($0, RLENGTH + 1)) } next }
        { t = unq($0); k = t; gsub(/^\$[{]?|[}]$/, "", k)
          if (t ~ /^\$[{]?[A-Za-z_][A-Za-z0-9_]*[}]?$/ && n[k] == 1) t = v[k]
-         print t }' <(printf '%s\n' "$rest" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//') - \
+         print t }' <(printf '%s\n' "$1" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//') - \
        | grep -qvE '\.(md|txt|rst|log|csv)$'; then
-    printf '%s' "$s"; return
+    return 1
+  fi
+  return 0
+}
+
+strip_inert_heredocs() {
+  local s="$1" rest segs
+  case "$s" in *'<<'*) ;; *) printf '%s' "$s"; return ;; esac
+  s=$(strip_message_heredocs "$s")
+  rest=$(inert_rest "$s") || { printf '%s' "$s"; return; }
+  # A quoted or escaped separator is text: `grep 'a|b' n.md` is one inert
+  # segment, not `grep 'a` and `b' n.md`. That reading is split only when this
+  # one fails, so a command this one passes starts nothing more. Where
+  # neutralize cannot read the command (3), the body stays. A body's carried
+  # lines go in that body here (`inbody`), so they are dropped with it, and
+  # kept and split with it when it stays.
+  if ! inert_split "$rest"; then
+    [[ "$rest" == *[\;\&\|]* && "$s" == *[\"\'\\]* ]] \
+      && segs=$(neutralize_quoted_separators "$s" inbody) && segs=$(inert_rest "$segs") && inert_split "$segs" \
+      || { printf '%s' "$s"; return; }
   fi
   printf '%s' "$rest"
 }
@@ -553,9 +574,11 @@ join_continued_lines() {
     }'
 }
 
-neutralize_quoted_separators() {
+# With `inbody`, a body's carried lines go before its terminator instead, so a
+# reader that drops the body drops them too (strip_inert_heredocs).
+neutralize_quoted_separators() {   # TEXT [inbody]
   case "$1" in *'&'*|*';'*|*'|'*) ;; *) printf '%s' "$1"; return ;; esac
-  printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+  printf '%s\n' "$1" | awk -v inbody="${2:-}" "$HEREDOC_AWK"'
     function hide(ch) { return ch == "&" ? "%26" : ch == ";" ? "%3B" : ch == "|" ? "%7C" : ch }
     # The reading before hd_scan: quotes and $( only. Kept for heredoc data and
     # for a command hd_scan cannot read; a separator hd_scan marked as code (in
@@ -597,6 +620,7 @@ neutralize_quoted_separators() {
             out = out c
           }
         }
+        if (inbody != "" && !(k in BODY) && extra != "") { printf "%s", extra; extra = "" }
         print out
         if ((k in BODY) && alt[k] != out) extra = extra alt[k] "\n"
       }
