@@ -380,5 +380,145 @@ OUT=$(run --write)
 check_absent "a tier marker is not a stray" "neither an entry nor a tier marker" "$OUT"
 
 echo ""
+echo "=== --status: the numbers and memory-lint's pressure verdict ==="
+reset
+i=0; : > "$STORE/MEMORY.md"
+while [ "$i" -lt 179 ]; do echo "- [T](x$i.md) — hook" >> "$STORE/MEMORY.md"; i=$((i+1)); done
+OUT=$(run --status)
+check_contains "lines and both limits"   "lines: 179 (limit 200, pressure at 180)" "$OUT"
+check_contains "bytes and both limits"   "(limit 25000, pressure at 20000)"        "$OUT"
+check_contains "179 lines: no pressure"  "pressure: no"  "$OUT"
+echo "- [T](x179.md) — hook" >> "$STORE/MEMORY.md"
+check_contains "180 lines, the threshold itself: pressure" "pressure: yes" "$(run --status)"
+check_contains "the threshold is the shared env name" "pressure: no" "$(MEMORY_INDEX_PRESSURE_LINES=181 run --status)"
+check_contains "bytes alone count too" "pressure: yes" "$(MEMORY_INDEX_PRESSURE_LINES=999 MEMORY_INDEX_PRESSURE_CHARS=100 run --status)"
+# A broken index still reports: the stray check is for writes.
+echo "a stray line" >> "$STORE/MEMORY.md"
+check_eq "a stray does not stop it" "0" "$(run_rc --status)"
+check_eq "and it writes nothing" "1" "$(grep -c 'a stray line' "$STORE/MEMORY.md")"
+
+echo ""
+echo "=== --diff names the entries a reorder moves, and writes nothing ==="
+reset
+mem f1 feedback; mem r1 reference 2026-01-01; mem p1 project; mem r2 reference 2026-02-01
+{ entry r1; entry p1; entry r2; entry f1; } > "$STORE/MEMORY.md"
+BEFORE=$(cat "$STORE/MEMORY.md")
+OUT=$(run --diff)
+check_contains "the rule moves up from line 4"      "4 -> 2     - [T](f1.md)" "$OUT"
+check_contains "the newer fact moves above the older" "3 -> 5     - [T](r2.md)" "$OUT"
+check_absent   "an entry in place is not listed"    "(p1.md)"   "$OUT"
+check_contains "and counts them"                    "2 entries move" "$OUT"
+check_eq       "exit 1, as the dry run"             "1" "$(run_rc --diff)"
+check_eq       "nothing written"                    "$BEFORE" "$(cat "$STORE/MEMORY.md")"
+check_eq       "--diff refuses --write"             "3" "$(run_rc --diff --write)"
+
+echo ""
+echo "=== --long-hooks counts characters exactly as memory-lint does ==="
+reset
+mem lh reference
+PAD=$(printf 'x%.0s' $(seq 1 90))
+# 30 em dashes and 10 e-acutes: 40 characters, 110 bytes.
+DASHES=$(printf '\xe2\x80\x94%.0s' $(seq 1 30)); ACC=$(printf '\xc3\xa9%.0s' $(seq 1 10))
+echo "- [Long one](lh.md) — $PAD$DASHES$ACC" > "$STORE/MEMORY.md"
+echo "- [Short](short.md) — fits" >> "$STORE/MEMORY.md"
+OUT=$(run --long-hooks)
+LINE=$(head -1 "$STORE/MEMORY.md")
+WANT=$(printf '%s' "$LINE" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
+check_contains "one line over"               "1 index lines over 110" "$OUT"
+check_eq       "its length is lint's ILEN"   "$WANT" "$(printf '%s\n' "$OUT" | awk '$NF == "lh.md" { print $1 }')"
+check_eq       "and lint's ILEN is 152"      "152" "$WANT"
+# `- [Long one](lh.md) — ` is 22 characters, so the hook has 88.
+check_eq       "room after title and filename" "88" "$(printf '%s\n' "$OUT" | awk '$NF == "lh.md" { print $3 }')"
+check_absent   "a short one is not listed"   "short.md" "$OUT"
+# The same number memory-lint gives the same line under pressure.
+LINT=$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s"}}' "$STORE/lh.md" \
+  | MEMORY_INDEX_PRESSURE_CHARS=1 bash hooks/memory-lint.sh 2>&1 | sed -n 's/.*its index line is \([0-9]*\) chars.*/\1/p')
+check_eq       "memory-lint says the same"   "$WANT" "$LINT"
+check_eq       "and under a POSIX locale"    "$WANT" "$(LC_ALL=POSIX run --long-hooks | awk '$NF == "lh.md" { print $1 }')"
+
+echo ""
+echo "=== --archive moves named lines to a new block, by permutation ==="
+archive_store() {
+  reset
+  mem p_old project 2026-01-01; mem p_new project 2026-03-01; mem r_fact reference 2026-02-01
+  mem f_rule feedback; mem feedback_hub_a feedback; mem f_inst feedback; mem a_live project
+  echo "- [[f_inst]] the instance" >> "$STORE/feedback_hub_a.md"
+  { active_with_pointer | sed '$d'; entry a_live; echo ""
+    echo "<!-- FEEDBACK -->"; entry f_rule; entry feedback_hub_a; entry f_inst; echo ""
+    echo "<!-- REFERENCE -->"; entry r_fact; echo ""
+    echo "<!-- PROJECT -->"; entry p_new; entry p_old; } > "$STORE/MEMORY.md"
+  printf '%s\n' "# Memory archive" "" "## Earlier" "- [T](p_gone.md) — hook" > "$STORE/MEMORY_ARCHIVE.md"
+}
+archive_store
+BEFORE=$(cat "$STORE/MEMORY.md"); ABEFORE=$(cat "$STORE/MEMORY_ARCHIVE.md")
+OUT=$(run --archive p_old.md r_fact --heading "Finished work, checked 2026-11-18")
+check_contains "dry run names the lines"  "would move 2 index lines" "$OUT"
+check_contains "and the heading"          '"## Finished work, checked 2026-11-18"' "$OUT"
+check_contains "and says it wrote nothing" "nothing written" "$OUT"
+check_eq       "index untouched"           "$BEFORE"  "$(cat "$STORE/MEMORY.md")"
+check_eq       "archive untouched"         "$ABEFORE" "$(cat "$STORE/MEMORY_ARCHIVE.md")"
+run --archive p_old.md r_fact --heading "Finished work, checked 2026-11-18" --write >/dev/null
+check_eq       "both left the index"       "a_live f_rule feedback_hub_a f_inst p_new " "$(order)"
+check_eq       "a new block at the end"    "## Finished work, checked 2026-11-18" "$(tail -3 "$STORE/MEMORY_ARCHIVE.md" | head -1)"
+check_eq       "holding exactly them"      "p_old r_fact " "$(tail -2 "$STORE/MEMORY_ARCHIVE.md" | sed 's/.*](//; s/\.md).*//' | sort | tr '\n' ' ')"
+check_eq       "the old block untouched"   "$ABEFORE" "$(head -4 "$STORE/MEMORY_ARCHIVE.md")"
+check_eq       "the pointer carries no count" "- [ARCHIVE: older memories](MEMORY_ARCHIVE.md) — index lines only." "$(grep 'MEMORY_ARCHIVE' "$STORE/MEMORY.md")"
+BOTH=$(cat "$STORE/MEMORY.md" "$STORE/MEMORY_ARCHIVE.md" | grep '^- \[' | grep -v '](MEMORY_ARCHIVE\.md)' | sed 's/.*](//; s/\.md).*//' | sort | tr '\n' ' ')
+check_eq       "every entry is in one file or the other" "a_live f_inst f_rule feedback_hub_a p_gone p_new p_old r_fact " "$BOTH"
+
+echo ""
+echo "=== --archive refuses, before any write ==="
+archive_store
+BEFORE=$(cat "$STORE/MEMORY.md"); ABEFORE=$(cat "$STORE/MEMORY_ARCHIVE.md")
+unchanged() { [ "$(cat "$STORE/MEMORY.md")" = "$BEFORE" ] && [ "$(cat "$STORE/MEMORY_ARCHIVE.md")" = "$ABEFORE" ] && echo yes || echo no; }
+check_eq "a name with no index line: exit 3"  "3" "$(run_rc --archive p_old nosuch --heading H --write)"
+check_contains "and says so"   "nosuch.md has no line in MEMORY.md" "$(run --archive p_old nosuch --heading H --write)"
+check_contains "an archived one is named as such" "already in MEMORY_ARCHIVE.md" "$(run --archive p_gone --heading H --write)"
+check_eq "nothing written"     "yes" "$(unchanged)"
+check_contains "ACTIVE refused" "ACTIVE block" "$(run --archive a_live --heading H --write)"
+check_eq "exit 3"              "3" "$(run_rc --archive a_live --heading H --write)"
+check_contains "feedback needs a hub heading" "archive it only with --heading feedback_hub_" "$(run --archive f_rule --heading H --write)"
+check_contains "a hub that does not link it"  "does not link [[f_rule]]" "$(run --archive f_rule --heading feedback_hub_a --write)"
+check_contains "the hub's own line must stay" "the hub's own line must stay" "$(run --archive f_inst feedback_hub_a --heading feedback_hub_a --write)"
+check_eq "still nothing written" "yes" "$(unchanged)"
+printf -- '---\nname: untyped\ndescription: d\n---\nbody\n' > "$STORE/untyped.md"; echo "- [T](untyped.md) — hook" >> "$STORE/MEMORY.md"
+BEFORE=$(cat "$STORE/MEMORY.md")
+check_contains "an untyped line refused" "untyped.md has no type" "$(run --archive untyped --heading H --write)"
+check_eq "needs --store"   "3" "$(bash "$SCRIPT_UT" --archive p_old --heading H >/dev/null 2>&1; echo $?)"
+check_eq "needs --heading" "3" "$(run_rc --archive p_old)"
+check_eq "not with --archive-overflow" "3" "$(run_rc --archive p_old --heading H --archive-overflow)"
+check_eq "nothing written by any of them" "yes" "$(unchanged)"
+
+echo ""
+echo "=== --archive takes feedback only under its hub, whose line stays ==="
+archive_store
+run --archive f_inst --heading feedback_hub_a --write >/dev/null
+check_eq "the instance left the index; the hub stayed" "a_live f_rule feedback_hub_a r_fact p_new p_old " "$(order)"
+check_eq "under the hub's heading" "## feedback_hub_a" "$(tail -2 "$STORE/MEMORY_ARCHIVE.md" | head -1)"
+LINT=$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s"}}' "$STORE/f_inst.md" | bash hooks/memory-lint.sh 2>&1)
+check_absent "and memory-lint is content with it" "MEMORY_ARCHIVE" "$LINT"
+
+echo ""
+echo "=== --archive adds the pointer when the index has none ==="
+reset
+mem p1 project; mem r1 reference
+{ entry r1; entry p1; } > "$STORE/MEMORY.md"
+run --archive p1 --heading Done --write >/dev/null
+check_eq "one pointer" "1" "$(grep -c '](MEMORY_ARCHIVE\.md)' "$STORE/MEMORY.md")"
+check_eq "p1 is archived" "1" "$(grep -c '(p1.md)' "$STORE/MEMORY_ARCHIVE.md")"
+
+echo ""
+echo "=== an archive append that does not land leaves the index as it was ==="
+archive_store
+BEFORE=$(cat "$STORE/MEMORY.md")
+chmod a-w "$STORE/MEMORY_ARCHIVE.md"
+OUT=$(run --archive p_old --heading Done --write)
+RC=$(run_rc --archive p_old --heading Done --write)
+chmod u+w "$STORE/MEMORY_ARCHIVE.md"
+check_contains "it says so"   "not all in MEMORY_ARCHIVE.md" "$OUT"
+check_eq "exit 3"             "3" "$RC"
+check_eq "MEMORY.md unchanged" "$BEFORE" "$(cat "$STORE/MEMORY.md")"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

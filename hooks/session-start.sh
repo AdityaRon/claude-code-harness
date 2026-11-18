@@ -93,8 +93,11 @@ STORE_SLUG=$(store_slug "$LAUNCH_DIR")
 MEM_DIR="$PROJECTS_DIR/$STORE_SLUG/memory"
 IDX_LINES=0 IDX_BYTES=0
 [[ -f "$MEM_DIR/MEMORY.md" ]] && read -r IDX_LINES IDX_BYTES < <(wc -lc < "$MEM_DIR/MEMORY.md")
-# The stamp and the lock are read only under pressure, the rare case.
-if { [[ "$IDX_LINES" -ge "${MEMORY_INDEX_PRESSURE_LINES:-180}" ]] || [[ "$IDX_BYTES" -ge "${MEMORY_INDEX_PRESSURE_CHARS:-20000}" ]]; } \
+# The stamp and the lock are read only under pressure, the rare case. Pressure is
+# memory-lint's definition, from the file both read; unreadable, no reorder.
+_hook_dir=${0%/*}; [[ "$_hook_dir" == "$0" ]] && _hook_dir=.
+# shellcheck source=lib/memory-limits.sh
+if source "$_hook_dir/lib/memory-limits.sh" 2>/dev/null && memory_pressure "$IDX_LINES" "$IDX_BYTES" \
    && in_budget memory-index; then
   STAMP_FILE="$STATE_DIR/memory-index/$STORE_SLUG"
   STAMP="$(date -r "$MEM_DIR/MEMORY.md" +%s 2>/dev/null) $IDX_BYTES"

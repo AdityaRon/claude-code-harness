@@ -61,10 +61,14 @@ SHOW_ALL=0
 TRIAGE_MIN_AGE_DAYS="${MEMORY_TRIAGE_MIN_AGE_DAYS:-14}"
 # Index load limits. Past either one the tail is silently dropped at session
 # start, so the oldest entries stop reaching the model.
-INDEX_MAX_LINES="${MEMORY_INDEX_MAX_LINES:-200}"
-# Byte limit. The env var keeps its historical _CHARS spelling so existing
-# overrides keep working; the value it carries is and always was bytes.
-INDEX_MAX_BYTES="${MEMORY_INDEX_MAX_CHARS:-25000}"
+# One copy, shared with memory-index and memory-lint: beside this file when
+# installed (~/.claude/hooks/lib), ../hooks/lib in the clone.
+LIMITS="$(dirname "$0")/hooks/lib/memory-limits.sh"
+[ -f "$LIMITS" ] || LIMITS="$(dirname "$0")/../hooks/lib/memory-limits.sh"
+# shellcheck source=../hooks/lib/memory-limits.sh
+. "$LIMITS" 2>/dev/null || { echo "FATAL: cannot read hooks/lib/memory-limits.sh near $0; run install.sh again" >&2; exit 3; }
+INDEX_MAX_LINES="$MEMORY_MAX_LINES"
+INDEX_MAX_BYTES="$MEMORY_MAX_BYTES"
 CURATE=0
 JIRA_KEYS=0
 # GitHub claims are looked up this many to one GraphQL call, per repo.

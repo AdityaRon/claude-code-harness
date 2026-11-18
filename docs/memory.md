@@ -110,16 +110,22 @@ write itself:
   GitHub does. A memory becomes mechanically checkable by carrying a
   `verify:` block (`- gh acme/api#4821 merged`, `- jira PROJ-123 Done`); the
   skill resolves the bare references a script cannot and writes the block
-  back. Read-only by contract: it proposes, never deletes.
+  back. Read-only by contract: it proposes, never deletes. GitHub claims are
+  looked up in one GraphQL call per repo per 100 numbers. A memory whose
+  open-state wording no lookup can settle carries `verify: none <reason>` in
+  its frontmatter instead; it is counted as waived, not triaged. ORPHAN names a
+  memory no index line, archive line or hub link reaches.
 
   ```bash
   bash ~/.claude/memory-verify.sh --store <slug>     # exit 0 fine, 1 stale, 2 triage, 3 could not run
+  bash ~/.claude/memory-verify.sh --jira-keys        # the jira claims as `key in (...)` JQL, 50 a line
   ```
 
 - **`memory-lint`** checks a memory at the moment it is written, for what the
   CLI does not check: name matches filename, a valid type, a state-free
-  description, a `verify:` block on any in-flight claim, link typos, an index
-  line in the right tier. Advisory, never blocks.
+  description, a `verify:` block (or `verify: none <reason>`) on any in-flight
+  claim, link typos, an index line in the right tier. An archive line counts as
+  indexed for a `project` or `reference` memory. Advisory, never blocks.
 - **`memory-provenance.sh`** answers who wrote a memory, so a session cannot
   cite as corroboration a memory it wrote itself. `--session NAME` asks whether
   the session telling you something also wrote the memory it cites as
@@ -129,3 +135,12 @@ write itself:
   rather than deleting. `session-start` runs the reorder only when the index is
   near its cap, has changed since the last run, and auto-dream's
   `.consolidate-lock` is not fresh; on an ordinary store it costs nothing.
+  "Near its cap" is 180 lines or 20,000 bytes, set once in
+  `hooks/lib/memory-limits.sh` for memory-lint, session-start and both tools.
+
+  ```bash
+  bash ~/.claude/memory-index.sh --store <slug> --status       # lines, bytes, limits, pressure: yes|no
+  bash ~/.claude/memory-index.sh --store <slug> --diff         # which entries a reorder moves
+  bash ~/.claude/memory-index.sh --store <slug> --long-hooks   # lines over 110 chars, and the hook's room
+  bash ~/.claude/memory-index.sh --store <slug> --archive project_x.md --heading "Finished, checked 2026-11-18"   # dry run; --write moves
+  ```
