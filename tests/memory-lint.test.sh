@@ -519,30 +519,30 @@ check_contains "a linked ledger is measured at its target" "log.md beside this h
 echo ""
 echo "=== a handoff line that sends a session to read a ledger whole ==="
 L4="$TMP/l4/trackers"; mkdir -p "$L4"
-pad "$L4/work-tracker.md" 21000
-printf 'small\n' > "$L4/tracker.md"
+pad "$L4/tracker.md" 21000
+printf 'small\n' > "$L4/work-tracker.md"
 rf() {  # rf LINE...: lint a handoff that ends in these lines, from line 21
   tracker "$L4/h.md" "$NOWS" "$CR" "$(printf '%s\n' "$@")"
   lint "$L4/h.md"
 }
-fires()  { check_contains "fires: $1" "tells a session to read work-tracker.md (21000 bytes) first" "$(rf "$1")"; }
+fires()  { check_contains "fires: $1" "tells a session to read tracker.md (21000 bytes) first" "$(rf "$1")"; }
 silent() { check_absent   "silent: $1" "tells a session to read" "$(rf "$1")"; }
-fires  "Read work-tracker.md first."
-fires  "Before anything else, reread \`work-tracker.md\`."
-fires  "Start by reading [the log](work-tracker.md)."
-fires  "On restart, read ~/notes/trackers/work-tracker.md"
-fires  "Read the large work-tracker.md first"
-silent "Do not read work-tracker.md whole."
-silent "Already read: work-tracker.md lines 40-90."
-silent "T-9 in work-tracker.md was read before the restart."
-silent "Read work-tracker.md first, by grep -n on the id."
-silent "Before anything, read work-tracker.md by slice."
-silent "Read tracker.md first."
-silent "Open work-tracker.md first."
-silent "See the thread on work-tracker.md before merging."
-silent "Read work-tracker.md.bak first."
-OUT=$(rf "Read work-tracker.md first." "Read work-tracker.md first, again." "Start: read work-tracker.md" \
-         "Read work-tracker.md before lunch." "Read work-tracker.md first, really.")
+fires  "Read tracker.md first."
+fires  "Before anything else, reread \`tracker.md\`."
+fires  "Start by reading [the log](tracker.md)."
+fires  "On restart, read ~/notes/trackers/tracker.md"
+fires  "Read the large tracker.md first"
+silent "Do not read tracker.md whole."
+silent "Already read: tracker.md lines 40-90."
+silent "T-9 in tracker.md was read before the restart."
+silent "Read tracker.md first, by grep -n on the id."
+silent "Before anything, read tracker.md by slice."
+silent "Read work-tracker.md first."
+silent "Read tracker.md.bak first."
+silent "Open tracker.md first."
+silent "See the thread on tracker.md before Friday."
+OUT=$(rf "Read tracker.md first." "Read tracker.md first, again." "Start: read tracker.md" \
+         "Read tracker.md before lunch." "Read tracker.md first, really.")
 check_eq "at most three lines named" "3" "$(printf '%s\n' "$OUT" | grep -c 'tells a session to read')"
 check_contains "the rest counted" "and 2 more like that" "$OUT"
 check_contains "by line number" "line 21 tells" "$OUT"
