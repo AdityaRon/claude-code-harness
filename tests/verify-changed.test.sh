@@ -82,8 +82,14 @@ if git -C "$R" cat-file -e "6e5697e^{commit}" 2>/dev/null; then
   OUT=$(replay 6e5697e)
   has "6e5697e (docs/known-limitations.md): 0 of $NROWS" "Checklist: 0 of $NROWS rows matched" "$OUT"
   [[ -z "$(fired "$OUT")" ]] && pass "and no row is listed" || fail "and no row is listed" "$(fired "$OUT")"
-  has "repo-layout covers a docs change" "tests/repo-layout.test.sh" "$OUT"
+  has "repo-layout covers a docs change, and only it" "Suites (1), which --run runs:
+  tests/repo-layout.test.sh  (docs/known-limitations.md)" "$OUT"
 else missing "docs-only replay"; fi
+# The guard suites quote "README.md" as a payload; only repo-layout reads it.
+if git -C "$R" cat-file -e "6c87d74^{commit}" 2>/dev/null; then
+  has "a README-only commit (6c87d74) brings repo-layout alone" "Suites (1), which --run runs:
+  tests/repo-layout.test.sh  (README.md)" "$(replay 6c87d74)"
+else missing "README-only replay"; fi
 
 echo ""
 echo "=== Changed files map to suites ==="
@@ -159,6 +165,22 @@ has "tools/foo.sh brings tests/foo.test.sh, which does not name it" "  tests/foo
 has "a suite naming lib/thing.sh is brought" "  tests/names.test.sh  (lib/thing.sh)" "$OUT"
 has "a hooks/lib file brings the smoke suites" "  tests/smokey.test.sh  (hooks/lib/y.sh (every wired hook sources it))" "$OUT"
 has "and nothing else" "Suites (3)" "$OUT"
+# A doc maps to suites that read it, not to suites that only quote its name.
+git checkout -q -- . && mkdir -p docs && printf 'r\n' > README.md && printf 'd\n' > docs/a.md
+cat > tests/reads.test.sh <<'EOF'
+BLOCK=$(awk '/^## x$/' README.md)
+grep -c y "$ROOT/docs/a.md"
+EOF
+cat > tests/quotes.test.sh <<'EOF'
+# README.md and docs/a.md, named in a comment
+check "cat README.md" allow "cat README.md"
+bash_is allow 'grep -c x docs/a.md'
+for f in hooks/README.md; do :; done
+EOF
+git add -A && git commit -qm docs && printf 's\n' | tee -a README.md docs/a.md > /dev/null
+OUT=$(bash "$VC" HEAD 2>&1)
+has "README.md and docs/a.md bring the suite that reads them, and no other" "Suites (1), which --run runs:
+  tests/reads.test.sh  (README.md, docs/a.md)" "$OUT"
 cd "$T" || exit 1
 
 echo ""

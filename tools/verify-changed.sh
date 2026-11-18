@@ -46,7 +46,7 @@ if [[ -n "$HEADREV" ]]; then
 else
   UNTRACKED=$(git ls-files --others --exclude-standard)
   CHANGES=$( { git diff --no-renames --name-status "$MB" --
-               [[ -z "$UNTRACKED" ]] || printf '%s\n' "$UNTRACKED" | sed "s/^/A$TAB/"; } | sort -t "$TAB" -k2,2 -u)
+               [[ -z "$UNTRACKED" ]] || printf '%s\n' "$UNTRACKED" | sed "s/^/A$TAB/"; } | LC_ALL=C sort -t "$TAB" -k2,2 -u)
   TO="the working tree"
 fi
 PATHS=$(printf '%s\n' "$CHANGES" | cut -f2 | sed '/^$/d')
@@ -130,6 +130,17 @@ naming() {
     [[ -z "$ALL_SUITES" ]] || grep -lE -e "$re" $ALL_SUITES 2>/dev/null
   fi
 }
+# The suites that read PATH, a doc: a bare argument or $VAR/PATH, outside
+# comments and quoted strings. A guard suite quoting "cat README.md" does not.
+STRIP='/^[[:space:]]*#/d; s/"[^"$][^"]*"//g; s/""//g'"; s/'[^']*'//g"
+reading() {
+  local s re
+  re="(^|[[:space:]=<(]|[\$][{]?[A-Za-z_][A-Za-z0-9_]*[}]?/)$(printf '%s' "$1" | sed 's/[][\.*^$+?(){}|/]/\\&/g')([^A-Za-z0-9_.-]|\$)"
+  for s in $ALL_SUITES; do
+    if [[ -n "$HEADREV" ]]; then git show "$HEADREV:$s" 2>/dev/null; else cat "$s"; fi \
+      | sed -E "$STRIP" | grep -qE -e "$re" && printf '%s\n' "$s"
+  done
+}
 SUITE_WHY=""   # suite<TAB>why, one line per reason
 want() { is_suite "$1" && SUITE_WHY="$SUITE_WHY$1$TAB$2"$'\n'; }
 while IFS=$TAB read -r st p; do
@@ -140,7 +151,10 @@ while IFS=$TAB read -r st p; do
   esac
   b=${p##*/}; stem=${b%.*}
   case "$p" in hooks/*.sh|bin/*|tools/*|.github/*.sh) want "tests/$stem.test.sh" "$p" ;; esac
-  for s in $(naming "$p"); do want "$s" "$p"; done
+  case "$p" in
+    README.md|docs/*.md) for s in $(reading "$p"); do want "$s" "$p"; done ;;
+    *) for s in $(naming "$p"); do want "$s" "$p"; done ;;
+  esac
   case "$p" in hooks/lib.sh|hooks/lib/*) for s in $SMOKE; do want "$s" "$p (every wired hook sources it)"; done ;; esac
   case "$st$TAB$p" in
     [AD]"$TAB"*|*"$TAB"README.md|*"$TAB"docs/*|*"$TAB"rules/*|*"$TAB".github/*|*"$TAB"config/settings.json|*"$TAB"tests/smoke.list)
@@ -182,7 +196,7 @@ echo "verify-changed: $NFILES file(s) changed from $MBS (merge base with $BASE) 
 echo "Checklist: $K of $NROWS rows matched ($SRC)"
 printf '%s\n' "$MERGED" | sed -n "s/^note$TAB/  note: /p"
 printf '%s' "$MATCHED"
-SUITES=$(printf '%s' "$SUITE_WHY" | cut -f1 | sort -u | sed '/^$/d')
+SUITES=$(printf '%s' "$SUITE_WHY" | cut -f1 | LC_ALL=C sort -u | sed '/^$/d')
 NSUITES=$(printf '%s\n' "$SUITES" | grep -c .)
 if [[ "$NSUITES" -eq 0 ]]; then
   echo "Suites: none cover these files"

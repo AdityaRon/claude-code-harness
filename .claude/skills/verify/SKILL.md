@@ -1,7 +1,6 @@
 ---
 name: verify
-description: Run the checks this branch's changes call for, and stamp the commit with what ran.
-disable-model-invocation: true
+description: Use before committing or opening a PR in this repo, in place of the full doctor.sh run.
 ---
 
 # Verify a change before committing
