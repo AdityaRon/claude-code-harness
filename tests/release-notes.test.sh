@@ -18,11 +18,11 @@ cat > "$TMP/prs.json" <<'JSON'
 [{"number":2,"title":"git-guard: a branch whose tip a remote holds can be deleted","labels":[],
   "body":"## Why\n\nintended-decisions: bash-git-branch-delete, friction-git-branch-delete\n"},
  {"number":3,"title":"guards: faster Bash checks; jq filters no longer false-deny","labels":[],"body":""},
- {"number":4,"title":"memory-lint: count characters in any locale","labels":[{"name":"enhancement"}],"body":"intended-decisions: x-1\nintended-launches: bash-ls, bash-git"},
+ {"number":4,"title":"memory-lint: count characters in any locale","labels":[{"name":"enhancement"}],"body":"intended-decisions: x-1\nintended-launches: bash-ls, bash-git\r\nremoved-payloads: bash-old,bash-gone\r\n"},
  {"number":5,"title":"changelog: v1.0.1","labels":[],"body":""},
  {"number":6,"title":"contract: review Claude Code releases up to 2.1.301","labels":[],"body":""},
  {"number":7,"title":"statusline: show live effort","labels":[],"body":"no decisions line"},
- {"number":9,"title":"network-guard: an old PR before the tag","labels":[],"body":"intended-decisions: old\nintended-launches: old"}]
+ {"number":9,"title":"network-guard: an old PR before the tag","labels":[],"body":"intended-decisions: old\nintended-launches: old\nremoved-payloads: old"}]
 JSON
 rn() { bash "$RN" --repo "$FIX" --prs "$TMP/prs.json" "$@"; }
 
@@ -77,6 +77,8 @@ echo "=== --intended: ids from the merged PR bodies ==="
   && pass "union of the lines, sorted, without the old PR's" || fail "intended" "[$(rn --since v1.0.0 --intended)]"
 [ "$(rn --since v1.0.0 --intended-launches)" = "bash-git bash-ls " ] \
   && pass "--intended-launches: the intended-launches lines alone, without the old PR's" || fail "intended-launches" "[$(rn --since v1.0.0 --intended-launches)]"
+[ "$(rn --since v1.0.0 --removed-payloads)" = "bash-gone bash-old " ] \
+  && pass "--removed-payloads: the removed-payloads lines alone, from a CRLF body, without the old PR's" || fail "removed-payloads" "[$(rn --since v1.0.0 --removed-payloads)]"
 
 echo ""
 echo "=== --changelog inserts above the first entry ==="

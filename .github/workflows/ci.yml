@@ -68,25 +68,19 @@ jobs:
       # to change is declared in its body: `intended-decisions: <payload ids>`.
       # --launches strace counts the processes each hook starts per payload, and
       # the gate fails a payload whose hooks start more than on the base, unless
-      # the body names it: `intended-launches: <payload ids>`.
+      # the body names it: `intended-launches: <payload ids>`. The gate script and
+      # corpus are the base's (.github/bench-gate.sh); a payload the PR removes or
+      # changes is named in its body: `removed-payloads: <payload ids>`.
       - name: Benchmark this PR's hooks against the base branch
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
           BASE: ${{ github.base_ref }}
         run: |
-          if git diff --quiet "origin/$BASE" HEAD -- hooks config/settings.json; then
-            echo "hooks/ and config/settings.json match origin/$BASE; benchmark skipped (both sides would run the same files)." > bench.md
-            cat bench.md >> "$GITHUB_STEP_SUMMARY"; exit 0
-          fi
           INTENDED=$(printf '%s\n' "$PR_BODY" | sed -nE 's/^intended-decisions:[[:space:]]*//p' | tr '\n' ' ')
           INTENDED_LAUNCHES=$(printf '%s\n' "$PR_BODY" | sed -nE 's/^intended-launches:[[:space:]]*//p' | tr '\n' ' ')
-          set +e
-          python3 tools/hook-bench.py --base "origin/$BASE" --head HEAD --gate --intended "$INTENDED" \
-            --launches strace --intended-launches "$INTENDED_LAUNCHES" --md bench.md >/dev/null
-          RC=$?
-          cat bench.md >> "$GITHUB_STEP_SUMMARY"
-          [ "$RC" = 0 ] || echo "::error::the benchmark gate failed; see the job summary."
-          exit $RC
+          REMOVED=$(printf '%s\n' "$PR_BODY" | sed -nE 's/^removed-payloads:[[:space:]]*//p' | tr '\n' ' ')
+          export INTENDED INTENDED_LAUNCHES REMOVED
+          .github/bench-gate.sh "origin/$BASE"
 
   shellcheck:
     name: shellcheck

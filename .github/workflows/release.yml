@@ -99,9 +99,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "intended=$(bash tools/release-notes.sh --since "$LAST" --prs prs.json --intended)" >> "$GITHUB_OUTPUT"
           echo "intended_launches=$(bash tools/release-notes.sh --since "$LAST" --prs prs.json --intended-launches)" >> "$GITHUB_OUTPUT"
-          # Fails closed: only exit 1 (nothing changed) skips the benchmark.
-          RC=0; bash tools/release-notes.sh --since "$LAST" --hooks-changed >/dev/null || RC=$?
-          if [ "$RC" = 1 ]; then echo "hooks_changed=false"; else echo "hooks_changed=true"; fi >> "$GITHUB_OUTPUT"
+          echo "removed_payloads=$(bash tools/release-notes.sh --since "$LAST" --prs prs.json --removed-payloads)" >> "$GITHUB_OUTPUT"
 
       # Always, whatever changed: a merge by github.token fires no push CI, so
       # this is the only full-suite run on the commit that gets tagged.
@@ -110,8 +108,10 @@ jobs:
         if: steps.plan.outputs.skip != 'true'
         run: bash doctor.sh
 
-      # hook-bench.py compares only hooks/ and config/settings.json of the two
-      # sides; with neither changed, both would run the same files.
+      # .github/bench-gate.sh runs the previous tag's tools/hook-bench.py and
+      # corpus, and skips the run when hooks/ and config/settings.json are as on
+      # the tag; a payload removed or changed since needs a merged PR's
+      # `removed-payloads:` line either way.
       - name: Benchmark against the previous tag
         id: bench
         if: steps.plan.outputs.skip != 'true'
@@ -119,21 +119,13 @@ jobs:
           LAST: ${{ steps.plan.outputs.last }}
           INTENDED: ${{ steps.plan.outputs.intended }}
           INTENDED_LAUNCHES: ${{ steps.plan.outputs.intended_launches }}
-          HOOKS_CHANGED: ${{ steps.plan.outputs.hooks_changed }}
+          REMOVED: ${{ steps.plan.outputs.removed_payloads }}
         run: |
           if [ -z "$LAST" ]; then
             echo "No previous tag, so no benchmark for this release." > bench.md
             cat bench.md >> "$GITHUB_STEP_SUMMARY"; exit 0
           fi
-          if [ "$HOOKS_CHANGED" = false ]; then
-            echo "hooks/ and config/settings.json are unchanged since $LAST; benchmark skipped (both sides would run the same files)." > bench.md
-            cat bench.md >> "$GITHUB_STEP_SUMMARY"; exit 0
-          fi
-          set +e
-          python3 tools/hook-bench.py --base "$LAST" --head HEAD --gate --intended "$INTENDED" \
-            --launches strace --intended-launches "$INTENDED_LAUNCHES" --md bench.md --json bench.json >/dev/null
-          RC=$?
-          cat bench.md >> "$GITHUB_STEP_SUMMARY"
+          RC=0; .github/bench-gate.sh "$LAST" || RC=$?
           [ "$RC" = 0 ] || echo "::error::the benchmark gate failed; the release is not made. See the job summary."
           exit $RC
 
@@ -260,6 +252,7 @@ jobs:
             echo "To unblock:"
             echo "- A decision change that a merged PR meant: add an \`intended-decisions: <payload ids>\` line to that PR's body (\`gh pr edit N --body-file ...\`). The ids are in the table above."
             echo "- More processes started that a merged PR meant: add an \`intended-launches: <payload ids>\` line to that PR's body the same way."
+            echo "- A payload a merged PR meant to remove or change in tests/bench-corpus.jsonl: add a \`removed-payloads: <payload ids>\` line to that PR's body the same way."
             echo "- A failing suite or a slower hook: fix it on main."
             echo
             echo "The next run retries after the daily Upstream drift run, or now: \`gh workflow run release.yml\`."
