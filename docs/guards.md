@@ -105,7 +105,9 @@ CI runs it on a PR that changes `hooks/`, the script, `bin/disk-space.py` or
 the corpus, on seed 1; the Release workflow's daily cron runs it on a new seed,
 printed first, beside the release rather than gating it. A failure prints each
 input with a line for `tests/bench-corpus.jsonl`: add that line by PR with the
-fix, so the bench and every later run hold it; `--seed N` repeats the run.
+fix, so the bench and every later run hold it; `--seed N` repeats the run. The
+bench gate takes a new id as it is, so where the fix changes that payload's
+answer, the PR names it on an `intended-decisions:` line ([releases.md](releases.md)).
 
 ## Allowlisting a wrapper script bypasses every guard
 
