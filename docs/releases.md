@@ -36,6 +36,23 @@ changed a decision or started more processes without its line, releases stay
 blocked until the line is added to its body (`gh pr edit N --body-file ...`)
 and the next run, or a dispatched one, retries.
 
+Both gates run through `.github/bench-gate.sh`, which takes
+`tools/hook-bench.py` and `tests/bench-corpus.jsonl` from the base (main for a
+PR, the previous tag for a release) with `git show`, not from the change under
+test, and says so on the summary's first line ("Gate script and corpus from
+`<sha>`"). A change that deletes the payload its hook edit would flip, or
+loosens the gate's limits in its own copy, is still judged by the base's.
+Payloads with ids new in the change are added to the base's corpus. One the
+change removes or changes needs its id on a `removed-payloads: <payload ids>`
+line in the PR body (a release reads the merged PRs' lines, as for the
+`intended-*` lines); without one the base's payload runs and the gate fails.
+That check runs even when the benchmark is skipped, since a deletion merged
+alone would be gone from the next PR's base. A change that edits
+`tools/hook-bench.py` runs the gate a second time with its own copy, and fails
+if either run fails. The workflow files and `.github/bench-gate.sh` themselves
+still come from the PR under `pull_request`, so an edit to them is the one way
+a PR changes its own gate, and it shows in the diff under `.github/`.
+
 `.github/workflows/release.yml` also runs on a daily cron (`23 19 * * *`, UTC),
 a backstop for a PR merged by hand on a day the drift run did not fire. The
 first release has no previous tag, so its entry carries no benchmark table; the
