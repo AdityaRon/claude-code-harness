@@ -34,7 +34,7 @@ quietly when jq is missing.
 
 | Hook | Event | Behaviour |
 |---|---|---|
-| `memory-lint` | PostToolUse → Write/Edit/MultiEdit | On a file under a `memory/` folder: name matches filename, a valid type, a state-free description, a `verify:` block on any in-flight claim, link typos, an index line in the right tier. See [memory.md](memory.md). |
+| `memory-lint` | PostToolUse → Write/Edit/MultiEdit | On a file under a `memory/` folder: name matches filename, a valid type, a state-free description, a `verify:` block on any in-flight claim, link typos, an index line in the right tier. See [memory.md](memory.md). On a file under a `trackers/` folder, the handoff shape from `rules/working-agreement.md` instead: the five `##` headings (Scope, Open, Owed, Settled, Next on restart) once each and in order, at most 5,000 bytes (`TRACKER_MAX_BYTES`), a `STATE:` UTC stamp no more than 2 min ahead of the clock or 5 min behind it, and `Crons:` as `none` or `- <five cron fields> <prompt>` lines. |
 | `comment-budget` | PostToolUse → Edit/MultiEdit/Write | Flags a comment run that this edit grew past 6 lines (`MAX_RUN` in the hook); a long block the file already carried stays silent. Steps aside in a repo that ships its own `.claude/hooks/comment-budget.py`. |
 
 ## Context & continuity

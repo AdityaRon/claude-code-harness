@@ -430,5 +430,47 @@ check_absent   "and not the new-memory advice" "do NOT add a MEMORY.md line" "$O
 rm -f "$STORE/MEMORY_ARCHIVE.md"
 check_contains "no archive line: the old finding stands" "no line in MEMORY.md points at project_done.md" "$(lint "$STORE/project_done.md")"
 
+echo ""
+echo "=== a handoff tracker: the shape, size, STATE stamp and crons ==="
+TRK="$TMP/trackers"; mkdir -p "$TRK"
+tracker() {  # FILE STAMP CRONS_BLOCK [EXTRA_SECTION]
+  { printf '# t\n\nSTATE: %s\n\n## Scope\nx\n\n## Open\nx\n\n## Owed\nx\n\n## Settled\nx\n\n## Next on restart\n%s\n' "$2" "$3"
+    [ -n "${4:-}" ] && printf '%s\n' "$4"; } > "$1"
+}
+NOWS=$(date -u +%Y-%m-%dT%H:%MZ)
+CR=$'Crons:\n- */30 9-17 * * 1-5 check the PR queue\n- 0 8 * * * morning re-gate'
+tracker "$TRK/good.md" "$NOWS" "$CR"
+check_eq "a well-formed tracker: silent, exit 0" "0" "$(lint_rc "$TRK/good.md")"
+tracker "$TRK/none.md" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "Crons: none"
+check_eq "Crons: none and a stamp with seconds: silent" "0" "$(lint_rc "$TRK/none.md")"
+tracker "$TRK/twice.md" "$NOWS" "$CR" $'\n## Scope\ny'
+check_contains "a second Scope: appended, not replaced" "once each, in that order" "$(lint "$TRK/twice.md")"
+tracker "$TRK/order.md" "$NOWS" "$CR"; sed -i.bak 's/^## Owed$/## Debts/' "$TRK/order.md"
+check_contains "a renamed heading" "Scope|Open|Debts|Settled|Next on restart" "$(lint "$TRK/order.md")"
+tracker "$TRK/big.md" "$NOWS" "$CR" "$(head -c 6000 /dev/zero | tr '\0' x)"
+check_contains "past 5,000 bytes" "past 5000" "$(lint "$TRK/big.md")"
+check_eq "TRACKER_MAX_BYTES raises it" "" "$(TRACKER_MAX_BYTES=9000 lint "$TRK/big.md" | grep 'past ')"
+tracker "$TRK/ahead.md" "$(date -u -r $(( $(date +%s) + 720 )) +%Y-%m-%dT%H:%MZ 2>/dev/null || date -u -d @$(( $(date +%s) + 720 )) +%Y-%m-%dT%H:%MZ)" "$CR"
+check_contains "a stamp 12 min ahead of the clock" "min ahead of the clock" "$(lint "$TRK/ahead.md")"
+tracker "$TRK/old.md" "2026-01-01T00:00Z" "$CR"
+check_contains "an old stamp" "min old, older than this write" "$(lint "$TRK/old.md")"
+tracker "$TRK/bad.md" "yesterday afternoon" "$CR"
+check_contains "a stamp that is not UTC ISO" "is not a UTC time" "$(lint "$TRK/bad.md")"
+{ printf '## Scope\n## Open\n## Owed\n## Settled\n## Next on restart\nCrons: none\n'; } > "$TRK/nostamp.md"
+check_contains "no STATE line" "no \`STATE:\` line" "$(lint "$TRK/nostamp.md")"
+tracker "$TRK/nocron.md" "$NOWS" "next: merge"
+check_contains "no Crons line" "no \`Crons:\` line" "$(lint "$TRK/nocron.md")"
+tracker "$TRK/prose.md" "$NOWS" $'Crons:\n- every half hour, check the queue'
+check_contains "a cron in prose, not five fields" "without five fields and a prompt" "$(lint "$TRK/prose.md")"
+tracker "$TRK/inline.md" "$NOWS" "Crons: every morning"
+check_contains "Crons: with prose on its own line" "takes \`none\` or entries" "$(lint "$TRK/inline.md")"
+tracker "$TRK/noprompt.md" "$NOWS" $'Crons:\n- 0 8 * * *'
+check_contains "a cron with no prompt" "without five fields and a prompt" "$(lint "$TRK/noprompt.md")"
+tracker "$TRK/noneplus.md" "$NOWS" $'Crons: none\n- 0 8 * * * morning re-gate'
+check_contains "Crons: none with an entry under it" "\`Crons: none\` with entries under it" "$(lint "$TRK/noneplus.md")"
+check_eq "a tracker finding exits 2 (handed to the model)" "2" "$(lint_rc "$TRK/nocron.md")"
+mkdir -p "$TMP/notes"; cp "$TRK/nocron.md" "$TMP/notes/nocron.md"
+check_eq "the same file outside trackers/: not checked" "0" "$(lint_rc "$TMP/notes/nocron.md")"
+
 echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

@@ -29,12 +29,59 @@ case "$TOOL" in
 esac
 
 [ -n "$FILE" ] || exit 0
+TRACKER=""
 case "$FILE" in
   */memory/*.md) ;;
+  */trackers/*.md) TRACKER=1 ;;
   *) exit 0 ;;
 esac
 BASE=$(basename "$FILE")
 [ -f "$FILE" ] || exit 0
+
+# ---- a handoff tracker: the shape rules/working-agreement.md gives it -----
+if [ -n "$TRACKER" ]; then
+  TF=""
+  tadd() { TF="${TF}  - $1
+"; }
+  WANT="Scope|Open|Owed|Settled|Next on restart"
+  GOT=$(sed -n 's/^## *//p' "$FILE" | sed 's/[[:space:]]*$//' | paste -sd '|' -)
+  [ "$GOT" = "$WANT" ] || tadd "its ## headings are \"${GOT:-none}\". A tracker has Scope, Open, Owed, Settled, Next on restart, once each, in that order; a second set means it was appended to, not replaced in place."
+  TMAX=${TRACKER_MAX_BYTES:-5000}
+  TB=$(wc -c < "$FILE" | tr -d ' ')
+  [ "$TB" -le "$TMAX" ] || tadd "it is $TB bytes, past $TMAX. Keep what a restart needs; settled detail belongs in a memory or the PR."
+  STAMP=$(sed -n 's/^STATE:[[:space:]]*//p' "$FILE" | sed 's/[[:space:]]*$//' | head -1)
+  if [ -z "$STAMP" ]; then
+    tadd "no \`STATE:\` line. Take it from \`date -u +%Y-%m-%dT%H:%MZ\`, not from the conversation."
+  else
+    D=$(jq -nr --arg s "$STAMP" '(try ($s|strptime("%Y-%m-%dT%H:%M:%SZ")) catch (try ($s|strptime("%Y-%m-%dT%H:%MZ")) catch null))
+      | if . == null then "bad" else ((mktime - now) | floor | tostring) end' 2>/dev/null)
+    case "$D" in
+      bad|"") tadd "\`STATE: $STAMP\` is not a UTC time like 2026-11-18T14:05Z. Take it from \`date -u +%Y-%m-%dT%H:%MZ\`." ;;
+      *) if [ "$D" -gt 120 ]; then tadd "\`STATE: $STAMP\` is $(( D / 60 )) min ahead of the clock. Take it from \`date -u +%Y-%m-%dT%H:%MZ\`."
+         elif [ "$D" -lt -300 ]; then tadd "\`STATE: $STAMP\` is $(( -D / 60 )) min old, older than this write. Refresh it from \`date -u +%Y-%m-%dT%H:%MZ\`."; fi ;;
+    esac
+  fi
+  # Session crons live only in the session: the tracker is what carries them across a restart.
+  CRONS=$(awk '/^Crons:/ { v = $0; sub(/^Crons:[[:space:]]*/, "", v); print "HEAD " v; on = 1; next }
+               on && /^[[:space:]]*- / { print; next } on { exit }' "$FILE")
+  if [ -z "$CRONS" ]; then
+    tadd "no \`Crons:\` line. List each session cron as \`- <five cron fields> <prompt>\`, or write \`Crons: none\`."
+  else
+    CH=$(printf '%s\n' "$CRONS" | sed -n '1s/^HEAD //p')
+    CL=$(printf '%s\n' "$CRONS" | sed '1d')
+    if [ "$CH" = none ]; then
+      [ -z "$CL" ] || tadd "\`Crons: none\` with entries under it."
+    elif [ -n "$CH" ] || [ -z "$CL" ]; then
+      tadd "\`Crons:\` takes \`none\` or entries on the lines under it, each \`- <five cron fields> <prompt>\`."
+    else
+      BAD=$(printf '%s\n' "$CL" | grep -vE '^[[:space:]]*- ([0-9*/,-]+[[:space:]]+){5}[^[:space:]]' | head -3)
+      [ -z "$BAD" ] || tadd "a cron entry without five fields and a prompt: $(printf '%s' "$BAD" | head -1 | sed 's/^[[:space:]]*//')"
+    fi
+  fi
+  [ -n "$TF" ] || exit 0
+  printf 'tracker lint on %s:\n%s' "$BASE" "$TF" >&2
+  exit 2
+fi
 
 # The same limits memory-verify reports OVERSIZE against. Measured in BYTES:
 # wc -c counts bytes, and the upstream limit is 25KB, not 25,000 characters. The
