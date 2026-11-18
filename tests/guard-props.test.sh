@@ -40,8 +40,9 @@ cm_mutant() {  # NAME REPLACEMENT GREP: count_mark's tail line replaced, the pro
   gp --only count --n 300 --disk-space "$TMP/ds.py"
   [ "$RC" = 1 ] && grep -qE "$3" "$TMP/out" && pass "$1 fails, and names a file it miscounts" || fail "$1" "rc=$RC $(tail -2 "$TMP/out")"
 }
-cm_mutant "a tail one byte short" 'tail = buf[max(i, len(buf) - (k - 2)):]' '^  mark .*count_mark [0-9]+, data.count'
-cm_mutant "a tail that starts before the last match" 'tail = buf[len(buf) - (k - 1):]' "^  mark b'(aa|aba|\"x\")'"
+# The real mark goes in only on chunk boundaries, and overlaps itself only as two copies placed sharing its quote.
+cm_mutant "a tail one byte short" 'tail = buf[max(i, len(buf) - (k - 2)):]' "^  mark b'\"subtype\":\"compact_boundary\"'"
+cm_mutant "a tail that starts before the last match" 'tail = buf[len(buf) - (k - 1):]' "^  mark b'\"subtype\":\"compact_boundary\"'"
 cm_mutant "a 1-byte mark carrying the whole buffer" 'tail = buf[max(i, len(buf) - (k - 1)):] if k > 1 else buf' "^  mark b'.', chunk"
 
 echo ""

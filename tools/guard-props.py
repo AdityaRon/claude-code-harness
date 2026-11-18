@@ -293,8 +293,11 @@ def count(a, rng, tmp):
     print(f'count: {trials} files, {len(marks)} marks of {min(map(len, marks))} to {max(map(len, marks))} bytes '
           f'({sum(1 for m in marks if borders(m))} that can overlap themselves; {shared} overlapping pairs placed), chunks of 1 '
           f'to {4 * max(map(len, marks)) + 8}: {len(bad)} counted wrong.')
-    for mark, chunk, n, got, want, head in bad[:5]:
-        print(f'  mark {mark!r}, chunk {chunk}, {n} bytes: count_mark {got}, data.count {want}; starts {head!r}')
+    shown = set()
+    for mark, chunk, n, got, want, head in bad:   # the first file each mark miscounts
+        if mark not in shown:
+            shown.add(mark)
+            print(f'  mark {mark!r}, chunk {chunk}, {n} bytes: count_mark {got}, data.count {want}; starts {head!r}')
     return not bad
 
 
