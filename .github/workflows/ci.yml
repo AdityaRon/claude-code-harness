@@ -121,3 +121,26 @@ jobs:
         run: |
           /usr/bin/python3 --version
           git ls-files -z '*.py' | xargs -0 /usr/bin/python3 -m py_compile
+
+  verify-stamp:
+    # Lists this PR's commits with no `Verified:` trailer in the job summary
+    # (tools/verify-stamp.sh). The mode is config/verify.conf on the base branch:
+    # observe passes; enforce would fail the step, and is not turned on.
+    name: verification stamps
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: List commits without a Verified trailer
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set +e
+          bash tools/verify-stamp.sh "origin/$BASE..HEAD" > stamp.md
+          RC=$?
+          cat stamp.md
+          cat stamp.md >> "$GITHUB_STEP_SUMMARY"
+          exit $RC

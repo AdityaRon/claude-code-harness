@@ -238,8 +238,9 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   pickup-report.sh       ← after an install, how running sessions pick up each change; install.sh runs it with
                            --prune, which removes what install wrote that the clone deleted
   verify-changed.sh      ← the checklist rows and suites a branch's changes call for (doctor.sh --changed)
+  verify-stamp.sh        ← a PR's commits with no Verified: trailer, for CI's job summary
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json,
-                           skills.pin, verify-checklist.tsv
+                           skills.pin, verify-checklist.tsv, verify.conf
 hooks/                   ← one file per hook, plus lib.sh, which sources lib/: command, paths,
                            scratch, io, inline, net, host and shadow; bash-guards.sh runs the Bash guards
 rules/                   ← installed to ~/.claude/rules, loaded in every session
