@@ -202,6 +202,30 @@ print(m.count_mark(sys.argv[2], chunk=int(sys.argv[3])))' "$DS" "$@"; }
 CMS=""; for c in 1 7 28 29 30 4096; do CMS="$CMS $(cm "$PR/-p1/aaaa-1111.jsonl" $c)"; done
 [ "$CMS" = " 3 3 3 3 3 3" ] && pass "a mark across a chunk boundary counts once, at any chunk size" || fail "count_mark chunks" "$CMS"
 [ "$(grep -c '^transcript=' "$TMP/state/disk-usage")" = 0 ] && pass "no projects folder: no transcript lines" || fail "no projects" "$(cat "$TMP/state/disk-usage")"
+sv2() { sed -n "s/^$1=//p" "$2"; }
+[ "$(sv2 transcripts_active "$TMP/state/tx")" = "4 $SB 1" ] && [ "$(sv2 transcript_mb "$TMP/state/tx")" = 1 ] \
+  && pass "transcripts_active: how many, the largest and its compactions; transcript_mb" || fail "active" "$(cat "$TMP/state/tx")"
+PR12="$TMP/projects12"; mkdir -p "$PR12/-p"
+for i in $(seq 10 21); do head -c $((1000000 + i * 1000)) /dev/zero | tr '\0' q > "$PR12/-p/s$i-0000.jsonl"; done
+touch -t 202601010000 "$PR12/-p/s21-0000.jsonl"
+ds stamp --out "$TMP/state/t12" --projects "$PR12" --transcript-mb 1 >/dev/null 2>&1
+[ "$(grep -c '^transcript=' "$TMP/state/t12")" = 10 ] && [ "$(sv2 transcripts_active "$TMP/state/t12" | cut -d' ' -f1-2)" = "11 1020000" ] \
+  && pass "12 past the size: 10 transcript lines, 11 written this week counted, the oldest-written not" \
+  || fail "active count" "$(grep -c '^transcript=' "$TMP/state/t12") $(sv2 transcripts_active "$TMP/state/t12")"
+touch -t 202601010000 "$PR12"/-p/*.jsonl
+ds stamp --out "$TMP/state/t0" --projects "$PR12" --transcript-mb 1 >/dev/null 2>&1
+[ -z "$(sv2 transcripts_active "$TMP/state/t0")" ] && pass "none written this week: no transcripts_active line" || fail "none active" "$(cat "$TMP/state/t0")"
+CLAUDE_TRANSCRIPT_WARN_MB=2 ds stamp --out "$TMP/state/te" --projects "$PR" >/dev/null 2>&1
+[ "$(grep '^transcript=' "$TMP/state/te" | cut -d' ' -f1)" = "transcript=bbbb-2222" ] && [ "$(sv2 transcript_mb "$TMP/state/te")" = 2 ] \
+  && pass "CLAUDE_TRANSCRIPT_WARN_MB sets the size" || fail "env mb" "$(cat "$TMP/state/te")"
+CLAUDE_TRANSCRIPT_WARN_MB=lots ds stamp --out "$TMP/state/tb" --projects "$PR" >/dev/null 2>&1
+[ "$(sv2 transcript_mb "$TMP/state/tb")" = 150 ] && pass "a CLAUDE_TRANSCRIPT_WARN_MB that is not a size: 150" || fail "env bad" "$(cat "$TMP/state/tb")"
+BK="$TMP/backups"; mkdir -p "$BK"; head -c 3000 /dev/zero > "$BK/transcript_auto_1_aaaa.jsonl"; head -c 2000 /dev/zero > "$BK/transcript_manual_2_bbbb.jsonl"; : > "$BK/other.txt"
+RJ=$(ds report --projects "$PR" --backups "$BK" --transcript-mb 1 --json)
+[ "$(jqr "$RJ" '[.backup_bytes, .backup_files] | @tsv')" = "$(printf '5000\t2')" ] && [ "$(jqr "$RJ" '.projects_bytes > 0')" = true ] \
+  && pass "report sizes the projects folder and pre-compact's copies (only transcript_*.jsonl)" || fail "store sizes" "$(jqr "$RJ" '[.projects_bytes, .backup_bytes, .backup_files]')"
+[[ "$(ds report --projects "$PR" --backups "$BK" --transcript-mb 1)" == *"pre-compact.sh's copies in"*"in 2 files"* ]] \
+  && pass "and prints them" || fail "store sizes text" ""
 
 echo ""
 echo "=== stamp: the p90 of each Bash call's slowest guard ==="
