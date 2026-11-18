@@ -134,7 +134,11 @@ fixes. `tests/permission-friction.test.sh` runs it, so doctor fails on a miss.
 ```
 tools/permission-friction.py --days 49 --out "$CLAUDE_JOB_DIR/tmp/pf"
 tools/permission-friction.py --days 49 --replay hooks/ --out "$CLAUDE_JOB_DIR/tmp/pf-replay"
+tools/permission-friction.py --since 2026-10-19T08:00:00Z --out "$CLAUDE_JOB_DIR/tmp/pf"
 ```
+
+`--since` takes an ISO 8601 date or time in place of `--days`; one with no zone is UTC.
+`tools/hook-latency.py` and `tools/shadow-report.py` take it too.
 
 The first takes about 30 s. The replay starts each guard once per recorded call
 and takes 15 to 20 minutes. Put site-specific mask patterns in

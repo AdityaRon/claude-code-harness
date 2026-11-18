@@ -188,6 +188,29 @@ N=$(jq -c '[.named_from_output, .named_by_number_only]' "$TMP/o5/friction.json" 
   && pass "the report counts the numbered records named from output and by number" || fail "naming counts" "$N"
 
 echo ""
+echo "=== --since is --days from a time of day ==="
+# Two approved git-guard asks (hook 2 on Bash): one an hour old, one three days old.
+H6="$TMP/home6"; mkdir -p "$H6/.claude/projects/p"
+cp "$TMP/home/.claude/settings.json" "$H6/.claude/settings.json"
+ago() { python3 -c 'import datetime as dt, sys; print((dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=float(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1"; }
+aged_ask() {  # id hours-ago
+  local t; t=$(ago "$2")
+  jq -nc --arg t "$t" --arg id "$1" '{type:"assistant", timestamp:$t, sessionId:"s6", cwd:"/w/proj", message:{content:[{type:"tool_use", id:$id, name:"Bash", input:{command:"git branch -D x"}}]}}'
+  jq -nc --arg t "$t" --arg id "$1" --arg out "$ASK" '{type:"attachment", timestamp:$t, attachment:{type:"hook_success", hookEvent:"PreToolUse", hookName:"PreToolUse:Bash", toolUseID:$id, command:"command hook 2", durationMs:120, stdout:$out}}'
+  jq -nc --arg t "$t" --arg id "$1" '{type:"user", timestamp:$t, sessionId:"s6", permissionDecision:{decision:"accept", source:"user_temporary"}, message:{content:[{type:"tool_result", tool_use_id:$id, content:"ok"}]}}'
+}
+{ aged_ask s1 1; aged_ask s3 72; } > "$H6/.claude/projects/p/s6.jsonl"
+asks6() { HOME="$H6" python3 "$PF" "$@" --out "$TMP/o6" >/dev/null 2>&1 && jq -r '[.guard_asks[] | "\(.key)=\(.count)"] | join(",")' "$TMP/o6/friction.json"; }
+HOME="$H6" python3 "$PF" --days 2 --out "$TMP/o6d" >/dev/null 2>&1
+HOME="$H6" python3 "$PF" --since "$(ago 48)" --out "$TMP/o6s" >/dev/null 2>&1
+A=$(jq -c 'del(.window)' "$TMP/o6d/friction.json" 2>/dev/null); B=$(jq -c 'del(.window)' "$TMP/o6s/friction.json" 2>/dev/null)
+[[ -n "$A" && "$A" == "$B" ]] && pass "--since two days ago reads what --days 2 reads" || fail "--since = --days" "$A vs $B"
+[[ "$(asks6 --since "$(ago 48)")" == "git-guard=1" && "$(asks6 --since "$(ago 96)")" == "git-guard=2" ]] \
+  && pass "the three-day-old ask is left out from two days back, and read from four" || fail "--since cut" "$(asks6 --since "$(ago 48)") / $(asks6 --since "$(ago 96)")"
+HOME="$H6" python3 "$PF" --days 2 --since "$(ago 48)" >/dev/null 2>&1; RC=$?
+[[ $RC == 2 ]] && pass "--days and --since together: a usage error" || fail "exclusive" "rc=$RC"
+
+echo ""
 echo "=== an ask from bash-guards goes back to the guards that gave it, by its timing log ==="
 H3="$TMP/home3"; mkdir -p "$H3/.claude/projects/p"
 printf '%s\n' '{"hooks":{"PreToolUse":[{"matcher":"Bash|Monitor","hooks":[{"type":"command","command":"~/.claude/hooks/bash-guards.sh"}]}]}}' > "$H3/.claude/settings.json"

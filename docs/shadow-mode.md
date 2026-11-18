@@ -93,6 +93,7 @@ to 2026-11-13, say `no reason given`.
 
 ```bash
 python3 tools/shadow-report.py --days 14
+python3 tools/shadow-report.py --since 2026-11-01   # UTC, in place of --days
 ```
 
 It joins the log on `tool_use_id` to three sources: the denials in the audit

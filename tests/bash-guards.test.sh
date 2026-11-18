@@ -325,7 +325,8 @@ echo ""
 echo "=== the skip file only takes guards off the shipped list ==="
 # It is read beside the hook, so these run a copy of hooks/ and never the clone's.
 copy_hooks; SKIP="$TMP/hk/bash-guards.skip"
-fields() { last_timing | awk -F'\t' '{ for (i = 3; i <= NF; i++) { sub(/=.*/, "", $i); printf "%s ", $i } }'; }
+# The guard names in the last timing line; the trailing at= column is no guard.
+fields() { last_timing | awk -F'\t' '{ for (i = 3; i <= NF; i++) { if ($i ~ /^at=/) continue; sub(/=.*/, "", $i); printf "%s ", $i } }'; }
 rm -f "$SKIP"
 disp "$TMP/hk" "$(payload 'git stash drop')"
 [[ "$(fields)" == "$GUARDS " && "$(dec "$OUT")" == ask ]] && pass "no skip file: all seven" || fail "no skip file" "$(fields)"
@@ -374,13 +375,21 @@ OUT=$(payload "python3 -c 'import os; os.system(\"git push --force origin main\"
 echo ""
 echo "=== the timing log: one line a call, keyed by tool_use_id ==="
 rm -f "$CLAUDE_GUARD_TIMING_LOG"
+T0=$(date +%s)
 disp hooks "$(payload 'ls' toolu_SILENT)"
+T1=$(date +%s)
 L=$(last_timing)
 [[ -z "$OUT" && "$(wc -l < "$CLAUDE_GUARD_TIMING_LOG" | tr -d ' ')" == 1 ]] && pass "a silent allow writes one line" || fail "silent allow" "$(cat "$CLAUDE_GUARD_TIMING_LOG")"
-[[ "$(printf '%s' "$L" | awk -F'\t' '{print $1, $2, NF - 2}')" == "toolu_SILENT Bash 7" ]] \
-  && pass "the payload's tool_use_id, the tool, seven guard fields" || fail "fields" "$L"
-BADF=$(printf '%s\n' "$L" | tr '\t' '\n' | tail -n +3 | grep -cvE '^[a-z-]+=[0-9]+\.[0-9]+:0:allow$')
+[[ "$(printf '%s' "$L" | awk -F'\t' '{print $1, $2, NF - 3}')" == "toolu_SILENT Bash 7" ]] \
+  && pass "the payload's tool_use_id, the tool, seven guard fields, at=" || fail "fields" "$L"
+BADF=$(printf '%s\n' "$L" | tr '\t' '\n' | tail -n +3 | sed '$d' | grep -cvE '^[a-z-]+=[0-9]+\.[0-9]+:0:allow$')
 [[ "$BADF" == 0 ]] && pass "each field is guard=seconds:status:decision" || fail "field shape" "$L"
+AT=${L##*$'\t'}
+[[ "$AT" =~ ^at=[0-9]+$ && ${AT#at=} -ge $T0 && ${AT#at=} -le $T1 ]] \
+  && pass "the last column is at= and the epoch second of the call ($T0 to $T1)" || fail "at= column" "$L"
+disp hooks $'  \n\t '
+[[ "$(last_timing)" == -$'\t'-$'\t'* && "$(last_timing)" != *at=* && "$(fields)" == "$GUARDS " ]] \
+  && pass "whitespace alone: no epoch, so no at= column, and the seven guards still logged" || fail "whitespace at=" "$(last_timing)"
 disp hooks "$(payload 'cat .env' toolu_DENY)"
 [[ "$(last_timing)" == toolu_DENY$'\t'Bash$'\t'env-guard=*:0:deny$'\t'* ]] && pass "a deny is recorded against its guard" || fail "deny field" "$(last_timing)"
 disp hooks "$(jq -nc '{tool_name:"Bash",tool_input:{command:"ls"}}')"

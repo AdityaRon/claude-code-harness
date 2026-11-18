@@ -18,6 +18,7 @@ stderr (tools/hooknames.py); with none, settings.json as it is now does.
 
   tools/permission-friction.py --days 49 --out DIR   # DIR/report.md + DIR/friction.json
   tools/permission-friction.py --days 49             # report to stdout
+  tools/permission-friction.py --since 2026-10-19    # from that day on (UTC), in place of --days
   tools/permission-friction.py --replay hooks/       # also re-run recorded asks/blocks through these guards
   tools/permission-friction.py --days 2 --project tradedesk   # only calls whose cwd contains this
 """
@@ -25,7 +26,7 @@ import argparse, collections, datetime as dt, glob, json, os, re, shlex, subproc
 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # hooknames.py, also when loaded by path
-from hooknames import GuardReasons, bash_guards, label, name_from_output, numbered, read_timing, settings_hooks
+from hooknames import GuardReasons, add_window, bash_guards, label, name_from_output, numbered, read_timing, settings_hooks, window
 
 HOME = os.path.expanduser('~')
 CLAUDE = os.path.join(HOME, '.claude')
@@ -736,7 +737,7 @@ def render_replay(rows, hooks_dir):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--days', type=int, default=49)
+    add_window(ap, 49, int)
     ap.add_argument('--project', default='', help='only tool calls whose working directory contains this text')
     ap.add_argument('--out', help='directory for report.md and friction.json (default: report to stdout)')
     ap.add_argument('--replay', metavar='HOOKS_DIR', help="re-run recorded asks/blocks through the guards in HOOKS_DIR (e.g. a branch's hooks/)")
@@ -749,7 +750,7 @@ def main():
             ap.error('--cases needs --replay HOOKS_DIR')
         return run_cases(a.cases, os.path.abspath(a.replay))
     now = dt.datetime.now(dt.timezone.utc)
-    cut = now - dt.timedelta(days=a.days)
+    cut, _ = window(a, now)
     rules = deny_rules()
     files, uses, results, asks, hblocks, kind, naming = collect(cut)
     if a.project:

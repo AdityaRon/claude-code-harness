@@ -27,7 +27,7 @@ In the 30 days to 2026-11-15 (`tools/permission-friction.py --days 30`), 476
 guard asks drew 1 rejection, a `kubectl delete`; the asks that were always
 approved are gone and the kubectl one is a native ask rule (#237).
 On your own machine, `bash doctor.sh --latency` reads each hook's wall time per day from
-Claude Code's transcripts, `bash doctor.sh --census` counts claude processes and their memory,
+Claude Code's transcripts and the Bash guards' timing log (`--days N`, or `--since 2026-10-19`), `bash doctor.sh --census` counts claude processes and their memory,
 and `bash doctor.sh --disk` sizes job folders and Bazel output bases.
 
 ## Install and update

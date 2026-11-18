@@ -190,15 +190,93 @@ grow() { jq -c --arg g "$1" '[.guards[] | select(.guard == $g)] | map([.n, (.p50
   && pass "a guard lost every time keeps its row" || fail "always lost" "$(jq -c '.guards' <<<"$G")"
 [ "$(jq -c '[.guards[] | select(.guard == "bad")] | length' <<<"$G")" = 0 ] \
   && pass "a column the hook never writes is skipped, not counted as a failure" || fail "malformed column" "$(jq -c '.guards' <<<"$G")"
-[ "$(jq -c '.timing' <<<"$G")" = '{"lines":4,"in_window":2,"no_call_found":1}' ] \
+[ "$(jq -c '.timing' <<<"$G")" = '{"lines":4,"in_window":2,"no_call_found":1,"dated_by_at":0}' ] \
   && pass "a call older than --days is left out; a line with no call in the transcripts is counted apart" || fail "timing counts" "$(jq -c '.timing' <<<"$G")"
 [ "$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total --hook rm-guard --json | jq -c '[.guards[].guard]')" = '["rm-guard"]' ] \
   && pass "--hook keeps one guard" || fail "--hook on guards" ""
 TXT=$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total 2>&1)
-[[ "$TXT" == *"wall time with the seven running at once"* && "$TXT" == *"4 calls logged, 2 in the window, 1 with no call found"* ]] \
+[[ "$TXT" == *"wall time with the seven running at once"* && "$TXT" == *"4 calls logged, 2 in the window (0 dated by their at= column"*"1 with no at= and no call found"* ]] \
   && pass "the text says what the seconds are and what was left out" || fail "guard table text" "$TXT"
 [ "$(jq -c '[(.guards | length), .timing.lines]' "$TMP/day.json")" = '[0,0]' ] \
   && pass "no timing log: no guard rows" || fail "no timing log" "$(jq -c '.timing' "$TMP/day.json")"
+
+echo ""
+echo "=== a timing line's at= dates it; the timing table comes first ==="
+# g5 and g6 are in no transcript: their at= dates them. g6's is 40 days old. g1 to g4
+# are the lines above, which have no at= and are dated through the transcripts as before.
+TL2="$TMP/timing2.log"; cp "$TL" "$TL2"
+NOW=$(date +%s)
+printf 'g5\tBash\tgit-guard=0.070:0:allow\tat=%s\n' "$((NOW - 86400))" >> "$TL2"
+printf 'g6\tBash\tgit-guard=0.080:0:allow\tat=%s\n' "$((NOW - 40 * 86400))" >> "$TL2"
+G2=$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL2" --total --json)
+[ "$(jq -c '.timing' <<<"$G2")" = '{"lines":6,"in_window":3,"no_call_found":1,"dated_by_at":1}' ] \
+  && pass "an at= line in the window counts with no call in the transcripts; one older than --days does not" \
+  || fail "at= dating" "$(jq -c '.timing' <<<"$G2")"
+[ "$(jq -c '[.guards[] | select(.guard == "git-guard")] | map([.n, (.max|round)])' <<<"$G2")" = '[[3,70]]' ] \
+  && pass "git-guard: the two old-format lines and the at= one, 20, 40 and 70 ms" || fail "at= row" "$(jq -c '.guards' <<<"$G2")"
+TXT3=$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL2" --total 2>&1)
+ORDER=$(printf '%s\n' "$TXT3" | grep -nE '^Bash guards inside bash-guards|^A tool call.s hooks run together|^Hook wall time' | cut -d: -f2- | cut -c1-12 | tr '\n' '|')
+[ "$ORDER" = "Bash guards |A tool call'|Hook wall ti|" ] \
+  && pass "the timing-log table, then the line on hooks running together, then the transcript table" || fail "order" "$ORDER"
+[[ "$TXT3" == *"A tool call's hooks run together, so it waits for its slowest hook: on Bash, bash-guards' fixed start plus its slowest guard, or subagent-cache-guard, which runs alongside."* ]] \
+  && pass "the line says a call costs its slowest hook" || fail "together line" "$TXT3"
+[[ "$(lat --total 2>&1)" == *"A tool call's hooks run together"* ]] && pass "the line is there with no timing log too" || fail "together line, no log" ""
+
+echo ""
+echo "=== a week whose hook records fall under a tenth of the weeks before is flagged ==="
+# Monday-to-Monday UTC weeks from --since, six full ones before this week: 20, 20, 3
+# (15% of 20: not flagged), 20, 0 (flagged: a week with none is still a week) and 1
+# (flagged, against the median of 20, 20, 3, 20 and 0).
+P3="$TMP/projects3"; mkdir -p "$P3/proj"
+SINCE=$(python3 - "$P3/proj/w.jsonl" <<'PY2'
+import datetime as dt, json, sys
+now = dt.datetime.now(dt.timezone.utc)
+mon = (now - dt.timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0) - dt.timedelta(weeks=6)
+with open(sys.argv[1], "w") as fh:
+    for wk, n in enumerate([20, 20, 3, 20, 0, 1]):
+        for i in range(n):
+            t = mon + dt.timedelta(weeks=wk, days=3, minutes=i)
+            at = {"type": "hook_success", "hookName": "PreToolUse:Bash", "command": "~/.claude/hooks/x.sh", "durationMs": 5}
+            fh.write(json.dumps({"type": "attachment", "timestamp": t.strftime("%Y-%m-%dT%H:%M:%S.000Z"), "attachment": at}) + "\n")
+print(mon.strftime("%Y-%m-%dT%H:%M:%SZ"))
+PY2
+)
+W=$(python3 "$REPO/tools/hook-latency.py" --projects "$P3" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --since "$SINCE" --json)
+[ "$(jq -c '[.weeks[:6][] | [.records, .flagged]]' <<<"$W")" = '[[20,false],[20,false],[3,false],[20,false],[0,true],[1,true]]' ] \
+  && pass "20, 20, 3 and 20 pass; the week with none and the week with 1 are flagged" || fail "weeks" "$(jq -c '.weeks' <<<"$W")"
+[ "$(jq -c '[.weeks[:6][] | .prior_median]' <<<"$W")" = '[null,null,20,20,20,20]' ] \
+  && pass "no week is judged on fewer than two before it; then the median of those before" || fail "median" "$(jq -c '[.weeks[].prior_median]' <<<"$W")"
+TXTW=$(python3 "$REPO/tools/hook-latency.py" --projects "$P3" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --since "$SINCE" 2>&1)
+WK5=$(jq -r '.weeks[5].week' <<<"$W")
+[[ "$TXTW" == *"Week of $WK5: 1 hook records"*"under 10% of the prior weeks' median of 20"* && "$TXTW" == *"since ${SINCE:0:10} 00:00 UTC"* ]] \
+  && pass "the text names the flagged week and the window it read" || fail "week text" "$TXTW"
+# weeks() on a fixed clock: the window opens on a Sunday and closes on a Tuesday, so the
+# first and last weeks have one day each and no record. Neither is judged or a baseline:
+# the full weeks hold 50 and then 2, and one week before the 2 is too few to judge it on.
+PW=$(python3 - "$REPO/tools/hook-latency.py" <<'PY2'
+import datetime as dt, importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("hl", sys.argv[1]); hl = importlib.util.module_from_spec(spec); spec.loader.exec_module(hl)
+u = dt.timezone.utc
+out = hl.weeks({"2026-10-05": 50, "2026-10-12": 2}, dt.datetime(2026, 10, 4, tzinfo=u), dt.datetime(2026, 10, 20, tzinfo=u))
+print(json.dumps([[w["week"], w["days"], w["flagged"]] for w in out]))
+PY2
+)
+[ "$PW" = '[["2026-09-28", 1.0, false], ["2026-10-05", 7.0, false], ["2026-10-12", 7.0, false], ["2026-10-19", 1.0, false]]' ] \
+  && pass "a week with under two days in the window is neither judged nor a baseline" \
+  || fail "partial weeks" "$PW"
+
+echo ""
+echo "=== --since is --days from a time of day ==="
+SEVEN=$(python3 -c 'import datetime as dt; print((dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+A=$(lat --days 7 --total --timing-log "$TL" --json | jq -c 'del(.weeks)')
+B=$(lat --since "$SEVEN" --total --timing-log "$TL" --json | jq -c 'del(.weeks)')
+[ -n "$A" ] && [ "$A" = "$B" ] && pass "--since a week ago reads what --days 7 reads" || fail "--since = --days" "$A vs $B"
+ONE=$(python3 -c 'import datetime as dt; print((dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=36)).strftime("%Y-%m-%dT%H:%M:%S"))')
+# Under UTC+14 a time with no zone read as local would start 14 hours earlier, and take it in.
+[ "$(TZ=Etc/GMT-14 lat --since "$ONE" --total --json | jq -c '[.rows[] | select(.hook == "git-guard.sh") | .n, .max]')" = '[2,3400]' ] \
+  && pass "a record from before --since is left out (git-guard's 2-day-old 900 ms), and no zone is UTC" || fail "--since cut" "$(lat --since "$ONE" --total --json | jq -c '.rows')"
+lat --days 7 --since "$SEVEN" >/dev/null 2>&1; RC=$?
+[ "$RC" = 2 ] && pass "--days and --since together: a usage error" || fail "exclusive" "rc=$RC"
 
 echo ""
 echo "=== doctor.sh --latency passes its arguments through ==="

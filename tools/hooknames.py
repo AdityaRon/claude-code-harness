@@ -13,7 +13,11 @@ hook now at its number. name_from_output names a numbered record by the guard wh
 are in the decision reason on its own stdout instead, and never reads its stderr.
 
   tools/hooknames.py PreToolUse 4 [--settings PATH]   the hook a record calls "command hook 4"
+
+Also the --days or --since window the report tools share (add_window, window).
 """
+import argparse
+import datetime as dt
 import glob
 import json
 import os
@@ -65,12 +69,14 @@ def label(cmd, event, hooks):
     return script_name(uniq[n - 1]) if 0 < n <= len(uniq) else f"hook {n}"
 
 
-def read_timing(path=None):
+def read_timing(path=None, stamps=None):
     """bash-guards' timing log and its rotated copy: tool_use_id -> [(guard, seconds, status, decision)].
 
     One line a call: the id, the tool, then guard=seconds:status:decision for each guard that
     ran. seconds is None where the hook wrote '-' (an answer that went missing); status is the
-    guard's exit status, or 'lost'. The log holds no time of day: join the id to a transcript.
+    guard's exit status, or 'lost'. A line written since the dispatcher's jq stamped it ends in
+    at=EPOCH, the second it read the call; pass a dict as stamps to get tool_use_id -> that epoch.
+    An older line has no time of day: join its id to a transcript.
     """
     path = os.path.expanduser(path or os.environ.get("CLAUDE_GUARD_TIMING_LOG") or "~/.claude/logs/guard-timing.log")
     out = {}
@@ -86,6 +92,10 @@ def read_timing(path=None):
                     continue
                 per = []
                 for c in cols[2:]:
+                    if c.startswith("at="):
+                        if stamps is not None and c[3:].isdigit():
+                            stamps[cols[0]] = int(c[3:])
+                        continue
                     g, _, v = c.partition("=")
                     secs, _, rest = v.partition(":")
                     status, _, decision = rest.partition(":")
@@ -98,6 +108,40 @@ def read_timing(path=None):
                     per.append((g, s, status, decision))
                 out[cols[0]] = per
     return out
+
+
+# ---- the window a report reads ------------------------------------------------
+def parse_since(s):
+    """An ISO 8601 date or time as an aware UTC datetime. One with no zone is UTC, and a
+    trailing Z is +00:00: Python 3.9's fromisoformat, macOS's /usr/bin/python3, rejects Z."""
+    t = str(s).strip()
+    if t[-1:] in ("Z", "z"):
+        t = t[:-1] + "+00:00"
+    try:
+        d = dt.datetime.fromisoformat(t)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an ISO 8601 date or time: {s!r}") from None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=dt.timezone.utc)
+    return d.astimezone(dt.timezone.utc)
+
+
+def add_window(ap, days, kind=float):
+    """--days N or --since WHEN, not both."""
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--days", type=kind, default=None, help=f"the last N days (default {days:g})")
+    g.add_argument("--since", type=parse_since, default=None,
+                   help="from this ISO 8601 date or time on, e.g. 2026-10-19 or 2026-10-19T08:00:00Z; one with no zone is UTC")
+    ap.set_defaults(window_days=days)
+
+
+def window(a, now):
+    """(start, words): where the window starts, and how a report names it. Sets a.days."""
+    if a.since is not None:
+        return a.since, f"since {a.since:%Y-%m-%d %H:%M} UTC"
+    if a.days is None:
+        a.days = a.window_days
+    return now - dt.timedelta(days=a.days), f"last {a.days:g} days"
 
 
 # ---- the guard a reason names -------------------------------------------------

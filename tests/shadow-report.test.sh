@@ -113,5 +113,17 @@ TOTAL=$(printf '%s\n' "$OUT" | grep -F '| **all** |')
 OUT=$(python3 -I tools/shadow-report.py --days 60 2>&1)
 printf '%s\n' "$OUT" | grep -qF '| kubectl-guard | mutating-verb | 5 |' && pass "--days 60 reaches the old line" || fail "--days 60" "$OUT"
 
+# --since: the same report as the matching --days, but for its title and the minute it ran.
+ago() { python3 -c 'import datetime as dt, sys; print((dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=float(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1"; }
+same() { sed -e 1d -e 's/ up to [0-9-]* [0-9:]* UTC/ up to NOW/'; }
+A=$(python3 -I tools/shadow-report.py --days 14 2>&1 | same)
+B=$(python3 -I tools/shadow-report.py --since "$(ago 14)" 2>&1 | same)
+[[ -n "$A" && "$A" == "$B" ]] && pass "--since 14 days ago reads what --days 14 reads" || fail "--since = --days" "$(diff <(echo "$A") <(echo "$B") | head -5)"
+OUT=$(python3 -I tools/shadow-report.py --since "$(ago 31)" 2>&1)
+printf '%s\n' "$OUT" | grep -qF '| kubectl-guard | mutating-verb | 5 |' && [[ "$(head -1 <<<"$OUT")" == "# Shadow report: since "*" UTC" ]] \
+  && pass "--since 31 days ago reaches the 30-day-old line, and the title says since" || fail "--since 31" "$(head -12 <<<"$OUT")"
+OUT=$(python3 -I tools/shadow-report.py --since "$(ago 29)" 2>&1)
+printf '%s\n' "$OUT" | grep -qF '| kubectl-guard | mutating-verb | 4 |' && pass "--since 29 days ago leaves it out" || fail "--since 29" "$OUT"
+
 echo ""
 results
