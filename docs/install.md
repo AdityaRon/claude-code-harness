@@ -49,7 +49,8 @@ repo layout is for reading the repo, not for the installed tree.
   spend-report.py          ← what sessions, subagents and loop ticks cost; comms-hub's tick runs it daily
   disk-space.py            ← what job folders and Bazel output bases hold; harness-update.sh runs its
                              stamp once a day into state/disk-usage (sizes, transcripts of 150 MB
-                             or more, the guards' p90), which session-start reads;
+                             or more, the guards' p90), which session-start reads; report also
+                             sizes ~/.claude/projects and pre-compact.sh's copies;
                              prune, clone and bazel --sweep delete by digest, behind ask rules
   relocate-clones.sh       ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads
   harness-update.sh        ← moves this machine to the newest release

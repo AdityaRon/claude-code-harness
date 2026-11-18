@@ -1249,7 +1249,8 @@ def count_mark(path, mark=COMPACT_MARK, chunk=1 << 20):
 
 def big_transcripts(projects, min_bytes, limit=10):
     """Session transcripts (PROJECT/SESSION.jsonl) of MIN_BYTES or more, largest first, each with
-    its compaction count. Every one is stat'ed; only those past the size are read."""
+    its compaction count and mtime; LIMIT None for all. Every one is stat'ed; only those past the
+    size are read."""
     out = []
     try:
         dirs = [d for d in os.scandir(projects) if d.is_dir(follow_symlinks=False)]
@@ -1264,22 +1265,43 @@ def big_transcripts(projects, min_bytes, limit=10):
             if not e.name.endswith(".jsonl") or not e.is_file(follow_symlinks=False):
                 continue
             try:
-                size = e.stat(follow_symlinks=False).st_size
+                st = e.stat(follow_symlinks=False)
             except OSError:
                 continue
-            if size >= min_bytes:
+            if st.st_size >= min_bytes:
                 n = count_mark(e.path)
                 if n is not None:
-                    out.append({"session": e.name[:-len(".jsonl")], "path": e.path, "bytes": size, "compactions": n})
+                    out.append({"session": e.name[:-len(".jsonl")], "path": e.path, "bytes": st.st_size,
+                                "compactions": n, "mtime": st.st_mtime})
     out.sort(key=lambda t: -t["bytes"])
-    return out[:limit]
+    return out if limit is None else out[:limit]
+
+
+def transcript_mb_default():
+    """CLAUDE_TRANSCRIPT_WARN_MB, or 150 when unset or not a size."""
+    try:
+        return days_arg(os.environ.get("CLAUDE_TRANSCRIPT_WARN_MB") or "150")
+    except (argparse.ArgumentTypeError, ValueError):
+        return 150.0
+
+
+def store_sizes(projects, backups):
+    """What ~/.claude/projects and pre-compact.sh's copies hold, on demand (du); None where du gave no total."""
+    _, pb, _ = du_children(projects) if os.path.isdir(projects) else ({}, 0, "")
+    try:
+        copies = [e for e in os.scandir(backups) if e.name.startswith("transcript_") and e.name.endswith(".jsonl")]
+    except OSError:
+        copies = []
+    bb = sum(e.stat(follow_symlinks=False).st_size for e in copies if e.is_file(follow_symlinks=False))
+    return {"projects_dir": projects, "projects_bytes": pb, "backups_dir": backups, "backup_bytes": bb,
+            "backup_files": len(copies)}
 
 
 def print_transcripts(ts, mb):
     if not ts:
         return
     print("")
-    print("Session transcripts of %g MB or more, largest first:" % mb)
+    print("Session transcripts of %g MB or more, largest first (CLAUDE_TRANSCRIPT_WARN_MB):" % mb)
     for t in ts:
         print("  %s  %d compactions  %s" % (fmt(t["bytes"]), t["compactions"], shown(t["path"])))
 
@@ -1341,9 +1363,14 @@ def cmd_stamp(a):
              "measured=%d" % now, "date=%s" % time.strftime("%Y-%m-%d", time.localtime(now)),
              "jobs_dir=%s" % jobs, "bazel_root=%s" % r["root"]]
     # session-start names its own session from these; an older one skips them (not a number).
+    big = big_transcripts(a.projects, a.transcript_mb * 1e6, limit=None)
     lines += ["transcript=%s %d %d" % (t["session"], t["bytes"], t["compactions"])
-              for t in big_transcripts(a.projects, a.transcript_mb * 1e6)
-              if re.match(r"^[A-Za-z0-9_-]+$", t["session"])]
+              for t in big[:10] if re.match(r"^[A-Za-z0-9_-]+$", t["session"])]
+    # Written in the last 7 days: an idle one cannot be acted on from a new session.
+    active = [t for t in big if now - t["mtime"] <= 7 * 86400]
+    if active:
+        lines.append("transcripts_active=%d %d %d" % (len(active), active[0]["bytes"], active[0]["compactions"]))
+    lines.append("transcript_mb=%d" % round(a.transcript_mb))
     ms, n = guard_p90(a.timing_log)
     if ms is not None:
         lines += ["guard_p90_ms=%d" % ms, "guard_calls=%d" % n]
@@ -1401,7 +1428,10 @@ def main(argv=None):
     p = sub.add_parser("report", help="each job folder", allow_abbrev=False)
     p.add_argument("--jobs", default=jobs_default)
     p.add_argument("--projects", default=projects_default)
-    p.add_argument("--transcript-mb", type=days_arg, default=150.0, help="list session transcripts this size or more")
+    p.add_argument("--transcript-mb", type=days_arg, default=transcript_mb_default(),
+                   help="list session transcripts this size or more (CLAUDE_TRANSCRIPT_WARN_MB, 150)")
+    p.add_argument("--backups", default=os.path.expanduser(
+        os.environ.get("CLAUDE_TRANSCRIPT_DIR") or os.path.join(HOME, ".claude", "transcripts")))
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("bazel", help="each Bazel output base; --sweep for orphans", allow_abbrev=False)
     p.add_argument("--root", default=None)
@@ -1413,7 +1443,8 @@ def main(argv=None):
     p.add_argument("--root", default=None)
     p.add_argument("--out", default=os.path.join(HOME, ".claude", "state", "disk-usage"))
     p.add_argument("--projects", default=projects_default)
-    p.add_argument("--transcript-mb", type=days_arg, default=150.0, help="list session transcripts this size or more")
+    p.add_argument("--transcript-mb", type=days_arg, default=transcript_mb_default(),
+                   help="list session transcripts this size or more (CLAUDE_TRANSCRIPT_WARN_MB, 150)")
     p.add_argument("--timing-log", default=os.path.expanduser(
         os.environ.get("CLAUDE_GUARD_TIMING_LOG") or os.path.join(HOME, ".claude", "logs", "guard-timing.log")))
     p = sub.add_parser("prune", help="old job tmp entries safe to delete, with a digest", allow_abbrev=False)
@@ -1440,10 +1471,15 @@ def main(argv=None):
     if a.cmd == "report":
         r = jobs_report(a.jobs, now)
         r["transcripts"] = big_transcripts(a.projects, a.transcript_mb * 1e6)
+        r.update(store_sizes(a.projects, a.backups))
         if a.json:
             print(json.dumps(r, indent=1))
         else:
             print_jobs(r)
+            print("")
+            print("Transcripts: %s holds %s (du); pre-compact.sh's copies in %s, %s in %d files"
+                  % (shown(r["projects_dir"]), fmt(r["projects_bytes"]) if r["projects_bytes"] is not None else "an unknown size",
+                     shown(r["backups_dir"]), fmt(r["backup_bytes"]), r["backup_files"]))
             print_transcripts(r["transcripts"], a.transcript_mb)
         return 0
     if a.cmd == "prune":
