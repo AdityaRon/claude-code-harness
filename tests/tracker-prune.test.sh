@@ -172,8 +172,9 @@ refused "an unclosed fence" "$T/fence.md" gone --write
 refused "an unclosed fence, dry run" "$T/fence.md" gone
 printf '| A | B | Status |\n|---|---|---|\n| a | b | done |\n| two | cells |\n' > "$T/rows.md"
 refused "a malformed row in a status table" "$T/rows.md" gone --write
-cp "$T/rows.md" "$T/x-archive.md"
+ledger "$T/x-archive.md"   # rows that would move, so only the name refuses it
 refused "an archive named as the tracker" "$T/x-archive.md" same --write
+gone "and no archive of an archive" "$T/x-archive-archive.md"
 printf '| A | Status |\n|---|---|\n| a | done \377 |\n' > "$T/bin.md"
 refused "not UTF-8" "$T/bin.md" gone --write
 ledger "$T/dir.md"; mkdir "$T/dir-archive.md"
@@ -186,6 +187,7 @@ echo ""
 echo "=== a fault the checks must catch: the tracker loses no line ==="
 T="$TMP/g/trackers"; mkdir -p "$T"; ledger "$T/work.md"
 CLAUDE_TRACKER_PRUNE_TEST_FAULT=drop-line refused "a line dropped from the new tracker" "$T/work.md" gone --write
+ledger "$T/work.md"
 CLAUDE_TRACKER_PRUNE_TEST_FAULT=drop-line refused "the same, dry run" "$T/work.md" gone
 
 echo ""
@@ -195,12 +197,12 @@ T="$TMP/h/trackers"; mkdir -p "$T"; ledger "$T/work.md"
 cp "$T/work.md" "$T/work-archive.md"; cp "$T/work-archive.md" "$TMP/h/arc.orig"
 CLAUDE_TRACKER_PRUNE_TEST_FAULT=short-append refused "a short append to an archive holding the same rows" "$T/work.md" same --write
 same "the archive is back to its bytes" "$T/work-archive.md" "$TMP/h/arc.orig"
-rm -f "$T/work-archive.md"
+rm -f "$T/work-archive.md"; ledger "$T/work.md"   # each case starts from the whole fixture
 CLAUDE_TRACKER_PRUNE_TEST_FAULT=short-append refused "a short append to a new archive" "$T/work.md" gone --write
 if [ "$(id -u)" = 0 ]; then
   echo "  (skipped: a read-only archive is writable as root)"
 else
-  : > "$T/work-archive.md"; chmod 444 "$T/work-archive.md"
+  ledger "$T/work.md"; : > "$T/work-archive.md"; chmod 444 "$T/work-archive.md"
   refused "an archive it cannot append to" "$T/work.md" same --write
   chmod 644 "$T/work-archive.md"; rm -f "$T/work-archive.md"
 fi
