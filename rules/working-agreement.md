@@ -37,4 +37,6 @@
   `trackers/<name>.md`, replaced in place: `## Scope`, `## Open`, `## Owed`,
   `## Settled`, `## Next on restart`; a `STATE:` line from `date -u`; and
   `Crons:` with each session cron as its expression and prompt, or `none`.
-  Under 5 KB. memory-lint checks the shape.
+  Under 5 KB. memory-lint checks the shape. A log too big for that is read by
+  slice (`grep`, `sed -n`), never whole; before compacting, `tracker-prune.py`
+  moves its settled rows to `<name>-archive.md`.
