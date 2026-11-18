@@ -74,6 +74,7 @@ tools/hook-bench.py                                  # latest tag vs the working
 tools/hook-bench.py --base origin/main --head HEAD   # two refs, same run
 tools/hook-bench.py --gate --intended id1,id2 --md bench.md --json bench.json
 tools/hook-bench.py --corpus audit                   # this machine's audit log; never publish
+tools/hook-bench.py --launches auto                  # also count the processes each hook starts
 ```
 
 Every payload in `tests/bench-corpus.jsonl` is fed to each PreToolUse command
@@ -91,3 +92,14 @@ named in `--intended`, or on a p50 or p95 wait that grows past both
 `--limit-pct` (default 20) and `--floor-ms` (default 5), for tool classes with
 at least `--min-calls` calls (default 20). Absolute numbers depend on the
 machine, so only the same-run comparison is a verdict.
+
+`--launches` adds a pass that counts the processes each hook starts on each
+payload, run alone once, and a table of them; no gate reads it yet. A machine
+whose endpoint agent inspects each process start pays 16 to 27 ms for one
+(`true`, `bash -c :`, `jq -n 1`, the maintainer's work Mac) where a CI runner
+pays 0.5 to 1.9 ms, so a count shows a cost the runner's clock hides.
+`--launches strace` (Linux) counts each execve past the hook's own bash and each
+new process, a `$( )` included; the PR bench runs it. `--launches shim` (macOS)
+runs a copy of the hooks whose `lib.sh` puts a shim for every program name
+first on PATH, and counts the execs found through PATH: no fork, and no
+program started by its full path. `auto` takes strace where it works.

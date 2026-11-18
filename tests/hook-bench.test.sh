@@ -196,5 +196,104 @@ run --base nope --head v0.1.0; RC=$?
 [ "$RC" = 2 ] && pass "exit 2 on a bad ref" || fail "bad ref" "rc=$RC"
 
 echo ""
+echo "=== --launches: the processes each hook starts, per payload, on a copy of the real hooks ==="
+F3="$TMP/fix3"; mkdir -p "$F3/config"
+cp -R "$PWD/hooks" "$F3/hooks"; cp "$PWD/config/settings.json" "$F3/config/settings.json"
+( cd "$F3" && git init -q && git -c user.email=t@example.com -c user.name=t add -A \
+  && git -c user.email=t@example.com -c user.name=t commit -qm base && git tag base ) || { echo "fixture failed"; exit 1; }
+{ jq -nc '{id:"ls",tool_name:"Bash",tool_input:{command:"ls -la"}}'
+  jq -nc '{id:"git",tool_name:"Bash",tool_input:{command:"git status"}}'
+  jq -nc '{id:"kube",tool_name:"Bash",tool_input:{command:"kubectl get pods"}}'; } > "$TMP/c3.jsonl"
+launches() {   # launches METHOD: base vs the worktree, counted; sets LRC
+  python3 "$BENCH" --repo "$F3" --corpus "$TMP/c3.jsonl" --base base --head worktree --launches "$1" \
+    --json "$TMP/l.json" --md "$TMP/l.md" >/dev/null 2>"$TMP/lerr"; LRC=$?
+}
+# Per payload, head less base: index 0 is execs, 1 forks.
+delta() { jq -c --arg h "$1" --argjson i "$2" '[.launches.per_payload | to_entries[] | (.value.head[$h][$i] - .value.base[$h][$i])]' "$TMP/l.json" 2>/dev/null; }
+add_line() {   # add_line TEXT: a line in the worktree's bash-guards.sh, after it reads the payload
+  ( cd "$F3" && git checkout -q -- hooks )
+  awk -v l="$1" '{ print } /^read_input$/ { print l }' "$F3/hooks/bash-guards.sh" > "$TMP/bg" && cat "$TMP/bg" > "$F3/hooks/bash-guards.sh"
+  grep -qxF "$1" "$F3/hooks/bash-guards.sh" || fail "test setup" "the read_input line was not found"
+}
+STRACE=no
+command -v strace >/dev/null && strace -f -o /dev/null true 2>/dev/null && STRACE=yes
+
+launches shim
+[ "$LRC" = 0 ] && [ "$(jq -r '.launches.method' "$TMP/l.json")" = shim ] \
+  && [ "$(delta bash-guards.sh 0)" = '[0,0,0]' ] && [ "$(jq -c '[.launches.per_payload[].base["bash-guards.sh"][0] >= 2] | all' "$TMP/l.json")" = true ] \
+  && pass "shim, same files both sides: bash-guards starts the same, at least its cat and jq" || fail "shim A/A" "rc=$LRC $(cat "$TMP/lerr") $(jq -c '.launches.per_payload' "$TMP/l.json" 2>/dev/null)"
+grep -q '^Processes started, report only: execs found through PATH only' "$TMP/l.md" && grep -q '^| bash-guards.sh | 3 | ' "$TMP/l.md" \
+  && pass "the markdown has the count table, labelled execs through PATH" || fail "shim markdown" "$(grep -A4 'Processes started' "$TMP/l.md")"
+# docs/guards.md: `ls -la` starts two programs, the dispatcher's cat and jq; the hook's own bash is not one.
+[ "$(jq -c '.launches.per_payload.ls.base["bash-guards.sh"][0]' "$TMP/l.json")" = 2 ] \
+  && pass "shim: ls -la is two execs in bash-guards, cat and jq" || fail "shim: ls -la" "$(jq -c '.launches.per_payload.ls' "$TMP/l.json")"
+# subagent-cache-guard runs dirname before it loads lib.sh: the shims are first on the PATH it starts with too.
+[ "$(jq -c '.launches.per_payload.ls.base["subagent-cache-guard.sh"][0]' "$TMP/l.json")" = 2 ] \
+  && pass "shim: subagent-cache-guard's dirname, before lib.sh, and cat" || fail "shim: before lib.sh" "$(jq -c '.launches.per_payload.ls' "$TMP/l.json")"
+if [ "$STRACE" = yes ]; then
+  launches strace
+  [ "$LRC" = 0 ] && [ "$(jq -c '.launches.per_payload.ls.base["bash-guards.sh"][0]' "$TMP/l.json")" = 2 ] && [ "$(delta bash-guards.sh 1)" = '[0,0,0]' ] \
+    && pass "strace, same files: ls -la is the same two execs, and no payload's forks differ" || fail "strace A/A" "rc=$LRC $(cat "$TMP/lerr") $(jq -c '.launches.per_payload' "$TMP/l.json" 2>/dev/null)"
+fi
+
+# `true` is a bash builtin and starts nothing; with the builtin off, `true` is the program on PATH.
+add_line 'enable -n true; true; enable true'
+launches shim
+[ "$(delta bash-guards.sh 0)" = '[1,1,1]' ] && [ "$(delta subagent-cache-guard.sh 0)" = '[0,0,0]' ] \
+  && pass "shim: one added external true is exactly one exec more on each payload, in that hook only" \
+  || fail "shim: one true" "bash-guards $(delta bash-guards.sh 0), subagent-cache-guard $(delta subagent-cache-guard.sh 0) $(cat "$TMP/lerr")"
+if [ "$STRACE" = yes ]; then
+  launches strace
+  [ "$(delta bash-guards.sh 0)" = '[1,1,1]' ] && [ "$(delta bash-guards.sh 1)" = '[1,1,1]' ] && [ "$(delta subagent-cache-guard.sh 0)" = '[0,0,0]' ] \
+    && pass "strace: one added external true is one exec and one fork more on each payload" \
+    || fail "strace: one true" "execs $(delta bash-guards.sh 0) forks $(delta bash-guards.sh 1) $(cat "$TMP/lerr")"
+else
+  echo "  SKIP: no strace here; the strace cases run on Linux CI"
+fi
+
+# env finds true by trying each PATH folder with execve: lib.sh's /opt/homebrew/bin and
+# /usr/local/bin first. Those tries fail and start nothing; env and true are two execs.
+add_line 'env true'
+launches shim
+[ "$(delta bash-guards.sh 0)" = '[2,2,2]' ] && pass "shim: an added env true is two execs, env and true" || fail "shim: env true" "$(delta bash-guards.sh 0)"
+if [ "$STRACE" = yes ]; then
+  launches strace
+  [ "$(delta bash-guards.sh 0)" = '[2,2,2]' ] && pass "strace: an added env true is two execs; the execve tries that failed are not counted" \
+    || fail "strace: env true" "execs $(delta bash-guards.sh 0) forks $(delta bash-guards.sh 1)"
+fi
+
+add_line ': "$( : )"'
+launches shim
+[ "$(delta bash-guards.sh 0)" = '[0,0,0]' ] && pass "shim: an added \$( : ) starts no program, and the shim sees no fork" || fail "shim: \$( : )" "$(delta bash-guards.sh 0)"
+if [ "$STRACE" = yes ]; then
+  launches strace
+  [ "$(delta bash-guards.sh 1)" = '[1,1,1]' ] && [ "$(delta bash-guards.sh 0)" = '[0,0,0]' ] \
+    && pass "strace: an added \$( : ) is one fork more on each payload, and no exec" \
+    || fail "strace: \$( : )" "execs $(delta bash-guards.sh 0) forks $(delta bash-guards.sh 1) $(cat "$TMP/lerr")"
+  grep -q '^Processes started, report only: each hook run alone once per payload under `strace -f`' "$TMP/l.md" \
+    && pass "the strace table says what it counts" || fail "strace markdown" "$(grep -A4 'Processes started' "$TMP/l.md")"
+else
+  launches strace
+  [ "$LRC" = 2 ] && grep -q 'strace is not installed here, or may not trace' "$TMP/lerr" \
+    && pass "--launches strace with no strace: exit 2, never a count of 0" || fail "no strace" "rc=$LRC $(cat "$TMP/lerr")"
+fi
+
+# A run past --hook-timeout is not counted, and says so: never a 0 a later gate would read as fewer.
+add_line 'sleep 4'
+head -1 "$TMP/c3.jsonl" > "$TMP/c1.jsonl"
+python3 "$BENCH" --repo "$F3" --corpus "$TMP/c1.jsonl" --base base --head worktree --launches shim --hook-timeout 2 \
+  --json "$TMP/l.json" --md "$TMP/l.md" >/dev/null 2>"$TMP/lerr"
+[ "$(jq -c '.launches.per_payload.ls | [.base["bash-guards.sh"][0], .head["bash-guards.sh"]]' "$TMP/l.json")" = '[2,null]' ] \
+  && grep -qE '^\| bash-guards\.sh \|.*\| 1 \|$' "$TMP/l.md" \
+  && pass "a hook that runs past the timeout: null for that payload, and 1 not counted" || fail "timeout" "$(jq -c '.launches.per_payload' "$TMP/l.json" 2>/dev/null) $(grep bash-guards "$TMP/l.md" | tail -1)"
+
+( cd "$F3" && git checkout -q -- hooks )
+grep -v '^export PATH=' "$F3/hooks/lib.sh" > "$TMP/lib" && cat "$TMP/lib" > "$F3/hooks/lib.sh"
+launches shim
+[ "$LRC" = 2 ] && grep -q 'no `export PATH="..."` line' "$TMP/lerr" \
+  && pass "a lib.sh with no PATH line to put the shims in front of: exit 2" || fail "no PATH line" "rc=$LRC $(cat "$TMP/lerr")"
+( cd "$F3" && git checkout -q -- hooks )
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

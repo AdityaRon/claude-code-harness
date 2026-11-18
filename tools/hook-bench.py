@@ -5,6 +5,7 @@
   tools/hook-bench.py --base edbd1fa --head HEAD
   tools/hook-bench.py --gate --intended id1,id2 --md bench.md --json bench.json
   tools/hook-bench.py --corpus audit          # this machine's audit log; never publish
+  tools/hook-bench.py --launches auto         # also count the processes each hook starts
 
 Every payload in the corpus is fed to the hooks that would fire for it under
 that side's config/settings.json (PreToolUse, command hooks, not async), both
@@ -25,8 +26,19 @@ python3 is already required by tools/permission-friction.py.
 Absolute numbers depend on the machine (process start cost varies 3x between
 laptops), which is why both sides run in the same process on the same corpus
 and only the comparison is reported as a verdict.
+
+--launches counts the processes each hook starts, per payload, in a pass of its
+own after the timed ones, each hook run alone once. A machine whose endpoint
+agent inspects every process start pays for each, so the count is a cost a
+fast runner's clock does not show. strace (Linux): `strace -f` sees every
+execve past the hook's own bash and every new process (clone, clone3, fork or
+vfork without CLONE_THREAD), a $( ) included. shim (macOS, or Linux without
+strace): a copy of each side's hooks whose lib.sh puts a folder of shims first
+on PATH, one per name in lib.sh's PATH folders and this PATH, each logging its
+name before it execs the real one. It sees execs found through PATH only: no
+fork, and no program started by its full path. Report only: no gate reads it.
 """
-import argparse, hashlib, io, json, os, platform, re, resource, shutil, signal, statistics, subprocess, sys, tarfile, tempfile, threading, time
+import argparse, concurrent.futures, glob, hashlib, io, json, os, platform, re, resource, shlex, shutil, signal, statistics, subprocess, sys, tarfile, tempfile, threading, time
 
 RANK = {'allow': 0, 'ask': 2, 'deny': 3, 'error': 4}
 CLASSES = {'Bash': 'Bash', 'Write': 'Write/Edit', 'Edit': 'Write/Edit', 'MultiEdit': 'Write/Edit',
@@ -229,6 +241,174 @@ def run_call(side, row, env, cwd):
             'cpu': sum(v[1] for v in per.values()), 'decision': worst, 'by': by, 'hooks': per}
 
 
+# ---- processes started (--launches) --------------------------------------------
+PATH_LINE = re.compile(r'^export PATH="(?P<dirs>[^"\n]*)"[ \t]*$', re.M)
+EXEC_OK = re.compile(r'^(execve|execveat)\(.*= 0$')
+FORK = re.compile(r'^(clone|clone3|fork|vfork)\(.*= (\d+)$')
+
+
+def strace_works():
+    """strace is here and may trace (a container can refuse ptrace)."""
+    if not shutil.which('strace'):
+        return False
+    d = tempfile.mkdtemp(prefix='cch-st.', dir=os.environ.get('TMPDIR') or None)
+    try:
+        p = subprocess.run(['strace', '-f', '-qq', '-e', 'trace=process', '-o', os.path.join(d, 'o'), 'true'],
+                           capture_output=True, timeout=30)
+        with open(os.path.join(d, 'o'), errors='replace') as f:
+            return p.returncode == 0 and 'execve(' in f.read()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def strace_counts(out_prefix):
+    """(execs, forks) from `strace -ff -o PREFIX`'s files: successful execve or execveat past the
+    hook's own, and clone, clone3, fork or vfork that made a process (a pid back, no CLONE_THREAD)."""
+    execs = forks = 0
+    for fn in glob.glob(glob.escape(out_prefix) + '.*'):
+        with open(fn, errors='replace') as f:
+            for line in f:
+                line = line.rstrip()
+                if EXEC_OK.match(line):
+                    execs += 1
+                    continue
+                m = FORK.match(line)
+                if m and int(m.group(2)) > 0 and 'CLONE_THREAD' not in line:
+                    forks += 1
+    # The first execve is the hook's own bash; with none, strace ran nothing and counted nothing.
+    return (execs - 1, forks) if execs else None
+
+
+def shim_side(side, into, shims):
+    """A copy of SIDE whose lib.sh puts the shim folder first on PATH, as a side dict. lib.sh's
+    own line puts the system folders first, before whatever PATH the hook was given."""
+    shutil.copytree(side['dir'], into, symlinks=True)
+    lib = os.path.join(into, 'hooks', 'lib.sh')
+    try:
+        text = open(lib).read()
+    except OSError:
+        die(f"--launches shim: {side['ref']} has no hooks/lib.sh to put the shims on PATH in")
+    m = PATH_LINE.search(text)
+    if not m:
+        die(f"--launches shim: no `export PATH=\"...\"` line in {side['ref']}'s hooks/lib.sh, so a shim "
+            'would not be first on PATH and its execs would not be counted')
+    with open(lib, 'w') as f:
+        f.write(text[:m.start()] + f'export PATH="{shims}:{m.group("dirs")}"' + text[m.end():])
+    return {'ref': side['ref'], 'commit': side['commit'], 'dir': into, 'lib_dirs': m.group('dirs')}
+
+
+def write_shims(shims, dir_lists):
+    """One shim per name in these folders, the first folder's wins as on PATH. Returns how many."""
+    os.makedirs(shims, exist_ok=True)
+    seen = set()
+    for d in dir_lists:
+        if not d or '$' in d or not os.path.isdir(d):
+            continue
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for n in names:
+            real = os.path.join(d, n)
+            if n in seen or '/' in n or '\n' in n or not os.path.isfile(real) or not os.access(real, os.X_OK):
+                continue
+            seen.add(n)
+            with open(os.path.join(shims, n), 'w') as f:
+                f.write(f'#!/bin/sh\nprintf \'%s\\n\' {shlex.quote(n)} >> "$CCH_LAUNCH_LOG"\nexec {shlex.quote(real)} "$@"\n')
+            os.chmod(os.path.join(shims, n), 0o755)
+    return len(seen)
+
+
+def count_one(method, path, payload, env, cwd, work, bash):
+    """(execs, forks) one hook started on one payload, run alone; forks is None under the shim.
+    None when the run did not finish: a count never stands in for one it could not make."""
+    os.makedirs(work)
+    e = dict(env)
+    if method == 'strace':
+        cmd = ['strace', '-ff', '-qq', '-e', 'trace=process', '-o', os.path.join(work, 'st'), bash, path]
+    else:
+        e['CCH_LAUNCH_LOG'] = os.path.join(work, 'log')
+        open(e['CCH_LAUNCH_LOG'], 'w').close()
+        cmd = [bash, path]
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         env=e, cwd=cwd, start_new_session=True)
+    try:
+        p.communicate(payload, timeout=HOOK_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        p.communicate()
+        return None
+    if method == 'strace':
+        if p.returncode != 0 and not glob.glob(glob.escape(os.path.join(work, 'st')) + '.*'):
+            return None
+        return strace_counts(os.path.join(work, 'st'))
+    with open(e['CCH_LAUNCH_LOG'], errors='replace') as f:
+        return sum(1 for line in f if line.strip()), None
+
+
+def count_launches(method, rows, sides, env, cwd, tmp):
+    """{'method', 'per_payload': {id: {side: {hook: [execs, forks] or None}}}, 'shims', 'elapsed_s'}."""
+    t0 = time.time()
+    bash = shutil.which('bash', path=env.get('PATH')) or 'bash'
+    csides, nshims = sides, 0
+    if method == 'shim':
+        shims = os.path.join(tmp, 'shims')
+        csides = {s: shim_side(sides[s], os.path.join(tmp, s + '-launches'), shims) for s in sides}
+        lib_dirs = [d for s in ('base', 'head') for d in csides[s]['lib_dirs'].split(':')]
+        nshims = write_shims(shims, lib_dirs + env.get('PATH', '').split(':'))
+        env = dict(env, PATH=shims + ':' + env.get('PATH', ''))
+    jobs = []
+    for row in rows:
+        payload = json.dumps({'hook_event_name': 'PreToolUse', 'session_id': 'bench', 'tool_name': row['tool_name'],
+                              'tool_input': row['tool_input'], 'cwd': cwd, 'permission_mode': 'auto'}).encode()
+        e = dict(env)
+        e.update({k: str(v) for k, v in (row.get('env') or {}).items()})
+        for s in ('base', 'head'):
+            for name, path in hooks_for(csides[s], row['tool_name']):
+                if path is not None:
+                    jobs.append((row['id'], s, name, path, payload, e))
+    per = {}
+    with concurrent.futures.ThreadPoolExecutor(max(1, os.cpu_count() or 1)) as ex:
+        futs = [(j, ex.submit(count_one, method, j[3], j[4], j[5], cwd, os.path.join(tmp, 'launch', str(i)), bash))
+                for i, j in enumerate(jobs)]
+        for (rid, s, name, _, _, _), fu in futs:
+            per.setdefault(rid, {}).setdefault(s, {})[name] = (lambda c: list(c) if c else None)(fu.result())
+    shutil.rmtree(os.path.join(tmp, 'launch'), ignore_errors=True)
+    return {'method': method, 'per_payload': per, 'shims': nshims, 'elapsed_s': round(time.time() - t0, 1)}
+
+
+def launch_table(la):
+    """Per hook and side: payloads, payloads not counted, execs and forks (total, mean), and the
+    payloads where head started more or fewer than base."""
+    hooks = {}
+    for sides in la['per_payload'].values():
+        for s, per in sides.items():
+            for name, c in per.items():
+                h = hooks.setdefault(name, {}).setdefault(s, {'n': 0, 'lost': 0, 'execs': 0, 'forks': 0})
+                h['n'] += 1
+                if c is None:
+                    h['lost'] += 1
+                    continue
+                h['execs'] += c[0]
+                h['forks'] += c[1] or 0
+    for name, hk in hooks.items():
+        more = fewer = 0
+        for sides in la['per_payload'].values():
+            b, h = (sides.get('base') or {}).get(name), (sides.get('head') or {}).get(name)
+            if b is None or h is None:
+                continue
+            tb, th = b[0] + (b[1] or 0), h[0] + (h[1] or 0)
+            more += th > tb
+            fewer += th < tb
+        hk['more'], hk['fewer'] = more, fewer
+    return dict(sorted(hooks.items()))
+
+
 def load_corpus(spec, repo):
     if spec.startswith('audit'):
         path = spec.partition(':')[2] or os.path.expanduser('~/.claude/logs/audit.log')
@@ -301,6 +481,33 @@ def fmt_pair(a, b):
     return f'{a:.1f} → {b:.1f} ms ({delta(a, b)})'
 
 
+def render_launches(la):
+    L = ['']
+    if la['method'] == 'strace':
+        L.append('Processes started, report only: each hook run alone once per payload under `strace -f`. Execs are '
+                 'execve calls past the hook\'s own bash; forks are new processes (clone, clone3, fork or vfork without '
+                 'CLONE_THREAD), a `$( )` among them. A machine that pays for each process start pays for both.')
+    else:
+        L.append('Processes started, report only: execs found through PATH only, counted by a shim per name on '
+                 f"hooks/lib.sh's PATH folders and this PATH ({la['shims']} shims). Forks and programs started by their full "
+                 'path are not seen; `strace` on Linux sees both.')
+    fk = la['method'] == 'strace'
+    L += ['', '| Hook | payloads | execs per payload | forks per payload | in all | payloads with more / fewer | not counted |',
+          '|---|---:|---|---|---|---|---:|']
+    mean = lambda h, k: h[k] / max(1, h['n'] - h['lost'])
+    for name, hk in la['table'].items():
+        b, h = hk.get('base'), hk.get('head')
+        if not (b and h):
+            s_, side = (b, 'base only') if b else (h, 'head only')
+            L.append(f"| {name} | {s_['n']} ({side}) | {mean(s_, 'execs'):.2f} | "
+                     + (f"{mean(s_, 'forks'):.2f}" if fk else 'n/a') + f" | {s_['execs'] + s_['forks']} | | {s_['lost']} |")
+            continue
+        L.append(f"| {name} | {b['n']} | {mean(b, 'execs'):.2f} → {mean(h, 'execs'):.2f} | "
+                 + (f"{mean(b, 'forks'):.2f} → {mean(h, 'forks'):.2f}" if fk else 'n/a')
+                 + f" | {b['execs'] + b['forks']} → {h['execs'] + h['forks']} | {hk['more']} / {hk['fewer']} | {b['lost'] + h['lost']} |")
+    return L
+
+
 def render_md(r):
     b, h = r['base'], r['head']
     L = [f"## Hook benchmark: {b['ref']} ({b['commit']}) vs {h['ref']} ({h['commit']})", '']
@@ -336,6 +543,8 @@ def render_md(r):
             side, s = ('base only', bw) if bw else ('head only', hw)
             L.append(f"| {name} | {s['wall']['n']} | {s['wall']['p50']:.1f} ms ({side}) | {s['wall']['p95']:.1f} ms | "
                      f"{s['cpu']['mean']:.1f} ms | {s['wall']['p50'] - floor:.1f} ms |")
+    if r.get('launches'):
+        L += render_launches(r['launches'])
     d = r['decisions']
     L += ['', f"Decisions: {d['same']} of {d['same'] + len(d['changed'])} payloads got the same answer on both sides."]
     if d['changed']:
@@ -370,6 +579,9 @@ def main():
     ap.add_argument('--limit-pct', type=float, default=20.0, help='p50/p95 wait may grow by this much (default 20)')
     ap.add_argument('--floor-ms', type=float, default=5.0, help='and must also grow by this many ms (default 5)')
     ap.add_argument('--min-calls', type=int, default=20, help='gate only tool classes with at least this many calls (default 20)')
+    ap.add_argument('--launches', choices=('off', 'auto', 'strace', 'shim'), default='off',
+                    help='count the processes each hook starts, in a pass of its own: strace (Linux), shim (execs '
+                         'through PATH only), or auto, strace where it works and shim elsewhere (default off)')
     ap.add_argument('--md', help='write the markdown report here (always printed to stdout)')
     ap.add_argument('--json', help='write the full result here')
     a = ap.parse_args()
@@ -378,6 +590,11 @@ def main():
     HOOK_TIMEOUT = a.hook_timeout
 
     repo = os.path.abspath(a.repo)
+    method = a.launches
+    if method == 'auto':
+        method = 'strace' if strace_works() else 'shim'
+    elif method == 'strace' and not strace_works():
+        die('--launches strace: strace is not installed here, or may not trace')
     base = a.base or git(repo, 'describe', '--tags', '--abbrev=0', check=False)
     if not base:
         die('no tag to compare against; pass --base REF')
@@ -423,6 +640,10 @@ def main():
                 for s in order:
                     results[s].setdefault(row['id'], []).append(run_call(sides[s], row, env, home))
         elapsed = time.time() - t_start
+        launches = None
+        if method != 'off':
+            launches = count_launches(method, rows, sides, env, home, tmp)
+            launches['table'] = launch_table(launches)
 
         classes, hooks = {}, {}
         for row in rows:
@@ -482,7 +703,7 @@ def main():
                                             key=lambda kv: -kv[1]))},
             'repeat': a.repeat, 'together': TOGETHER, 'quick': a.quick, 'elapsed_s': round(elapsed, 1),
             'process_start_ms': start_cost(env, home),
-            'classes': class_out, 'hooks': hook_out,
+            'classes': class_out, 'hooks': hook_out, 'launches': launches,
             'decisions': {'same': same, 'changed': changed},
             'gate': {'enabled': a.gate, 'limit_pct': a.limit_pct, 'floor_ms': a.floor_ms, 'min_calls': a.min_calls,
                      'intended': sorted(intended), 'failures': failures, 'passed': not failures},
