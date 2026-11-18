@@ -36,19 +36,18 @@ esac
 BASE=$(basename "$FILE")
 [ -f "$FILE" ] || exit 0
 
-INDEX_LINE_MAX="${MEMORY_INDEX_LINE_MAX:-110}"
 # The same limits memory-verify reports OVERSIZE against. Measured in BYTES:
 # wc -c counts bytes, and the upstream limit is 25KB, not 25,000 characters. The
 # distinction is not academic here -- em-dashes and arrows are multi-byte, so a
 # real index runs ~2% larger in bytes than in characters, which is enough to sit
 # inside the limit on one measure and outside it on the other. These names say
 # BYTES so nobody reads a passing character count as compliance.
-# The env var names keep their historical _CHARS spelling so existing overrides
-# and tests keep working; the values they carry are and always were bytes.
-INDEX_MAX_BYTES="${MEMORY_INDEX_MAX_CHARS:-25000}"
-INDEX_PRESSURE_BYTES="${MEMORY_INDEX_PRESSURE_CHARS:-20000}"
-INDEX_PRESSURE_LINES="${MEMORY_INDEX_PRESSURE_LINES:-180}"
-INDEX_MAX_LINES="${MEMORY_INDEX_MAX_LINES:-200}"   # same name memory-verify reads
+# shellcheck source=lib/memory-limits.sh
+source "$(dirname "$0")/lib/memory-limits.sh" \
+  || { echo "memory-lint: cannot read lib/memory-limits.sh; run install.sh again" >&2; exit 1; }
+INDEX_LINE_MAX="$MEMORY_LINE_MAX"
+INDEX_MAX_BYTES="$MEMORY_MAX_BYTES"
+INDEX_MAX_LINES="$MEMORY_MAX_LINES"
 # The fix for an out-of-order index, at the installed path, for this store:
 # projects/<slug>/memory/<file>.
 _d=${FILE%/*}; _d=${_d%/*}
@@ -174,8 +173,16 @@ fi
 # healthy state", "a required check is missing, pending, or failed"). A finding
 # that cries wolf gets ignored, so only liveness CONSTRUCTIONS count now.
 OPEN_RE='\b(pending (review|merge|approval|deploy|release|sign-?off)|(is|still) pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|blocked on|still open|will land)\b'
-if grep -qiE "$OPEN_RE" "$FILE" && ! grep -q '^verify:' "$FILE"; then
-  add "asserts work still in flight but carries no \`verify:\` block, so nothing can ever check it. Add one, e.g. \`  - gh owner/repo#123 open\` or \`  - jira PROJ-1 In Progress\`."
+# A frontmatter `verify: none <reason>` says the wording cannot be checked, and
+# why. The pattern is memory-verify's store_prepass, which honours it the same way.
+WAIVER=$(awk 'NR == 1 && $0 != "---" { exit } NR > 1 && /^---[[:space:]]*$/ { exit }
+  NR > 1 && /^[[:space:]]*verify:[[:space:]]*none([[:space:]]|$)/ {
+    sub(/^[[:space:]]*verify:[[:space:]]*none[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print "W:" $0; exit }' "$FILE")
+if [ "$WAIVER" = "W:" ]; then
+  add "\`verify: none\` gives no reason, so memory-verify ignores it. Say why this memory cannot be checked: \`verify: none <reason>\`."
+fi
+if grep -qiE "$OPEN_RE" "$FILE" && ! grep -q '^verify:' "$FILE" && [ "${WAIVER#W:}" = "" ]; then
+  add "asserts work still in flight but carries no \`verify:\` block, so nothing can ever check it. Add one, e.g. \`  - gh owner/repo#123 open\` or \`  - jira PROJ-1 In Progress\`, or \`verify: none <reason>\` in the frontmatter if no lookup can settle it."
 fi
 
 # --- links that were MEANT to resolve ------------------------------------
@@ -231,13 +238,25 @@ if [ -f "$DIR/MEMORY.md" ]; then
         done
         ;;
     esac
+    ARCHIVED=""
+    [ -f "$DIR/MEMORY_ARCHIVE.md" ] && grep -qF "($BASE)" "$DIR/MEMORY_ARCHIVE.md" && ARCHIVED=1
     if [ -n "$IN_HUB" ]; then
       # The archive line is the whole restore path: move it back and the lesson
       # has its own index line again. A hub bullet with no archived line leaves
       # nothing to move.
-      if [ -f "$DIR/MEMORY_ARCHIVE.md" ] && ! grep -qF "($BASE)" "$DIR/MEMORY_ARCHIVE.md"; then
+      if [ -f "$DIR/MEMORY_ARCHIVE.md" ] && [ -z "$ARCHIVED" ]; then
         add "[[$IN_HUB]] carries this memory, but no line for $BASE is in MEMORY_ARCHIVE.md. That line is the restore path — without it there is nothing to move back if the lesson needs its own index line again."
       fi
+    elif [ -n "$ARCHIVED" ]; then
+      # Archived is the intended state for a fact or a finished project. A rule
+      # only works when loaded, so it may leave the index only under a hub.
+      case "$TYPE" in
+        project|reference) ;;
+        feedback|user)
+          add "its only index line is in MEMORY_ARCHIVE.md, and a feedback memory is never archived on its own: a rule works only when loaded. Move the line back into MEMORY.md, or add a bullet for [[$STEM]] to a hub whose own line is in MEMORY.md and keep the archive line under that hub's heading.${HUBS:+ Hubs:$HUBS}" ;;
+        *)
+          add "its only index line is in MEMORY_ARCHIVE.md, which holds \`project\` and \`reference\` memories. Give it a type, or move the line back into MEMORY.md." ;;
+      esac
     elif [ -n "$HUBS" ]; then
       add "no MEMORY.md line points at $BASE yet — and this store groups method lessons under principle hubs. If this lesson is an instance of one, do NOT add a MEMORY.md line: add a bullet to that hub and put this memory's index line in MEMORY_ARCHIVE.md under the hub's heading. Give it its own index line only if it is a user preference, a fact about a specific tool, or fits no hub. Hubs:$HUBS"
     else
@@ -267,7 +286,7 @@ if [ -f "$DIR/MEMORY.md" ]; then
     # than using ${#IDX}, which counts bytes under a POSIX locale.
     IDX_BYTES=$(wc -c < "$DIR/MEMORY.md" | tr -d ' ')
     IDX_LINES=$(wc -l < "$DIR/MEMORY.md" | tr -d ' ')
-    if [ "$IDX_BYTES" -ge "$INDEX_PRESSURE_BYTES" ] || [ "$IDX_LINES" -ge "$INDEX_PRESSURE_LINES" ]; then
+    if memory_pressure "$IDX_LINES" "$IDX_BYTES"; then
       ILEN=$(printf '%s' "$IDX" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
       [ "$ILEN" -gt "$INDEX_LINE_MAX" ] \
         && add "its index line is $ILEN chars. This index is at $IDX_BYTES bytes of ~$INDEX_MAX_BYTES and $IDX_LINES lines, so per-line length is the only lever left on the total — compose the hook under $INDEX_LINE_MAX."

@@ -66,6 +66,13 @@
 #                 signal, so it overrides the proxy. If the floor blocks every
 #                 remaining candidate the drain stops short and says so, rather
 #                 than peeling live work to satisfy a number.
+#   --status      lines, bytes, limits and `pressure: yes|no` as memory-lint judges it
+#   --diff        dry run that lists each entry the reorder moves (old -> new line)
+#   --long-hooks  entries over 110 chars as memory-lint counts, with the hook's room
+#   --archive FILE... --heading TEXT
+#                 move those index lines to MEMORY_ARCHIVE.md under a new `## TEXT`;
+#                 one --store; dry run unless --write (which also reorders). No
+#                 ACTIVE or untyped line; feedback only under a feedback_hub_* TEXT.
 #
 # Exit: 0 already ordered (or written) · 1 out of order · 3 could not run
 #
@@ -76,10 +83,25 @@ PROJECTS="${CLAUDE_MEMORY_PROJECTS_DIR:-$HOME/.claude/projects}"
 ONLY_STORE=""
 WRITE=0
 ARCHIVE_OVERFLOW=0
+STATUS=0
+DIFF=0
+LONG_HOOKS=0
+ARCHIVE=0
+ARCHIVE_NAMES=""
+HEADING=""
+NL='
+'
+# One copy of the limits, shared with memory-lint and session-start: beside this
+# file when installed (~/.claude/hooks/lib), ../hooks/lib in the clone.
+HERE=$(dirname "$0")
+LIMITS="$HERE/hooks/lib/memory-limits.sh"
+[ -f "$LIMITS" ] || LIMITS="$HERE/../hooks/lib/memory-limits.sh"
+# shellcheck source=../hooks/lib/memory-limits.sh
+. "$LIMITS" 2>/dev/null || { echo "FATAL: cannot read hooks/lib/memory-limits.sh near $0; run install.sh again" >&2; exit 3; }
 # Same budget memory-verify enforces. Bytes, not characters - `wc -c` counts
 # bytes and this index is full of multi-byte punctuation.
-INDEX_MAX_LINES="${MEMORY_INDEX_MAX_LINES:-200}"
-INDEX_MAX_BYTES="${MEMORY_INDEX_MAX_CHARS:-25000}"
+INDEX_MAX_LINES="$MEMORY_MAX_LINES"
+INDEX_MAX_BYTES="$MEMORY_MAX_BYTES"
 # Drain BELOW the cap, not to it. This tool runs occasionally, not on every
 # memory write, so an index drained to exactly 200 lines is back over the cap
 # within a day at the measured ~14-memories-a-day rate - and everything past
@@ -97,12 +119,38 @@ while [ $# -gt 0 ]; do
     --write) WRITE=1; shift ;;
     --archive-overflow) ARCHIVE_OVERFLOW=1; WRITE=1; shift ;;
     --min-age-days) INDEX_ARCHIVE_MIN_AGE_DAYS="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,70p' "$0"; exit 0 ;;
+    --status) STATUS=1; shift ;;
+    --diff) DIFF=1; shift ;;
+    --long-hooks) LONG_HOOKS=1; shift ;;
+    --archive)
+      ARCHIVE=1; shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --*) break ;;
+          *) f=${1##*/}; case "$f" in *.md) ;; *) f="$f.md" ;; esac
+             ARCHIVE_NAMES="$ARCHIVE_NAMES$f$NL"; shift ;;
+        esac
+      done ;;
+    --heading) HEADING="${2:-}"; shift 2 ;;
+    -h|--help) sed -n '2,77p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 3 ;;
   esac
 done
 
 [ -d "$PROJECTS" ] || { echo "FATAL: no projects dir at $PROJECTS" >&2; exit 3; }
+usage_err() { echo "memory-index: $1" >&2; exit 3; }
+if [ $((STATUS + LONG_HOOKS)) -gt 0 ] && [ $((WRITE + ARCHIVE + DIFF + STATUS + LONG_HOOKS)) -gt 1 ]; then
+  usage_err "--status and --long-hooks are reports; run each alone"
+fi
+[ "$DIFF" -eq 1 ] && [ "$WRITE" -eq 1 ] && usage_err "--diff is read-only; drop --write to see the moves"
+if [ "$ARCHIVE" -eq 1 ]; then
+  [ -n "$ARCHIVE_NAMES" ] || usage_err "--archive needs at least one memory file"
+  [ -n "$ONLY_STORE" ] || usage_err "--archive needs --store SLUG"
+  [ "$ARCHIVE_OVERFLOW" -eq 0 ] || usage_err "--archive and --archive-overflow are separate runs"
+  case "$HEADING" in ''|*"$NL"*) usage_err "--archive needs --heading TEXT, one line" ;; esac
+  case "$NL$ARCHIVE_NAMES" in *"${NL}MEMORY.md$NL"*|*"${NL}MEMORY_ARCHIVE.md$NL"*) usage_err "an index is not a memory" ;; esac
+fi
+[ -n "$HEADING" ] && [ "$ARCHIVE" -eq 0 ] && usage_err "--heading goes with --archive"
 
 # Section markers. memory-lint.sh reads these to tell which section a line is
 # in, so the two must agree; keep the leading text stable.
@@ -152,6 +200,38 @@ TMP="${TMPDIR:-/tmp}/memory-index.$$"
 mkdir -p "$TMP" || exit 3
 trap 'rm -rf "$TMP"' EXIT
 
+# An entry's link target: its LAST `](...)`, as the classifier below reads it.
+AWK_TARGET='function target(s,   f) { f = ""; while (match(s, /\]\([^)]*\)/)) { f = substr(s, RSTART + 2, RLENGTH - 3); s = substr(s, RSTART + 2) } return f }'
+
+# The entries a reorder moves, "old<TAB>new<TAB>line", from diff's own longest
+# common subsequence: a line it keeps in place did not move relative to the rest.
+moved_entries() {  # moved_entries <old> <new>
+  diff "$1" "$2" | awk '
+    /^[0-9]/ { match($0, /[acd]/); split(substr($0, 1, RSTART - 1), L, ","); split(substr($0, RSTART + 1), R, ",")
+               o = L[1]; n = R[1]; next }
+    /^< - \[/ { old[substr($0, 3)] = o }
+    /^> - \[/ { new[substr($0, 3)] = n }
+    /^</ { o++ } /^>/ { n++ }
+    END { for (s in old) if (s in new) print old[s] "\t" new[s] "\t" s }' | sort -n
+}
+
+# --long-hooks: memory-lint's count is bytes less UTF-8 continuation bytes
+# (`tr -d '\200-\277' | wc -c`), so strip them once and measure under LC_ALL=C.
+# Room is what is left for the hook after `- [Title](file.md) — `.
+long_hooks() {  # long_hooks <index> <slug>
+  LC_ALL=C tr -d '\200-\277' < "$1" > "$TMP/stripped"
+  LC_ALL=C awk -v max="$MEMORY_LINE_MAX" "$AWK_TARGET"'
+    NR == FNR { orig[FNR] = $0; next }
+    /^- \[/ && target(orig[FNR]) != "MEMORY_ARCHIVE.md" && length($0) > max {
+      p = index($0, "]("); q = p ? index(substr($0, p), ")") : 0; c = q ? p + q - 1 : length($0)
+      if (substr($0, c + 1, 1) == " " && substr($0, c + 3, 1) == " ") c += 3
+      printf "%6d %6d %10d  %s\n", length($0), length($0) - max, max - c, target(orig[FNR])
+    }' "$1" "$TMP/stripped" | sort -rn > "$TMP/long"
+  echo "$2: $(wc -l < "$TMP/long" | tr -d ' ') index lines over $MEMORY_LINE_MAX characters (memory-lint's count)"
+  [ -s "$TMP/long" ] && { printf '%6s %6s %10s  %s\n' chars over "hook room" file; cat "$TMP/long"; }
+  return 0
+}
+
 RC=0
 STORES=0
 
@@ -162,6 +242,19 @@ for dir in "$PROJECTS"/*/memory; do
   idx="$dir/MEMORY.md"
   [ -f "$idx" ] || continue
   STORES=$((STORES+1))
+
+  # Reports, before any check a broken index would fail.
+  if [ "$STATUS" -eq 1 ]; then
+    read -r s_lines s_bytes <<EOF
+$(wc -lc < "$idx")
+EOF
+    echo "$slug"
+    echo "  lines: $s_lines (limit $MEMORY_MAX_LINES, pressure at $MEMORY_PRESSURE_LINES)"
+    echo "  bytes: $s_bytes (limit $MEMORY_MAX_BYTES, pressure at $MEMORY_PRESSURE_BYTES)"
+    if memory_pressure "$s_lines" "$s_bytes"; then echo "  pressure: yes"; else echo "  pressure: no"; fi
+    continue
+  fi
+  if [ "$LONG_HOOKS" -eq 1 ]; then long_hooks "$idx" "$slug"; continue; fi
 
   # The ACTIVE block is the leading comment plus the entries directly under it,
   # up to the first blank line. It is hand-curated and passed through as-is.
@@ -215,6 +308,44 @@ for dir in "$PROJECTS"/*/memory; do
       printf "%s\t%s\t%d\t%s\n", t, m, seq, line
     }' "$TMP/rest" > "$TMP/classified"
 
+  # --archive: the named entries leave `classified` for `peeled` here, before
+  # the tiers are built, so the pair check below sees them moved, not lost.
+  # Every refusal exits before anything is written.
+  : > "$TMP/peeled"
+  if [ "$ARCHIVE" -eq 1 ]; then
+    printf '%s' "$ARCHIVE_NAMES" > "$TMP/named"; : > "$TMP/hits"
+    awk -F'\t' -v named="$TMP/named" -v act="$TMP/active" -v hits="$TMP/hits" -v peeled="$TMP/peeled" "$AWK_TARGET"'
+      BEGIN { while ((getline n < named) > 0) want[n] = 1
+              while ((getline l < act) > 0) if (l ~ /^- \[/ && (target(l) in want)) print target(l) "\tACTIVE" > hits }
+      { line = substr($0, length($1) + length($2) + length($3) + 4); f = target(line)
+        if (f in want) { print line > peeled; print f "\t" $1 > hits } else print }' \
+      "$TMP/classified" > "$TMP/kept"
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      types=$(awk -F'\t' -v f="$f" '$1 == f { printf "%s ", $2 }' "$TMP/hits")
+      case "$types" in
+        "") grep -qF "]($f)" "$dir/MEMORY_ARCHIVE.md" 2>/dev/null \
+              && usage_err "$f has no line in MEMORY.md; it is already in MEMORY_ARCHIVE.md. Nothing written."
+            usage_err "$f has no line in MEMORY.md. Nothing written." ;;
+        *ACTIVE*)  usage_err "$f is in the hand-curated ACTIVE block; move it out by hand first. Nothing written." ;;
+        *unknown*) usage_err "$f has no type this tool reads (feedback, reference or project); give it one first. Nothing written." ;;
+        *feedback*)
+          # A rule works only when loaded: it may leave the index only under a
+          # hub that links it and whose own line stays loaded.
+          case "$HEADING" in
+            feedback_hub_*) ;;
+            *) usage_err "$f is feedback: archive it only with --heading feedback_hub_<name>, the hub that carries it. Nothing written." ;;
+          esac
+          case "$NL$ARCHIVE_NAMES" in *"$NL$HEADING.md$NL"*) usage_err "$HEADING.md is being archived too; the hub's own line must stay in MEMORY.md. Nothing written." ;; esac
+          grep -qF "]($HEADING.md)" "$idx" || usage_err "$HEADING.md has no line in MEMORY.md, so the hub is not loaded. Nothing written."
+          grep -qF "[[${f%.md}]]" "$dir/$HEADING.md" 2>/dev/null || usage_err "$HEADING.md does not link [[${f%.md}]]; add its bullet to the hub first. Nothing written." ;;
+      esac
+    done <<EOF
+$ARCHIVE_NAMES
+EOF
+    mv "$TMP/kept" "$TMP/classified"
+  fi
+
   # feedback/unknown: the bare line, input order. reference/project keep
   # <mdate>TAB<seq>TAB<line> for sort_newest_first. Unknown (no resolvable
   # type) is kept above project so a malformed memory is not demoted to the tail.
@@ -227,7 +358,6 @@ for dir in "$PROJECTS"/*/memory; do
   # their tails without re-deriving the order each time.
   sort_newest_first "$TMP/reference" > "$TMP/ref.s"
   sort_newest_first "$TMP/project"   > "$TMP/prj.s"
-  : > "$TMP/peeled"
 
   emit_index() {  # emit_index <reference-sorted> <project-sorted>
     if [ -s "$TMP/active" ]; then cat "$TMP/active"; echo ""; fi
@@ -247,6 +377,13 @@ for dir in "$PROJECTS"/*/memory; do
   }
 
   emit_index "$TMP/ref.s" "$TMP/prj.s" > "$TMP/new"
+
+  # An archived line nothing points at is a deletion; the pointer is that link.
+  if [ "$ARCHIVE" -eq 1 ] && ! grep -q '](MEMORY_ARCHIVE\.md)' "$TMP/new"; then
+    [ -s "$TMP/active" ] || printf '%s\n' "$M_ACTIVE" > "$TMP/active"
+    printf '%s\n' "$ARCHIVE_POINTER" >> "$TMP/active"
+    emit_index "$TMP/ref.s" "$TMP/prj.s" > "$TMP/new"
+  fi
 
   if [ "$ARCHIVE_OVERFLOW" -eq 1 ]; then
     # ONE threshold, used to trigger and to drain: keep the index at or below
@@ -367,18 +504,39 @@ for dir in "$PROJECTS"/*/memory; do
           echo "To bring one back, move its line into MEMORY.md."
         } > "$arch"
       fi
-      { echo ""
-        echo "## Overflow archived $(date +%Y-%m-%d) — oldest first, cheapest end of the index"
-        cat "$TMP/peeled"
-      } >> "$arch"
+      # A new block, never an insert under an existing heading: appending is
+      # the only edit that cannot disturb a line already in the archive.
+      if [ "$ARCHIVE" -eq 1 ]; then head="## $HEADING"
+      else head="## Overflow archived $(date +%Y-%m-%d) — oldest first, cheapest end of the index"; fi
+      # Checked after the append, before the index is replaced: an append that
+      # failed or landed short must leave MEMORY.md holding the lines.
+      { { echo ""; echo "$head"; cat "$TMP/peeled"; } >> "$arch"; } 2>/dev/null \
+        && awk -v arch="$arch" 'BEGIN { while ((getline l < arch) > 0) a[l] = 1 }
+             !($0 in a) { bad = 1 } END { exit bad }' "$TMP/peeled" \
+        || { echo "ABORT $slug: the lines to archive are not all in MEMORY_ARCHIVE.md, so MEMORY.md is left as it was" >&2; exit 3; }
     fi
     cp "$TMP/new" "$idx"
     echo "$slug: reordered ($n entries: feedback $(wc -l < "$TMP/feedback" | tr -d ' '), reference $(wc -l < "$TMP/ref.s" | tr -d ' '), project $(wc -l < "$TMP/prj.s" | tr -d ' '))"
     if [ -s "$TMP/peeled" ]; then
-      echo "$slug: archived $(wc -l < "$TMP/peeled" | tr -d ' ') overflow entries to MEMORY_ARCHIVE.md → $(wc -l < "$idx" | tr -d ' ') lines, $(wc -c < "$idx" | tr -d ' ') bytes"
+      what="overflow entries"; [ "$ARCHIVE" -eq 1 ] && what="entries under \"$head\""
+      echo "$slug: archived $(wc -l < "$TMP/peeled" | tr -d ' ') $what to MEMORY_ARCHIVE.md → $(wc -l < "$idx" | tr -d ' ') lines, $(wc -c < "$idx" | tr -d ' ') bytes"
     fi
+  elif [ "$ARCHIVE" -eq 1 ]; then
+    echo "$slug: would move $(wc -l < "$TMP/peeled" | tr -d ' ') index lines to MEMORY_ARCHIVE.md under \"## $HEADING\":"
+    sed 's/^/  /' "$TMP/peeled"
+    moved_entries "$idx" "$TMP/new" > "$TMP/moves"
+    if [ -s "$TMP/moves" ]; then
+      echo "--write also reorders the index; $(wc -l < "$TMP/moves" | tr -d ' ') entries move (old line -> new line):"
+      awk -F'\t' '{ printf "  %5d -> %-5d %s\n", $1, $2, $3 }' "$TMP/moves"
+    fi
+    echo "Dry run: nothing written. Rerun with --write."
   else
     echo "$slug: OUT OF ORDER ($n entries) — rerun with --write"
+    if [ "$DIFF" -eq 1 ]; then
+      moved_entries "$idx" "$TMP/new" > "$TMP/moves"
+      echo "$(wc -l < "$TMP/moves" | tr -d ' ') entries move (old line -> new line):"
+      awk -F'\t' '{ printf "  %5d -> %-5d %s\n", $1, $2, $3 }' "$TMP/moves"
+    fi
     RC=1
   fi
 done

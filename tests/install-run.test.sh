@@ -144,6 +144,15 @@ printf -- '- [P](project_old.md) — hook\n- [F](feedback_one.md) — hook\n' > 
 [[ "$(grep -o 'feedback_one\|project_old' "$STORE/MEMORY.md" | head -1)" = feedback_one ]] \
   && pass "the installed session-start.sh finds memory-index.sh and reorders" \
   || fail "the installed session-start.sh finds memory-index.sh and reorders" "$(cat "$STORE/MEMORY.md")"
+# memory-index.sh and memory-verify.sh read hooks/lib/memory-limits.sh, which
+# installs under ~/.claude/hooks/lib, not beside them as in the clone.
+SLUG=$(basename "$(dirname "$STORE")")
+MOUT=$(env -i HOME="$HOME" PATH="$PATH" bash "$HOME/.claude/memory-index.sh" --store "$SLUG" --status 2>&1)
+[[ "$MOUT" == *"pressure: "* ]] && pass "the installed memory-index.sh reads memory-limits.sh" \
+  || fail "the installed memory-index.sh reads memory-limits.sh" "$MOUT"
+MOUT=$(env -i HOME="$HOME" PATH="$PATH" MEMORY_VERIFY_GH_CMD=false bash "$HOME/.claude/memory-verify.sh" --store "$SLUG" 2>&1)
+[[ "$MOUT" == *"--- Results:"* ]] && pass "the installed memory-verify.sh reads memory-limits.sh" \
+  || fail "the installed memory-verify.sh reads memory-limits.sh" "$MOUT"
 
 echo ""
 echo "=== lib.sh's parts install before it, and define what the clone's lib.sh does ==="
