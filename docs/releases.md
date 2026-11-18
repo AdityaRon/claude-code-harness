@@ -14,8 +14,10 @@ opens a draft fix for you to read. The Release workflow runs when that run compl
 since the previous tag, after `doctor.sh` and, when `hooks/` or
 `config/settings.json` changed, `tools/hook-bench.py --gate` against that tag:
 no release when a tool class's wait grew more than 20% and 5 ms at p50 or p95,
-or when a payload's decision changed and no merged PR body declared it with an
-`intended-decisions: <payload ids>` line. A blocked release opens or updates
+when a payload's decision changed and no merged PR body declared it with an
+`intended-decisions: <payload ids>` line, or when a payload's hooks started
+more processes (`--launches strace`) and no merged PR body declared it with an
+`intended-launches: <payload ids>` line. A blocked release opens or updates
 the "Release blocked" issue, and the next run retries; the next release closes
 it. A contract-only release is a patch. The CHANGELOG entry lands by a PR the
 workflow opens and merges once CI passes, and each machine's scheduled
@@ -28,9 +30,10 @@ main's required checks, and is only the fallback when approval is refused.
 The same benchmark, on every payload, runs on each PR that changes `hooks/` or
 `config/settings.json` against main (others skip it, since both sides would run
 the same files) and posts its table to the job summary; `.github/workflows/ci.yml` runs it with
-`--gate`, reading the PR's own `intended-decisions:` line, so the job fails on
-the same terms. If a merged PR changed a decision without that line, releases
-stay blocked until the line is added to its body (`gh pr edit N --body-file ...`)
+`--gate` and `--launches strace`, reading the PR's own `intended-decisions:` and
+`intended-launches:` lines, so the job fails on the same terms. If a merged PR
+changed a decision or started more processes without its line, releases stay
+blocked until the line is added to its body (`gh pr edit N --body-file ...`)
 and the next run, or a dispatched one, retries.
 
 `.github/workflows/release.yml` also runs on a daily cron (`23 19 * * *`, UTC),
@@ -94,7 +97,10 @@ at least `--min-calls` calls (default 20). Absolute numbers depend on the
 machine, so only the same-run comparison is a verdict.
 
 `--launches` adds a pass that counts the processes each hook starts on each
-payload, run alone once, and a table of them; no gate reads it yet. A machine
+payload, run alone once, and a table of them. With `--gate`, a payload whose
+hooks start more on head than on base (execs plus forks, summed over its
+hooks) fails unless `--intended-launches` names it, as does one a side could
+not count; fewer always passes. A machine
 whose endpoint agent inspects each process start pays 16 to 27 ms for one
 (`true`, `bash -c :`, `jq -n 1`, the maintainer's work Mac) where a CI runner
 pays 0.5 to 1.9 ms, so a count shows a cost the runner's clock hides.

@@ -220,20 +220,20 @@ command -v strace >/dev/null && strace -f -o /dev/null true 2>/dev/null && STRAC
 
 launches shim
 [ "$LRC" = 0 ] && [ "$(jq -r '.launches.method' "$TMP/l.json")" = shim ] \
-  && [ "$(delta bash-guards.sh 0)" = '[0,0,0]' ] && [ "$(jq -c '[.launches.per_payload[].base["bash-guards.sh"][0] >= 2] | all' "$TMP/l.json")" = true ] \
-  && pass "shim, same files both sides: bash-guards starts the same, at least its cat and jq" || fail "shim A/A" "rc=$LRC $(cat "$TMP/lerr") $(jq -c '.launches.per_payload' "$TMP/l.json" 2>/dev/null)"
-grep -q '^Processes started, report only: execs found through PATH only' "$TMP/l.md" && grep -q '^| bash-guards.sh | 3 | ' "$TMP/l.md" \
+  && [ "$(delta bash-guards.sh 0)" = '[0,0,0]' ] && [ "$(jq -c '[.launches.per_payload[].base["bash-guards.sh"][0] >= 1] | all' "$TMP/l.json")" = true ] \
+  && pass "shim, same files both sides: bash-guards starts the same, at least its jq" || fail "shim A/A" "rc=$LRC $(cat "$TMP/lerr") $(jq -c '.launches.per_payload' "$TMP/l.json" 2>/dev/null)"
+grep -q '^Processes started: execs found through PATH only' "$TMP/l.md" && grep -q '^| bash-guards.sh | 3 | ' "$TMP/l.md" \
   && pass "the markdown has the count table, labelled execs through PATH" || fail "shim markdown" "$(grep -A4 'Processes started' "$TMP/l.md")"
-# docs/guards.md: `ls -la` starts two programs, the dispatcher's cat and jq; the hook's own bash is not one.
-[ "$(jq -c '.launches.per_payload.ls.base["bash-guards.sh"][0]' "$TMP/l.json")" = 2 ] \
-  && pass "shim: ls -la is two execs in bash-guards, cat and jq" || fail "shim: ls -la" "$(jq -c '.launches.per_payload.ls' "$TMP/l.json")"
+# docs/guards.md: `ls -la` starts one program, the dispatcher's jq; the hook's own bash is not one.
+[ "$(jq -c '.launches.per_payload.ls.base["bash-guards.sh"][0]' "$TMP/l.json")" = 1 ] \
+  && pass "shim: ls -la is one exec in bash-guards, jq" || fail "shim: ls -la" "$(jq -c '.launches.per_payload.ls' "$TMP/l.json")"
 # subagent-cache-guard runs dirname before it loads lib.sh: the shims are first on the PATH it starts with too.
-[ "$(jq -c '.launches.per_payload.ls.base["subagent-cache-guard.sh"][0]' "$TMP/l.json")" = 2 ] \
-  && pass "shim: subagent-cache-guard's dirname, before lib.sh, and cat" || fail "shim: before lib.sh" "$(jq -c '.launches.per_payload.ls' "$TMP/l.json")"
+[ "$(jq -c '.launches.per_payload.ls.base["subagent-cache-guard.sh"][0]' "$TMP/l.json")" = 1 ] \
+  && pass "shim: subagent-cache-guard's dirname, before lib.sh" || fail "shim: before lib.sh" "$(jq -c '.launches.per_payload.ls' "$TMP/l.json")"
 if [ "$STRACE" = yes ]; then
   launches strace
-  [ "$LRC" = 0 ] && [ "$(jq -c '.launches.per_payload.ls.base["bash-guards.sh"][0]' "$TMP/l.json")" = 2 ] && [ "$(delta bash-guards.sh 1)" = '[0,0,0]' ] \
-    && pass "strace, same files: ls -la is the same two execs, and no payload's forks differ" || fail "strace A/A" "rc=$LRC $(cat "$TMP/lerr") $(jq -c '.launches.per_payload' "$TMP/l.json" 2>/dev/null)"
+  [ "$LRC" = 0 ] && [ "$(jq -c '.launches.per_payload.ls.base["bash-guards.sh"][0]' "$TMP/l.json")" = 1 ] && [ "$(delta bash-guards.sh 1)" = '[0,0,0]' ] \
+    && pass "strace, same files: ls -la is the same one exec, and no payload's forks differ" || fail "strace A/A" "rc=$LRC $(cat "$TMP/lerr") $(jq -c '.launches.per_payload' "$TMP/l.json" 2>/dev/null)"
 fi
 
 # `true` is a bash builtin and starts nothing; with the builtin off, `true` is the program on PATH.
@@ -262,6 +262,42 @@ if [ "$STRACE" = yes ]; then
     || fail "strace: env true" "execs $(delta bash-guards.sh 0) forks $(delta bash-guards.sh 1)"
 fi
 
+echo ""
+echo "=== --gate with --launches: a payload whose hooks start more fails unless --intended-launches names it ==="
+gate() {   # gate METHOD [ARGS]: base vs the worktree with --gate; sets LRC
+  python3 "$BENCH" --repo "$F3" --corpus "$TMP/c3.jsonl" --base base --head worktree --launches "$1" --gate "${@:2}" \
+    --json "$TMP/l.json" --md "$TMP/l.md" >/dev/null 2>"$TMP/lerr"; LRC=$?
+}
+gfail() { jq -r '.gate.failures[]' "$TMP/l.json" 2>/dev/null | sort | tr '\n' '|'; }
+add_line 'enable -n true; true; enable true'
+gate shim
+[ "$LRC" = 1 ] && [ "$(gfail)" = "launches grew without --intended-launches: git 2 → 3|launches grew without --intended-launches: kube 12 → 13|launches grew without --intended-launches: ls 2 → 3|" ] \
+  && pass "one exec more on every payload: the gate fails and names each, base → head over its hooks" || fail "launch gate" "rc=$LRC $(gfail) $(cat "$TMP/lerr")"
+grep -q "no payload's hooks may start more processes unless intended" "$TMP/l.md" && pass "the gate line says so" || fail "gate line" "$(grep Gate "$TMP/l.md")"
+gate shim --intended-launches 'ls git,kube'
+[ "$LRC" = 0 ] && [ "$(jq -c '.gate.intended_launches' "$TMP/l.json")" = '["git","kube","ls"]' ] \
+  && pass "--intended-launches naming all three passes" || fail "intended-launches" "rc=$LRC $(gfail)"
+gate shim --intended-launches ls
+[ "$LRC" = 1 ] && [ "$(gfail)" = "launches grew without --intended-launches: git 2 → 3|launches grew without --intended-launches: kube 12 → 13|" ] \
+  && pass "naming one leaves the other two failing" || fail "intended one" "rc=$LRC $(gfail)"
+gate shim --intended-launches all
+[ "$LRC" = 0 ] && pass "--intended-launches all passes" || fail "intended all" "rc=$LRC $(gfail)"
+gate shim --intended 'ls git kube'
+[ "$LRC" = 1 ] && pass "--intended (decisions) does not stand in for --intended-launches" || fail "intended is not intended-launches" "rc=$LRC"
+# Fewer: base is the commit with the extra exec, head the files without it.
+( cd "$F3" && git -c user.email=t@example.com -c user.name=t commit -qam more && git tag more && git checkout -q base -- hooks )
+python3 "$BENCH" --repo "$F3" --corpus "$TMP/c3.jsonl" --base more --head worktree --launches shim --gate \
+  --json "$TMP/l.json" --md "$TMP/l.md" >/dev/null 2>"$TMP/lerr"; LRC=$?
+[ "$LRC" = 0 ] && [ "$(jq -c '.launches.table["bash-guards.sh"] | [.more, .fewer]' "$TMP/l.json")" = '[0,3]' ] \
+  && pass "fewer on every payload passes" || fail "fewer" "rc=$LRC $(gfail)"
+( cd "$F3" && git checkout -q base 2>/dev/null; git checkout -q -- hooks )
+if [ "$STRACE" = yes ]; then
+  add_line ': "$( : )"'
+  gate strace
+  [ "$LRC" = 1 ] && [ "$(gfail | tr '|' '\n' | grep -c 'launches grew without --intended-launches')" = 3 ] \
+    && pass "strace: one fork more, no exec, still fails the gate on every payload" || fail "strace fork gate" "rc=$LRC $(gfail)"
+fi
+
 add_line ': "$( : )"'
 launches shim
 [ "$(delta bash-guards.sh 0)" = '[0,0,0]' ] && pass "shim: an added \$( : ) starts no program, and the shim sees no fork" || fail "shim: \$( : )" "$(delta bash-guards.sh 0)"
@@ -270,7 +306,7 @@ if [ "$STRACE" = yes ]; then
   [ "$(delta bash-guards.sh 1)" = '[1,1,1]' ] && [ "$(delta bash-guards.sh 0)" = '[0,0,0]' ] \
     && pass "strace: an added \$( : ) is one fork more on each payload, and no exec" \
     || fail "strace: \$( : )" "execs $(delta bash-guards.sh 0) forks $(delta bash-guards.sh 1) $(cat "$TMP/lerr")"
-  grep -q '^Processes started, report only: each hook run alone once per payload under `strace -f`' "$TMP/l.md" \
+  grep -q '^Processes started: each hook run alone once per payload under `strace -f`' "$TMP/l.md" \
     && pass "the strace table says what it counts" || fail "strace markdown" "$(grep -A4 'Processes started' "$TMP/l.md")"
 else
   launches strace
@@ -283,7 +319,7 @@ add_line 'sleep 4'
 head -1 "$TMP/c3.jsonl" > "$TMP/c1.jsonl"
 python3 "$BENCH" --repo "$F3" --corpus "$TMP/c1.jsonl" --base base --head worktree --launches shim --hook-timeout 2 \
   --json "$TMP/l.json" --md "$TMP/l.md" >/dev/null 2>"$TMP/lerr"
-[ "$(jq -c '.launches.per_payload.ls | [.base["bash-guards.sh"][0], .head["bash-guards.sh"]]' "$TMP/l.json")" = '[2,null]' ] \
+[ "$(jq -c '.launches.per_payload.ls | [.base["bash-guards.sh"][0], .head["bash-guards.sh"]]' "$TMP/l.json")" = '[1,null]' ] \
   && grep -qE '^\| bash-guards\.sh \|.*\| 1 \|$' "$TMP/l.md" \
   && pass "a hook that runs past the timeout: null for that payload, and 1 not counted" || fail "timeout" "$(jq -c '.launches.per_payload' "$TMP/l.json" 2>/dev/null) $(grep bash-guards "$TMP/l.md" | tail -1)"
 

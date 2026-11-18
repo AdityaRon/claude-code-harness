@@ -6,6 +6,7 @@
   tools/hook-bench.py --gate --intended id1,id2 --md bench.md --json bench.json
   tools/hook-bench.py --corpus audit          # this machine's audit log; never publish
   tools/hook-bench.py --launches auto         # also count the processes each hook starts
+  tools/hook-bench.py --gate --launches strace --intended-launches id1,id2
 
 Every payload in the corpus is fed to the hooks that would fire for it under
 that side's config/settings.json (PreToolUse, command hooks, not async), both
@@ -36,7 +37,10 @@ vfork without CLONE_THREAD), a $( ) included. shim (macOS, or Linux without
 strace): a copy of each side's hooks whose lib.sh puts a folder of shims first
 on PATH, one per name in lib.sh's PATH folders and this PATH, each logging its
 name before it execs the real one. It sees execs found through PATH only: no
-fork, and no program started by its full path. Report only: no gate reads it.
+fork, and no program started by its full path. With --gate, a payload whose
+hooks start more processes on head than on base (execs plus forks, summed over
+its hooks) fails unless --intended-launches names it, and so does a payload a
+side could not count.
 """
 import argparse, concurrent.futures, glob, hashlib, io, json, os, platform, re, resource, shlex, shutil, signal, statistics, subprocess, sys, tarfile, tempfile, threading, time
 
@@ -382,6 +386,24 @@ def count_launches(method, rows, sides, env, cwd, tmp):
     return {'method': method, 'per_payload': per, 'shims': nshims, 'elapsed_s': round(time.time() - t0, 1)}
 
 
+def launch_total(per):
+    """execs plus forks over one payload's hooks on one side, or None when one was not counted."""
+    if any(c is None for c in per.values()):
+        return None
+    return sum(c[0] + (c[1] or 0) for c in per.values())
+
+
+def launch_failures(la, intended):
+    out = []
+    for rid, sides in la['per_payload'].items():
+        tb, th = launch_total(sides.get('base') or {}), launch_total(sides.get('head') or {})
+        if tb is None or th is None:
+            out.append(f"launches not counted on {'base' if tb is None else 'head'}: {rid}")
+        elif th > tb and 'all' not in intended and rid not in intended:
+            out.append(f'launches grew without --intended-launches: {rid} {tb} → {th}')
+    return out
+
+
 def launch_table(la):
     """Per hook and side: payloads, payloads not counted, execs and forks (total, mean), and the
     payloads where head started more or fewer than base."""
@@ -484,11 +506,11 @@ def fmt_pair(a, b):
 def render_launches(la):
     L = ['']
     if la['method'] == 'strace':
-        L.append('Processes started, report only: each hook run alone once per payload under `strace -f`. Execs are '
+        L.append('Processes started: each hook run alone once per payload under `strace -f`. Execs are '
                  'execve calls past the hook\'s own bash; forks are new processes (clone, clone3, fork or vfork without '
                  'CLONE_THREAD), a `$( )` among them. A machine that pays for each process start pays for both.')
     else:
-        L.append('Processes started, report only: execs found through PATH only, counted by a shim per name on '
+        L.append('Processes started: execs found through PATH only, counted by a shim per name on '
                  f"hooks/lib.sh's PATH folders and this PATH ({la['shims']} shims). Forks and programs started by their full "
                  'path are not seen; `strace` on Linux sees both.')
     fk = la['method'] == 'strace'
@@ -556,7 +578,8 @@ def render_md(r):
     if g['enabled']:
         L += ['', ('Gate: passed' if g['passed'] else 'Gate: FAILED') +
               f" (p50 and p95 wait may not grow more than {g['limit_pct']:g}% and {g['floor_ms']:g} ms, "
-              f"per class with at least {g['min_calls']} calls; every decision change must be intended)."]
+              f"per class with at least {g['min_calls']} calls; every decision change must be intended"
+              + ('; no payload\'s hooks may start more processes unless intended).' if r.get('launches') else ').')]
         for f_ in g['failures']:
             L.append(f'- {f_}')
     return '\n'.join(L) + '\n'
@@ -576,6 +599,8 @@ def main():
                     help="the earlier model: each hook alone, wait the slowest (as if each had its own core)")
     ap.add_argument('--gate', action='store_true', help='exit 1 on a regression or an unintended decision change')
     ap.add_argument('--intended', default='', help="payload ids whose decision may change, comma or space separated, or 'all'")
+    ap.add_argument('--intended-launches', default='',
+                    help="payload ids whose hooks may start more processes, comma or space separated, or 'all' (with --launches)")
     ap.add_argument('--limit-pct', type=float, default=20.0, help='p50/p95 wait may grow by this much (default 20)')
     ap.add_argument('--floor-ms', type=float, default=5.0, help='and must also grow by this many ms (default 5)')
     ap.add_argument('--min-calls', type=int, default=20, help='gate only tool classes with at least this many calls (default 20)')
@@ -693,6 +718,9 @@ def main():
         for ch in changed:
             if 'all' not in intended and ch['id'] not in intended:
                 failures.append(f"decision changed without --intended: {ch['id']} {ch['base']} → {ch['head']}")
+        intended_l = set(re.split(r'[,\s]+', a.intended_launches.strip())) - {''}
+        if launches:
+            failures += launch_failures(launches, intended_l)
 
         report = {
             'date': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'machine': machine(),
@@ -706,7 +734,7 @@ def main():
             'classes': class_out, 'hooks': hook_out, 'launches': launches,
             'decisions': {'same': same, 'changed': changed},
             'gate': {'enabled': a.gate, 'limit_pct': a.limit_pct, 'floor_ms': a.floor_ms, 'min_calls': a.min_calls,
-                     'intended': sorted(intended), 'failures': failures, 'passed': not failures},
+                     'intended': sorted(intended), 'intended_launches': sorted(intended_l), 'failures': failures, 'passed': not failures},
         }
         if not local:
             # The report is what a release publishes; the local corpus never is.

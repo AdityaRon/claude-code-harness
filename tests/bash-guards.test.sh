@@ -289,7 +289,7 @@ disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
   && pass "a lib without word_filter: exit 2, not seven guards that allow" || fail "a lib without word_filter" "rc=$RC out=$OUT err=$ERR"
 
 echo ""
-echo "=== a command that names no guard's word starts two processes ==="
+echo "=== a command that names no guard's word starts one process ==="
 # Each name on lib.sh's PATH is a shim that logs it and runs the real one.
 copy_hooks
 mkdir -p "$TMP/shim"
@@ -305,9 +305,17 @@ started() {   # started COMMAND: the processes one call starts, sorted, on one l
   sort "$TMP/started" | tr '\n' ' '
 }
 S=$(started 'ls -la')
-[[ "$S" == "cat jq " ]] && pass "ls -la: the dispatcher's cat and jq, and no guard starts one" || fail "ls -la starts" "$S"
+[[ "$S" == "jq " ]] && pass "ls -la: the dispatcher's jq, and no guard starts one (read_input starts no cat)" || fail "ls -la starts" "$S"
 S=$(started 'grep -rn "it'\''s" src/ | head -20')
-[[ "$S" == "cat jq " ]] && pass "quotes in it: still cat and jq" || fail "a quoted command starts" "$S"
+[[ "$S" == "jq " ]] && pass "quotes in it: still only jq" || fail "a quoted command starts" "$S"
+# git-guard's second word filter: a git command naming none of its gate's words is done with a builtin match.
+BADG=""
+for c in 'git log' 'git status' 'git diff HEAD~1' 'git show HEAD' 'git commit -m "fix: x"' 'git fetch origin' 'git log --oneline -5 | head'; do
+  S=$(started "$c"); [[ "$S" == "jq " ]] || BADG="$BADG [$c: $S]"
+done
+[[ -z "$BADG" ]] && pass "git log, status, diff, show, commit -m and fetch: only the dispatcher's jq" || fail "git commands start" "$BADG"
+S=$(started 'git push origin x')
+[[ "$S" == *" grep "* || "$S" == *" sed "* ]] && pass "git push still goes through git-guard's checks" || fail "git push starts" "$S"
 S=$(started 'kube"ctl" delete pod web')
 [[ "$S" == *" sed "* && "$S" != *" grep grep grep grep "* ]] \
   && pass "a guard whose word is named goes on; the others start none" || fail "kube\"ctl\" starts" "$S"

@@ -3,7 +3,7 @@
 # decisions, and shows the person what else it hooks and calls. Uses
 # `claude plugin validate`, the static analysis Claude Code itself loads mods by.
 
-INPUT=$(cat)
+INPUT=$(</dev/stdin)   # bash reads it: no cat (read_input, lib/io.sh)
 # Every Write and Edit lands here: decide on the raw text, without a fork, that
 # this cannot be a mod file before paying for jq.
 [[ "$INPUT" =~ \.(js|mjs|cjs|jsx|ts|mts|cts|tsx)\" || "$INPUT" =~ (plugin|hooks)\.json\" ]] || exit 0

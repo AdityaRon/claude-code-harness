@@ -66,8 +66,9 @@ jobs:
       # hooks/ and config/settings.json as on the base, both sides would run the
       # same files, so it is skipped, as release.yml does. A decision the PR means
       # to change is declared in its body: `intended-decisions: <payload ids>`.
-      # --launches strace adds the processes each hook starts per payload to the
-      # table, report only.
+      # --launches strace counts the processes each hook starts per payload, and
+      # the gate fails a payload whose hooks start more than on the base, unless
+      # the body names it: `intended-launches: <payload ids>`.
       - name: Benchmark this PR's hooks against the base branch
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -78,8 +79,10 @@ jobs:
             cat bench.md >> "$GITHUB_STEP_SUMMARY"; exit 0
           fi
           INTENDED=$(printf '%s\n' "$PR_BODY" | sed -nE 's/^intended-decisions:[[:space:]]*//p' | tr '\n' ' ')
+          INTENDED_LAUNCHES=$(printf '%s\n' "$PR_BODY" | sed -nE 's/^intended-launches:[[:space:]]*//p' | tr '\n' ' ')
           set +e
-          python3 tools/hook-bench.py --base "origin/$BASE" --head HEAD --gate --intended "$INTENDED" --launches strace --md bench.md >/dev/null
+          python3 tools/hook-bench.py --base "origin/$BASE" --head HEAD --gate --intended "$INTENDED" \
+            --launches strace --intended-launches "$INTENDED_LAUNCHES" --md bench.md >/dev/null
           RC=$?
           cat bench.md >> "$GITHUB_STEP_SUMMARY"
           [ "$RC" = 0 ] || echo "::error::the benchmark gate failed; see the job summary."

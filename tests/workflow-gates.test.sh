@@ -86,7 +86,7 @@ bench_case() {  # name, a function that edits the PR side; sets BENCH_RC, BENCH_
   printf 'import sys\nopen("argv.txt", "w").write(" ".join(sys.argv[1:]))\nopen("bench.md", "w").write("bench ran")\n' > tools/hook-bench.py
   git add -A && git commit -qm base && git update-ref refs/remotes/origin/main HEAD
   "$2"; git add -A && git commit -qm pr
-  BASE=main PR_BODY=$'text\nintended-decisions: id-a id-b' GITHUB_STEP_SUMMARY="$d/summary" bash "$TMP/bench.sh" > "$d.out" 2>&1
+  BASE=main PR_BODY=$'text\nintended-decisions: id-a id-b\nintended-launches: id-c, id-d' GITHUB_STEP_SUMMARY="$d/summary" bash "$TMP/bench.sh" > "$d.out" 2>&1
   BENCH_RC=$? BENCH_ARGV=$(cat argv.txt 2>/dev/null || echo "not run") BENCH_SUMMARY=$(cat summary 2>/dev/null)
   cd "$ROOT" || return
 }
@@ -104,8 +104,26 @@ bench_case "hooks edit" hook_edit
   || fail "intended ids" "argv=[$BENCH_ARGV]"
 [[ " $BENCH_ARGV " == *" --launches strace "* ]] && pass "the PR bench counts each hook's processes under strace" \
   || fail "--launches strace" "argv=[$BENCH_ARGV]"
+[[ "$BENCH_ARGV" == *"--intended-launches id-c, id-d"* && "$BENCH_ARGV" != *"--intended id-a id-b id-c"* ]] \
+  && pass "the PR body's intended-launches ids reach the gate, apart from intended-decisions" || fail "intended-launches ids" "argv=[$BENCH_ARGV]"
 bench_case "settings edit" settings_edit
 [ "$BENCH_ARGV" != "not run" ] && pass "a config/settings.json edit runs the bench" || fail "settings edit runs the bench" "not run"
+
+echo ""
+echo "=== release.yml: the release bench gates on launches too, with the merged PRs' intended-launches ==="
+REL_WF=.github/workflows/release.yml
+awk '/name: Benchmark against the previous tag/{f=1} f && /^        run: \|$/{on=1; next}
+     on && $0 != "" && !/^          /{exit} on' "$REL_WF" | sed 's/^          //' > "$TMP/rbench.sh"
+if grep -q 'hook-bench.py' "$TMP/rbench.sh"; then pass "the bench step is in $REL_WF"; else fail "the bench step is in $REL_WF" "not found"; fi
+d="$TMP/rbench"; mkdir -p "$d/tools" && cd "$d" || exit 1
+printf 'import sys\nopen("argv.txt", "w").write(" ".join(sys.argv[1:]))\nopen("bench.md", "w").write("bench ran")\n' > tools/hook-bench.py
+LAST=v1.0.0 HOOKS_CHANGED=true INTENDED='id-a' INTENDED_LAUNCHES='id-c id-d' GITHUB_STEP_SUMMARY="$d/summary" bash "$TMP/rbench.sh" > "$d.out" 2>&1
+RARGV=$(cat argv.txt 2>/dev/null || echo "not run"); cd "$ROOT" || exit 1
+[[ " $RARGV " == *" --gate "* && " $RARGV " == *" --launches strace "* && "$RARGV" == *"--intended-launches id-c id-d"* && "$RARGV" == *"--intended id-a "* ]] \
+  && pass "release bench: --gate, --launches strace and both intended lists" || fail "release bench argv" "argv=[$RARGV]"
+grep -qE 'install-apt-deps\.sh jq strace' "$REL_WF" && pass "release.yml installs strace" || fail "release strace" ""
+grep -q 'intended_launches=$(bash tools/release-notes.sh --since "$LAST" --prs prs.json --intended-launches)' "$REL_WF" \
+  && pass "release.yml reads intended-launches from the merged PRs" || fail "release intended-launches" ""
 
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

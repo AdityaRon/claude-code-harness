@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # hooks/lib.sh sources this: reading the hook payload, decisions, the audit log, redaction.
 
-# Read full stdin once into $INPUT. Safe to call with no stdin.
+# Read full stdin once into $INPUT. Safe to call with no stdin. $(</dev/stdin)
+# is bash reading the file itself: the same text as $(cat), trailing newlines
+# and NULs dropped alike, and one program fewer started on every hook run. Not
+# `read -d ''`, which reads a pipe a byte at a time.
 read_input() {
   [[ -n "${HARNESS_PRESET:-}" ]] && return 0
   if [[ -t 0 ]]; then
     INPUT=""
   else
-    INPUT=$(cat)
+    INPUT=$(</dev/stdin)
   fi
   export INPUT
 }

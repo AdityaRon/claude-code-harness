@@ -56,9 +56,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install jq
+      # strace: the benchmark's process count (--launches strace) and its gate.
+      - name: Install jq and strace
         # See .github/install-apt-deps.sh for why this is not a plain apt-get.
-        run: .github/install-apt-deps.sh jq
+        run: .github/install-apt-deps.sh jq strace
 
       # As in ci.yml: the suites that read the skills fail in CI without a clone.
       - name: Clone claude-code-skills
@@ -97,6 +98,7 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "intended=$(bash tools/release-notes.sh --since "$LAST" --prs prs.json --intended)" >> "$GITHUB_OUTPUT"
+          echo "intended_launches=$(bash tools/release-notes.sh --since "$LAST" --prs prs.json --intended-launches)" >> "$GITHUB_OUTPUT"
           # Fails closed: only exit 1 (nothing changed) skips the benchmark.
           RC=0; bash tools/release-notes.sh --since "$LAST" --hooks-changed >/dev/null || RC=$?
           if [ "$RC" = 1 ]; then echo "hooks_changed=false"; else echo "hooks_changed=true"; fi >> "$GITHUB_OUTPUT"
@@ -116,6 +118,7 @@ jobs:
         env:
           LAST: ${{ steps.plan.outputs.last }}
           INTENDED: ${{ steps.plan.outputs.intended }}
+          INTENDED_LAUNCHES: ${{ steps.plan.outputs.intended_launches }}
           HOOKS_CHANGED: ${{ steps.plan.outputs.hooks_changed }}
         run: |
           if [ -z "$LAST" ]; then
@@ -127,7 +130,8 @@ jobs:
             cat bench.md >> "$GITHUB_STEP_SUMMARY"; exit 0
           fi
           set +e
-          python3 tools/hook-bench.py --base "$LAST" --head HEAD --gate --intended "$INTENDED" --md bench.md --json bench.json >/dev/null
+          python3 tools/hook-bench.py --base "$LAST" --head HEAD --gate --intended "$INTENDED" \
+            --launches strace --intended-launches "$INTENDED_LAUNCHES" --md bench.md --json bench.json >/dev/null
           RC=$?
           cat bench.md >> "$GITHUB_STEP_SUMMARY"
           [ "$RC" = 0 ] || echo "::error::the benchmark gate failed; the release is not made. See the job summary."
@@ -255,6 +259,7 @@ jobs:
             echo
             echo "To unblock:"
             echo "- A decision change that a merged PR meant: add an \`intended-decisions: <payload ids>\` line to that PR's body (\`gh pr edit N --body-file ...\`). The ids are in the table above."
+            echo "- More processes started that a merged PR meant: add an \`intended-launches: <payload ids>\` line to that PR's body the same way."
             echo "- A failing suite or a slower hook: fix it on main."
             echo
             echo "The next run retries after the daily Upstream drift run, or now: \`gh workflow run release.yml\`."
