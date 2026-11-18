@@ -189,6 +189,7 @@ verify_lines() {
 #   G <owner/repo> <number>   a gh claim resolve_gh will ask for
 #   J <key>                   a jira claim's key
 #   W <file> <reason>         a frontmatter `verify: none` waiver; reason may be empty
+#   V <file>                  the file has a verify: block
 # The block rules are verify_lines', and the ref shape is resolve_gh's: a claim
 # missing here is a lookup-failed SKIP there, never a silent pass.
 store_prepass() {
@@ -205,7 +206,7 @@ store_prepass() {
       r = $0; sub(/^[[:space:]]*verify:[[:space:]]*none[[:space:]]*/, "", r); sub(/[[:space:]]+$/, "", r)
       print "W", base, r; next
     }
-    /^verify:[[:space:]]*$/ { inblock = 1; next }
+    /^verify:[[:space:]]*$/ { inblock = 1; print "V", base; next }
     inblock && /^[[:space:]]*-[[:space:]]/ {
       s = $0; sub(/^[[:space:]]*-[[:space:]]*/, "", s); n = split(s, a, " ")
       if (n >= 3 && a[1] == "gh" && a[2] ~ /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+$/) {
@@ -350,9 +351,10 @@ scan_index() {
   local n=0
 
   [ -f "$idx" ] || return 0
+  # One grep for the lines that matter, rather than one per index line.
   while IFS= read -r line; do
-    n=$((n + 1))
-    printf '%s' "$line" | grep -qiE "$OPEN_RE" || continue
+    [ -n "$line" ] || continue
+    n=${line%%:*}; line=${line#*:}
     target=$(printf '%s' "$line" | sed -n 's/.*](\([^)]*\.md\)).*/\1/p' | head -1)
     [ -n "$target" ] && case "$WAIVED_FILES" in *"$NL$target$NL"*) continue ;; esac
     if [ -n "$target" ] && [ -f "$dir/$target" ]; then
@@ -362,7 +364,9 @@ scan_index() {
     else
       emit TRIAGE "$slug" "MEMORY.md:$n" "index line asserts open state"
     fi
-  done < "$idx"
+  done <<EOF
+$(grep -niE "$OPEN_RE" "$idx")
+EOF
 }
 
 # A memory nothing links to is never recalled. Reached means named by a link
@@ -438,8 +442,11 @@ scan_index_hooks() {
   local idx="$dir/MEMORY.md"
   local n=0
   [ -f "$idx" ] || return 0
+  # Candidates from one grep: a hook ends where its line ends, so a line that
+  # does not end this way cannot hold one. The exact test still runs below.
   while IFS= read -r line; do
-    n=$((n + 1))
+    [ -n "$line" ] || continue
+    n=${line%%:*}; line=${line#*:}
     case "$line" in '- ['*) ;; *) continue ;; esac
     # Split on the separator the index format uses; no separator, no hook.
     hook=${line#*") — "}
@@ -458,7 +465,9 @@ scan_index_hooks() {
     [ $(( dlen * 100 )) -ge $(( hlen * HOOK_MIN_DESC_RATIO )) ] || continue
     emit HOOK "$slug" "MEMORY.md:$n" \
       "hook trails off (\"$hook\") but ${target} still has the payload: $(printf '%.120s' "$desc")"
-  done < "$idx"
+  done <<EOF
+$(grep -nE '(…|\.\.\.|,|;)$|[[:space:]](and|or|not|the|but|with|is|of|to|for|an?)$' "$idx")
+EOF
 }
 
 # Advisory overlap pass. Answers one question a size problem actually turns
@@ -526,13 +535,19 @@ scan_store() {
   local settled recorded_only mtype waived waiver
 
   # Every gh claim in the store, looked up in batches before the first emit.
-  : > "$TMP_DIR/waivers"
+  : > "$TMP_DIR/waivers"; : > "$TMP_DIR/vfiles"
   store_prepass "$dir"/*.md \
-    | awk -F'\t' -v w="$TMP_DIR/waivers" '$1 == "G" { print $2 "\t" $3 } $1 == "W" { print $2 "\t" $3 > w }' \
+    | awk -F'\t' -v w="$TMP_DIR/waivers" -v v="$TMP_DIR/vfiles" '
+        $1 == "G" { print $2 "\t" $3 } $1 == "W" { print $2 "\t" $3 > w } $1 == "V" { print $2 > v }' \
     | LC_ALL=C sort -u > "$TMP_DIR/gh-refs"
   gh_prefetch "$TMP_DIR/gh-refs"
   WAIVERS="$NL$(cat "$TMP_DIR/waivers")$NL"
   WAIVED_FILES="$NL"
+  # One awk and two greps for the store, not one of each per file: on a few
+  # hundred memories the per-file execs were most of the run once gh was batched.
+  VFILES="$NL$(cat "$TMP_DIR/vfiles")$NL"
+  OPEN_FILES="$NL$(grep -liE "$OPEN_RE" "$dir"/*.md 2>/dev/null | sed 's#.*/##')$NL"
+  CLOSED_FILES="$NL$(grep -liE "$CLOSED_RE" "$dir"/*.md 2>/dev/null | sed 's#.*/##')$NL"
 
   for f in "$dir"/*.md; do
     [ -f "$f" ] || continue
@@ -555,7 +570,8 @@ scan_store() {
         fi ;;
     esac
 
-    claims=$(verify_lines "$f")
+    claims=""
+    case "$VFILES" in *"$NL$base$NL"*) claims=$(verify_lines "$f") ;; esac
     if [ -n "$claims" ]; then
       # Track whether every claim in this memory has reached a terminal state.
       settled=1; recorded_only=0
@@ -606,12 +622,14 @@ scan_store() {
       # section that is not loaded. Reversible in one line, which is why it may
       # be suggested at all where the withdrawn retirement heuristic could not:
       # that one guessed from prose, this one reads resolved evidence.
-      mtype=$(sed -n 's/^[[:space:]]*type:[[:space:]]*\([a-z]*\)[[:space:]]*$/\1/p' "$f" | head -1)
       # Behind --curate, with the other index-size advice: a healthy store
       # should stay quiet on a default run, and a settled memory is not a
       # defect. It is only interesting when the index is being trimmed.
-      if [ "$CURATE" -eq 1 ] && [ "$settled" -eq 1 ] && [ "$mtype" = "project" ] \
-         && ! grep -qiE "$OPEN_RE" "$f" 2>/dev/null \
+      mtype=""
+      [ "$CURATE" -eq 1 ] && [ "$settled" -eq 1 ] \
+        && mtype=$(sed -n 's/^[[:space:]]*type:[[:space:]]*\([a-z]*\)[[:space:]]*$/\1/p' "$f" | head -1)
+      if [ "$mtype" = "project" ] \
+         && case "$OPEN_FILES" in *"$NL$base$NL"*) false ;; *) true ;; esac \
          && ! archived_already "$dir" "$base"; then
         if [ "$recorded_only" -eq 1 ]; then
           emit SETTLED "$slug" "$base" "every claim is terminal per the RECORDED evidence and nothing is in flight — the index line can move to the archive section"
@@ -631,7 +649,8 @@ scan_store() {
     # this corpus that asserted three PRs were open when all three had merged
     # the same day - a 14-day gate would have hidden it for two weeks, and it
     # sat in the most-read block of the index the whole time.
-    if [ "$waived" -eq 0 ] && grep -qiE "$OPEN_RE" "$f" 2>/dev/null; then
+    case "$OPEN_FILES" in *"$NL$base$NL"*) ;; *) continue ;; esac
+    if [ "$waived" -eq 0 ]; then
       age=$(age_days "$f")
       # Advisory context for the skill, which reads the file itself anyway — so
       # bias to high signal over completeness. Standards tokens (SHA-256,
@@ -644,9 +663,9 @@ scan_store() {
       ids=$(printf '%s\n' "$ids" | head -8 | tr '\n' ' ' | sed 's/ $//')
       [ "$id_count" -gt 8 ] && ids="$ids …and $((id_count - 8)) more"
       note="${age}d old, asserts open state"
-      if grep -qiE "$CLOSED_RE" "$f" 2>/dev/null; then
-        note="$note; ALSO claims closed state (self-contradictory)"
-      fi
+      case "$CLOSED_FILES" in
+        *"$NL$base$NL"*) note="$note; ALSO claims closed state (self-contradictory)" ;;
+      esac
       [ -n "$ids" ] && note="$note; refs: $ids"
       emit TRIAGE "$slug" "$base" "$note"
     fi
