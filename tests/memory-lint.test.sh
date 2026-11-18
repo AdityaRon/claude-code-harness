@@ -5,7 +5,7 @@
 # Half of these assert SILENCE. A write-time hook that fires on healthy memories
 # gets ignored, and then it is worse than no hook at all.
 set -u
-HOOK="hooks/memory-lint.sh"
+HOOK="${CCH_MEMORY_LINT_SH:-hooks/memory-lint.sh}"   # a mutation run points this at a changed copy
 PASS=0; FAIL=0
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
@@ -471,6 +471,81 @@ check_contains "Crons: none with an entry under it" "\`Crons: none\` with entrie
 check_eq "a tracker finding exits 2 (handed to the model)" "2" "$(lint_rc "$TRK/nocron.md")"
 mkdir -p "$TMP/notes"; cp "$TRK/nocron.md" "$TMP/notes/nocron.md"
 check_eq "the same file outside trackers/: not checked" "0" "$(lint_rc "$TMP/notes/nocron.md")"
+
+echo ""
+echo "=== trackers/: an archive, a ledger, and the ledgers beside a handoff ==="
+# Each case has its own trackers/ folder: a big file beside the handoffs above
+# would add a finding to every one of them.
+pad() { head -c "$2" /dev/zero | tr '\0' y > "$1"; }   # pad FILE BYTES: one shapeless line
+L1="$TMP/l1/trackers"; mkdir -p "$L1"
+pad "$L1/work-archive.md" 30000
+check_eq "an archive Edit: silent, exit 0" "0" "$(lint_rc "$L1/work-archive.md")"
+check_eq "and no output" "" "$(lint "$L1/work-archive.md" Edit)"
+pad "$L1/work.md" 8000
+check_eq "a pruned ledger under 20 KB with its archive beside it: silent" "" "$(lint "$L1/work.md" Edit)"
+
+L2="$TMP/l2/trackers"; mkdir -p "$L2"
+tracker "$L2/grown.md" "$NOWS" "$CR" "$(head -c 25000 /dev/zero | tr '\0' x)"
+OUT=$(lint "$L2/grown.md")
+check_contains "a handoff grown past 20 KB is a ledger" "ledger lint on grown.md" "$OUT"
+check_contains "with its size" "is 25" "$OUT"
+check_contains "and the prune command for it" "python3 ~/.claude/tracker-prune.py '$L2/grown.md'" "$OUT"
+check_eq "one finding, not the handoff's" "1" "$(printf '%s\n' "$OUT" | grep -c '^  - ')"
+check_eq "exit 2" "2" "$(lint_rc "$L2/grown.md")"
+check_contains "TRACKER_LEDGER_BYTES moves the line" "past 5000" "$(TRACKER_LEDGER_BYTES=30000 lint "$L2/grown.md")"
+L2B="$TMP/l2b/trackers"; mkdir -p "$L2B"
+pad "$L2B/shapeless.md" 6000
+OUT=$(lint "$L2B/shapeless.md")
+check_contains "a shapeless 6 KB file is a handoff: headings" "once each, in that order" "$OUT"
+check_contains "past 5000" "past 5000" "$OUT"
+check_contains "no STATE" "no \`STATE:\` line" "$OUT"
+check_contains "no Crons" "no \`Crons:\` line" "$OUT"
+check_eq "four findings" "4" "$(printf '%s\n' "$OUT" | grep -c '^  - ')"
+
+L3="$TMP/l3/trackers"; mkdir -p "$L3"
+tracker "$L3/handoff.md" "$NOWS" "$CR"
+check_eq "a handoff with no big sibling: silent" "" "$(lint "$L3/handoff.md")"
+pad "$L3/log.md" 26000
+pad "$L3/log-archive.md" 40000
+OUT=$(lint "$L3/handoff.md")
+check_contains "a big sibling: named, with its size" "ledger log.md beside this handoff is 26000 bytes" "$OUT"
+check_contains "and the prune command for it" "tracker-prune.py '$L3/log.md'" "$OUT"
+check_absent "an archive is not a big sibling" "log-archive.md" "$OUT"
+check_eq "exit 2" "2" "$(lint_rc "$L3/handoff.md")"
+check_eq "TRACKER_LEDGER_BYTES moves the find too" "" "$(TRACKER_LEDGER_BYTES=50000 lint "$L3/handoff.md")"
+mkdir -p "$TMP/l3/elsewhere"; mv "$L3/log.md" "$TMP/l3/elsewhere/log.md"; ln -s "$TMP/l3/elsewhere/log.md" "$L3/log.md"
+check_contains "a linked ledger is measured at its target" "log.md beside this handoff is 26000 bytes" "$(lint "$L3/handoff.md")"
+
+echo ""
+echo "=== a handoff line that sends a session to read a ledger whole ==="
+L4="$TMP/l4/trackers"; mkdir -p "$L4"
+pad "$L4/tracker.md" 21000
+printf 'small\n' > "$L4/work-tracker.md"
+rf() {  # rf LINE...: lint a handoff that ends in these lines, from line 21
+  tracker "$L4/h.md" "$NOWS" "$CR" "$(printf '%s\n' "$@")"
+  lint "$L4/h.md"
+}
+fires()  { check_contains "fires: $1" "tells a session to read tracker.md (21000 bytes) first" "$(rf "$1")"; }
+silent() { check_absent   "silent: $1" "tells a session to read" "$(rf "$1")"; }
+fires  "Read tracker.md first."
+fires  "Before anything else, reread \`tracker.md\`."
+fires  "Start by reading [the log](tracker.md)."
+fires  "On restart, read ~/notes/trackers/tracker.md"
+fires  "Read the large tracker.md first"
+silent "Do not read tracker.md whole."
+silent "Already read: tracker.md lines 40-90."
+silent "T-9 in tracker.md was read before the restart."
+silent "Read tracker.md first, by grep -n on the id."
+silent "Before anything, read tracker.md by slice."
+silent "Read work-tracker.md first."
+silent "Read tracker.md.bak first."
+silent "Open tracker.md first."
+silent "See the thread on tracker.md before Friday."
+OUT=$(rf "Read tracker.md first." "Read tracker.md first, again." "Start: read tracker.md" \
+         "Read tracker.md before lunch." "Read tracker.md first, really.")
+check_eq "at most three lines named" "3" "$(printf '%s\n' "$OUT" | grep -c 'tells a session to read')"
+check_contains "the rest counted" "and 2 more like that" "$OUT"
+check_contains "by line number" "line 21 tells" "$OUT"
 
 echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

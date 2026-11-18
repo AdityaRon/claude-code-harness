@@ -32,22 +32,34 @@ esac
 TRACKER=""
 case "$FILE" in
   */memory/*.md) ;;
+  */trackers/*-archive.md) exit 0 ;;   # tracker-prune.py's archive: grows by design, read by grep only
   */trackers/*.md) TRACKER=1 ;;
   *) exit 0 ;;
 esac
-BASE=$(basename "$FILE")
+BASE=${FILE##*/}
 [ -f "$FILE" ] || exit 0
 
-# ---- a handoff tracker: the shape rules/working-agreement.md gives it -----
+# ---- trackers/: a handoff, or a ledger ---------------------------------------
+# A handoff is what a restart reads whole: the shape rules/working-agreement.md
+# gives it. A ledger is a log past TRACKER_LEDGER_BYTES, or one tracker-prune.py
+# has archived from; it is read by slice, so only its size is checked.
 if [ -n "$TRACKER" ]; then
+  LB=${TRACKER_LEDGER_BYTES:-20000}
+  TB=$(( $(wc -c < "$FILE") ))
+  PRUNE="python3 ~/.claude/tracker-prune.py"
+  if [ "$TB" -gt "$LB" ] || [ -f "${FILE%.md}-archive.md" ]; then
+    [ "$TB" -gt "$LB" ] || exit 0
+    printf "ledger lint on %s:\n  - it is %s bytes, past %s. Read it by slice (grep, sed -n), never whole. \`%s '%s'\` lists the settled rows it would move to %s; --write moves them.\n" \
+      "$BASE" "$TB" "$LB" "$PRUNE" "$FILE" "${BASE%.md}-archive.md" >&2
+    exit 2
+  fi
   TF=""
   tadd() { TF="${TF}  - $1
 "; }
   WANT="Scope|Open|Owed|Settled|Next on restart"
   GOT=$(sed -n 's/^## *//p' "$FILE" | sed 's/[[:space:]]*$//' | paste -sd '|' -)
-  [ "$GOT" = "$WANT" ] || tadd "its ## headings are \"${GOT:-none}\". A tracker has Scope, Open, Owed, Settled, Next on restart, once each, in that order; a second set means it was appended to, not replaced in place."
+  [ "$GOT" = "$WANT" ] || tadd "its ## headings are \"${GOT:-none}\". A handoff has Scope, Open, Owed, Settled, Next on restart, once each, in that order; a second set means it was appended to, not replaced in place."
   TMAX=${TRACKER_MAX_BYTES:-5000}
-  TB=$(wc -c < "$FILE" | tr -d ' ')
   [ "$TB" -le "$TMAX" ] || tadd "it is $TB bytes, past $TMAX. Keep what a restart needs; settled detail belongs in a memory or the PR."
   STAMP=$(sed -n 's/^STATE:[[:space:]]*//p' "$FILE" | sed 's/[[:space:]]*$//' | head -1)
   if [ -z "$STAMP" ]; then
@@ -78,8 +90,59 @@ if [ -n "$TRACKER" ]; then
       [ -z "$BAD" ] || tadd "a cron entry without five fields and a prompt: $(printf '%s' "$BAD" | head -1 | sed 's/^[[:space:]]*//')"
     fi
   fi
+  # Ledgers beside this handoff, the one check that sees a ledger edited through
+  # Bash. -L: one kept elsewhere and linked in is measured at its target, as wc
+  # and sed above read it. wc and awk start only when find names one.
+  BIG=$(find -L "${FILE%/*}" -maxdepth 1 -name '*.md' ! -name '*-archive.md' -size +"${LB}"c -exec wc -c {} + 2>/dev/null)
+  if [ -n "$BIG" ]; then
+    # Whole words and names by hand: mawk and BWK awk have no \b. A read-first line
+    # names a ledger after read/reread/reading, says first, before, start or
+    # restart, and no slice tool.
+    RF=$(awk -v lb="$LB" -v prune="$PRUNE" '
+      function at(s, w, from,   i, p) {
+        while ((i = index(substr(s, from), w)) > 0) {
+          p = from + i - 1
+          if ((p == 1 || substr(s, p - 1, 1) !~ /[a-z0-9_]/) && substr(s, p + length(w), 1) !~ /[a-z0-9_]/) return p
+          from = p + 1
+        }
+        return 0
+      }
+      function named(s, w, from,   i, p, a) {
+        while ((i = index(substr(s, from), w)) > 0) {
+          p = from + i - 1; a = substr(s, p + length(w), 2)
+          if ((p == 1 || substr(s, p - 1, 1) !~ /[a-z0-9._-]/) && a !~ /^[a-z0-9_-]/ && a !~ /^\.[a-z0-9_-]/) return p
+          from = p + 1
+        }
+        return 0
+      }
+      function first(a, b) { return !a ? b : (!b || a < b) ? a : b }
+      FNR == NR {
+        if (index($0, "/") == 0) next
+        p = $0; sub(/^[ \t]*[0-9]+[ \t]/, "", p); b = p; sub(/.*\//, "", b)
+        n++; nm[n] = tolower(b); bn[n] = b; sz[n] = $1
+        if (n <= 5) printf "  - ledger %s beside this handoff is %d bytes, past %d. Read it by slice (grep, sed -n), never whole; `%s \047%s\047` moves its settled rows out.\n", b, $1, lb, prune, p
+        next
+      }
+      {
+        l = tolower($0)
+        if (at(l, "grep", 1) || at(l, "rg", 1) || at(l, "sed", 1) || at(l, "awk", 1) || at(l, "slice", 1)) next
+        if (!(at(l, "first", 1) || at(l, "before", 1) || at(l, "start", 1) || at(l, "restart", 1))) next
+        r = first(first(at(l, "read", 1), at(l, "reread", 1)), at(l, "reading", 1))
+        if (!r) next
+        for (k = 1; k <= n; k++) if (named(l, nm[k], r + 1)) {
+          if (++hits <= 3) printf "  - line %d tells a session to read %s (%d bytes) first. Say to read it by slice (grep, sed -n) instead.\n", FNR, bn[k], sz[k]
+          break
+        }
+      }
+      END { if (hits > 3) printf "  - and %d more like that.\n", hits - 3 }' - "$FILE" <<EOF
+$BIG
+EOF
+)
+    [ -z "$RF" ] || TF="$TF$RF
+"
+  fi
   [ -n "$TF" ] || exit 0
-  printf 'tracker lint on %s:\n%s' "$BASE" "$TF" >&2
+  printf 'handoff lint on %s:\n%s' "$BASE" "$TF" >&2
   exit 2
 fi
 
