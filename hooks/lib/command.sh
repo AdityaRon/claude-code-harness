@@ -547,10 +547,7 @@ drop_data_heredocs() {   # TEXT [all]
 # asks, since neither hiding nor keeping a separator is safe there.
 # A body no shell reads may be a script run later, where a quote spans lines:
 # the reading carried from the body's first line is printed after the command
-# where it differs, so the lines a guard replays in order (cd) stay in order: a
-# script runs where it is sourced, not where it was written. They are the body of
-# a quoted heredoc of their own, so they stay data: read as code, a python body's
-# 'it\'s' then `set(p)|r` became `set;p;` and env-guard denied.
+# where it differs, so the lines a guard replays in order (cd) stay in order.
 # The command with its lines joined as bash joins them: a \ that ends a line
 # goes with its newline, and a newline inside quotes, part of a word, becomes
 # the byte \001. Guards read line by line, so `git push origin main \` then
@@ -622,8 +619,7 @@ neutralize_quoted_separators() {
         print out
         if ((k in BODY) && alt[k] != out) extra = extra alt[k] "\n"
       }
-      # A line differs only by a separator, and the delimiter holds none.
-      if (extra != "") printf "true <<\047NQS_ALT\047\n%sNQS_ALT\n", extra
+      printf "%s", extra
       if (SH_BAD) exit 3
     }'
 }
