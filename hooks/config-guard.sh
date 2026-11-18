@@ -67,12 +67,24 @@ if [[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && "$FSRC" != *..* ]]; then
     "$H/.claude/jobs/"*) f_post=${CWD#"$H/.claude/jobs/"}; [[ "$f_post" =~ ^[A-Za-z0-9_-]+/tmp(/|$) ]] && FCWD=/ ;;
   esac
 fi
-# A glob in a dot-name (~/.cla*, .bash?c, ~/.[bz]shrc) or after .config/ can name
-# one of these, and the full read expands it: such a command is read in full. Only
-# a name's own characters before the glob, so regex text (`(?:\.\d+)?`) is not one.
-F_GLOB='(^|[[:space:]/])[.]([[:alnum:]_.-]*[][*?]|config/[[:alnum:]_.-]*[][*?])'
+# A glob in a dot-name (~/.cla*, .bash?c, ~/.[bz]shrc, .config/gi?/config) can name
+# one of these, and the full read expands it: a command with one that can is read
+# in full. jq's .[] or .items[0] cannot, so it is not.
+f_dotglob() {   # f_dotglob TEXT
+  local rest=$1 g n t='[^/[:space:];&|<>()"'\'']'
+  local re="(^|[[:space:]/])[.](config/)?($t*[*?[]$t*)"
+  # shellcheck disable=SC2053  # $g is the command's glob, matched as one
+  while [[ "$rest" =~ $re ]]; do
+    rest=${rest#*"${BASH_REMATCH[0]}"} g=${BASH_REMATCH[3]}
+    if [[ -n "${BASH_REMATCH[2]}" ]]; then [[ git == $g ]] && return 0; continue; fi
+    for n in claude config zshrc zshenv zprofile zlogin zlogout bashrc bash_profile bash_login profile gitconfig; do
+      [[ $n == $g ]] && return 0
+    done
+  done
+  return 1
+}
 shopt -s nocasematch
-[[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && ! "$FTARGET" =~ $F_GLOB ]] && case "$FTARGET" in
+[[ "$TOOL" == Bash || "$TOOL" == Monitor ]] && ! f_dotglob "$FTARGET" && case "$FTARGET" in
   *.claude*|*.zsh*|*.zprofile*|*.zlog*|*.bashrc*|*.bash_profile*|*.bash_login*|*.profile*|*gitconfig*|*git/config*|*LaunchAgents*|*Library/*|*--global*) ;;
   *) case "$FCWD" in "$H/.claude"|"$H/.claude/"*|*/.claude|*/.claude/skills/*|"$H/Library/LaunchAgents") ;; *) exit 0 ;; esac ;;
 esac

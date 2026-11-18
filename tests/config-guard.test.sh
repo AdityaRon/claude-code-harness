@@ -446,6 +446,8 @@ bash_is allow 'ls ./*.py'
 starts_one 'ls .pytest_cache/*'
 starts_one 'ls ./*.py *.md'
 starts_one "grep -E '(\\.[0-9]+)?' notes.md"   # a regex's \. is no dot-name
+starts_one "gh pr list --json number --jq '.[].number'"   # nor is jq's .[]: no protected name fits it
+starts_one "gh pr view 1 --json files --jq '.files[0].path'"
 # Accepted (docs/known-limitations.md): the full read does not put a variable, a
 # brace, a glob above the file or a split option in place either, so the filter
 # letting these go answers as it does.
