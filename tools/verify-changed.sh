@@ -68,10 +68,14 @@ diff_of() {
 }
 
 # ---- The table: the merge base's rows, then head's rows with a new id --------
+# From origin/main's merge base whatever BASE is, so `--changed HEAD` cannot
+# read a table the branch already cut; BASE's only where origin/main is not kin.
+TB=$(git merge-base origin/main "${HEADREV:-HEAD}" 2>/dev/null) && TBN=origin/main || { TB=$MB TBN=$BASE; }
+TBS=$(git rev-parse --short "$TB")
 head_table() {
   if [[ -n "$HEADREV" ]]; then git show "$HEADREV:$TABLE" 2>/dev/null; else cat "$TABLE" 2>/dev/null; fi
 }
-BASE_TABLE=$(git show "$MB:$TABLE" 2>/dev/null); HAVE_BASE=$?
+BASE_TABLE=$(git show "$TB:$TABLE" 2>/dev/null); HAVE_BASE=$?
 HEAD_TABLE=$(head_table); HAVE_HEAD=$?
 # Lines out: row<TAB>the five fields, note<TAB>text, or bad<TAB>text.
 MERGED=$(awk -F'\t' -v OFS='\t' -v hb="$HAVE_BASE" -v hh="$HAVE_HEAD" '
@@ -97,10 +101,11 @@ BAD=$(printf '%s\n' "$MERGED" | sed -n "s/^bad$TAB//p")
 ROWS=$(printf '%s\n' "$MERGED" | sed -n "s/^row$TAB//p")
 read -r NBASE NADDED <<< "$(printf '%s\n' "$MERGED" | sed -n "s/^count$TAB//p" | tr '\t' ' ')"
 NROWS=$((NBASE + NADDED))
-[[ "$NROWS" -gt 0 ]] || die "no checklist rows: $TABLE is missing or empty at $MBS and in $TO"
-if [[ "$HAVE_BASE" -ne 0 ]]; then SRC="$MBS has no table, so head's $NADDED rows"
-elif [[ "$NADDED" -gt 0 ]]; then SRC="table from $MBS, plus $NADDED new in head"
-else SRC="table from $MBS"; fi
+[[ "$NROWS" -gt 0 ]] || die "no checklist rows: $TABLE is missing or empty at $TBS and in $TO"
+AT="$TBS, the merge base with $TBN"
+if [[ "$HAVE_BASE" -ne 0 ]]; then SRC="$AT, has no table, so head's $NADDED rows"
+elif [[ "$NADDED" -gt 0 ]]; then SRC="table from $AT, plus $NADDED new in head"
+else SRC="table from $AT"; fi
 
 # ---- Suites: which tests/*.test.sh cover each changed file ------------------
 if [[ -n "$HEADREV" ]]; then

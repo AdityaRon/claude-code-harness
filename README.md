@@ -198,8 +198,8 @@ Opt in: nothing here runs from a hook.
   `--stamp` also prints a `Verified:` line naming each with its tally, and none when
   one fails. `--changed HEAD` reads only what is not committed yet.
 - Each row cites the incident it comes from, and its check is suites (`run:`) or a
-  step to do by hand (`do:`). The table is read from the merge base, plus rows new in
-  the branch, so a branch cannot drop or narrow its own rows.
+  step to do by hand (`do:`). The table is read from the merge base with `origin/main`,
+  whatever BASE is, plus rows new in the branch, so a branch cannot drop or narrow its own rows.
 - In a session in this clone, `/verify` (`.claude/skills/verify`) walks the same
   steps. It runs only when typed, so it adds nothing to a session's context before then.
 - A commit's `Verified:` trailer names what ran, or says `Verified: none (<why>)`.

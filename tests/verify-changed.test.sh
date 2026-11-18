@@ -117,6 +117,13 @@ case " $(fired "$OUT")" in *" head-row "*) pass "a row new in head is added" ;; 
 has "says head drops a row" "note: head drops row keep-me" "$OUT"
 has "says head changes a row" "note: head changes row narrow" "$OUT"
 has "counts base rows plus new ones" "Checklist: 3 of 5 rows matched (table from" "$OUT"
+# --changed HEAD diffs from HEAD, but the table still comes from origin/main's merge base.
+git update-ref refs/remotes/origin/main main
+printf 'c\n' >> src/a.txt
+OUT=$(bash "$VC" HEAD 2>&1)
+case " $(fired "$OUT")" in *" keep-me "*) pass "--changed HEAD keeps a row the branch dropped" ;; *) fail "--changed HEAD keeps a row the branch dropped" "$OUT" ;; esac
+has "and says the table is origin/main's" "the merge base with origin/main" "$OUT"
+git checkout -q -- src/a.txt
 
 echo ""
 echo "=== Uncommitted, untracked and diff-pattern matches ==="
@@ -133,6 +140,26 @@ mkdir -p new && printf 'n\n' > new/f.txt
 OUT=$(bash "$VC" HEAD 2>&1)
 case " $(fired "$OUT")" in *" fresh "*) pass "an untracked file fires its row" ;; *) fail "an untracked file fires its row" "$OUT" ;; esac
 rm -rf new
+
+echo ""
+echo "=== Each way a file maps to a suite ==="
+MP=$TMP/m; mkdir -p "$MP/tools" "$MP/lib" "$MP/hooks/lib" "$MP/tests" "$MP/config"; cd "$MP" || exit 1
+git init -q -b main .
+row none 'nothing/*' - 'do nothing' '#8' > "$TABLE"
+printf 'echo foo\n' > tools/foo.sh
+printf 'echo hi\n' > tests/foo.test.sh
+printf '# exercises lib/thing.sh\n' > tests/names.test.sh
+printf 'tests/smokey.test.sh\n' > tests/smoke.list
+printf '# smoke\n' > tests/smokey.test.sh
+printf 'x\n' | tee lib/thing.sh hooks/lib/y.sh > /dev/null
+git add -A && git commit -qm base
+printf 'y\n' | tee -a tools/foo.sh lib/thing.sh hooks/lib/y.sh > /dev/null
+OUT=$(bash "$VC" main 2>&1)
+has "tools/foo.sh brings tests/foo.test.sh, which does not name it" "  tests/foo.test.sh  (tools/foo.sh)" "$OUT"
+has "a suite naming lib/thing.sh is brought" "  tests/names.test.sh  (lib/thing.sh)" "$OUT"
+has "a hooks/lib file brings the smoke suites" "  tests/smokey.test.sh  (hooks/lib/y.sh (every wired hook sources it))" "$OUT"
+has "and nothing else" "Suites (3)" "$OUT"
+cd "$T" || exit 1
 
 echo ""
 echo "=== It refuses what it cannot read ==="

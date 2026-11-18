@@ -2,6 +2,7 @@
 paths:
   - "**/*.py"
   - "**/pytest.ini"
+  - "tests/**"
   - "**/tests/**"
 ---
 
