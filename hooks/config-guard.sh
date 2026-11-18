@@ -77,7 +77,7 @@ F_PRE='c(l(a(u(d(e)?)?)?)?|o(n(f(i(g)?)?)?)?)?|p(r(o(f(i(l(e)?)?)?)?)?)?|g(i(t(c
 F_PRE=$F_PRE'|z(s(h[[:alnum:]_]*)?|p(r(o(f(i(l(e)?)?)?)?)?)?|l(o(g[[:alnum:]_]*)?)?)?'
 F_PRE=$F_PRE'|b(a(s(h(r(c)?|_(p(r(o(f(i(l(e)?)?)?)?)?)?|l(o(g(i(n)?)?)?)?)?)?)?)?)?'
 F_PRE=$F_PRE'|config/(git/(c(o(n(f(i(g)?)?)?)?)?)?|(g(i(t)?)?)?)'
-F_CLASS='\[([!^]|][^]/[:space:]]+|[0-9:-]*[^]0-9:-])[^]/[:space:]]*\]'
+F_CLASS='\[([!^]|][[:alnum:]_-]|[0-9:-]*[^]0-9:-])[^]/[:space:]]*\]'
 F_GLOB="(^|[[:space:]/;&|<>(=])[.](($F_PRE)([*?]|$F_CLASS)|$F_CLASS)|(~|HOME[}]?)/[.][*?]"
 # Run from home, a bare .* or .? on its own counts too (.*rc). The full read expands
 # a glob from the session's folder, not after a cd, so neither does this.

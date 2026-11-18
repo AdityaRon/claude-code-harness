@@ -457,6 +457,7 @@ starts_one "grep -E '(\\.[0-9]+)?' notes.md"   # a regex's \. is no dot-name
 starts_one "gh pr list --json number --jq '.[].number'"   # nor is jq's .[]: no protected name fits it
 starts_one "gh pr view 1 --json files --jq '.files[0].path'"
 starts_one "gh pr view 1 --json commits --jq '.commits[1:3]'"
+starts_one "gh pr list --json number,title --jq '.[]|[.number,.title]|@tsv'"
 starts_one "sed -i '' 's/.*x/y/' notes.md"   # a regex's .* is a glob only right under home
 starts_one 'grep -E "a: .* b" notes.md'
 # Accepted (docs/known-limitations.md): the full read does not put a variable, a
