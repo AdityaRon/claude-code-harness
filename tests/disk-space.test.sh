@@ -581,6 +581,9 @@ OUT=$(cl "$CL/prclone" --json)
 CD=$(jqr "$OUT" .digest)
 [ "$(jqr "$OUT" '[.targets[].path, (.targets[].bases[].name)] | join(" ")')" = "$CL/prclone $P8" ] \
   && pass "made today and clean: listed, with the output base whose DO_NOT_BUILD_HERE names it" || fail "clone list" "$OUT"
+QL="$CL/.disk-space-quarantine-7-abcdef05-prclone2"; mkdir -p "$QL"
+[ "$(cl "$CL/prclone" --json | jq -r ".quarantined[] | select(.path == \"$QL\") | .restore")" = "mv -n -- $QL $CL/prclone2" ] \
+  && pass "a leftover beside the clone is listed with its mv" || fail "clone leftover" "$(cl "$CL/prclone" --json | jq -c .quarantined)"
 for row in "dirtyclone|dirtyclone: tracked files changed" "busyclone|live job f0000002's originCwd is inside" "cwdclone|pid $CLPID's working folder is inside"; do
   n=${row%%|*}; want=${row#*|}; got=$(cl "$CL/$n" --json | jq -r '.kept[0].reason')
   [[ "$got" == *"$want"* ]] && pass "clone kept: $want" || fail "clone $n" "want *$want* got: $got"
