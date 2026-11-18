@@ -174,7 +174,10 @@ git checkout -q -- "$TABLE"
 U=$TMP/u; mkdir -p "$U" && git -C "$U" init -q -b main && printf 'x\n' > "$U/f" && git -C "$U" add f && git -C "$U" commit -qm x
 OUT=$(cd "$U" && bash "$VC" main 2>&1); RC=$?
 [[ $RC -eq 2 ]] && has "no table anywhere exits 2" "no checklist rows" "$OUT" || fail "no table anywhere exits 2" "rc=$RC $OUT"
-OUT=$(bash "$ROOT/doctor.sh" --changed no-such-ref 2>&1); RC=$?
+# A copy with no tests/: were the dispatch lost, doctor would run every suite,
+# this one among them.
+mkdir -p "$U/tools" && cp "$ROOT/doctor.sh" "$U/" && cp "$VC" "$U/tools/"
+OUT=$(bash "$U/doctor.sh" --changed no-such-ref 2>&1); RC=$?
 [[ $RC -eq 2 ]] && has "doctor.sh --changed hands over to it" "verify-changed: no commit no-such-ref" "$OUT" \
   || fail "doctor.sh --changed hands over to it" "rc=$RC $OUT"
 
