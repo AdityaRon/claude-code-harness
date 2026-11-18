@@ -187,6 +187,26 @@ memory-archive. Their protocols, tests and changelog are there.
 - `bash doctor.sh --skill comms-hub` runs that skill's prerequisite check from
   `~/.claude/skills-src`.
 
+## Verifying a change
+
+Opt in: nothing here runs from a hook.
+
+- `bash doctor.sh --changed [BASE]` diffs the working tree, uncommitted and untracked
+  files included, against its merge base with BASE (default `origin/main`). It prints
+  the rows of `config/verify-checklist.tsv` the change matches, always as "K of N rows
+  matched", and the suites that cover the changed files. `--run` runs those suites;
+  `--stamp` also prints a `Verified:` line naming each with its tally, and none when
+  one fails. `--changed HEAD` reads only what is not committed yet.
+- Each row cites the incident it comes from, and its check is suites (`run:`) or a
+  step to do by hand (`do:`). The table is read from the merge base, plus rows new in
+  the branch, so a branch cannot drop or narrow its own rows.
+- In a session in this clone, `/verify` (`.claude/skills/verify`) walks the same
+  steps. It runs only when typed, so it adds nothing to a session's context before then.
+- A commit's `Verified:` trailer names what ran, or says `Verified: none (<why>)`.
+  CI's "verification stamps" job lists a PR's commits without one in its summary
+  (`tools/verify-stamp.sh`) and passes. `config/verify.conf` on the base branch sets
+  the mode: `observe` now; `enforce` would fail the job.
+
 ## Design choices
 
 - The guards keep what auto mode cannot see or should not judge: file reads it never classifies, commands an allow rule may pass before the classifier, and actions that cannot be undone. A hook sees the whole command and a permission rule sees a prefix or a space-wildcard pattern, so those checks live in the guards; native ask rules cover kubectl writes and secret reads, and the classifier judges the rest ([docs/permissions.md](docs/permissions.md)).
@@ -213,6 +233,8 @@ everything else is grouped by what it is.
 install.sh  doctor.sh    ← install once per machine; run every suite in tests/
 CHANGELOG.md             ← one entry per release
 LICENSE                  ← MIT
+.claude/skills/verify/   ← /verify in a session in this clone (doctor.sh --changed, then the stamp);
+                           not installed
 bin/                     ← every file installed flat to ~/.claude by install.sh
   statusline.sh  harness-update.sh  net-allowlist.sh  sandbox.sh  sandbox-trial.sh
   skills-sync.sh         ← installs the claude-code-skills release config/skills.pin names
