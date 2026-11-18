@@ -104,6 +104,11 @@ command for that host, so each new one costs one prompt and one confirm.
 { "env": { "CLAUDE_PLAN_HTML_NO_OPEN": "1" } }
 ```
 
+**Cap pre-compact's transcript copies** (megabytes, default 1000; `0` for no cap; the newest copy always stays):
+```json
+{ "env": { "CLAUDE_TRANSCRIPT_BACKUP_MAX_MB": "500" } }
+```
+
 **Open workflow scripts in a specific editor** (the status-line `wf` link). Auto-detects VS Code/Cursor/Zed; override the URI scheme:
 ```json
 { "env": { "CLAUDE_EDITOR_URI": "cursor://file" } }

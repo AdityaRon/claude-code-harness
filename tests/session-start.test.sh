@@ -501,11 +501,16 @@ tstamp 3600
 OUT=$(dstart)
 check_contains "resume of a listed session: its size and compactions" "It held 612 MB after 13 compactions" "$OUT"
 check_contains "and where to see them all" "python3 ~/.claude/disk-space.py report" "$OUT"
+check_contains "it names the tracker's shape and says restart" "(Scope, Open, Owed, Settled, Next on restart; rules/working-agreement.md), then restart in a fresh session" "$OUT"
 check_not_contains "and no disk warning under the thresholds" "## Disk" "$OUT"
 check_not_contains "a second resume, same measurement: silent" "This session's transcript" "$(dstart)"
 check_contains "another listed session gets its own" "It held 414 MB after 2 compactions" \
   "$(run_tree other-sess CLAUDE_DISK_STAMP="$DSTAMP")"
 check_not_contains "an unlisted session: silent" "This session's transcript" "$(run_tree sess-unlisted CLAUDE_DISK_STAMP="$DSTAMP")"
+tstamp 3600
+check_contains "a compaction of a listed session, not only a resume" "It held 612 MB after 13 compactions" \
+  "$(jq -nc '{source:"compact", session_id:"sess-clean", hook_event_name:"SessionStart"}' \
+     | env CLAUDE_DISK_STAMP="$DSTAMP" bash "$TREE/hooks/session-start.sh" 2>/dev/null)"
 tstamp 3600
 check_not_contains "a startup, not a resume: silent" "This session's transcript" \
   "$(jq -nc '{source:"startup", session_id:"sess-clean", hook_event_name:"SessionStart"}' \
@@ -515,6 +520,33 @@ check_not_contains "a stamp over two days old: silent" "This session's transcrip
 tstamp 3600; printf 'transcript=sess-clean 9$(touch %s/pwned4) 1\n' "$TMP" >> "$DSTAMP"
 OUT=$(dstart)
 check_eq "a transcript line runs nothing" "" "$(ls "$TMP"/pwned4 2>/dev/null)"
+rm -f "$DSTAMP"
+
+echo ""
+echo "=== large transcripts across the machine: any start, once per measurement ==="
+astamp() {  # COUNT BYTES COMPACTIONS SECONDS_AGO [MB]
+  dstamp 0 0 "$4"; printf 'transcripts_active=%s %s %s\ntranscript_mb=%s\n' "$1" "$2" "$3" "${5:-150}" >> "$DSTAMP"
+  rm -f "$CLAUDE_STATE_DIR"/transcripts-warning*
+}
+startup() { jq -nc '{source:"startup", session_id:"sess-new", hook_event_name:"SessionStart"}' \
+  | env CLAUDE_DISK_STAMP="$DSTAMP" "$@" bash "$TREE/hooks/session-start.sh" 2>/dev/null; }
+astamp 4 612000000 65 3600
+OUT=$(startup)
+check_contains "a startup: the count, the largest and its compactions" "4 session transcripts written in the last 7 days are past 150 MB; the largest held 612 MB after 65 compactions" "$OUT"
+check_contains "and what to do" "write the handoff, then restart. Each one: python3 ~/.claude/disk-space.py report" "$OUT"
+check_not_contains "a second start, same measurement: silent" "## Large session transcripts" "$(startup)"
+astamp 1 200000000 2 3600 200
+check_contains "one, and the stamp's size" "1 session transcript written in the last 7 days is past 200 MB" "$(startup)"
+astamp 4 612000000 65 $((3 * 86400))
+check_not_contains "a stamp over two days old: silent" "## Large session transcripts" "$(startup)"
+astamp 0 0 0 3600
+check_not_contains "none: silent" "## Large session transcripts" "$(startup)"
+astamp 4 612000000 65 3600; printf 'transcripts_active=4 a[$(touch${IFS}%s/pwned5)] 1\n' "$TMP" >> "$DSTAMP"
+startup >/dev/null
+check_eq "a transcripts_active line runs nothing" "" "$(ls "$TMP"/pwned5 2>/dev/null)"
+astamp 4 612000000 65 3600
+startup CLAUDE_SESSION_START_BUDGET=0 >/dev/null
+check_eq "a start past its budget claims nothing" "" "$(ls "$CLAUDE_STATE_DIR"/transcripts-warning* 2>/dev/null)"
 rm -f "$DSTAMP"
 
 echo ""

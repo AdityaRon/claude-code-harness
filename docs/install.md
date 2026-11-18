@@ -49,7 +49,8 @@ repo layout is for reading the repo, not for the installed tree.
   spend-report.py          ← what sessions, subagents and loop ticks cost; comms-hub's tick runs it daily
   disk-space.py            ← what job folders and Bazel output bases hold; harness-update.sh runs its
                              stamp once a day into state/disk-usage (sizes, transcripts of 150 MB
-                             or more, the guards' p90), which session-start reads;
+                             or more, the guards' p90), which session-start reads; report also
+                             sizes ~/.claude/projects and pre-compact.sh's copies;
                              prune, clone and bazel --sweep delete by digest, behind ask rules
   relocate-clones.sh       ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads
   harness-update.sh        ← moves this machine to the newest release
@@ -72,7 +73,7 @@ repo layout is for reading the repo, not for the installed tree.
     harness-update-doctor.log  ← the doctor run the last update was gated on
     install-doctor.log     ← the doctor run the last install.sh verified with
   transcripts/
-    transcript_<trigger>_<ts>_<session>.jsonl  ← pre-compact backups, newest 20
+    transcript_<trigger>_<ts>_<session>.jsonl  ← pre-compact backups: one per session, newest 20, 1000 MB
   state/
     sessions/<session_id>.json  ← per-session edit snapshot, 0600, newest 50 kept
     sessions/memory-index/      ← when session-start last reordered each memory index
