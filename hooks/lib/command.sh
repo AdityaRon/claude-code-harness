@@ -507,10 +507,12 @@ strip_inert_heredocs() {
   # A quoted or escaped separator is text: `grep 'a|b' n.md` is one inert
   # segment, not `grep 'a` and `b' n.md`. That reading is split only when this
   # one fails, so a command this one passes starts nothing more. Where
-  # neutralize cannot read the command (3), the body stays.
+  # neutralize cannot read the command (3), the body stays. A body's carried
+  # lines go in that body here (`inbody`), so they are dropped with it, and
+  # kept and split with it when it stays.
   if ! inert_split "$rest"; then
     [[ "$rest" == *[\;\&\|]* && "$s" == *[\"\'\\]* ]] \
-      && segs=$(neutralize_quoted_separators "$s") && segs=$(inert_rest "$segs") && inert_split "$segs" \
+      && segs=$(neutralize_quoted_separators "$s" inbody) && segs=$(inert_rest "$segs") && inert_split "$segs" \
       || { printf '%s' "$s"; return; }
   fi
   printf '%s' "$rest"
@@ -572,9 +574,11 @@ join_continued_lines() {
     }'
 }
 
-neutralize_quoted_separators() {
+# With `inbody`, a body's carried lines go before its terminator instead, so a
+# reader that drops the body drops them too (strip_inert_heredocs).
+neutralize_quoted_separators() {   # TEXT [inbody]
   case "$1" in *'&'*|*';'*|*'|'*) ;; *) printf '%s' "$1"; return ;; esac
-  printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+  printf '%s\n' "$1" | awk -v inbody="${2:-}" "$HEREDOC_AWK"'
     function hide(ch) { return ch == "&" ? "%26" : ch == ";" ? "%3B" : ch == "|" ? "%7C" : ch }
     # The reading before hd_scan: quotes and $( only. Kept for heredoc data and
     # for a command hd_scan cannot read; a separator hd_scan marked as code (in
@@ -616,6 +620,7 @@ neutralize_quoted_separators() {
             out = out c
           }
         }
+        if (inbody != "" && !(k in BODY) && extra != "") { printf "%s", extra; extra = "" }
         print out
         if ((k in BODY) && alt[k] != out) extra = extra alt[k] "\n"
       }
