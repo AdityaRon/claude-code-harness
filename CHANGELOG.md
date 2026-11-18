@@ -8,6 +8,58 @@ installed machine to the newest tag. After v1.4.2 the skills live in
 [claude-code-skills](https://github.com/AdityaRon/claude-code-skills), with their
 own changelog; `config/skills.pin` names the release each version installs.
 
+## v1.4.11 (2026-11-18)
+
+Merged since v1.4.10: 4 PRs.
+
+### Speed
+- hook-bench gates on process starts; read_input and git-guard start fewer (stacked on #268) (#270)
+- Timing log at=, hook-latency reads it first, --since, and a report-only process count in hook-bench (#268)
+
+### Memory
+- memory-lint: a handoff tracker has one shape (#271)
+
+### Other
+- skills.pin: claude-code-skills v1.2.0 (#273)
+
+### Benchmark vs v1.4.10
+
+
+2026-11-18T12:08:09Z, Linux 7.0.0-1019-azure x86_64, Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz, python 3.14.4. Corpus tests/bench-corpus.jsonl: 492 payloads (372 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 NotebookEdit, 2 MultiEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, launched together as Claude Code does. Wait is from the first launch to the last exit, so hooks that share the cores pay for it; CPU is the sum of each hook's own. The per-hook table runs each hook alone. Process start here: `true` 0.6 ms, `bash -c :` 1.1 ms, `jq -n 1` 1.9 ms (p50 of 20), so only same-run comparisons are meaningful. A machine whose process start is slower pays it again for each process a hook starts: the last column is a hook's p50 past one `bash -c :`.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 372 | 66.1 → 64.1 ms (-3%) | 65.4 → 61.8 ms (-6%) | 118.6 → 115.9 ms (-2%) | 131.9 → 123.3 ms (-7%) |
+| WebFetch | 11 | 8.4 → 6.1 ms (-28%) | 8.4 → 6.2 ms (-27%) | 8.8 → 6.9 ms (-22%) | 8.2 → 5.9 ms (-28%) |
+| Read/Grep | 41 | 44.3 → 41.9 ms (-5%) | 48.4 → 45.9 ms (-5%) | 67.4 → 66.4 ms (-1%) | 61.6 → 56.7 ms (-8%) |
+| Write/Edit | 63 | 55.1 → 51.1 ms (-7%) | 57.4 → 53.7 ms (-6%) | 76.7 → 73.8 ms (-4%) | 140.8 → 125.6 ms (-11%) |
+| Monitor | 5 | 36.5 → 34.1 ms (-7%) | 48.2 → 46.2 ms (-4%) | 92.4 → 90.5 ms (-2%) | 92.8 → 89.3 ms (-4%) |
+| All | 492 | 56.5 → 54.2 ms (-4%) | 61.5 → 58.0 ms (-6%) | 115.8 → 112.4 ms (-3%) | 124.0 → 115.1 ms (-7%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean | p50 past bash start |
+|---|---:|---|---|---|---|
+| bash-guards.sh | 377 | 64.5 → 62.7 ms (-3%) | 117.0 → 113.3 ms (-3%) | 120.7 → 115.1 ms (-5%) | 63.4 → 61.6 ms |
+| config-guard.sh | 63 | 18.0 → 15.8 ms (-12%) | 39.4 → 36.6 ms (-7%) | 24.7 → 22.5 ms (-9%) | 16.9 → 14.7 ms |
+| mod-gate.sh | 63 | 3.8 → 1.5 ms (-62%) | 14.0 → 11.8 ms (-16%) | 4.3 → 2.0 ms (-54%) | 2.7 → 0.4 ms |
+| secret-scanner.sh | 63 | 23.8 → 21.5 ms (-10%) | 62.9 → 61.1 ms (-3%) | 28.4 → 26.1 ms (-8%) | 22.7 → 20.4 ms |
+| sensitive-file-guard.sh | 104 | 43.6 → 41.3 ms (-5%) | 60.8 → 57.9 ms (-5%) | 48.8 → 46.3 ms (-5%) | 42.5 → 40.2 ms |
+| subagent-cache-guard.sh | 492 | 8.4 → 6.1 ms (-27%) | 9.0 → 6.5 ms (-28%) | 8.2 → 5.9 ms (-29%) | 7.3 → 5.0 ms |
+
+Processes started: each hook run alone once per payload under `strace -f`. Execs are execve calls past the hook's own bash; forks are new processes (clone, clone3, fork or vfork without CLONE_THREAD), a `$( )` among them. A machine that pays for each process start pays for both.
+
+| Hook | payloads | execs per payload | forks per payload | in all | payloads with more / fewer | not counted |
+|---|---:|---|---|---|---|---:|
+| bash-guards.sh | 377 | 25.59 → 23.78 | 104.72 → 100.34 | 49127 → 46796 | 0 / 377 | 0 |
+| config-guard.sh | 63 | 6.10 → 5.10 | 16.24 → 15.24 | 1407 → 1281 | 0 / 63 | 0 |
+| mod-gate.sh | 63 | 1.19 → 0.19 | 1.44 → 0.44 | 166 → 40 | 0 / 63 | 0 |
+| secret-scanner.sh | 63 | 8.65 → 7.65 | 20.95 → 19.95 | 1865 → 1739 | 0 / 63 | 0 |
+| sensitive-file-guard.sh | 104 | 14.10 → 13.10 | 31.25 → 30.25 | 4716 → 4508 | 0 / 104 | 0 |
+| subagent-cache-guard.sh | 492 | 2.00 → 1.00 | 2.00 → 1.00 | 1968 → 984 | 0 / 492 | 0 |
+
+Decisions: 492 of 492 payloads got the same answer on both sides.
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended; no payload's hooks may start more processes unless intended).
+
 ## v1.4.10 (2026-11-18)
 
 Merged since v1.4.9: 4 PRs.
