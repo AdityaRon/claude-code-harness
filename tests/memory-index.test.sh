@@ -518,6 +518,13 @@ chmod u+w "$STORE/MEMORY_ARCHIVE.md"
 check_contains "it says so"   "not all in MEMORY_ARCHIVE.md" "$OUT"
 check_eq "exit 3"             "3" "$RC"
 check_eq "MEMORY.md unchanged" "$BEFORE" "$(cat "$STORE/MEMORY.md")"
+# An append that succeeds and lands nowhere: only the check after it can tell,
+# and it holds where chmod does not (a suite run as root).
+rm -f "$STORE/MEMORY_ARCHIVE.md"; ln -s /dev/null "$STORE/MEMORY_ARCHIVE.md"
+OUT=$(run --archive p_old --heading Done --write); RC=$?
+check_contains "an append that lands nowhere is caught" "not all in MEMORY_ARCHIVE.md" "$OUT"
+check_eq "MEMORY.md still unchanged" "$BEFORE" "$(cat "$STORE/MEMORY.md")"
+rm -f "$STORE/MEMORY_ARCHIVE.md"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

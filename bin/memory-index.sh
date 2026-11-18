@@ -511,7 +511,8 @@ EOF
       # Checked after the append, before the index is replaced: an append that
       # failed or landed short must leave MEMORY.md holding the lines.
       { { echo ""; echo "$head"; cat "$TMP/peeled"; } >> "$arch"; } 2>/dev/null \
-        && awk 'NR == FNR { a[$0] = 1; next } !($0 in a) { bad = 1 } END { exit bad }' "$arch" "$TMP/peeled" \
+        && awk -v arch="$arch" 'BEGIN { while ((getline l < arch) > 0) a[l] = 1 }
+             !($0 in a) { bad = 1 } END { exit bad }' "$TMP/peeled" \
         || { echo "ABORT $slug: the lines to archive are not all in MEMORY_ARCHIVE.md, so MEMORY.md is left as it was" >&2; exit 3; }
     fi
     cp "$TMP/new" "$idx"
