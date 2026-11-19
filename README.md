@@ -217,6 +217,10 @@ Opt in: nothing here runs from a hook.
 - Every deny and ask is an audit line; MCP calls are logged, not guarded ([docs/hooks.md](docs/hooks.md)).
 - The memory tools propose and never delete ([docs/memory.md](docs/memory.md)), and what it relies on in Claude Code is checked daily for breakage ([docs/upstream-contract.md](docs/upstream-contract.md)).
 
+## Long-running sessions
+
+A session kept for days works, but its transcript only grows: compaction shrinks what the model sees, not the file. On one work Mac, sessions that had been restarted or had ended left transcripts of 212 MB to 1.9 GB, while sessions restarted from a handoff ran at 7 to 15 MB. The harness measures transcripts once a day. At session start it says when a transcript is past 150 MB: write the handoff (`trackers/<name>.md`), then restart. It caps its own pre-compact backups at one per session and 1000 MB in all, and `python3 ~/.claude/disk-space.py report` lists the large transcripts and when Claude Code will remove them. What grows, what to do and the settings: [docs/long-sessions.md](docs/long-sessions.md).
+
 ## Known limitations
 
 - Regex guards can be evaded by a determined agent; the OS sandbox is the real containment. Guard hardening is frozen as of 2026-11-15, so a bypass of a guard's regex is a known limitation rather than a fix.
@@ -285,6 +289,7 @@ docs/
   session-routing.md     ← routing a PR to its session; holds only in single-author repos
   permission-friction.md ← which guard asks and denies cost the most, and why
   shadow-mode.md         ← the guards and rules on trial (#237): what they log, how step 9 reads the report
+  long-sessions.md       ← what grows in a session kept for days, what the harness caps, what to do
   permission-friction-cases.jsonl  ← cases tools/permission-friction.py --cases replays
   history/               ← superseded memory research the memory skills still cite
 ```
