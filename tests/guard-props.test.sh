@@ -56,8 +56,8 @@ for c in 'printenv PATH' "echo hi | 'p'rintenv" "python3 -c \"import subprocess;
   jq -nc --arg c "$c" '{id: $c, tool_name: "Bash", tool_input: {command: $c}}'
 done > "$TMP/c.jsonl"
 gp --only fastpath --n 0 --corpus "$TMP/c.jsonl"
-[ "$RC" = 0 ] && grep -q "forced to pass: word_filter in env-guard (1), interpreter-guard (1), kubectl-guard (1), network-guard (1); git-guard's git; git-guard's GG_GATE; rm-guard's RM_WORD; config-guard's paths: 0 answered differently" "$TMP/out" \
-  && pass "the shipped fast paths: word_filter in four guards, git-guard's two gates, rm-guard's RM_WORD, config-guard's paths" || fail "fastpath" "rc=$RC $(cat "$TMP/out")"
+[ "$RC" = 0 ] && grep -q "forced to pass: word_filter in env-guard (1), interpreter-guard (1), kubectl-guard (1), network-guard (1); git-guard's git; git-guard's GG_GATE; git-guard's rule union; rm-guard's RM_WORD; config-guard's paths: 0 answered differently" "$TMP/out" \
+  && pass "the shipped fast paths: word_filter in four guards, git-guard's two gates and rule union, rm-guard's RM_WORD, config-guard's paths" || fail "fastpath" "rc=$RC $(cat "$TMP/out")"
 fp_mutant() {  # NAME FILE SED COUNT CMD-START: a mutant of one fast path, and the commands it gets wrong
   mutant "$1" "$2" "$3"
   gp --only fastpath --n 0 --corpus "$TMP/c.jsonl" --hooks "$TMP/$1"
@@ -68,6 +68,8 @@ fp_mutant no-printenv env-guard.sh 's/\(env\|printenv\|export/(env|export/' 2 'p
 fp_mutant kubectl-space kubectl-guard.sh "s/^word_filter 'kubectl' /word_filter 'kubectl ' /" 1 'python3 -c '
 fp_mutant gate-no-push git-guard.sh "s/^GG_GATE='hooks\|push\|/GG_GATE='hooks|/" 1 'git push --force origin main: '
 fp_mutant gate-no-reset git-guard.sh "s/^GG_GATE='hooks\|push\|reset\|/GG_GATE='hooks|push|/" 1 'git reset --hard HEAD~1: '
+# The union missing one check's pattern ends a call that check denies.
+fp_mutant union-no-reset git-guard.sh 's/ "\$SFX_RESET_HARD"//' 1 'git reset --hard HEAD~1: '
 fp_mutant rm-word-unquoted rm-guard.sh "s/^RM_WORD=.*$/RM_WORD='(^|[^[:alnum:]_.-])rm([[:space:]]|\$)'/;s/^RM_BARE=.*$/RM_BARE='(^|[^[:alnum:]_.-])rm([[:space:]]|\$)'/" 1 'python3 - <<'
 # rm-guard's filter as on main: lower case and the typed text only, so RM and r''m skip a full read that denies them.
 fp_mutant rm-word-typed rm-guard.sh "s/^RM_BARE=.*$/RM_BARE='a^'/" 2 'RM -rf ~/: '

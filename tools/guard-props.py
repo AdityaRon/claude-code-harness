@@ -7,7 +7,7 @@
   tools/guard-props.py --hooks DIR        # another hooks/ folder, e.g. a mutant
 
 fastpath: a guard's `word_filter ... || exit 0` line is its fast path, as are
-git-guard's two gates, rm-guard's RM_WORD and config-guard's path test.
+git-guard's two gates and its rule union, rm-guard's RM_WORD and config-guard's path test.
 A copy of hooks/ with every one of them made to pass must answer as hooks/ does through
 bash-guards.sh (decision, exit code, shadow rules) on the bench corpus's Bash
 payloads and N generated commands: guard words with quotes, backslashes, case
@@ -50,6 +50,8 @@ FAST_PATH = re.compile(r'^([ \t]*)word_filter[ \t].*\|\|[ \t]*exit 0[ \t]*$', re
 OTHER_PATHS = [
     ('git', "git-guard's git", 'git-guard.sh', r'^\[\[ "\$R" == \*\[Gg\]\[Ii\]\[Tt\]\* \]\] \|\| exit 0$', ':', True),
     ('gg-gate', "git-guard's GG_GATE", 'git-guard.sh', r'^\[\[ "\$R" =~ \$GG_GATE \]\] \|\| exit 0$', ':', True),
+    ('gg-union', "git-guard's rule union", 'git-guard.sh',
+     r'^printf .%s\\n. "\$GG_TEXT" \| sed -nE .* \| grep -qiE "\$GG_UNION"; \[\[ "\$\{PIPESTATUS\[\*\]\}" != "0 0 1" \]\] \|\| exit 0$', ':', True),
     ('rm-word', "rm-guard's RM_WORD", 'rm-guard.sh', r'^\[\[ "\$CMD" =~ \$RM_WORD \]\] \|\| word_filter "\$RM_BARE" "\$CMD" \|\| rm_allow$', ':', True),
     ('config-paths', "config-guard's paths", 'config-guard.sh', r'^([ \t]*\*\) case "\$FCWD" in .*\*\) )exit 0( ;; esac ;;)$', r'\1:\2', True),
 ]

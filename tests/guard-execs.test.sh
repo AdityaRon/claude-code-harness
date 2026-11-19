@@ -22,15 +22,15 @@ git -C "$TMP/repo" init -q && printf 'x\n' > "$TMP/repo/README.md"
 # and says why there.
 #  payload                    git-guard  interpreter-guard
 BUDGETS='
-shape-cd-chain                  34   7
-shape-pipes                     18  12
+shape-cd-chain                  12   5
+shape-pipes                     16  10
 shape-python-heredoc             0  30
-shape-notes-then-git            45  22
-shape-commit-heredoc            48  23
-shape-commit-pr-heredoc         48  23
-mult-joined-pass                66  14
-mult-inline-shellouts           84  17
-mult-git-add-all                74   0
+shape-notes-then-git            23  20
+shape-commit-heredoc            25  21
+shape-commit-pr-heredoc         25  21
+mult-joined-pass                22  10
+mult-inline-shellouts           61  17
+mult-git-add-all                76   0
 '
 GUARDS="env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard"
 

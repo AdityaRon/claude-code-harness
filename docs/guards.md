@@ -66,7 +66,7 @@ bash reading it itself, where `cat` was). git-guard asks a second builtin
 question of a git command: whether it names one of the words its checks need
 (`push`, `reset`, `add`, `config`, `hooks` and the rest), or holds `$`, a
 backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
-`commit -m` and `fetch` hold none, and start nothing past that `jq`. Each guard file still runs alone as before
+`commit -m` and `fetch` hold none, and start nothing past that `jq`. A git command that names one goes to one grep of every check's pattern (`GG_UNION`, case folded, over each text a check reads), and ends there when none matches: a benign add, commit or push used to start each check's grep, about 15. Each guard file still runs alone as before
 (`bash ~/.claude/hooks/kubectl-guard.sh < payload.json`).
 
 - **Answers.** A deny beats an ask, and an ask beats a silent allow. One guard answering is passed on byte for byte; when several do, the reasons of those with the strongest answer are joined, in the order above. Each guard writes its own audit line, under its own name.
@@ -91,7 +91,7 @@ backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
   generated commands (guard words with quotes, backslashes, case, suffixes and
   paths, some in a notes heredoc). Forced: every `word_filter ... || exit 0`
   line (env-guard, interpreter-guard, kubectl-guard, network-guard), git-guard's
-  two gates (no `git`, then `GG_GATE`), rm-guard's `RM_WORD` and config-guard's
+  two gates (no `git`, then `GG_GATE`) and its rule union (`GG_UNION`), rm-guard's `RM_WORD` and config-guard's
   path test. Each must be found once, or the run stops (exit 2) rather than
   pass on less. rm-guard's `word_filter` sets a flag rather than exiting, so it
   stays. `--force KEY` forces a fast path that is off by default; none is today.
