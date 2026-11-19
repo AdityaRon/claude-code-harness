@@ -24,6 +24,11 @@ Python, not bash: getrusage(RUSAGE_CHILDREN) is the only portable way to read a
 child's CPU to the millisecond; bash and perl `times` round to clock ticks.
 python3 is already required by tools/permission-friction.py.
 
+Progress goes to stderr, never stdout: a line up front with the estimated time, then at most one every
+--progress-every seconds (default 10; 0 is none) per phase (warm, timed, launches). --quick is the way
+to a short run on a slow machine. On SIGINT or SIGTERM the table built so far is printed, marked
+"partial: n of N payloads", and the exit is 130; a partial run fails --gate.
+
 Absolute numbers depend on the machine (process start cost varies 3x between
 laptops), which is why both sides run in the same process on the same corpus
 and only the comparison is reported as a verdict.
@@ -47,6 +52,41 @@ import argparse, concurrent.futures, glob, hashlib, io, json, os, platform, re, 
 RANK = {'allow': 0, 'ask': 2, 'deny': 3, 'error': 4}
 CLASSES = {'Bash': 'Bash', 'Write': 'Write/Edit', 'Edit': 'Write/Edit', 'MultiEdit': 'Write/Edit',
            'NotebookEdit': 'Write/Edit', 'Read': 'Read/Grep', 'Grep': 'Read/Grep', 'WebFetch': 'WebFetch'}
+
+
+class Interrupted(BaseException):
+    """SIGINT or SIGTERM, raised in the main thread by the handler main() installs for the run."""
+
+
+def fmt_dur(sec):
+    sec = int(max(0, sec))
+    h, m, s_ = sec // 3600, sec % 3600 // 60, sec % 60
+    return f'{h}h{m:02d}m' if h else f'{m}m{s_:02d}s' if m else f'{s_}s'
+
+
+class Progress:
+    """One stderr line per phase tick, at most one every EVERY seconds; 0 says nothing."""
+    def __init__(self, every=10.0):
+        self.every, self.t0 = every, time.time()
+        self.last, self.phase, self.p0 = self.t0, None, self.t0
+
+    def say(self, msg):
+        if self.every > 0:
+            print(f'hook-bench: {msg}', file=sys.stderr, flush=True)
+
+    def tick(self, phase, side, n, total):
+        """About to do payload N of TOTAL in PHASE on SIDE."""
+        now = time.time()
+        if phase != self.phase:
+            self.phase, self.p0 = phase, now
+        if self.every <= 0 or now - self.last < self.every:
+            return
+        self.last = now
+        est = f", about {fmt_dur((now - self.p0) / (n - 1) * (total - n + 1))} left in {phase}" if n > 1 else ''
+        self.say(f'{phase} {side}: payload {n} of {total}, elapsed {fmt_dur(now - self.t0)}{est}')
+
+
+PROG = Progress()
 
 
 def die(msg, rc=2):
@@ -164,11 +204,17 @@ def run_together(hooks, payload, env, cwd, timeout=None):
     def unfinished():
         return [p.pid for _, p in procs if p.pid not in exited or any(t.is_alive() for t in threads[p.pid])]
     killer = threading.Timer(timeout, lambda: kill(unfinished()))
+    killer.daemon = True
     killer.start()
-    for _, p in procs:
-        _, status, ru = os.wait4(p.pid, 0)
-        p.returncode = os.waitstatus_to_exitcode(status)
-        exited[p.pid] = (time.perf_counter(), (ru.ru_utime + ru.ru_stime) * 1000.0)
+    try:
+        for _, p in procs:
+            _, status, ru = os.wait4(p.pid, 0)
+            p.returncode = os.waitstatus_to_exitcode(status)
+            exited[p.pid] = (time.perf_counter(), (ru.ru_utime + ru.ru_stime) * 1000.0)
+    except BaseException:   # an interrupt: no hook of this call outlives it
+        killer.cancel()
+        kill([p.pid for _, p in procs])
+        raise
     for _, p in procs:
         for t in threads[p.pid]:
             t.join(max(0.0, deadline - time.perf_counter()))
@@ -377,11 +423,17 @@ def count_launches(method, rows, sides, env, cwd, tmp):
                 if path is not None:
                     jobs.append((row['id'], s, name, path, payload, e))
     per = {}
-    with concurrent.futures.ThreadPoolExecutor(max(1, os.cpu_count() or 1)) as ex:
+    ex = concurrent.futures.ThreadPoolExecutor(max(1, os.cpu_count() or 1))
+    try:
         futs = [(j, ex.submit(count_one, method, j[3], j[4], j[5], cwd, os.path.join(tmp, 'launch', str(i)), bash))
                 for i, j in enumerate(jobs)]
-        for (rid, s, name, _, _, _), fu in futs:
+        for n, ((rid, s, name, _, _, _), fu) in enumerate(futs, 1):
+            PROG.tick('launches', s, n, len(futs))
             per.setdefault(rid, {}).setdefault(s, {})[name] = (lambda c: list(c) if c else None)(fu.result())
+    except BaseException:   # an interrupt: do not wait for the queue
+        ex.shutdown(wait=False, cancel_futures=True)
+        raise
+    ex.shutdown()
     shutil.rmtree(os.path.join(tmp, 'launch'), ignore_errors=True)
     return {'method': method, 'per_payload': per, 'shims': nshims, 'elapsed_s': round(time.time() - t0, 1)}
 
@@ -533,6 +585,10 @@ def render_launches(la):
 def render_md(r):
     b, h = r['base'], r['head']
     L = [f"## Hook benchmark: {b['ref']} ({b['commit']}) vs {h['ref']} ({h['commit']})", '']
+    if r.get('partial'):
+        pt = r['partial']
+        L += [f"**partial: {pt['done']} of {pt['of']} payloads**" + (f" ({pt['note']})" if pt.get('note') else '')
+              + ', interrupted; these are not the numbers of a full run.', '']
     m = r['machine']
     counts = ', '.join(f'{v} {k}' for k, v in r['corpus']['tools'].items())
     note = ' (local audit corpus, not for publishing)' if r['corpus']['local'] else ''
@@ -607,11 +663,14 @@ def main():
     ap.add_argument('--launches', choices=('off', 'auto', 'strace', 'shim'), default='off',
                     help='count the processes each hook starts, in a pass of its own: strace (Linux), shim (execs '
                          'through PATH only), or auto, strace where it works and shim elsewhere (default off)')
+    ap.add_argument('--progress-every', type=float, default=10.0,
+                    help='seconds between progress lines on stderr (default 10; 0 for none)')
     ap.add_argument('--md', help='write the markdown report here (always printed to stdout)')
     ap.add_argument('--json', help='write the full result here')
     a = ap.parse_args()
-    global TOGETHER, HOOK_TIMEOUT
+    global TOGETHER, HOOK_TIMEOUT, PROG
     TOGETHER = not a.serial
+    PROG = Progress(a.progress_every)
     HOOK_TIMEOUT = a.hook_timeout
 
     repo = os.path.abspath(a.repo)
@@ -643,32 +702,68 @@ def main():
                     'CLAUDE_LOCAL_SETTINGS_DIR': os.path.join(tmp, 'no-local-settings'),
                     'CLAUDE_NET_TUNNEL_RE': '^cch-no-tunnel$', 'CLAUDE_STATE_DIR': os.path.join(tmp, 'state')})
         env.pop('CLAUDE_JOB_DIR', None)
+        proc_start = start_cost(env, home)   # up front: the progress estimate is made from it
         sides = {'base': extract_side(repo, base, os.path.join(tmp, 'base')),
                  'head': extract_side(repo, a.head, os.path.join(tmp, 'head'))}
 
-        # Warm the page cache with one call per tool through both sides.
-        seen = set()
-        for row in rows:
-            if row['tool_name'] in seen:
-                continue
-            seen.add(row['tool_name'])
-            for s in sides.values():
-                run_call(s, row, env, home)
+        tools = list(dict.fromkeys(r['tool_name'] for r in rows))
+        n_all = len(rows)
+        starts = sum(sum(1 for _, p in hooks_for(sd, r['tool_name']) if p) for r in rows for sd in sides.values())
+        wstarts = sum(sum(1 for _, p in hooks_for(sd, t) if p) for t in tools for sd in sides.values())
+        # Each call starts every hook twice (together, then alone); a real hook starts more than bash, so a floor.
+        floor_s = (2 * (starts * a.repeat + wstarts) + (starts if method != 'off' else 0)) * proc_start['bash -c :'] / 1000.0
+        PROG.say(f"{n_all} payloads x {a.repeat} pass x 2 sides; at least {fmt_dur(floor_s)} from this machine's process "
+                 f"start (`bash -c :` {proc_start['bash -c :']:.1f} ms), the hooks' own work comes on top. "
+                 + ('--quick is on (every third payload).' if a.quick else
+                    'On a slow machine --quick takes every third payload.')
+                 + ' Ctrl-C prints the table so far.')
 
+        def on_signal(signum, _frame):
+            raise Interrupted(signum)
+        signal.signal(signal.SIGINT, on_signal)
+        signal.signal(signal.SIGTERM, on_signal)
         results = {'base': {}, 'head': {}}
+        launches = None
+        partial = None
         k = 0
         t_start = time.time()
-        for _ in range(a.repeat):
-            for row in rows:
-                order = ('base', 'head') if k % 2 == 0 else ('head', 'base')
-                k += 1
-                for s in order:
-                    results[s].setdefault(row['id'], []).append(run_call(sides[s], row, env, home))
-        elapsed = time.time() - t_start
-        launches = None
-        if method != 'off':
-            launches = count_launches(method, rows, sides, env, home, tmp)
-            launches['table'] = launch_table(launches)
+        try:
+            # Warm the page cache with one call per tool through both sides.
+            w = 0
+            for tool in tools:
+                row = next(r for r in rows if r['tool_name'] == tool)
+                for sn, s in sides.items():
+                    w += 1
+                    PROG.tick('warm', sn, w, 2 * len(tools))
+                    run_call(s, row, env, home)
+            t_start = time.time()
+            for _ in range(a.repeat):
+                for row in rows:
+                    order = ('base', 'head') if k % 2 == 0 else ('head', 'base')
+                    k += 1
+                    for s in order:
+                        PROG.tick('timed', s, k, n_all * a.repeat)
+                        results[s].setdefault(row['id'], []).append(run_call(sides[s], row, env, home))
+            elapsed = time.time() - t_start
+            if method != 'off':
+                launches = count_launches(method, rows, sides, env, home, tmp)
+                launches['table'] = launch_table(launches)
+        except Interrupted:
+            elapsed = time.time() - t_start
+            launches = None
+            keep = []
+            for row in rows:   # a payload counts once both sides have a call of it
+                m = min(len(results['base'].get(row['id'], [])), len(results['head'].get(row['id'], [])))
+                for s in results:
+                    results[s][row['id']] = results[s].get(row['id'], [])[:m]
+                if m:
+                    keep.append(row)
+            note = '' if len(keep) < n_all else 'the processes-started pass did not finish'
+            partial = {'done': len(keep), 'of': n_all, 'note': note}
+            rows = keep
+        finally:
+            signal.signal(signal.SIGINT, signal.default_int_handler)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
         classes, hooks = {}, {}
         for row in rows:
@@ -721,6 +816,8 @@ def main():
         intended_l = set(re.split(r'[,\s]+', a.intended_launches.strip())) - {''}
         if launches:
             failures += launch_failures(launches, intended_l)
+        if partial:
+            failures.append(f"partial run: {partial['done']} of {partial['of']} payloads; a partial run cannot pass the gate")
 
         report = {
             'date': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'machine': machine(),
@@ -730,7 +827,7 @@ def main():
                        'tools': dict(sorted(((t, sum(1 for r in rows if r['tool_name'] == t)) for t in {r['tool_name'] for r in rows}),
                                             key=lambda kv: -kv[1]))},
             'repeat': a.repeat, 'together': TOGETHER, 'quick': a.quick, 'elapsed_s': round(elapsed, 1),
-            'process_start_ms': start_cost(env, home),
+            'process_start_ms': proc_start, 'partial': partial,
             'classes': class_out, 'hooks': hook_out, 'launches': launches,
             'decisions': {'same': same, 'changed': changed},
             'gate': {'enabled': a.gate, 'limit_pct': a.limit_pct, 'floor_ms': a.floor_ms, 'min_calls': a.min_calls,
@@ -738,7 +835,7 @@ def main():
         }
         if not local:
             # The report is what a release publishes; the local corpus never is.
-            report['decisions_detail'] = {rid: {s: results[s][rid][-1]['decision'] for s in ('base', 'head')} for rid in ids}
+            report['decisions_detail'] = {rid: {s: results[s][rid][-1]['decision'] for s in ('base', 'head')} for rid in (r_['id'] for r_ in rows)}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -750,6 +847,9 @@ def main():
     if a.json:
         with open(a.json, 'w') as f:
             json.dump(report, f, indent=1)
+    if partial:
+        sys.stdout.flush(); sys.stderr.flush()
+        os._exit(130)   # a launches worker may still be running its hook; do not wait for it
     if a.gate and failures:
         sys.exit(1)
 
