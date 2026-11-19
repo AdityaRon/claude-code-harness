@@ -27,7 +27,7 @@ jq -e 'all(has("id") and has("tool_name") and (.tool_input | type == "object"))'
 FIX="$TMP/fix"; mkdir -p "$FIX/hooks" "$FIX/config"
 cat > "$FIX/hooks/fast.sh" <<'SH'
 #!/usr/bin/env bash
-INPUT=$(cat); sleep 0.03
+INPUT=$(cat); sleep 0.12
 case "$INPUT" in *danger*) echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"x"}}' ;; esac
 exit 0
 SH
@@ -61,8 +61,10 @@ echo "=== A/A: same ref on both sides passes the gate ==="
 run --base v0.1.0 --head v0.1.0 --gate --floor-ms 100000; RC=$?
 [ "$RC" = 0 ] && pass "exit 0" || fail "exit 0" "rc=$RC $(cat "$TMP/err")"
 [ "$(jqo '.classes.Bash.base.wait.n')" = 7 ] && pass "7 Bash calls counted" || fail "Bash calls" "$(jqo '.classes.Bash.base.wait.n')"
-# second.sh sleeps 150 ms and fast.sh 30 ms, launched together: the call cannot end
-# before second.sh's sleep, and stays well short of the two one after the other. The
+# second.sh sleeps 150 ms and fast.sh 120 ms, launched together: the call cannot end
+# before second.sh's sleep, and stays well short of the two one after the other. fast.sh
+# was 30 ms until a loaded macOS runner put the max at the sum: wait 283 ms, hooks 79 and
+# 203 ms (run 44438931985); the gap is now fast.sh's 120 ms, not 30. The
 # floor is the sleep, not second.sh's measured time alone: that is a separate run, and
 # on a loaded macOS runner the two differed by 15 ms (run 43522592163). With equal
 # hooks, noisy medians on macOS put the median of the max at the sum (run 39076417023).
