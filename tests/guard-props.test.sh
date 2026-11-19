@@ -52,12 +52,12 @@ echo "=== fastpath: a guard's fast path answers as the guard behind it ==="
 # Commands a fast-path mutant answered wrongly on the default run, and two it did not.
 for c in 'printenv PATH' "echo hi | 'p'rintenv" "python3 -c \"import subprocess; subprocess.run(['kubectl','delete','pod','x'])\"" \
          'git push --force origin main' 'git reset --hard HEAD~1' $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run([\'rm\',\'-rf\',\'/\'])\nEOF' \
-         'ls -la' 'kubectl get pods'; do
+         "cp x ~/.cl''aude/hooks/lib.sh" 'ls -la' 'kubectl get pods'; do
   jq -nc --arg c "$c" '{id: $c, tool_name: "Bash", tool_input: {command: $c}}'
 done > "$TMP/c.jsonl"
 gp --only fastpath --n 0 --corpus "$TMP/c.jsonl"
-[ "$RC" = 0 ] && grep -q "forced to pass: word_filter in env-guard (1), interpreter-guard (1), kubectl-guard (1), network-guard (1); git-guard's git; git-guard's GG_GATE; rm-guard's RM_WORD: 0 answered differently" "$TMP/out" \
-  && pass "the shipped fast paths: word_filter in four guards, git-guard's two gates, rm-guard's RM_WORD" || fail "fastpath" "rc=$RC $(cat "$TMP/out")"
+[ "$RC" = 0 ] && grep -q "forced to pass: word_filter in env-guard (1), interpreter-guard (1), kubectl-guard (1), network-guard (1); git-guard's git; git-guard's GG_GATE; rm-guard's RM_WORD; config-guard's paths: 0 answered differently" "$TMP/out" \
+  && pass "the shipped fast paths: word_filter in four guards, git-guard's two gates, rm-guard's RM_WORD, config-guard's paths" || fail "fastpath" "rc=$RC $(cat "$TMP/out")"
 fp_mutant() {  # NAME FILE SED COUNT CMD-START: a mutant of one fast path, and the commands it gets wrong
   mutant "$1" "$2" "$3"
   gp --only fastpath --n 0 --corpus "$TMP/c.jsonl" --hooks "$TMP/$1"
@@ -69,6 +69,8 @@ fp_mutant kubectl-space kubectl-guard.sh "s/^word_filter 'kubectl' /word_filter 
 fp_mutant gate-no-push git-guard.sh "s/^GG_GATE='hooks\|push\|/GG_GATE='hooks|/" 1 'git push --force origin main: '
 fp_mutant gate-no-reset git-guard.sh "s/^GG_GATE='hooks\|push\|reset\|/GG_GATE='hooks|push|/" 1 'git reset --hard HEAD~1: '
 fp_mutant rm-word-unquoted rm-guard.sh "s/^RM_WORD=.*$/RM_WORD='(^|[^[:alnum:]_.-])rm([[:space:]]|\$)'/" 1 'python3 - <<'
+# config-guard's filter reading the command as typed again, as before the bare text: a quote-split path gets past it.
+fp_mutant config-typed config-guard.sh 's/then FSRC=\$TARGET\$....\$PRESET_BARE.*$/then FSRC=$TARGET/' 1 "cp x ~/.cl''aude/hooks/lib.sh: "
 mutant no-filters kubectl-guard.sh 's/^word_filter .*\|\| exit 0$/:/'
 for g in env-guard interpreter-guard network-guard; do sed -E 's/^([ \t]*)word_filter .*\|\| exit 0$/\1:/' "hooks/$g.sh" > "$TMP/no-filters/$g.sh"; done
 gp --only fastpath --n 0 --corpus "$TMP/c.jsonl" --hooks "$TMP/no-filters"
@@ -79,10 +81,64 @@ gp --only fastpath --n 0 --corpus "$TMP/c.jsonl" --hooks "$TMP/no-gate"
 [ "$RC" = 2 ] && grep -q "git-guard's GG_GATE: 0 lines like" "$TMP/out" \
   && pass "a fast path whose line changed stops the run, not passes it" || fail "line changed" "rc=$RC $(cat "$TMP/out")"
 head -1 "$TMP/c.jsonl" > "$TMP/c1.jsonl"
-gp --only fastpath --n 0 --corpus "$TMP/c1.jsonl" --force config-paths
-[ "$RC" = 0 ] && grep -q "rm-guard's RM_WORD; config-guard's paths: 0 answered" "$TMP/out" \
-  && pass "--force config-paths adds config-guard's path test" || fail "--force config-paths" "rc=$RC $(cat "$TMP/out")"
+gp --only fastpath --n 0 --corpus "$TMP/c1.jsonl" --force nope
+[ "$RC" = 2 ] && grep -q -- "--force: unknown nope" "$TMP/out" \
+  && pass "--force with a fast path it does not know stops" || fail "--force nope" "rc=$RC $(cat "$TMP/out")"
 
+echo ""
+echo "=== fastpath: an approved difference (tests/guard-props-approved.jsonl) ==="
+# #285: env-guard's full read takes `nc\_x` for nc, where bash runs nc_x. The shipped entry
+# approves that command alone; a sibling the same over-read catches still fails.
+for c in 'ls; nc\_x -la' 'ls; nc\_y -la'; do jq -nc --arg c "$c" '{id: $c, tool_name: "Bash", tool_input: {command: $c}}'; done > "$TMP/a2.jsonl"
+head -1 "$TMP/a2.jsonl" > "$TMP/a1.jsonl"
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl"
+[ "$RC" = 0 ] && grep -qF 'approved, not counted (1, tests/guard-props-approved.jsonl): ls; nc\_x -la (#285)' "$TMP/out" \
+  && grep -q ': 0 answered differently' "$TMP/out" \
+  && pass "the shipped entry approves its command: printed, not failed" || fail "approved" "rc=$RC $(cat "$TMP/out")"
+gp --only fastpath --n 0 --corpus "$TMP/a2.jsonl"
+[ "$RC" = 1 ] && grep -q ': 1 answered differently' "$TMP/out" && grep -qF '  ls; nc\_y -la: ' "$TMP/out" \
+  && grep -qF 'approved, not counted (1' "$TMP/out" \
+  && pass "it approves only its command: a sibling still fails" || fail "approved sibling" "rc=$RC $(cat "$TMP/out")"
+entry() {  # FIELD=VALUE ...: the shipped #285 entry with these fields changed, as $TMP/ap.jsonl
+  python3 -c 'import json, sys
+e = json.loads(open(sys.argv[1]).readline())
+for kv in sys.argv[2:]:
+    k, v = kv.split("=", 1)
+    e[k] = v
+print(json.dumps(e))' tests/guard-props-approved.jsonl "$@" > "$TMP/ap.jsonl"
+}
+entry right=full
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -q "refused: right is 'full'" "$TMP/out" \
+  && pass "an entry approving the full guard's side (a bypass) is refused" || fail "right=full" "rc=$RC $(cat "$TMP/out")"
+entry why=
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -q 'needs property, guard, command, bash_reads, right, issue, why' "$TMP/out" \
+  && pass "an entry with no why is refused" || fail "no why" "rc=$RC $(cat "$TMP/out")"
+entry 'bash_reads=ls; nc -la'
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -q 'bash_reads is not the command with only quotes or backslashes taken out' "$TMP/out" \
+  && pass "an entry whose bash_reads is not the command less its quoting is refused" || fail "bash_reads shape" "rc=$RC $(cat "$TMP/out")"
+# A real bypass (env-guard's filter without printenv, a mutant from above) is not approved by a
+# well-formed entry: as bash reads it, the full guard still denies what hooks/ allows.
+jq -nc --arg c "echo hi | 'p'rintenv" '{id: $c, tool_name: "Bash", tool_input: {command: $c}}' > "$TMP/b1.jsonl"
+entry "command=echo hi | 'p'rintenv" 'bash_reads=echo hi | printenv'
+gp --only fastpath --n 0 --corpus "$TMP/b1.jsonl" --approved "$TMP/ap.jsonl" --hooks "$TMP/no-printenv"
+[ "$RC" = 1 ] && grep -qF "approval refused (#285): on 'echo hi | printenv', the command as bash reads it, the full guard answers deny" "$TMP/out" \
+  && pass "a bypass is not approved by a well-formed entry" || fail "bypass entry" "rc=$RC $(cat "$TMP/out")"
+# The full guard must be the stricter side. fastpath cannot produce the other way round (the
+# forced copy runs the full guard wherever hooks/ does), so approval() is called on made-up answers.
+D=$(python3 -c 'import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gp", sys.argv[1]); gp = importlib.util.module_from_spec(spec); spec.loader.exec_module(gp)
+e = json.loads(open(sys.argv[2]).readline())
+for h, f in (("deny", "allow"), ("ask", "ask"), ("ask", "allow")):
+    print(gp.approval(e, e["command"], ((h, 0, ()), ""), ((f, 0, ()), ""), None, None, None, None))' "$GP" tests/guard-props-approved.jsonl 2>&1)
+[ "$(grep -c '^the full guard is not the stricter side' <<< "$D")" = 3 ] \
+  && pass "hooks/ as strict as the full guard, or stricter, is never approved" || fail "stricter side" "$D"
+entry guard=network-guard
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 1 ] && grep -q "approval refused (#285): network-guard alone answers allow, not the full guard's deny" "$TMP/out" \
+  && pass "an entry naming a guard that did not give the stricter answer approves nothing" || fail "guard" "rc=$RC $(cat "$TMP/out")"
 echo ""
 echo "=== heredoc: a body strip_inert_heredocs drops cannot change an answer ==="
 gp --only heredoc --n 0

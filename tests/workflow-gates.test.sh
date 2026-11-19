@@ -211,10 +211,21 @@ grep -q 'removed_payloads=$(bash tools/release-notes.sh --since "$LAST" --prs pr
   && pass "release.yml reads removed-payloads from the merged PRs into the bench step" || fail "release removed-payloads" ""
 
 echo ""
-echo "=== release.yml: a guard-props counterexample opens an issue, or comments on the open one ==="
+echo "=== guard-props-daily.yml: a counterexample opens an issue, or comments on the open one ==="
+PROPS_WF=.github/workflows/guard-props-daily.yml
+# Its own workflow, so a counterexample never turns a Release run red.
+if grep -q 'guard-props' "$REL_WF"; then fail "release.yml runs no guard-props job" "$(grep -n 'guard-props' "$REL_WF" | head -3)"
+else pass "release.yml runs no guard-props job: a Release run's color is the release's"; fi
+grep -q "^    - cron: '" "$PROPS_WF" && grep -q '^      issues: write$' "$PROPS_WF" \
+  && grep -q 'python3 tools/guard-props.py --seed random > props.txt' "$PROPS_WF" \
+  && pass "$PROPS_WF runs on a cron, on a random seed, with issues: write" || fail "daily workflow" "$(head -30 "$PROPS_WF")"
+# A PR cannot approve its own differences: CI's property run reads the base's list.
+grep -qF 'git show "origin/$BASE:tests/guard-props-approved.jsonl" > "$RUNNER_TEMP/approved.jsonl"' "$CI_WF" \
+  && [ "$(grep -c 'python3 tools/guard-props.py' "$CI_WF")" = "$(grep -cF 'python3 tools/guard-props.py --approved "$RUNNER_TEMP/approved.jsonl"' "$CI_WF")" ] \
+  && pass "ci.yml's property run takes the approved list from the base branch" || fail "approved from base" "$(grep -n 'guard-props' "$CI_WF")"
 awk '/name: Record a counterexample in an issue/{f=1} f && /^        run: \|$/{on=1; next}
-     on && $0 != "" && !/^          /{exit} on' "$REL_WF" | sed 's/^          //' > "$TMP/issue.sh"
-if grep -q 'gh issue' "$TMP/issue.sh"; then pass "the issue step is in $REL_WF"; else fail "the issue step is in $REL_WF" "not found"; fi
+     on && $0 != "" && !/^          /{exit} on' "$PROPS_WF" | sed 's/^          //' > "$TMP/issue.sh"
+if grep -q 'gh issue' "$TMP/issue.sh"; then pass "the issue step is in $PROPS_WF"; else fail "the issue step is in $PROPS_WF" "not found"; fi
 d="$TMP/issue"; mkdir -p "$d/bin"
 # props.txt from a real failing run: the count property on a count_mark whose tail is one byte short.
 python3 -c 'import sys; s = open(sys.argv[1]).read(); open(sys.argv[2], "w").write(s.replace("(k - 1)):]", "(k - 2)):]"))' \

@@ -91,12 +91,10 @@ backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
   generated commands (guard words with quotes, backslashes, case, suffixes and
   paths, some in a notes heredoc). Forced: every `word_filter ... || exit 0`
   line (env-guard, interpreter-guard, kubectl-guard, network-guard), git-guard's
-  two gates (no `git`, then `GG_GATE`) and rm-guard's `RM_WORD`. Each must be
-  found once, or the run stops (exit 2) rather than pass on less. rm-guard's
-  `word_filter` sets a flag rather than exiting, so it stays. config-guard's
-  path test is forced only with `--force config-paths`: forced, it asks where
-  `hooks/` allows a quote-split path such as `cp x ~/.cl''aude/hooks/lib.sh`,
-  which that test lets go today.
+  two gates (no `git`, then `GG_GATE`), rm-guard's `RM_WORD` and config-guard's
+  path test. Each must be found once, or the run stops (exit 2) rather than
+  pass on less. rm-guard's `word_filter` sets a flag rather than exiting, so it
+  stays. `--force KEY` forces a fast path that is off by default; none is today.
 - **heredoc.** Where `strip_inert_heredocs` drops a heredoc body as inert, the
   same command with another body it also drops gets the same answer from the
   guards that read past such bodies (those calling `strip_inert_heredocs` or
@@ -111,13 +109,26 @@ backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
 CI's `guard properties` job runs it on a PR that changes `hooks/`, the script
 or its suite, `bin/disk-space.py` or the corpus, on seed 1, then runs
 `tests/guard-props.test.sh`, its mutants. doctor.sh skips that suite (it sets
-`CCH_DOCTOR`); `bash tests/guard-props.test.sh` runs it by hand. The Release
-workflow's daily cron runs the properties on a new seed, printed first, beside
-the release rather than gating it; a counterexample opens an issue titled
+`CCH_DOCTOR`); `bash tests/guard-props.test.sh` runs it by hand. Its own
+workflow, `.github/workflows/guard-props-daily.yml`, runs the properties daily
+on a new seed, printed first. It is not part of the Release workflow, so a
+counterexample never turns a release red; it opens an issue titled
 "guard properties: counterexample (seed N)", or comments on the one open. A
 failure prints each input, the reason the full guard gave, and a line for
 `tests/bench-corpus.jsonl`: add that line by PR with the fix, so the bench and
-every later run hold it; `--seed N` repeats the run. The bench gate takes a new
+every later run hold it; `--seed N` repeats the run.
+
+A fastpath difference where the full guard over-reads what bash runs is a
+false positive of the full guard, not a bypass. It can be approved in
+`tests/guard-props-approved.jsonl`, one JSON object a line: `property`,
+`guard`, `command`, `bash_reads` (the command as bash reads it), `right`,
+`issue` and `why`. The script refuses an entry whose `right` is not `hooks`,
+since approving the full guard's side would pass hooks more permissive than
+bash's own command. An entry approves only its exact command, and only when the
+full guard is the stricter side, its answer is the named guard's alone, and on
+`bash_reads` both the full guard and `hooks/` answer as `hooks/` did. Approved
+differences are printed and do not fail. CI reads the list from the PR's base
+branch, so a PR cannot approve its own differences; the daily run reads main's. The bench gate takes a new
 id as it is, so where the fix changes that payload's answer, the PR names it on
 an `intended-decisions:` line ([releases.md](releases.md)).
 

@@ -33,17 +33,26 @@ H=$HOME
 # symlink into ~/.claude/hooks has to be made first, and ln is checked below.
 # Library/ lets a glob there in (~/Library/LaunchAgen*). Case-folded, as
 # level_of matches: macOS formats APFS case-insensitive, so ~/.CLAUDE/HOOKS is
-# ~/.claude/hooks there.
-FTARGET=$TARGET FCWD=$CWD
+# ~/.claude/hooks there. It reads the command with quotes and backslashes out too,
+# as bash runs it (`~/.cl''aude/hooks` is ~/.claude/hooks): the dispatcher's jq made
+# that text (PRESET_BARE, cmd_bare in lib/io.sh), and the joined command's too
+# (PRESET_JBARE); run alone, tr makes it, only for a command holding one.
+# A command with no quote or backslash is its own bare text, so it is read once.
+FSRC=$TARGET
+if [[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && "$TARGET" == *[\"\'\\]* ]]; then
+  if [[ -n "${HARNESS_PRESET:-}" && -n "${PRESET_BARE+x}" ]]; then FSRC=$TARGET$'\n'$PRESET_BARE${PRESET_JBARE:+$'\n'$PRESET_JBARE}
+  else FSRC=$TARGET$'\n'$(printf '%s' "$TARGET" | tr -d '"'\''\\'); fi
+fi
+FTARGET=$FSRC FCWD=$CWD
 # A job's scratch (~/.claude/jobs/<id>/tmp), ~/.claude/projects and ~/.claude/logs
 # hold nothing level_of protects: the filter reads the command with those
 # prefixes out, as typed after ~/, $HOME/ or the home path, and ending at a /,
 # space, quote or ; & | ) so ~/.claude/logs.sh stays. A command with .. is read
 # whole. A symlink there into hooks is written through unasked, as from /tmp
 # (docs/known-limitations.md). Not ${x//…}: bash 3.2 took 25 s on 8,000 bytes.
-if [[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && "$TARGET" != *..* ]]; then
-  if [[ "$TARGET" == *.claude/* ]]; then
-    f_rest=$TARGET FTARGET="" f_re='^(projects|logs|jobs/[A-Za-z0-9_-]+/tmp)(/|[[:space:]"'\'';&|)]|$)'
+if [[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && "$FSRC" != *..* ]]; then
+  if [[ "$FSRC" == *.claude/* ]]; then
+    f_rest=$FSRC FTARGET="" f_re='^(projects|logs|jobs/[A-Za-z0-9_-]+/tmp)(/|[[:space:]"'\'';&|)]|$)'
     while [[ "$f_rest" == *.claude/* ]]; do
       f_post=${f_rest#*.claude/}; f_pre=${f_rest:0:${#f_rest}-${#f_post}-8}; f_ok=""
       # shellcheck disable=SC2088,SC2016  # the tilde and $HOME as typed
@@ -59,8 +68,23 @@ if [[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && "$TARGET" != *..* ]]; then
     "$H/.claude/jobs/"*) f_post=${CWD#"$H/.claude/jobs/"}; [[ "$f_post" =~ ^[A-Za-z0-9_-]+/tmp(/|$) ]] && FCWD=/ ;;
   esac
 fi
+# A glob in a dot-name (~/.cla*, ~/.bash?c, ~/.[bz]shrc, ~/.config/gi?/config) can
+# name one of these, and the full read expands it: such a command is read in full.
+# The name before the glob must begin one of them, a [ ] must be able to hold a
+# letter, and a bare .* or .? must be right under home (~/.*rc), so jq's .[] and
+# .items[0] and a regex's s/.*x/ are not one. One regex, no loop: a ${x#*…} strip
+# took 5 s on 64 KB under bash 3.2.
+F_PRE='c(l(a(u(d(e)?)?)?)?|o(n(f(i(g)?)?)?)?)?|p(r(o(f(i(l(e)?)?)?)?)?)?|g(i(t(c(o(n(f(i(g)?)?)?)?)?)?)?)?'
+F_PRE=$F_PRE'|z(s(h[[:alnum:]_]*)?|p(r(o(f(i(l(e)?)?)?)?)?)?|l(o(g[[:alnum:]_]*)?)?)?'
+F_PRE=$F_PRE'|b(a(s(h(r(c)?|_(p(r(o(f(i(l(e)?)?)?)?)?)?|l(o(g(i(n)?)?)?)?)?)?)?)?)?'
+F_PRE=$F_PRE'|config/(git/(c(o(n(f(i(g)?)?)?)?)?)?|(g(i(t)?)?)?)'
+F_CLASS='\[([!^]|][[:alnum:]_-]|[0-9:-]*[^]0-9:-])[^]/[:space:]]*\]'
+F_GLOB="(^|[[:space:]/;&|<>(=])[.](($F_PRE)([*?]|$F_CLASS)|$F_CLASS)|(~|HOME[}]?)/[.][*?]"
+# Run from home, a bare .* or .? on its own counts too (.*rc). The full read expands
+# a glob from the session's folder, not after a cd, so neither does this.
+[[ "$FCWD" == "$H" ]] && F_GLOB="$F_GLOB|(^|[[:space:];&|<>=])[.][*?]"
 shopt -s nocasematch
-[[ "$TOOL" == Bash || "$TOOL" == Monitor ]] && case "$FTARGET" in
+[[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && ! "$FTARGET" =~ $F_GLOB ]] && case "$FTARGET" in
   *.claude*|*.zsh*|*.zprofile*|*.zlog*|*.bashrc*|*.bash_profile*|*.bash_login*|*.profile*|*gitconfig*|*git/config*|*LaunchAgents*|*Library/*|*--global*) ;;
   *) case "$FCWD" in "$H/.claude"|"$H/.claude/"*|*/.claude|*/.claude/skills/*|"$H/Library/LaunchAgents") ;; *) exit 0 ;; esac ;;
 esac

@@ -404,6 +404,70 @@ for c in 'ls ~/.claude/hooks' 'cat ~/.claude/jobs/j/state.json'; do   # a job's 
   if [[ "$s" == *" sed "* ]]; then echo "  OK (read in full): $c"; PASS=$((PASS+1))
   else echo "  FAIL: not read in full, started $s: $c"; FAIL=$((FAIL+1)); fi
 done
+# A quoted command starts nothing more: the filter's text without quotes is the dispatcher's.
+starts_one 'echo "a b" > notes.md'
+starts_one "printf '%s\\n' x >> notes.md"
+
+echo ""
+echo "=== a protected path split by quotes or a backslash is the path bash writes: ask ==="
+# The filter read the command as typed, so `~/.cl''aude` named no protected path
+# and the guard let it go, though the full read asks. Run alone, tr takes the
+# quotes out; through the dispatcher, its jq already had (PRESET_BARE).
+SPLIT=("cp x ~/'.cl'aude/settings.json" 'cp x ~/.cl"aude"/settings.json' "cp x ~/.cl''aude/hooks/lib.sh"
+       'cp x ~/.cl\aude/hooks/lib.sh' 'echo x >> ~/.bash"rc"' "rm ~/.cl''aude/hooks/env-guard.sh"
+       'cp x ~/.c""laude/settings.json' 'echo x >> ~/.git\config' 'echo x >> ~/.pro"file"')
+for c in "${SPLIT[@]}"; do bash_is ask "$c"; done
+dispatch_is() {   # dispatch_is WANT COMMAND: the answer through hooks/bash-guards.sh
+  local got
+  got=$(jq -nc --arg c "$2" '{tool_name:"Bash",tool_input:{command:$c},cwd:"/srv",session_id:"x"}' \
+    | CLAUDE_GUARD_TIMING_LOG=/dev/null CLAUDE_SHADOW_LOG=/dev/null bash hooks/bash-guards.sh 2>/dev/null \
+    | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
+  if [[ "${got:-allow}" == "$1" ]]; then echo "  OK ($1, dispatcher): $2"; PASS=$((PASS+1))
+  else echo "  FAIL: want $1, got ${got:-allow} through the dispatcher: $2"; FAIL=$((FAIL+1)); fi
+}
+for c in "${SPLIT[@]}"; do dispatch_is ask "$c"; done
+# Split by a quote and a line's end at once: only the joined command without quotes
+# shows the name (the dispatcher's jq makes it, PRESET_JBARE).
+dispatch_is ask $'cp x ~/.cl""au\\\nde/settings.json'
+bash_is ask $'cp x ~/.cl""au\\\nde/settings.json'
+# Reads still pass, and a projects path split the same way is still out of the filter.
+bash_is allow 'cat ~/.cl"aude"/settings.json'
+bash_is allow 'cp x ~/.cl"aude"/projects/p/notes.md'
+echo ""
+echo "=== a glob in a dot-name or after .config/ is expanded by the full read: ask ==="
+mkdir -p "$HOME/.config/git"
+touch "$HOME/.config/git/config" "$HOME/.claude/settings.json" "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile"
+GLOB=('cp x ~/.cla*/settings.json' 'cp x ~/.cl?ude/settings.json' 'cp x ~/.cl[a]ude/hooks/lib.sh' 'echo x >> ~/.bash?c'
+      'echo x >> ~/.[bz]shrc' 'cp x ~/.config/gi?/config' 'cp x ~/.config/*/config' 'cp x ~/.config/git/con*'
+      'cp x ~/.config/git/c?nfig' 'cp x ~/.cl[]a]ude/hooks/lib.sh' 'echo x >> ~/.bash[_]profile' 'echo x >> ~/.*rc'
+      'cp x $HOME/.*rc' 'echo x>~/.bash?c')
+for c in "${GLOB[@]}"; do bash_is ask "$c"; done
+for c in "${GLOB[@]}"; do dispatch_is ask "$c"; done
+bash_is ask 'cp x .cla*/settings.json' "$HOME"
+bash_is ask 'echo x >.bash?c' "$HOME"
+bash_is ask 'echo x >> .*rc' "$HOME"
+bash_is ask 'curl -so x --output=.cla*/settings.json https://example.com' "$HOME"
+bash_is allow 'rm -rf .pytest_cache/*'
+bash_is allow 'ls ./*.py'
+# Each of these names a dot and a glob character, and none can name a protected file:
+# the filter lets it go, so it starts nothing more.
+starts_one 'ls .pytest_cache/*'
+starts_one 'ls ./*.py *.md'
+starts_one "grep -E '(\\.[0-9]+)?' notes.md"   # a regex's \. is no dot-name
+starts_one "gh pr list --json number --jq '.[].number'"   # nor is jq's .[]: no protected name fits it
+starts_one "gh pr view 1 --json files --jq '.files[0].path'"
+starts_one "gh pr view 1 --json commits --jq '.commits[1:3]'"
+starts_one "gh pr list --json number,title --jq '.[]|[.number,.title]|@tsv'"
+starts_one "sed -i '' 's/.*x/y/' notes.md"   # a regex's .* is a glob only right under home
+starts_one 'grep -E "a: .* b" notes.md'
+# Accepted (docs/known-limitations.md): the full read does not put a variable, a
+# brace, a glob above the file, a split option or a glob after a cd in place either,
+# so the filter letting these go answers as it does.
+bash_is allow 'd=.claude; cp x ~/$d/settings.json'
+bash_is allow 'cp x ~/.{claude,x}/settings.json'
+bash_is allow 'cp x ~/Library/Launch*/x.plist'
+bash_is allow 'git config --glo"bal" user.name x'
+bash_is allow 'cd ~ && echo x >> .*rc'   # the full read expands a glob from the session's folder
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
