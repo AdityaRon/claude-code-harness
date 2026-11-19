@@ -477,8 +477,11 @@ inert_rest() {
 
 # 0 when every segment of READING is inert and every target in it is prose.
 inert_split() {   # READING
-  if printf '%s\n' "$1" | tr '\n' ';' | sed -E 's/\|\||&&/;/g; s/[|;&]/\n/g' | sed -E 's/^[[:space:]]+//' \
-       | grep -vE '^[[:space:]]*$' | grep -qvE "$INERT_SEG"; then
+  # A segment a line, split by one awk. Its blank test and leading-blank trim stay
+  # in grep: the awk runs under LC_ALL=C, where [[:space:]] misses the U+00A0 and
+  # U+2003 that sed and grep in a UTF-8 locale strip.
+  if printf '%s\n' "$1" | awk '{ n = split($0, s, /[|;&]/); for (i = 1; i <= n; i++) print s[i] }' \
+       | grep -qvE "^[[:space:]]*\$|^[[:space:]]*${INERT_SEG#^}"; then
     return 1
   fi
   # Every target must be prose: each > or >> target, and every file tee is given

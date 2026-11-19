@@ -24,12 +24,12 @@ git -C "$TMP/repo" init -q && printf 'x\n' > "$TMP/repo/README.md"
 BUDGETS='
 shape-cd-chain                  12   5
 shape-pipes                     16  10
-shape-python-heredoc             0  30
-shape-notes-then-git            23  20
-shape-commit-heredoc            25  21
-shape-commit-pr-heredoc         25  21
+shape-python-heredoc             0  27
+shape-notes-then-git            17  14
+shape-commit-heredoc            19  15
+shape-commit-pr-heredoc         19  15
 mult-joined-pass                22  10
-mult-inline-shellouts           61  17
+mult-inline-shellouts           48  14
 mult-git-add-all                76   0
 '
 GUARDS="env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard"

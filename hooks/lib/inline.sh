@@ -227,7 +227,11 @@ check_inline_shellouts() {
       continue
     fi
     shadow_relay "$r"   # the run's shadowed hit, noted under this call
-    d=$(printf '%s' "$r" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+    # Its answer read as bash-guards.sh reads a guard's, deny first: the run prints
+    # only emit_deny's, emit_ask's and shadow_note's compact JSON. jq for a reason only.
+    d=""
+    case "$r" in *'"permissionDecision":"deny"'*) d=deny ;; *'"permissionDecision":"ask"'*) d=ask ;; esac
+    [[ -n "$d" ]] || continue
     reason=$(printf '%s' "$r" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)
     case "$d" in
       deny) emit_deny "An inline script runs this through a shell-out: $v. $reason"; exit 0 ;;

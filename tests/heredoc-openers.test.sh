@@ -510,6 +510,9 @@ DROPS=(
   "strip_inert_heredocs|cat <<-EOF, tab-indented"    $'cat <<-EOF > notes.md\n\t'"$M"$'\n\tEOF'
   "strip_inert_heredocs|cat > notes.md <<'EOF'"      $'cat > notes.md <<\'EOF\'\n'"$M"$'\nEOF'
   "strip_inert_heredocs|after a here-string"         $'cat <<<x > a.md; cat <<\'EOF\' > notes.md\n'"$M"$'\nEOF'
+  # Each splits into a blank segment, which is inert (inert_split).
+  "strip_inert_heredocs|mkdir, && then the opener"   $'mkdir -p docs && cat > docs/notes.md <<\'EOF\'\n'"$M"$'\nEOF'
+  "strip_inert_heredocs|a ; and an empty line first" $'cd docs;\n\ncat > notes.md <<\'EOF\'\n'"$M"$'\nEOF'
   "drop_data_heredocs|cat <<EOF"                     $'cat <<EOF\n'"$M"$'\nEOF'
   "drop_data_heredocs|python3 - <<'EOF'"             $'python3 - <<\'EOF\'\n'"$M"$'\nEOF'
   "drop_data_heredocs|cat <<EOF > a.md, no shell on the line" $'cat <<EOF > a.md\n'"$M"$'\nEOF'
