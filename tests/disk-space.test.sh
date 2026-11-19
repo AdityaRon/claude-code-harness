@@ -196,6 +196,59 @@ transcript=aaaa-1111 $SA 3" ] \
   && pass "report --json carries the same list" || fail "report transcripts" "$(ds report --projects "$PR" --transcript-mb 1 --json | jq -c .transcripts)"
 [[ "$(ds report --projects "$PR" --transcript-mb 1)" == *"3 compactions"*"aaaa-1111.jsonl"* ]] \
   && pass "report prints them" || fail "report text" "$(ds report --projects "$PR" --transcript-mb 1)"
+echo ""
+echo "=== report: who has a large transcript open, idle days, and when Claude Code removes it ==="
+PX="$TMP/projx"; mkdir -p "$PX/-p1"
+head -c 1200000 /dev/zero | tr '\0' h > "$PX/-p1/held-0001.jsonl"      # a process has it open
+head -c 1300000 /dev/zero | tr '\0' i > "$PX/-p1/idle-0002.jsonl"      # written 40 days ago, nobody has it
+head -c 1400000 /dev/zero | tr '\0' j > "$PX/-p1/nojob-0003.jsonl"     # an interactive session: no job folder anywhere
+age 40 "$PX/-p1/idle-0002.jsonl"; age 2 "$PX/-p1/nojob-0003.jsonl"; age 5 "$PX/-p1/held-0001.jsonl"
+PXR=$(ds report --projects "$PX" --transcript-mb 1 --json)
+tj() { printf '%s' "$PXR" | jq -r --arg s "$1" ".transcripts[] | select(.session == \$s) | $2"; }
+if [ -x "$TMP/bin/lsof" ]; then
+  echo "  SKIP: no lsof here, only the stand-in that lists working folders; the open-file cases run where lsof is"
+else
+  sleep 120 3<"$PX/-p1/held-0001.jsonl" & HPID=$!; SLEEPERS="$SLEEPERS $HPID"
+  sleep 0.3
+  PXR=$(ds report --projects "$PX" --transcript-mb 1 --json)
+  [ "$(tj held-0001 '.holders | join(",")')" = "$HPID" ] \
+    && [[ "$(ds report --projects "$PX" --transcript-mb 1)" == *"open in pid $HPID"*"held-0001.jsonl"* ]] \
+    && pass "a transcript a live process has open shows its pid" || fail "held transcript" "$(tj held-0001 '.holders') want $HPID"
+fi
+[ "$(tj idle-0002 '.holders | length')" = 0 ] && [ "$(tj idle-0002 '.idle_days | floor')" = 40 ] \
+  && [[ "$(ds report --projects "$PX" --transcript-mb 1)" == *"idle 40.0 d"*"idle-0002.jsonl"* ]] \
+  && pass "one nobody has open shows its idle days" || fail "idle transcript" "$(tj idle-0002 '[.holders, .idle_days]')"
+OUT=$(ds report --projects "$PX" --transcript-mb 1 | sed -n '/^Session transcripts/,$p')
+[[ "$OUT" == *"idle 2.0 d"*"nojob-0003.jsonl"* ]] && [[ "$OUT" != *dead* ]] && [[ "$OUT" != *ended* ]] \
+  && pass "a transcript with no job folder is idle, never dead or ended" || fail "no job" "$OUT"
+mkdir -p "$TMP/badlsof"; printf '#!/bin/sh\nexit 3\n' > "$TMP/badlsof/lsof"; chmod +x "$TMP/badlsof/lsof"
+PXB=$(PATH="$TMP/badlsof:$PATH" ds report --projects "$PX" --transcript-mb 1 --json)
+OUT=$(PATH="$TMP/badlsof:$PATH" ds report --projects "$PX" --transcript-mb 1)
+[ "$(printf '%s' "$PXB" | jq -c '[.transcripts[].holders] | all(. == null)')" = true ] && [[ "$OUT" == *"?  Claude Code removes it"* ]] \
+  && [[ "$OUT" != *"idle "[0-9]* ]] && pass "an lsof that fails: ? on every one, never idle" || fail "lsof fails" "$OUT"
+NOLSOF="$TMP/nolsof"; mkdir -p "$NOLSOF"; for t in python3 jq du ps; do ln -sf "$(command -v "$t")" "$NOLSOF/$t"; done
+OUT=$(PATH="$NOLSOF" /bin/sh -c "exec \"$(command -v python3)\" \"$DS\" report --projects \"$PX\" --transcript-mb 1" 2>&1)
+[[ "$OUT" == *"?  Claude Code removes it"* ]] && [[ "$OUT" == *"no lsof"* ]] && [[ "$OUT" != *"idle "[0-9]* ]] \
+  && pass "no lsof at all: ?, and the line says why" || fail "no lsof" "$OUT"
+# The removal date: last write plus cleanupPeriodDays from settings.json, 30 when it names none.
+MT=$(tj idle-0002 '.mtime | floor'); RE=$(tj idle-0002 '.removal_epoch | floor')
+[ $((RE - MT)) = $((30 * 86400)) ] && [ "$(tj idle-0002 '.removal_epoch - .mtime | floor')" = 2592000 ] \
+  && [ "$(printf '%s' "$PXR" | jq -r '.cleanup_days | floor')" = 30 ] \
+  && pass "no settings.json: removed 30 days after the last write" || fail "default 30" "$MT $RE"
+echo '{"cleanupPeriodDays": 7}' > "$TMP/set7.json"
+P7=$(ds report --projects "$PX" --transcript-mb 1 --settings "$TMP/set7.json" --json)
+[ "$(printf '%s' "$P7" | jq -r '.transcripts[] | select(.session == "idle-0002") | (.removal_epoch - .mtime | floor)')" = 604800 ] \
+  && [ "$(printf '%s' "$P7" | jq -r '.cleanup_days | floor')" = 7 ] \
+  && WANT=$(python3 -c 'import sys, time; print(time.strftime("%Y-%m-%d", time.localtime(float(sys.argv[1]) + 7 * 86400)))' "$MT") \
+  && [[ "$(ds report --projects "$PX" --transcript-mb 1 --settings "$TMP/set7.json")" == *"Claude Code removes it $WANT"*"idle-0002.jsonl"* ]] \
+  && pass "cleanupPeriodDays 7 in settings.json: removed 7 days after the last write, as printed" || fail "cleanupPeriodDays" "$(printf '%s' "$P7" | jq -c '.cleanup_days')"
+echo '{"cleanupPeriodDays": "soon"}' > "$TMP/setbad.json"
+[ "$(ds report --projects "$PX" --transcript-mb 1 --settings "$TMP/setbad.json" --json | jq -r '.cleanup_days | floor')" = 30 ] \
+  && pass "a cleanupPeriodDays that is not a number: 30" || fail "bad cleanupPeriodDays" ""
+[[ "$OUT" != *"--apply"* ]] && ! grep -q 'transcript.*--apply\|--apply.*transcript' <<<"$(ds report --projects "$PX" --transcript-mb 1)" \
+  && [[ "$(ds report --projects "$PX" --transcript-mb 1)" == *"Nothing here deletes one"*"claude --resume"* ]] \
+  && pass "the report says it deletes nothing, and why a transcript is kept" || fail "no delete verb" ""
+
 cm() { python3 -c 'import importlib.util as u, sys
 s = u.spec_from_file_location("ds", sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)
 print(m.count_mark(sys.argv[2], chunk=int(sys.argv[3])))' "$DS" "$@"; }

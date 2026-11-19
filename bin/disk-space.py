@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """What Claude Code's job folders and Bazel's output bases hold on this machine, and pruning them.
 
-  disk-space.py report [--jobs DIR] [--json]   each job folder: size with tmp, tmp entries, activity
+  disk-space.py report [--jobs DIR] [--json]   each job folder: size with tmp, tmp entries, activity;
+                                               and each session transcript over CLAUDE_TRANSCRIPT_WARN_MB
+                                               with who has it open, and when Claude Code removes it
   disk-space.py bazel [--root DIR] [--json]    each Bazel output base: its workspace, size, server
   disk-space.py stamp [--out FILE]             the totals session-start warns from; harness-update.sh
                                                runs it once a day
@@ -1294,6 +1296,66 @@ def transcript_mb_default():
         return 150.0
 
 
+def cleanup_days(settings):
+    """(days, where): cleanupPeriodDays from the settings.json at SETTINGS when it is a number above 0,
+    else 30 (Claude Code's default)."""
+    try:
+        with open(settings) as f:
+            v = json.load(f).get("cleanupPeriodDays")
+    except (OSError, ValueError, AttributeError):
+        v = None
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0:
+        return float(v), "cleanupPeriodDays in " + shown(settings)
+    return 30.0, "the default, no cleanupPeriodDays in " + shown(settings)
+
+
+def open_holders(paths):
+    """({path: [pids that have it open]}, "") from one `lsof` over PATHS (it exits 1 when some named file
+    is open by nobody), or (None, why) when it cannot be told: no lsof, it did not run, or it exited
+    with more than 1. When it also wrote to stderr, a file with no holder seen is None, not []. A
+    failed lookup is never "nobody has it open"."""
+    exe = shutil.which("lsof")
+    if not exe:
+        return None, "no lsof"
+    if not paths:
+        return {}, ""
+    real = {}
+    for x in paths:
+        real.setdefault(os.path.realpath(x), []).append(x)
+    try:
+        p = subprocess.run([exe, "-n", "-P", "-Fpn", "--", *real], capture_output=True, text=True,
+                           errors="surrogateescape", timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, "lsof did not run: %s" % e
+    if p.returncode not in (0, 1) or (p.returncode == 0 and not p.stdout.strip()):
+        return None, "lsof exited %d" % p.returncode
+    held, pid = {x: [] for x in paths}, None
+    for ln in p.stdout.splitlines():
+        if ln.startswith("p"):
+            pid = int(ln[1:]) if ln[1:].isdigit() else None
+        elif ln.startswith("n") and pid is not None:
+            for x in real.get(os.path.realpath(ln[1:]), ()):
+                if pid not in held[x]:
+                    held[x].append(pid)
+    if p.stderr.strip():   # lsof said something (a file it could not stat, a process it could not read): no holder seen is not none
+        held = {x: v or None for x, v in held.items()}
+        return held, "lsof warned: " + p.stderr.strip().splitlines()[0][:80]
+    return held, ""
+
+
+def annotate_transcripts(ts, settings, now):
+    """Each transcript gets who holds it open (pids, or None when that cannot be told), idle days, and
+    the time Claude Code removes it: last write plus cleanupPeriodDays. No job folder is consulted: most
+    transcripts belong to interactive sessions that have none, so "no job" says nothing about one."""
+    days_, where = cleanup_days(settings)
+    held, why = open_holders([t["path"] for t in ts])
+    for t in ts:
+        t["holders"] = None if held is None else held[t["path"]]
+        t["idle_days"] = max(0.0, (now - t["mtime"]) / 86400.0)
+        t["removal_epoch"] = t["mtime"] + days_ * 86400.0
+    return {"cleanup_days": days_, "cleanup_source": where, "liveness_unknown": why}
+
+
 def store_sizes(projects, backups):
     """What ~/.claude/projects and pre-compact.sh's copies hold, on demand (du); None where du gave no total."""
     _, pb, _ = du_children(projects) if os.path.isdir(projects) else ({}, 0, "")
@@ -1306,13 +1368,31 @@ def store_sizes(projects, backups):
             "backup_files": len(copies)}
 
 
-def print_transcripts(ts, mb):
+def print_transcripts(ts, mb, note=None):
     if not ts:
         return
     print("")
     print("Session transcripts of %g MB or more, largest first (CLAUDE_TRANSCRIPT_WARN_MB):" % mb)
     for t in ts:
-        print("  %s  %d compactions  %s" % (fmt(t["bytes"]), t["compactions"], shown(t["path"])))
+        if "holders" not in t:
+            print("  %s  %d compactions  %s" % (fmt(t["bytes"]), t["compactions"], shown(t["path"])))
+            continue
+        if t["holders"] is None:
+            who = "?"
+        elif t["holders"]:
+            who = "open in pid " + ",".join(str(x) for x in t["holders"])
+        else:
+            who = "idle %.1f d" % t["idle_days"]
+        print("  %s  %d compactions  last write %s  %s  Claude Code removes it %s  %s"
+              % (fmt(t["bytes"]), t["compactions"], time.strftime("%Y-%m-%d", time.localtime(t["mtime"])), who,
+                 time.strftime("%Y-%m-%d", time.localtime(t["removal_epoch"])), shown(t["path"])))
+    if note:
+        print("  Claude Code removes a session's transcript once it has been inactive %g days (%s). Nothing here"
+              " deletes one: a transcript is still read after its session ends (`claude --resume`, and"
+              " permission-friction, shadow-report, session-census and spend-report)." % (note["cleanup_days"], note["cleanup_source"]))
+        print("  open in pid N: that process has the file open (lsof). idle: no process has it open, N days since"
+              " its last write; that is not a claim that its session is over. ?: lsof could not tell%s."
+              % (" (" + note["liveness_unknown"] + ")" if note["liveness_unknown"] else ""))
 
 
 def guard_p90(log, calls=200, floor=50):
@@ -1441,6 +1521,8 @@ def main(argv=None):
                    help="list session transcripts this size or more (CLAUDE_TRANSCRIPT_WARN_MB, 150)")
     p.add_argument("--backups", default=os.path.expanduser(
         os.environ.get("CLAUDE_TRANSCRIPT_DIR") or os.path.join(HOME, ".claude", "transcripts")))
+    p.add_argument("--settings", default=os.path.join(HOME, ".claude", "settings.json"),
+                   help="where cleanupPeriodDays is read, for the date Claude Code removes a transcript (default 30 days)")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("bazel", help="each Bazel output base; --sweep for orphans", allow_abbrev=False)
     p.add_argument("--root", default=None)
@@ -1479,7 +1561,9 @@ def main(argv=None):
     now = time.time()
     if a.cmd == "report":
         r = jobs_report(a.jobs, now)
-        r["transcripts"] = big_transcripts(a.projects, a.transcript_mb * 1e6)
+        r["transcripts"] = big_transcripts(a.projects, a.transcript_mb * 1e6, limit=None)
+        tnote = annotate_transcripts(r["transcripts"], a.settings, now)
+        r.update(tnote)
         r.update(store_sizes(a.projects, a.backups))
         if a.json:
             print(json.dumps(r, indent=1))
@@ -1489,7 +1573,7 @@ def main(argv=None):
             print("Transcripts: %s holds %s (du); pre-compact.sh's copies in %s, %s in %d files"
                   % (shown(r["projects_dir"]), fmt(r["projects_bytes"]) if r["projects_bytes"] is not None else "an unknown size",
                      shown(r["backups_dir"]), fmt(r["backup_bytes"]), r["backup_files"]))
-            print_transcripts(r["transcripts"], a.transcript_mb)
+            print_transcripts(r["transcripts"], a.transcript_mb, tnote)
         return 0
     if a.cmd == "prune":
         return cmd_prune(a)
