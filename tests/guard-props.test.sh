@@ -126,6 +126,15 @@ entry "command=echo hi | 'p'rintenv" 'bash_reads=echo hi | printenv'
 gp --only fastpath --n 0 --corpus "$TMP/b1.jsonl" --approved "$TMP/ap.jsonl" --hooks "$TMP/no-printenv"
 [ "$RC" = 1 ] && grep -qF "approval refused (#285): on 'echo hi | printenv', the command as bash reads it, the full guard answers deny" "$TMP/out" \
   && pass "a bypass is not approved by a well-formed entry" || fail "bypass entry" "rc=$RC $(cat "$TMP/out")"
+# The full guard must be the stricter side. fastpath cannot produce the other way round (the
+# forced copy runs the full guard wherever hooks/ does), so approval() is called on made-up answers.
+D=$(python3 -c 'import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gp", sys.argv[1]); gp = importlib.util.module_from_spec(spec); spec.loader.exec_module(gp)
+e = json.loads(open(sys.argv[2]).readline())
+for h, f in (("deny", "allow"), ("ask", "ask"), ("ask", "allow")):
+    print(gp.approval(e, e["command"], ((h, 0, ()), ""), ((f, 0, ()), ""), None, None, None, None))' "$GP" tests/guard-props-approved.jsonl 2>&1)
+[ "$(grep -c '^the full guard is not the stricter side' <<< "$D")" = 3 ] \
+  && pass "hooks/ as strict as the full guard, or stricter, is never approved" || fail "stricter side" "$D"
 entry guard=network-guard
 gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
 [ "$RC" = 1 ] && grep -q "approval refused (#285): network-guard alone answers allow, not the full guard's deny" "$TMP/out" \

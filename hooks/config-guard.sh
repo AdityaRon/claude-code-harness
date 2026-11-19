@@ -37,10 +37,11 @@ H=$HOME
 # as bash runs it (`~/.cl''aude/hooks` is ~/.claude/hooks): the dispatcher's jq made
 # that text (PRESET_BARE, cmd_bare in lib/io.sh), and the joined command's too
 # (PRESET_JBARE); run alone, tr makes it, only for a command holding one.
+# A command with no quote or backslash is its own bare text, so it is read once.
 FSRC=$TARGET
-if [[ "$TOOL" == Bash || "$TOOL" == Monitor ]]; then
+if [[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && "$TARGET" == *[\"\'\\]* ]]; then
   if [[ -n "${HARNESS_PRESET:-}" && -n "${PRESET_BARE+x}" ]]; then FSRC=$TARGET$'\n'$PRESET_BARE${PRESET_JBARE:+$'\n'$PRESET_JBARE}
-  elif [[ "$TARGET" == *[\"\'\\]* ]]; then FSRC=$TARGET$'\n'$(printf '%s' "$TARGET" | tr -d '"'\''\\'); fi
+  else FSRC=$TARGET$'\n'$(printf '%s' "$TARGET" | tr -d '"'\''\\'); fi
 fi
 FTARGET=$FSRC FCWD=$CWD
 # A job's scratch (~/.claude/jobs/<id>/tmp), ~/.claude/projects and ~/.claude/logs
