@@ -535,9 +535,12 @@ check "the apostrophe repro stays a deny"       deny  "$APOS"
 hinted "the apostrophe repro: the reason names the workaround" yes "$APOS"
 hinted "a plain printenv: no hint"              no    'printenv'
 hinted "cat .env: no hint"                      no    'cat .env'
-hinted "bash <<, set | head: the hint"          yes   $'bash <<\'EOF\'\nset | head\nEOF'
-hinted "node - <<: the hint"                    yes   $'node - <<\'EOF\'\nset\nEOF'
+# A real dump in a heredoc, with no apostrophe in a word, gets no hint: it would show the way past.
+hinted "bash <<, set | head: no hint"           no    $'bash <<\'EOF\'\nset | head\nEOF'
+hinted "node - <<, set: no hint"                no    $'node - <<\'EOF\'\nset\nEOF'
+hinted "bash <<, a contraction, then set: the hint" yes $'bash <<\'EOF\'\n# don\'t print\nset | head\nEOF'
 hinted "a notes heredoc then printenv: no hint" no    $'cat > n.md <<\'EOF\'\nx\nEOF\nprintenv'
+hinted "an apostrophe in a word, no interpreter heredoc: no hint" no $'echo "don\'t"; printenv'
 hinted "a here-string to bash, then printenv: no hint" no $'bash <<< "x"; printenv'
 hinted "printenv alone, python3 -c mentioned: no hint" no $'python3 -c \'print(1)\'; printenv'
 echo ""

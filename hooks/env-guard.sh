@@ -266,15 +266,18 @@ add "sends a secret variable"               "(curl|wget)\b[^|;&]*${SECRET_VAR_SU
 add "opens a raw socket"                    "${A}${SOCKETS}"
 add "evaluates an environment dump"         "${A}${EVAL_ENV}"
 
-# An interpreter reading a heredoc: its body is also read as a script run later would read it
-# (docs/known-limitations.md), so an apostrophe in a quoted string can make a later line read as
-# `set`. Only the reason text changes, never the decision; a builtin match, run on a deny only.
+# An interpreter reading a heredoc whose body has an apostrophe in a word (it\'s, don't): the body
+# is also read as a script run later would read it (docs/known-limitations.md), so that quote can
+# make a later line read as `set`. Only then the reason names the workaround: a real dump (`set` in
+# a body with no such quote) gets no hint. Reason text only, never the decision; builtins, on a deny.
 HEREDOC_INTERP='(^|[^[:alnum:]_.-])(python[0-9.]*|node|ruby|perl|bash|sh)([[:space:]][^|;&<]*)?<<([^<]|$)'
+WORD_APOS=$'[[:alnum:]]\\\\?\'[[:alnum:]]'
 
 block() {   # block WHY MATCH [RULE]: a shadowed RULE returns, and the scan goes on
   local m hint=""
   m=$(printf '%s' "$2" | head -1 | sed -E 's/^[|&;`$([:space:]]+//; s/[|&;`)>[:space:]]+$//' | cut -c1-80)
-  [[ "$CMD" =~ $HEREDOC_INTERP ]] && hint=' If this is a script in a heredoc, write it to a file and run it (`python3 -I f.py`).'
+  [[ "$CMD" =~ $HEREDOC_INTERP && "$CMD" =~ $WORD_APOS ]] \
+    && hint=" If \`$m\` is not a line your script runs (an apostrophe in a heredoc body can make this guard misread a later line), write it to a file and run it (\`python3 -I f.py\`)."
   decide deny "${3:-}" "Blocked: \`$m\` $1. Reference variables by name in code; do not print, dump, or transmit their values.$hint"
 }
 
