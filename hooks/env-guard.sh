@@ -266,10 +266,16 @@ add "sends a secret variable"               "(curl|wget)\b[^|;&]*${SECRET_VAR_SU
 add "opens a raw socket"                    "${A}${SOCKETS}"
 add "evaluates an environment dump"         "${A}${EVAL_ENV}"
 
+# An interpreter reading a heredoc: its body is also read as a script run later would read it
+# (docs/known-limitations.md), so an apostrophe in a quoted string can make a later line read as
+# `set`. Only the reason text changes, never the decision; a builtin match, run on a deny only.
+HEREDOC_INTERP='(^|[^[:alnum:]_.-])(python[0-9.]*|node|ruby|perl|bash|sh)([[:space:]][^|;&<]*)?<<([^<]|$)'
+
 block() {   # block WHY MATCH [RULE]: a shadowed RULE returns, and the scan goes on
-  local m
+  local m hint=""
   m=$(printf '%s' "$2" | head -1 | sed -E 's/^[|&;`$([:space:]]+//; s/[|&;`)>[:space:]]+$//' | cut -c1-80)
-  decide deny "${3:-}" "Blocked: \`$m\` $1. Reference variables by name in code; do not print, dump, or transmit their values."
+  [[ "$CMD" =~ $HEREDOC_INTERP ]] && hint=' If this is a script in a heredoc, write it to a file and run it (`python3 -I f.py`).'
+  decide deny "${3:-}" "Blocked: \`$m\` $1. Reference variables by name in code; do not print, dump, or transmit their values.$hint"
 }
 
 # One grep over every pattern first: SCAN_LC holds the other two texts (the
