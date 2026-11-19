@@ -165,6 +165,17 @@ echo "=== A \\ at a line's end, or a newline in quotes, ends no command ==="
 # word, where the guard read each line alone: each row that asks or denies here
 # was allowed.
 check "rm, \\ then -rf ~/"                  deny  $'rm \\\n-rf ~/'
+# The filter in front of the full read: any case (macOS's disk runs RM as rm) and the text bash reads.
+check "RM -rf ~/"                  deny 'RM -rf ~/'
+check "/bin/Rm -rf ~/"             deny '/bin/Rm -rf ~/'
+check "r''m -rf ~/"                deny "r''m -rf ~/"
+# The full read misses r\m too (docs/known-limitations.md, #237 freeze); pinned so a fix shows.
+check 'r\m -rf ~/: a known miss'  allow 'r\m -rf ~/'
+check '"R"M -rf ~/'                deny '"R"M -rf ~/'
+check "rm in a python list, quoted" deny "python3 -c \"import subprocess; subprocess.run(['rm','-rf','/'])\""
+check "RM in a python list: a known miss" allow "python3 -c \"import subprocess; subprocess.run(['RM','-rf','/'])\""
+check "rmdir is not rm"            allow 'rmdir ~/empty'
+check "a word ending in rm"        allow 'npm run perm-check ~/'
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

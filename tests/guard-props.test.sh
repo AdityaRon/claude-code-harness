@@ -52,7 +52,7 @@ echo "=== fastpath: a guard's fast path answers as the guard behind it ==="
 # Commands a fast-path mutant answered wrongly on the default run, and two it did not.
 for c in 'printenv PATH' "echo hi | 'p'rintenv" "python3 -c \"import subprocess; subprocess.run(['kubectl','delete','pod','x'])\"" \
          'git push --force origin main' 'git reset --hard HEAD~1' $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run([\'rm\',\'-rf\',\'/\'])\nEOF' \
-         "cp x ~/.cl''aude/hooks/lib.sh" 'ls -la' 'kubectl get pods' 'echo x >> ~//.?ashrc'; do
+         "cp x ~/.cl''aude/hooks/lib.sh" 'RM -rf ~/' "r''m -rf ~/" 'ls -la' 'kubectl get pods' 'echo x >> ~//.?ashrc'; do
   jq -nc --arg c "$c" '{id: $c, tool_name: "Bash", tool_input: {command: $c}}'
 done > "$TMP/c.jsonl"
 gp --only fastpath --n 0 --corpus "$TMP/c.jsonl"
@@ -68,7 +68,9 @@ fp_mutant no-printenv env-guard.sh 's/\(env\|printenv\|export/(env|export/' 2 'p
 fp_mutant kubectl-space kubectl-guard.sh "s/^word_filter 'kubectl' /word_filter 'kubectl ' /" 1 'python3 -c '
 fp_mutant gate-no-push git-guard.sh "s/^GG_GATE='hooks\|push\|/GG_GATE='hooks|/" 1 'git push --force origin main: '
 fp_mutant gate-no-reset git-guard.sh "s/^GG_GATE='hooks\|push\|reset\|/GG_GATE='hooks|push|/" 1 'git reset --hard HEAD~1: '
-fp_mutant rm-word-unquoted rm-guard.sh "s/^RM_WORD=.*$/RM_WORD='(^|[^[:alnum:]_.-])rm([[:space:]]|\$)'/" 1 'python3 - <<'
+fp_mutant rm-word-unquoted rm-guard.sh "s/^RM_WORD=.*$/RM_WORD='(^|[^[:alnum:]_.-])rm([[:space:]]|\$)'/;s/^RM_BARE=.*$/RM_BARE='(^|[^[:alnum:]_.-])rm([[:space:]]|\$)'/" 1 'python3 - <<'
+# rm-guard's filter as on main: lower case and the typed text only, so RM and r''m skip a full read that denies them.
+fp_mutant rm-word-typed rm-guard.sh "s/^RM_BARE=.*$/RM_BARE='a^'/" 2 'RM -rf ~/: '
 # config-guard's filter reading the command as typed again, as before the bare text: a quote-split path gets past it.
 fp_mutant config-typed config-guard.sh 's/^    FSRC=\$TARGET\$....\$PRESET_BARE.*$/    FSRC=$TARGET/' 1 "cp x ~/.cl''aude/hooks/lib.sh: "
 # Its glob rule taking only one / between names, as before #287's review: ~//.?ashrc gets past it.

@@ -502,3 +502,5 @@
 {"id": "config-split-continuation", "tool_name": "Bash", "tool_input": {"command": "cp x ~/.cl\"\"au\\\nde/settings.json"}, "source": "guard-props"}
 {"id": "config-split-read-passes", "tool_name": "Bash", "tool_input": {"command": "cat ~/.cl\"aude\"/settings.json"}, "source": "guard-props"}
 {"id": "config-split-projects-passes", "tool_name": "Bash", "tool_input": {"command": "cp x ~/.cl\"aude\"/projects/p/notes.md"}, "source": "guard-props"}
+{"id": "rm-case-home", "tool_name": "Bash", "tool_input": {"command": "RM -rf ~/"}, "source": "guard-props"}
+{"id": "rm-split-home", "tool_name": "Bash", "tool_input": {"command": "r''m -rf ~/"}, "source": "guard-props"}
