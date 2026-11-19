@@ -117,8 +117,15 @@ gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
   && pass "an entry with no why is refused" || fail "no why" "rc=$RC $(cat "$TMP/out")"
 entry 'bash_reads=ls; nc -la'
 gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
-[ "$RC" = 1 ] && grep -qF "approval refused (#285): on 'ls; nc -la', the command as bash reads it, the full guard answers deny" "$TMP/out" \
-  && pass "an entry whose bash_reads still holds what the full guard read approves nothing" || fail "bash_reads" "rc=$RC $(cat "$TMP/out")"
+[ "$RC" = 2 ] && grep -q 'bash_reads is not the command with only quotes or backslashes taken out' "$TMP/out" \
+  && pass "an entry whose bash_reads is not the command less its quoting is refused" || fail "bash_reads shape" "rc=$RC $(cat "$TMP/out")"
+# A real bypass (env-guard's filter without printenv, a mutant from above) is not approved by a
+# well-formed entry: as bash reads it, the full guard still denies what hooks/ allows.
+jq -nc --arg c "echo hi | 'p'rintenv" '{id: $c, tool_name: "Bash", tool_input: {command: $c}}' > "$TMP/b1.jsonl"
+entry "command=echo hi | 'p'rintenv" 'bash_reads=echo hi | printenv'
+gp --only fastpath --n 0 --corpus "$TMP/b1.jsonl" --approved "$TMP/ap.jsonl" --hooks "$TMP/no-printenv"
+[ "$RC" = 1 ] && grep -qF "approval refused (#285): on 'echo hi | printenv', the command as bash reads it, the full guard answers deny" "$TMP/out" \
+  && pass "a bypass is not approved by a well-formed entry" || fail "bypass entry" "rc=$RC $(cat "$TMP/out")"
 entry guard=network-guard
 gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
 [ "$RC" = 1 ] && grep -q "approval refused (#285): network-guard alone answers allow, not the full guard's deny" "$TMP/out" \

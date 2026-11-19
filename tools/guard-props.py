@@ -27,7 +27,8 @@ one, and marks placed as two copies sharing their border (b"aba" + b"ba").
 
 A fastpath difference can be approved in tests/guard-props-approved.jsonl (--approved),
 one JSON object a line: property, guard, command, bash_reads, right, issue, why. It
-holds only where the full guard over-reads what bash runs: right must be "hooks" (an
+holds only where the full guard over-reads what bash runs: bash_reads is the command
+with only quotes or backslashes taken out, right must be "hooks" (an
 entry approving the full guard's side would pass hooks more permissive than bash's
 own command, a bypass, and is refused), the full guard must be the stricter side,
 its answer must be the named guard's, and on bash_reads, the command as bash reads
@@ -113,12 +114,25 @@ def load_approved(path, hooks):
                 die(f"{path}:{n}: issue {e['issue']!r} is not #N")
             if e['command'] == e['bash_reads']:
                 die(f'{path}:{n}: bash_reads is the command itself, so it explains nothing')
+            if not quoting_out(e['command'], e['bash_reads']):
+                die(f'{path}:{n}: bash_reads is not the command with only quotes or backslashes taken out')
             if not os.path.isfile(os.path.join(hooks, e['guard'] + '.sh')):
                 die(f"{path}:{n}: no {e['guard']}.sh in {hooks}")
             if e['command'] in out:
                 die(f'{path}:{n}: a second entry for {e["command"]!r}')
             out[e['command']] = e
     return out
+
+
+def quoting_out(cmd, reads):
+    """True when READS is CMD with some of its " ' and \\ taken out and nothing else changed."""
+    i = 0
+    for ch in cmd:
+        if i < len(reads) and reads[i] == ch:
+            i += 1
+        elif ch not in '"\'\\':
+            return False
+    return i == len(reads)
 
 
 def guard_only(forced, guard, tmp):
