@@ -75,10 +75,6 @@ NQREAD=""
 [[ -n "$NQS" ]] && NQREAD=$(printf '%s\n%s' "$(normalize_wrappers "$(separate_groups "$NQS")")" "$(normalize_command "$NQS")") \
   && CMD=$(printf '%s\n%s' "$CMD" "$NQREAD")
 
-# Committed template files (.env.example / .sample / .template / .dist / .tpl)
-# are safe to stage; neutralize them so `git add .env.example` isn't blocked.
-SCAN=$(printf '%s' "$CMD" | sed -E 's/\.env\.(example|sample|template|dist|tpl)/.envTEMPLATE/g')
-
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
 # Global options that git accepts BETWEEN `git` and the subcommand. Left
@@ -102,6 +98,96 @@ GOPT="(-c[= ]${QV}|-C[= ]${QV}|--git-dir[= ]${QV}|--work-tree[= ]${QV}|--namespa
 GIT="${XARGS}git(\s+${GOPT})*\s+"
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*(((ba|z|da|k|fi)?sh\s+(-[-A-Za-z]+\s+)*-[A-Za-z]*c[A-Za-z]*|eval)\s+["'\'']?)?'
 
+# --- What the checks below match -----------------------------------------
+# Each check's pattern, named once. Most are ${A}${GIT} and a suffix; GG_SFX
+# lists the suffixes and GG_RULES the rest, for the union after them.
+TREE='(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?(\.{1,2}/?|:/)([[:space:]]|;|&|\||\)|$)'
+TREEQ='(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?["'\'']?(\.{1,2}/?|:/)["'\'']?([[:space:]]|\)|$)'
+# git accepts --del and -qd, so the push --delete check does.
+PUSH_DEL='(--de(l|le|let|lete)?\b|-[A-Za-z0-9]*d[A-Za-z0-9]*\b|\+?:[^[:space:]|;&])'
+BROAD="['\"]?(-[A-Za-z]*A[A-Za-z]*|--a(l|ll)?|\.{1,2}/?|:/|\\$\(\s*pwd\s*\)|\\$\{?PWD\}?)['\"]?"   # -vA bundles; git takes --al
+SENSITIVE=(
+  '\.env(\s|$)'
+  '\.env\.'
+  '\.envrc(\s|$)'
+  '\.pem(\s|$)'
+  '\.key(\s|$)'
+  'id_rsa'
+  'id_ed25519'
+  '\.aws/credentials'
+  '\.netrc(\s|$)'
+  '\.git-credentials(\s|$)'
+  '\.pgpass(\s|$)'
+  # Config-shaped secret files only — not secrets.py / secrets.ts (source code).
+  'secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)'
+)
+# One grep for the whole list, since every name gets the same deny. A grep each
+# was 12 process starts on a git add that stages none of them.
+SENSITIVE_RE=""
+for P in "${SENSITIVE[@]}"; do SENSITIVE_RE="${SENSITIVE_RE:+$SENSITIVE_RE|}($P)"; done
+SFX_SUB_VAR="[\"']?\\\$"
+SFX_FORCE_PUSH="push\b[^|;&]*([[:space:]]-[A-Za-z]*f[A-Za-z]*([[:space:];&|)\"']|$)|--force\b|--force-with-lease\b)"
+SFX_FORCE_REF="push\b[^|;&]*([[:space:]]['\"]?\+[A-Za-z0-9_./*-]|--mirror\b|[[:space:]]['\"]?--m(i|ir|irr|irro)?\b)"
+SFX_RESET_HARD="reset\s+[^|;&]*--hard\b"
+SFX_CLEAN_F="clean\s+[^|;&]*-[a-zA-Z]*f"
+SFX_TREE_SEG="(checkout|restore)\s+[^|;&]*"
+SFX_STASH_DROP="stash\s+(drop|clear)\b"
+SFX_PUSH_DELETE="push\s([^|;&]*\s)?${PUSH_DEL}"
+SFX_BROAD_ADD="add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||\)|$)"
+SFX_GLOB_ADD="add\s+[^|;&]*['\"]?\*"
+SFX_SENSITIVE_ADD="add\s.*(${SENSITIVE_RE})"
+SFX_CONFIG_HOOKSPATH="config\s+.*core\.hooksPath"
+SFX_ALIAS_BANG="config\s+[^|;&]*alias\.[A-Za-z0-9_.-]+\s+['\"]?[[:space:]]*!"
+SFX_ALIAS="config\s+[^|;&]*alias\."
+SFX_REMOTE_SET="remote\s+(set-url|add)\b"
+SFX_HISTORY="(filter-branch|filter-repo|update-ref|reflog\s+expire)\b"
+GG_SFX=("$SFX_SUB_VAR" "$SFX_FORCE_PUSH" "$SFX_FORCE_REF" "$SFX_RESET_HARD" "$SFX_CLEAN_F" "$SFX_TREE_SEG"
+  "$SFX_STASH_DROP" "$SFX_PUSH_DELETE" "$SFX_BROAD_ADD" "$SFX_GLOB_ADD" "$SFX_SENSITIVE_ADD" "$SFX_CONFIG_HOOKSPATH"
+  "$SFX_ALIAS_BANG" "$SFX_ALIAS" "$SFX_REMOTE_SET" "$SFX_HISTORY")
+RE_SUB_VAR="${A}${GIT}${SFX_SUB_VAR}"
+RE_FORCE_PUSH="${A}${GIT}${SFX_FORCE_PUSH}"
+RE_FORCE_REF="${A}${GIT}${SFX_FORCE_REF}"
+RE_RESET_HARD="${A}${GIT}${SFX_RESET_HARD}"
+RE_CLEAN_F="${A}${GIT}${SFX_CLEAN_F}"
+RE_TREE_SEG="${A}${GIT}${SFX_TREE_SEG}"
+RE_STASH_DROP="${A}${GIT}${SFX_STASH_DROP}"
+RE_PUSH_DELETE="${A}${GIT}${SFX_PUSH_DELETE}"
+RE_BROAD_ADD="${A}${GIT}${SFX_BROAD_ADD}"
+RE_GLOB_ADD="${A}${GIT}${SFX_GLOB_ADD}"
+RE_SENSITIVE_ADD="${A}${GIT}${SFX_SENSITIVE_ADD}"
+RE_CONFIG_HOOKSPATH="${A}${GIT}${SFX_CONFIG_HOOKSPATH}"
+RE_ALIAS_BANG="${A}${GIT}${SFX_ALIAS_BANG}"
+RE_ALIAS="${A}${GIT}${SFX_ALIAS}"
+RE_REMOTE_SET="${A}${GIT}${SFX_REMOTE_SET}"
+RE_HISTORY="${A}${GIT}${SFX_HISTORY}"
+RE_SUB_TICK="(^|[|&;]|&&|\|\||\\\$\()\s*${GIT}\`"
+RE_HOOKSPATH_OPT="${A}git\b[^|;&]*-c[= ]core\.hookspath"   # read with -i
+RE_TREE_TYPED="${A0}${GIT0}${TREE}"
+RE_HOOKS_DIR="\.git/hooks(/|\b)"
+GG_RULES=("$RE_SUB_TICK" "$RE_HOOKSPATH_OPT" "$RE_TREE_TYPED" "$RE_HOOKS_DIR")
+# The prefix once: BSD grep took 4.9 s on 1.5 MB with it in each of 16, 0.8 s this way.
+GG_UNION=""
+for P in "${GG_SFX[@]}"; do GG_UNION="${GG_UNION:+$GG_UNION|}($P)"; done
+GG_UNION="(${A}${GIT}(${GG_UNION}))"
+for P in "${GG_RULES[@]}"; do GG_UNION="$GG_UNION|($P)"; done
+
+# One grep for every check below, before ~15 one at a time: each pattern above,
+# with -i for the one check that folds case, over every line a check reads. SCAN
+# (below) only hides a template from the sensitive-file check, so CMD stands in
+# for it. sed adds each line without " ' and \ where it holds push (push --delete
+# reads that), and without " and ' where it holds add (sensitive files). The
+# other texts feed checks that need a backtick or .git/hooks, so they join only
+# holding one. Only a clean no-match ends the call.
+GG_TEXT=$CMD
+[[ "$MSG_FREE" == *'`'* ]] && GG_TEXT=$GG_TEXT$'\n'$MSG_FREE
+[[ "$HOOKS_TEXT" == *.git/hooks* ]] && GG_TEXT=$GG_TEXT$'\n'$HOOKS_TEXT
+[[ "$INLINE_TEXT" == *.git/hooks* ]] && GG_TEXT=$GG_TEXT$'\n'$INLINE_TEXT
+printf '%s\n' "$GG_TEXT" | sed -nE "p; h; s/[\"'\\\\]//g; /push/p; g; s/[\"']//g; /add/p" | grep -qiE "$GG_UNION"; [[ "${PIPESTATUS[*]}" != "0 0 1" ]] || exit 0
+
+# Committed template files (.env.example / .sample / .template / .dist / .tpl)
+# are safe to stage; neutralize them so `git add .env.example` isn't blocked.
+SCAN=$(printf '%s' "$CMD" | sed -E 's/\.env\.(example|sample|template|dist|tpl)/.envTEMPLATE/g')
+
 # --- A subcommand this cannot read --------------------------------------
 # Every check below names its subcommand, so `X=push; git $X --force origin
 # main` and `g() { git "$@"; }; g push --force` passed all of them while the
@@ -109,8 +195,8 @@ A='(^|[|&;]|&&|\|\||\$\(|`)\s*(((ba|z|da|k|fi)?sh\s+(-[-A-Za-z]+\s+)*-[A-Za-z]*c
 # normalized one spaces backticks out, so a Markdown code span naming git in a
 # heredoc read as git running one. Most git commands hold neither character,
 # and the globs skip both greps for them.
-if { [[ "$CMD" == *'$'* ]] && printf '%s\n' "$CMD" | grep -qE "${A}${GIT}[\"']?\\\$"; } \
-   || { [[ "$MSG_FREE" == *'`'* ]] && printf '%s\n' "$MSG_FREE" | grep -qE "(^|[|&;]|&&|\|\||\\\$\()\s*${GIT}\`"; }; then
+if { [[ "$CMD" == *'$'* ]] && printf '%s\n' "$CMD" | grep -qE "$RE_SUB_VAR"; } \
+   || { [[ "$MSG_FREE" == *'`'* ]] && printf '%s\n' "$MSG_FREE" | grep -qE "$RE_SUB_TICK"; }; then
   emit_ask "git's subcommand here comes from a variable or a function's arguments, so this guard cannot tell which git command runs. Confirm what it expands to."
   exit 0
 fi
@@ -124,7 +210,7 @@ printf '%s\n%s\n' "$CMD" "$SCAN" | grep -qiE "core\.hookspath|\.git/hooks|${GIT}
 # `git -c core.hooksPath=/tmp/evil <anything>` points hooks at an attacker
 # dir for that invocation, running arbitrary code on the next hook trigger.
 # Config keys are case-insensitive, so match case-insensitively.
-if printf '%s\n' "$CMD" | grep -qiE "${A}git\b[^|;&]*-c[= ]core\.hookspath"; then
+if printf '%s\n' "$CMD" | grep -qiE "$RE_HOOKSPATH_OPT"; then
   emit_deny "Blocked: -c core.hooksPath redirects git hooks to an arbitrary directory (code-execution vector). Not permitted."
   exit 0
 fi
@@ -137,7 +223,7 @@ fi
 # while the bare form was denied. A separator, the ) closing a $( ) or the quote
 # closing a shell's -c string bounds it too: `git push origin main -f; ls`,
 # "$(git push origin main -f)" and `bash -c "git push origin main -f"` ran.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]-[A-Za-z]*f[A-Za-z]*([[:space:];&|)\"']|$)|--force\b|--force-with-lease\b)"; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_FORCE_PUSH"; then
   emit_deny "Blocked: force-push is not allowed. Use regular git push, or ask the user to run this manually."
   exit 0
 fi
@@ -149,7 +235,7 @@ fi
 # allow. Quoted forms count; a branch name containing + (feature-c++) does not,
 # because the + has to open the token.
 # git takes any prefix of --mirror down to --m.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\b[^|;&]*([[:space:]]['\"]?\+[A-Za-z0-9_./*-]|--mirror\b|[[:space:]]['\"]?--m(i|ir|irr|irro)?\b)"; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_FORCE_REF"; then
   emit_deny "Blocked: this push rewrites remote history without saying --force. A + on a refspec forces that ref, and --mirror force-updates every ref and deletes the ones missing locally. Push the refs you mean by name, or ask the user to run this manually."
   exit 0
 fi
@@ -161,13 +247,13 @@ fi
 # above DOES see it, which makes this hook the layer that closes the gap.
 # Kept deliberately in lockstep with permissions.deny — relaxing one without
 # the other leaves a rule that reads as protection but is not.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}reset\s+[^|;&]*--hard\b"; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_RESET_HARD"; then
   emit_deny "Blocked: git reset --hard discards committed and uncommitted work with no recovery path. Use git checkout <file> or git revert, or ask the user to run this manually."
   exit 0
 fi
 # -[a-zA-Z]*f catches -f, -fd, -df, -xdf and --force; --dry-run has no f after
 # a hyphen and so does not trip it.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}clean\s+[^|;&]*-[a-zA-Z]*f"; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_CLEAN_F"; then
   emit_deny "Blocked: git clean -f permanently deletes untracked files. Remove the files you mean by name instead."
   exit 0
 fi
@@ -210,22 +296,20 @@ BRANCH_DEL='(-[A-Za-z]*[dD][A-Za-z]*|--de(l|le|let|lete)?)\b'   # -qD bundles; g
 # there (`git restore . && git restore "x;y" --staged f`), and one in the same
 # segment does (`git restore "a;b" --staged .`, `git -C "a b" restore --staged
 # .`). A quote may close round the pathspec there (`bash -c "git checkout ."`).
-TREE='(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?(\.{1,2}/?|:/)([[:space:]]|;|&|\||\)|$)'
-TREEQ='(checkout|restore)\s+([^|;&]*[[:space:]])?(--\s+)?["'\'']?(\.{1,2}/?|:/)["'\'']?([[:space:]]|\)|$)'
 tree_segment() {
   local t
-  t=$(printf '%s\n' "$CMD" | grep -oE "${A}${GIT}(checkout|restore)\s+[^|;&]*" | grep -E "$TREEQ")
+  t=$(printf '%s\n' "$CMD" | grep -oE "$RE_TREE_SEG" | grep -E "$TREEQ")
   [[ -n "$t" ]] || return 1
   printf '%s\n' "$t" | grep -vqE "restore\s[^|;&]*(--staged|-S)\b" || printf '%s\n' "$t" | grep -qE "restore\s[^|;&]*(--worktree|-W)\b"
 }
-if { printf '%s\n' "$TYPED" | grep -qE "${A0}${GIT0}${TREE}" \
+if { printf '%s\n' "$TYPED" | grep -qE "$RE_TREE_TYPED" \
      && ! { printf '%s\n' "$TYPED" | grep -qE "${A0}${GIT0}restore\s[^|;&]*(--staged|-S)\b" \
             && ! printf '%s\n' "$TYPED" | grep -qE "${A0}${GIT0}restore\s[^|;&]*(--worktree|-W)\b"; }; } \
    || tree_segment; then
   emit_deny "Blocked: this discards every uncommitted change in the tree with no recovery path. Restore the files you mean by name, or ask the user to run this manually."
   exit 0
 fi
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}stash\s+(drop|clear)\b"; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_STASH_DROP"; then
   emit_ask "This deletes a stash with its uncommitted changes. Confirm nothing in it is needed."
   exit 0
 fi
@@ -234,8 +318,6 @@ fi
 # --- Remote branch deletion (push --delete, -d, <remote> :branch) -------
 # Runs when a ref this push leaves in place holds the tip the remote reports.
 # ls-remote, not the tracking ref: that is stale once someone else pushes.
-# git accepts --del and -qd, so the gate does.
-PUSH_DEL='(--de(l|le|let|lete)?\b|-[A-Za-z0-9]*d[A-Za-z0-9]*\b|\+?:[^[:space:]|;&])'
 remote_tips_held() {   # $1 repo  $2 remote  $3 refs to leave out, one per line  $4.. names
   local repo="$1" remote="$2" out def sha held b x
   local -a pats=() skip=()
@@ -322,8 +404,8 @@ push_delete_safe() {
     remote_tips_held "${s_repo[k]}" "${s_remote[k]}" "${gone%$'\n'}" "${names[@]}" || return 1
   done
 }
-if { printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "${A}${GIT}push\s([^|;&]*\s)?${PUSH_DEL}" \
-     || printf '%s\n' "$CMD" | grep -qE "${A}${GIT}push\s([^|;&]*\s)?${PUSH_DEL}"; } && ! proved_in_each_reading push_delete_safe; then
+if { printf '%s\n' "$CMD" | tr -d '"'\''\\' | grep -qE "$RE_PUSH_DELETE" \
+     || printf '%s\n' "$CMD" | grep -qE "$RE_PUSH_DELETE"; } && ! proved_in_each_reading push_delete_safe; then
   emit_ask "This deletes a remote branch whose tip no other ref holds (a local branch, a tag, or another remote-tracking ref), or one this guard could not check. Confirm the work is merged or no longer needed."
   exit 0
 fi
@@ -338,7 +420,6 @@ fi
 # Quoting does not narrow a pathspec, and `..` or `$(pwd)` name a tree at least
 # as wide as `.`; each of those was a silent allow. normalize_wrappers pads
 # `$(` to ` $( `, hence the spaces inside the $(pwd) form.
-BROAD="['\"]?(-[A-Za-z]*A[A-Za-z]*|--a(l|ll)?|\.{1,2}/?|:/|\\$\(\s*pwd\s*\)|\\$\{?PWD\}?)['\"]?"   # -vA bundles; git takes --al
 # What a broad add would stage, git status lists (porcelain paths are always
 # repo-relative, so a subdirectory's `.` is covered by a superset). Deny only
 # when one of those paths is a credential file; a clean broad add runs. -f adds
@@ -397,7 +478,7 @@ broad_add_safe() {
   PROOF_N=$n
   [[ $n -eq $(gate_segments add "\s(--\s+)?${BROAD}([[:space:]]|$)") ]]
 }
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)?${BROAD}([[:space:]]|;|&|\||\)|$)" && ! proved_in_each_reading broad_add_safe; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_BROAD_ADD" && ! proved_in_each_reading broad_add_safe; then
   if [[ -n "$FOUND" ]]; then
     emit_deny "Blocked: this broad git add would stage $FOUND, a credential file. Stage files by name instead."
   else
@@ -407,51 +488,32 @@ if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+([^|;&]*[[:space:]])?(--\s+)
 fi
 
 # --- Glob staging ('*', '*.env', etc.) ---------------------------------
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}add\s+[^|;&]*['\"]?\*"; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_GLOB_ADD"; then
   emit_ask "git add uses a glob pattern. This may unintentionally stage secrets — confirm the expanded file list first."
   exit 0
 fi
 
 # --- Sensitive file staging --------------------------------------------
-SENSITIVE=(
-  '\.env(\s|$)'
-  '\.env\.'
-  '\.envrc(\s|$)'
-  '\.pem(\s|$)'
-  '\.key(\s|$)'
-  'id_rsa'
-  'id_ed25519'
-  '\.aws/credentials'
-  '\.netrc(\s|$)'
-  '\.git-credentials(\s|$)'
-  '\.pgpass(\s|$)'
-  # Config-shaped secret files only — not secrets.py / secrets.ts (source code).
-  'secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|enc)'
-)
-# One grep for the whole list, since every name gets the same deny. A grep each
-# was 12 process starts on a git add that stages none of them.
-SENSITIVE_RE=""
-for P in "${SENSITIVE[@]}"; do SENSITIVE_RE="${SENSITIVE_RE:+$SENSITIVE_RE|}($P)"; done
-# Its quotes taken out too: `git add "<name>"` and a shell's -c string ended the
+# SENSITIVE_RE, above, with its quotes taken out too: `git add "<name>"` and a shell's -c string ended the
 # name at a quote, where each pattern wants a blank or the line's end.
-if printf '%s\n%s\n' "$SCAN" "$(printf '%s\n' "$SCAN" | tr -d '"'\')" | grep -qE "${A}${GIT}add\s.*(${SENSITIVE_RE})"; then
+if printf '%s\n%s\n' "$SCAN" "$(printf '%s\n' "$SCAN" | tr -d '"'\')" | grep -qE "$RE_SENSITIVE_ADD"; then
   emit_deny "Blocked: git add targets a sensitive file. Do not stage credentials or secret files."
   exit 0
 fi
 
 # --- Git config tampering ----------------------------------------------
 # core.hooksPath redirection and ! aliases.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}config\s+.*core\.hooksPath"; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_CONFIG_HOOKSPATH"; then
   emit_deny "Blocked: changing core.hooksPath disables or redirects git hooks. Not permitted."
   exit 0
 fi
 # Malicious alias: a `!`-prefixed alias value is arbitrary shell run on the
 # next `git <alias>` — a persistence/exec vector as dangerous as .git/hooks.
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}config\s+[^|;&]*alias\.[A-Za-z0-9_.-]+\s+['\"]?[[:space:]]*!"; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_ALIAS_BANG"; then
   emit_deny "Blocked: git alias defined with a shell-command (!) body executes arbitrary code on the next git invocation. Not permitted."
   exit 0
 fi
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}config\s+[^|;&]*alias\."; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_ALIAS"; then
   emit_ask "git config is defining an alias. Confirm the alias body is safe (a leading '!' would run a shell command)."
   exit 0
 fi
@@ -463,19 +525,19 @@ fi
 # old pattern never saw it. This check is deliberately unanchored (it fires
 # wherever the path appears, a commit message included) — dropping the
 # required slash widens that, it does not change its shape.
-if printf '%s\n%s\n%s\n' "$CMD" "$HOOKS_TEXT" "$INLINE_TEXT" | grep -qE "\.git/hooks(/|\b)"; then
+if printf '%s\n%s\n%s\n' "$CMD" "$HOOKS_TEXT" "$INLINE_TEXT" | grep -qE "$RE_HOOKS_DIR"; then
   emit_deny "Blocked: writing into .git/hooks can install a persistent payload. Not permitted."
   exit 0
 fi
 
 # --- Remote redirection ------------------------------------------------
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}remote\s+(set-url|add)\b"; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_REMOTE_SET"; then
   emit_ask "git remote is being set or added. Confirm the URL points where you expect — redirecting origin is a common exfiltration vector."
   exit 0
 fi
 
 # --- History rewrites --------------------------------------------------
-if printf '%s\n' "$CMD" | grep -qE "${A}${GIT}(filter-branch|filter-repo|update-ref|reflog\s+expire)\b"; then
+if printf '%s\n' "$CMD" | grep -qE "$RE_HISTORY"; then
   emit_deny "Blocked: history-rewriting or ref-deleting commands. Run manually if truly needed."
   exit 0
 fi

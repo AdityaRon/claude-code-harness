@@ -116,11 +116,8 @@ SENSITIVE_TOKENS=(
 # too and let the token scan below inspect the heredoc body.
 INTERP_INLINE_RE="${IB}${INTERP}\b[^|;&]*${INLINE}"
 INTERP_HEREDOC_RE="${IB}${INTERP}\b[^|;&]*<<-?"
-if ! printf '%s\n' "$ICMD" | grep -qE "$INTERP_INLINE_RE" \
-   && ! printf '%s\n' "$ICMD" | grep -qE "$INLINE_ONLY" \
-   && ! printf '%s\n' "$ICMD" | grep -qE "$INTERP_HEREDOC_RE"; then
-  exit 0
-fi
+# The three read ICMD with -E, so one grep of their alternation answers as they did.
+printf '%s\n' "$ICMD" | grep -qE "($INTERP_INLINE_RE)|($INLINE_ONLY)|($INTERP_HEREDOC_RE)" || exit 0
 
 # Yes — scan the payload for sensitive tokens.
 # `templates.env.filters` or `self.env["X"]` is an attribute, not the .env file.
