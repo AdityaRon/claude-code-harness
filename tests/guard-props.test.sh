@@ -83,6 +83,10 @@ want = {"?": "?", "*": "*", "[": "[", "//": "//", "/./": "/./", "/../": "/../", 
         "home typed": " /h/home/", ". first": " ./", "$PWD": "\"$PWD\""}
 print(" ".join(k for k, v in want.items() if not any(v in c for c in got)) or "all")' "$GP" 2>&1)
 [ "$D" = all ] && pass "the generator spells protected paths with each glob, separator and home" || fail "path spellings" "missing: $D"
+: > "$TMP/none.jsonl"
+gp --only fastpath --n 6 --corpus "$TMP/none.jsonl"
+[ "$RC" = 0 ] && grep -q '^fastpath: 7 commands (0 corpus, 7 generated)' "$TMP/out" \
+  && pass "fastpath runs n/6 path spellings after the n generated commands" || fail "path spellings run" "rc=$RC $(head -3 "$TMP/out")"
 mutant no-filters kubectl-guard.sh 's/^word_filter .*\|\| exit 0$/:/'
 for g in env-guard interpreter-guard network-guard; do sed -E 's/^([ \t]*)word_filter .*\|\| exit 0$/\1:/' "hooks/$g.sh" > "$TMP/no-filters/$g.sh"; done
 gp --only fastpath --n 0 --corpus "$TMP/c.jsonl" --hooks "$TMP/no-filters"

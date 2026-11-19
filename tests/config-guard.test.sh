@@ -480,8 +480,9 @@ glob_rule() {   # glob_rule HOME CWD COMMAND: hit when the filter's glob rule se
 }
 [[ "$(glob_rule /Users/u /srv 'echo x >> /Users/u/.?ashrc')$(glob_rule /Users/u /srv 'echo x >> /Users/u//.config/../.*rc')" == hithit \
    && "$(glob_rule /Users/u /srv 'echo x >> /Users/uv/.?ashrc')$(glob_rule /Users/a.b /srv 'echo x >> /Users/aXb/.?ashrc')" == missmiss \
-   && "$(glob_rule /Users/a.b /srv 'echo x >> /Users/a.b/.?ashrc')$(glob_rule '/Users/a(b' /srv 'echo x >> /Users/a(b/.?ashrc')" == hitmiss ]] \
-  && { echo "  OK: the home path typed out counts as ~, its dots as dots, and one with ( is left out"; PASS=$((PASS+1)); } \
+   && "$(glob_rule /Users/a.b /srv 'echo x >> /Users/a.b/.?ashrc')$(glob_rule '/Users/a(b' /srv 'echo x >> /Users/a(b/.?ashrc')" == hitmiss \
+   && "$(glob_rule '/Users/a(b' /srv 'echo x >> ~/.?ashrc')" == hit ]] \
+  && { echo "  OK: the home path typed out counts as ~, its dots as dots, and one with ( is left out, not a broken regex"; PASS=$((PASS+1)); } \
   || { echo "  FAIL: the typed-out home rule"; FAIL=$((FAIL+1)); }
 # A continuation the join gives up on (the "a}" in ${x:-...}): the text with \ and newline out shows it.
 JOINLESS=$'cp x ~/.cl\'\'au\\\nde/settings.json; echo ${x:-"a}"}'

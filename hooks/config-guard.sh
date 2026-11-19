@@ -80,7 +80,7 @@ fi
 # letter, and a bare .* or .? must be right under home (~/.*rc), so jq's .[] and
 # .items[0] and a regex's s/.*x/ are not one. F_SEP is a / as the full read resolves
 # it: //, /./, /DIR/../. One regex, no loop: a ${x#*…} strip took 5 s on 64 KB under bash 3.2.
-F_SEP='/+(([^[:space:]]*/+)?[.][.]?/+)*'
+F_SEP='(/+|/([^[:space:]]*/)?[.][.]?/+)'
 F_PRE='c(l(a(u(d(e)?)?)?)?|o(n(f(i(g)?)?)?)?)?|p(r(o(f(i(l(e)?)?)?)?)?)?|g(i(t(c(o(n(f(i(g)?)?)?)?)?)?)?)?'
 F_PRE=$F_PRE'|z(s(h[[:alnum:]_]*)?|p(r(o(f(i(l(e)?)?)?)?)?)?|l(o(g[[:alnum:]_]*)?)?)?'
 F_PRE=$F_PRE'|b(a(s(h(r(c)?|_(p(r(o(f(i(l(e)?)?)?)?)?)?|l(o(g(i(n)?)?)?)?)?)?)?)?)?'

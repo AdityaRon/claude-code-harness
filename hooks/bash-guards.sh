@@ -95,6 +95,9 @@ if [[ "$PRESET_CMD" == *$'\n'* && "$PRESET_CMD" == *[\"\'\\]* ]] && PRESET_JOINE
     || PRESET_JOINED="" PRESET_JINPUT="" PRESET_JBARE=""
   unset bg_j
 fi
+# The joined text already holds what PRESET_NLBARE would add.
+# shellcheck disable=SC2034  # lib.sh reads it in each guard's fork
+[[ -n "$PRESET_JBARE" ]] && PRESET_NLBARE=""
 # bash-guards.skip beside this hook (~/.claude/hooks/) names guards to leave out,
 # one a line. It only takes names off the list above, so a missing or empty file
 # runs all seven, and a symlink is not read. In the hooks folder, a write to it is
