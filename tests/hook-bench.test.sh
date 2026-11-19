@@ -346,7 +346,8 @@ for i in 1 2 3 4 5 6 7 8 9 10; do jq -nc --arg id "s-$i" --arg c "echo $i" '{id:
 shape() { sed 's/[+-]*[0-9][0-9.]*%*/N/g' "$1"; }
 python3 "$BENCH" --repo "$F4" --corpus "$TMP/c4.jsonl" --base v0.1.0 --head v0.1.0 --progress-every 0 --min-calls 5 >"$TMP/q.out" 2>"$TMP/q.err"
 python3 "$BENCH" --repo "$F4" --corpus "$TMP/c4.jsonl" --base v0.1.0 --head v0.1.0 --progress-every 0.05 --min-calls 5 >"$TMP/p.out" 2>"$TMP/p.err"
-[ ! -s "$TMP/q.err" ] && pass "--progress-every 0 writes nothing to stderr" || fail "quiet" "$(head -3 "$TMP/q.err")"
+# Not [ ! -s ]: tarfile on Python 3.12 warns on stderr, a line that is not ours (run 44610159230).
+! grep -q '^hook-bench:' "$TMP/q.err" && pass "--progress-every 0 writes no progress line to stderr" || fail "quiet" "$(head -3 "$TMP/q.err")"
 [ "$(shape "$TMP/q.out")" = "$(shape "$TMP/p.out")" ] && ! grep -q 'hook-bench:' "$TMP/p.out" \
   && pass "stdout is the same with progress on, and carries no progress line" || fail "stdout unchanged" "$(diff <(shape "$TMP/q.out") <(shape "$TMP/p.out") | head -4)"
 grep -q '^hook-bench: 10 payloads x 1 pass x 2 sides; at least .* process start' "$TMP/p.err" && grep -q -- '--quick takes every third' "$TMP/p.err" \
