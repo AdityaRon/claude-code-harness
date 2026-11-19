@@ -8,6 +8,22 @@ installed machine to the newest tag. After v1.4.2 the skills live in
 [claude-code-skills](https://github.com/AdityaRon/claude-code-skills), with their
 own changelog; `config/skills.pin` names the release each version installs.
 
+## v1.4.13 (2026-11-19)
+
+Merged since v1.4.12: 2 PRs.
+
+### Security
+- guard-props: property checks for guard fast paths, inert heredocs, count_mark (#280)
+
+### Other
+- tests/doctor: time budgets that hold on a loaded runner (#284)
+
+### Benchmark vs v1.4.12
+
+Gate script and corpus from `7013901` (v1.4.12): 492 payloads, 0 of them new in this change.
+
+hooks/ and config/settings.json match v1.4.12; benchmark skipped (both sides would run the same files).
+
 ## v1.4.12 (2026-11-18)
 
 Merged since v1.4.11: 7 PRs.
