@@ -52,12 +52,12 @@ echo "=== fastpath: a guard's fast path answers as the guard behind it ==="
 # Commands a fast-path mutant answered wrongly on the default run, and two it did not.
 for c in 'printenv PATH' "echo hi | 'p'rintenv" "python3 -c \"import subprocess; subprocess.run(['kubectl','delete','pod','x'])\"" \
          'git push --force origin main' 'git reset --hard HEAD~1' $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run([\'rm\',\'-rf\',\'/\'])\nEOF' \
-         'ls -la' 'kubectl get pods'; do
+         "cp x ~/.cl''aude/hooks/lib.sh" 'ls -la' 'kubectl get pods'; do
   jq -nc --arg c "$c" '{id: $c, tool_name: "Bash", tool_input: {command: $c}}'
 done > "$TMP/c.jsonl"
 gp --only fastpath --n 0 --corpus "$TMP/c.jsonl"
-[ "$RC" = 0 ] && grep -q "forced to pass: word_filter in env-guard (1), interpreter-guard (1), kubectl-guard (1), network-guard (1); git-guard's git; git-guard's GG_GATE; rm-guard's RM_WORD: 0 answered differently" "$TMP/out" \
-  && pass "the shipped fast paths: word_filter in four guards, git-guard's two gates, rm-guard's RM_WORD" || fail "fastpath" "rc=$RC $(cat "$TMP/out")"
+[ "$RC" = 0 ] && grep -q "forced to pass: word_filter in env-guard (1), interpreter-guard (1), kubectl-guard (1), network-guard (1); git-guard's git; git-guard's GG_GATE; rm-guard's RM_WORD; config-guard's paths: 0 answered differently" "$TMP/out" \
+  && pass "the shipped fast paths: word_filter in four guards, git-guard's two gates, rm-guard's RM_WORD, config-guard's paths" || fail "fastpath" "rc=$RC $(cat "$TMP/out")"
 fp_mutant() {  # NAME FILE SED COUNT CMD-START: a mutant of one fast path, and the commands it gets wrong
   mutant "$1" "$2" "$3"
   gp --only fastpath --n 0 --corpus "$TMP/c.jsonl" --hooks "$TMP/$1"
@@ -69,6 +69,8 @@ fp_mutant kubectl-space kubectl-guard.sh "s/^word_filter 'kubectl' /word_filter 
 fp_mutant gate-no-push git-guard.sh "s/^GG_GATE='hooks\|push\|/GG_GATE='hooks|/" 1 'git push --force origin main: '
 fp_mutant gate-no-reset git-guard.sh "s/^GG_GATE='hooks\|push\|reset\|/GG_GATE='hooks|push|/" 1 'git reset --hard HEAD~1: '
 fp_mutant rm-word-unquoted rm-guard.sh "s/^RM_WORD=.*$/RM_WORD='(^|[^[:alnum:]_.-])rm([[:space:]]|\$)'/" 1 'python3 - <<'
+# config-guard's filter reading the command as typed again, as before the bare text: a quote-split path gets past it.
+fp_mutant config-typed config-guard.sh 's/then FSRC=\$TARGET\$....\$PRESET_BARE.*$/then FSRC=$TARGET/' 1 "cp x ~/.cl''aude/hooks/lib.sh: "
 mutant no-filters kubectl-guard.sh 's/^word_filter .*\|\| exit 0$/:/'
 for g in env-guard interpreter-guard network-guard; do sed -E 's/^([ \t]*)word_filter .*\|\| exit 0$/\1:/' "hooks/$g.sh" > "$TMP/no-filters/$g.sh"; done
 gp --only fastpath --n 0 --corpus "$TMP/c.jsonl" --hooks "$TMP/no-filters"
@@ -79,9 +81,9 @@ gp --only fastpath --n 0 --corpus "$TMP/c.jsonl" --hooks "$TMP/no-gate"
 [ "$RC" = 2 ] && grep -q "git-guard's GG_GATE: 0 lines like" "$TMP/out" \
   && pass "a fast path whose line changed stops the run, not passes it" || fail "line changed" "rc=$RC $(cat "$TMP/out")"
 head -1 "$TMP/c.jsonl" > "$TMP/c1.jsonl"
-gp --only fastpath --n 0 --corpus "$TMP/c1.jsonl" --force config-paths
-[ "$RC" = 0 ] && grep -q "rm-guard's RM_WORD; config-guard's paths: 0 answered" "$TMP/out" \
-  && pass "--force config-paths adds config-guard's path test" || fail "--force config-paths" "rc=$RC $(cat "$TMP/out")"
+gp --only fastpath --n 0 --corpus "$TMP/c1.jsonl" --force nope
+[ "$RC" = 2 ] && grep -q -- "--force: unknown nope" "$TMP/out" \
+  && pass "--force with a fast path it does not know stops" || fail "--force nope" "rc=$RC $(cat "$TMP/out")"
 
 echo ""
 echo "=== heredoc: a body strip_inert_heredocs drops cannot change an answer ==="

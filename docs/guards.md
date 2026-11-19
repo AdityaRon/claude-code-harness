@@ -91,12 +91,10 @@ backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
   generated commands (guard words with quotes, backslashes, case, suffixes and
   paths, some in a notes heredoc). Forced: every `word_filter ... || exit 0`
   line (env-guard, interpreter-guard, kubectl-guard, network-guard), git-guard's
-  two gates (no `git`, then `GG_GATE`) and rm-guard's `RM_WORD`. Each must be
-  found once, or the run stops (exit 2) rather than pass on less. rm-guard's
-  `word_filter` sets a flag rather than exiting, so it stays. config-guard's
-  path test is forced only with `--force config-paths`: forced, it asks where
-  `hooks/` allows a quote-split path such as `cp x ~/.cl''aude/hooks/lib.sh`,
-  which that test lets go today.
+  two gates (no `git`, then `GG_GATE`), rm-guard's `RM_WORD` and config-guard's
+  path test. Each must be found once, or the run stops (exit 2) rather than
+  pass on less. rm-guard's `word_filter` sets a flag rather than exiting, so it
+  stays. `--force KEY` forces a fast path that is off by default; none is today.
 - **heredoc.** Where `strip_inert_heredocs` drops a heredoc body as inert, the
   same command with another body it also drops gets the same answer from the
   guards that read past such bodies (those calling `strip_inert_heredocs` or

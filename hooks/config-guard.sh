@@ -81,7 +81,7 @@ F_CLASS='\[([!^]|][[:alnum:]_-]|[0-9:-]*[^]0-9:-])[^]/[:space:]]*\]'
 F_GLOB="(^|[[:space:]/;&|<>(=])[.](($F_PRE)([*?]|$F_CLASS)|$F_CLASS)|(~|HOME[}]?)/[.][*?]"
 # Run from home, a bare .* or .? on its own counts too (.*rc). The full read expands
 # a glob from the session's folder, not after a cd, so neither does this.
-[[ "$FCWD" == "$H" ]] && F_GLOB="$F_GLOB|(^|[[:space:];&|<>(=])[.][*?]"
+[[ "$FCWD" == "$H" ]] && F_GLOB="$F_GLOB|(^|[[:space:];&|<>=])[.][*?]"
 shopt -s nocasematch
 [[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && ! "$FTARGET" =~ $F_GLOB ]] && case "$FTARGET" in
   *.claude*|*.zsh*|*.zprofile*|*.zlog*|*.bashrc*|*.bash_profile*|*.bash_login*|*.profile*|*gitconfig*|*git/config*|*LaunchAgents*|*Library/*|*--global*) ;;

@@ -7,8 +7,7 @@
   tools/guard-props.py --hooks DIR        # another hooks/ folder, e.g. a mutant
 
 fastpath: a guard's `word_filter ... || exit 0` line is its fast path, as are
-git-guard's two gates and rm-guard's RM_WORD (config-guard's path test with
---force config-paths: a quote-split path gets past it on main today).
+git-guard's two gates, rm-guard's RM_WORD and config-guard's path test.
 A copy of hooks/ with every one of them made to pass must answer as hooks/ does through
 bash-guards.sh (decision, exit code, shadow rules) on the bench corpus's Bash
 payloads and N generated commands: guard words with quotes, backslashes, case
@@ -34,14 +33,13 @@ import argparse, concurrent.futures, hashlib, importlib.util, json, os, random, 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FAST_PATH = re.compile(r'^([ \t]*)word_filter[ \t].*\|\|[ \t]*exit 0[ \t]*$', re.M)
 # The other guards' fast paths, each a line that must be in its file once: (key, name, file, line,
-# made to pass, forced unless asked). config-paths is off by default: forced, it answers differently
-# on a quote-split path (`cp x ~/.cl''aude/hooks/lib.sh`), which config-guard's filter lets go
-# unasked; --force config-paths turns it on for the fix that closes that.
+# made to pass, forced unless asked). One off by default is forced with --force KEY, for a fast path
+# that does not hold yet and the fix that closes it.
 OTHER_PATHS = [
     ('git', "git-guard's git", 'git-guard.sh', r'^\[\[ "\$R" == \*\[Gg\]\[Ii\]\[Tt\]\* \]\] \|\| exit 0$', ':', True),
     ('gg-gate', "git-guard's GG_GATE", 'git-guard.sh', r'^\[\[ "\$R" =~ \$GG_GATE \]\] \|\| exit 0$', ':', True),
     ('rm-word', "rm-guard's RM_WORD", 'rm-guard.sh', r'^\[\[ "\$CMD" =~ \$RM_WORD \]\] \|\| rm_allow$', ':', True),
-    ('config-paths', "config-guard's paths", 'config-guard.sh', r'^([ \t]*\*\) case "\$FCWD" in .*\*\) )exit 0( ;; esac ;;)$', r'\1:\2', False),
+    ('config-paths', "config-guard's paths", 'config-guard.sh', r'^([ \t]*\*\) case "\$FCWD" in .*\*\) )exit 0( ;; esac ;;)$', r'\1:\2', True),
 ]
 # Words from the guards' word_filter lines, and the commands they sit in.
 WORDS = ['kubectl', 'printenv', 'env', 'export', 'set', 'declare', 'compgen', 'eval', 'nc', 'ncat', 'socat', 'dd',
@@ -311,7 +309,7 @@ def main():
     ap.add_argument('--corpus', default=os.path.join(ROOT, 'tests', 'bench-corpus.jsonl'))
     ap.add_argument('--disk-space', default=os.path.join(ROOT, 'bin', 'disk-space.py'))
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 2)
-    ap.add_argument('--force', default='', help='fastpath: comma-separated fast paths off by default to force too (config-paths)')
+    ap.add_argument('--force', default='', help='fastpath: comma-separated fast paths off by default to force too (none today)')
     a = ap.parse_args()
     seed = random.SystemRandom().randrange(1 << 31) if a.seed == 'random' else int(a.seed)
     print(f'guard-props: seed {seed} (repeat with --seed {seed}), n {a.n}')
