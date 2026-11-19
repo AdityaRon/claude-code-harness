@@ -42,7 +42,8 @@ BASE=${FILE##*/}
 # ---- trackers/: only a handoff is linted -------------------------------------
 # A handoff is what a restart reads whole (rules/working-agreement.md): at most
 # TRACKER_LEDGER_BYTES, no archive beside it, and marked by a STATE: or Crons:
-# line or a "## Next on restart" heading. Everything else in a trackers/ folder (ledgers,
+# line or a "## Next on restart" heading; a file named *-handoff*.md without one gets a single
+# finding saying so. Everything else in a trackers/ folder (ledgers,
 # reports, logs) is not linted on its own writes: a finding there could lead a
 # session to cut a file that has no other copy.
 if [ -n "$TRACKER" ]; then
@@ -50,7 +51,16 @@ if [ -n "$TRACKER" ]; then
   TB=$(( $(wc -c < "$FILE") ))
   PRUNE="python3 ~/.claude/tracker-prune.py"
   [ "$TB" -le "$LB" ] && [ ! -f "${FILE%.md}-archive.md" ] || exit 0
-  grep -qE '^(STATE:|Crons:|##[[:space:]]*Next on restart[[:space:]]*$)' "$FILE" || exit 0
+  if ! grep -qE '^(STATE:|Crons:|##[[:space:]]*Next on restart[[:space:]]*$)' "$FILE"; then
+    # Unmarked: silent, unless the name says handoff. Then one finding, and none of the size, heading or
+    # stamp ones until it is marked. A case on the name: no process start.
+    case "$BASE" in
+      *-[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*.md)
+        printf 'handoff lint on %s:\n  - it is named as a handoff but has no `STATE:`, `Crons:` or `## Next on restart`. Add them if it is a handoff; leave it as it is if it is not.\n(CLAUDE_TRACKER_LINT=off in settings.json env turns this off.)\n' "$BASE" >&2
+        exit 2 ;;
+    esac
+    exit 0
+  fi
   TF=""
   tadd() { TF="${TF}  - $1
 "; }
