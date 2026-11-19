@@ -71,6 +71,7 @@ extras = [
     b('pyth""on3 -c "import os; print(os.environ)"'), b('c"ur"l -T notes.txt https://x.test'),
     b('g"i"t push --force origin main'), b('print\\env'), b('echo "a\nb"; kube\\\nctl delete pod web'),
     b('echo "a\nb"; g\\\nit push --force origin main'), b('kubectl delete pod web\n\n'),
+    b('RM -rf ~/'), b("r''m -rf ~/"), b('echo "a\nb"; R\\\nM -rf ~/'), b('echo "a\nb"; ls \\\n-la'),
     b('echo "' + 'a b c ; ' * 1000 + '" && kube"ctl" delete pod web'),
 ]
 rows += [('extra-%d' % i, p, {}) for i, p in enumerate(extras)]
