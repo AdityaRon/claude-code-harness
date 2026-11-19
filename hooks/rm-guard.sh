@@ -19,9 +19,11 @@ rm_allow() {
   [[ $DS_APPLY -eq 1 ]] && decide ask disk-space-apply "disk-space.py with --apply deletes old job tmp entries, a clone or Bazel output bases. Read the listing it printed, then approve."
   exit 0
 }
-# A quote may follow: subprocess.run(['rm', '-rf', x]) in an inline script.
+# A quote may follow: subprocess.run(['rm', '-rf', x]) in an inline script. Then the text
+# bash reads, in any case (r''m; RM runs rm on macOS's disk), as the full read sees it.
 RM_WORD='(^|[^[:alnum:]_.-])rm([[:space:]"'\'']|$)'
-[[ "$CMD" =~ $RM_WORD ]] || rm_allow
+RM_BARE='(^|[^[:alnum:]_.-])rm([^[:alnum:]_.-]|$)'
+[[ "$CMD" =~ $RM_WORD ]] || word_filter "$RM_BARE" "$CMD" || rm_allow
 # A script's shell-outs are checked as commands of their own (lib.sh).
 check_inline_shellouts rm flat
 
