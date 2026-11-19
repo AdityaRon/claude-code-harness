@@ -417,9 +417,9 @@ SPLIT=("cp x ~/'.cl'aude/settings.json" 'cp x ~/.cl"aude"/settings.json' "cp x ~
        'cp x ~/.cl\aude/hooks/lib.sh' 'echo x >> ~/.bash"rc"' "rm ~/.cl''aude/hooks/env-guard.sh"
        'cp x ~/.c""laude/settings.json' 'echo x >> ~/.git\config' 'echo x >> ~/.pro"file"')
 for c in "${SPLIT[@]}"; do bash_is ask "$c"; done
-dispatch_is() {   # dispatch_is WANT COMMAND: the answer through hooks/bash-guards.sh
+dispatch_is() {   # dispatch_is WANT COMMAND [CWD]: the answer through hooks/bash-guards.sh
   local got
-  got=$(jq -nc --arg c "$2" '{tool_name:"Bash",tool_input:{command:$c},cwd:"/srv",session_id:"x"}' \
+  got=$(jq -nc --arg c "$2" --arg d "${3:-/srv}" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"x"}' \
     | CLAUDE_GUARD_TIMING_LOG=/dev/null CLAUDE_SHADOW_LOG=/dev/null bash hooks/bash-guards.sh 2>/dev/null \
     | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
   if [[ "${got:-allow}" == "$1" ]]; then echo "  OK ($1, dispatcher): $2"; PASS=$((PASS+1))
@@ -460,6 +460,37 @@ starts_one "gh pr view 1 --json commits --jq '.commits[1:3]'"
 starts_one "gh pr list --json number,title --jq '.[]|[.number,.title]|@tsv'"
 starts_one "sed -i '' 's/.*x/y/' notes.md"   # a regex's .* is a glob only right under home
 starts_one 'grep -E "a: .* b" notes.md'
+echo ""
+echo "=== a glob after //, /./ or /DIR/../, after \$HOME//, the home path, or ./ from home: ask ==="
+# The full read resolves these to the protected file and asks; the filter let them go.
+# shellcheck disable=SC2088  # the tilde as typed
+PATHS=('echo x >> ~//.?ashrc' 'echo x >> ~/./.?ashrc' 'echo x >> ~/.config/../.?ashrc' 'echo x >> $HOME//.?ashrc'
+       'cp x ~/.config//git/c*' 'cp x ~/.config/./g*/config' 'cp x ~/.config/git/./c*' "echo x >> $HOME/.?ashrc"
+       "cp x $HOME/./.config/../.cl?ude/settings.json" 'echo x >> ~/.config/git/../../.?ashrc')
+for c in "${PATHS[@]}"; do bash_is ask "$c"; done
+for c in "${PATHS[@]}"; do dispatch_is ask "$c"; done
+for c in 'echo x >> ./.?ashrc' 'echo x >> "$PWD"/.?ashrc' 'echo x >> ${PWD}//.*rc' 'cp x ./.config/./g?t/config'; do
+  bash_is ask "$c" "$HOME"; dispatch_is ask "$c" "$HOME"
+done
+# This HOME's path holds .claude where TMPDIR is under ~/.claude, and ends in home, which
+# HOME[}]? matches case-folded, so the typed-out home is checked on the rule itself.
+sed -n '/^F_SEP=/,/^\[\[ "\$FCWD" == "\$H" \]\] && F_GLOB=/p' hooks/config-guard.sh > "$TMP/fglob.sh"
+glob_rule() {   # glob_rule HOME CWD COMMAND: hit when the filter's glob rule sends COMMAND to the full read
+  ( H=$1 FCWD=$2; source "$TMP/fglob.sh"; shopt -s nocasematch; [[ "$3" =~ $F_GLOB ]] && echo hit || echo miss )
+}
+[[ "$(glob_rule /Users/u /srv 'echo x >> /Users/u/.?ashrc')$(glob_rule /Users/u /srv 'echo x >> /Users/u//.config/../.*rc')" == hithit \
+   && "$(glob_rule /Users/u /srv 'echo x >> /Users/uv/.?ashrc')$(glob_rule /Users/a.b /srv 'echo x >> /Users/aXb/.?ashrc')" == missmiss \
+   && "$(glob_rule /Users/a.b /srv 'echo x >> /Users/a.b/.?ashrc')$(glob_rule '/Users/a(b' /srv 'echo x >> /Users/a(b/.?ashrc')" == hitmiss ]] \
+  && { echo "  OK: the home path typed out counts as ~, its dots as dots, and one with ( is left out"; PASS=$((PASS+1)); } \
+  || { echo "  FAIL: the typed-out home rule"; FAIL=$((FAIL+1)); }
+# A continuation the join gives up on (the "a}" in ${x:-...}): the text with \ and newline out shows it.
+JOINLESS=$'cp x ~/.cl\'\'au\\\nde/settings.json; echo ${x:-"a}"}'
+bash_is ask "$JOINLESS"; dispatch_is ask "$JOINLESS"
+# From another folder, ./ and $PWD are not home, and a path with no glob still reads as before.
+bash_is allow 'echo x >> ./.?ashrc' /srv
+bash_is allow 'cat ~//.?ashrc'
+starts_one 'ls ~/src/./x/../*.py'
+starts_one "jq '.[]' ./a/../b.json"
 # Accepted (docs/known-limitations.md): the full read does not put a variable, a
 # brace, a glob above the file, a split option or a glob after a cd in place either,
 # so the filter letting these go answers as it does.
@@ -468,6 +499,14 @@ bash_is allow 'cp x ~/.{claude,x}/settings.json'
 bash_is allow 'cp x ~/Library/Launch*/x.plist'
 bash_is allow 'git config --glo"bal" user.name x'
 bash_is allow 'cd ~ && echo x >> .*rc'   # the full read expands a glob from the session's folder
+# Nor (the #287 review): a glob in the folder cd enters, &> with a ~ after it, a quote
+# inside [ ], $'...' in a name, a quoted --global, or a glob in Library.
+bash_is allow 'cd ~/.cla* && cp x settings.json'
+bash_is allow 'echo x >&~/.bashrc'
+bash_is allow 'cp x ~/.cl[a" "]ude/settings.json'
+bash_is allow $'cp x ~/.cl$\'a\'ude/settings.json'
+bash_is allow 'git config "--global" user.name x'
+bash_is allow 'cp x ~/Libr?ry/LaunchAgents/x.plist'
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

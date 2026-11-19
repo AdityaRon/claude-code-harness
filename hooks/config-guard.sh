@@ -36,12 +36,18 @@ H=$HOME
 # ~/.claude/hooks there. It reads the command with quotes and backslashes out too,
 # as bash runs it (`~/.cl''aude/hooks` is ~/.claude/hooks): the dispatcher's jq made
 # that text (PRESET_BARE, cmd_bare in lib/io.sh), and the joined command's too
-# (PRESET_JBARE); run alone, tr makes it, only for a command holding one.
+# (PRESET_JBARE), and with each \ and newline after it out where the join gave up
+# (PRESET_NLBARE); run alone, tr and awk make them, only for a command holding one.
 # A command with no quote or backslash is its own bare text, so it is read once.
 FSRC=$TARGET
 if [[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && "$TARGET" == *[\"\'\\]* ]]; then
-  if [[ -n "${HARNESS_PRESET:-}" && -n "${PRESET_BARE+x}" ]]; then FSRC=$TARGET$'\n'$PRESET_BARE${PRESET_JBARE:+$'\n'$PRESET_JBARE}
-  else FSRC=$TARGET$'\n'$(printf '%s' "$TARGET" | tr -d '"'\''\\'); fi
+  if [[ -n "${HARNESS_PRESET:-}" && -n "${PRESET_BARE+x}" ]]; then
+    FSRC=$TARGET$'\n'$PRESET_BARE${PRESET_JBARE:+$'\n'$PRESET_JBARE}${PRESET_NLBARE:+$'\n'$PRESET_NLBARE}
+  else
+    FSRC=$TARGET$'\n'$(printf '%s' "$TARGET" | tr -d '"'\''\\')
+    [[ "$TARGET" == *\\$'\n'* ]] && FSRC=$FSRC$'\n'$(printf '%s' "$TARGET" \
+      | awk 'BEGIN { RS = "\001" } { gsub(/\\\n/, ""); gsub(/["\047\\]/, ""); printf "%s", $0 }')
+  fi
 fi
 FTARGET=$FSRC FCWD=$CWD
 # A job's scratch (~/.claude/jobs/<id>/tmp), ~/.claude/projects and ~/.claude/logs
@@ -72,17 +78,22 @@ fi
 # name one of these, and the full read expands it: such a command is read in full.
 # The name before the glob must begin one of them, a [ ] must be able to hold a
 # letter, and a bare .* or .? must be right under home (~/.*rc), so jq's .[] and
-# .items[0] and a regex's s/.*x/ are not one. One regex, no loop: a ${x#*…} strip
-# took 5 s on 64 KB under bash 3.2.
+# .items[0] and a regex's s/.*x/ are not one. F_SEP is a / as the full read resolves
+# it: //, /./, /DIR/../. One regex, no loop: a ${x#*…} strip took 5 s on 64 KB under bash 3.2.
+F_SEP='/+(([^[:space:]]*/+)?[.][.]?/+)*'
 F_PRE='c(l(a(u(d(e)?)?)?)?|o(n(f(i(g)?)?)?)?)?|p(r(o(f(i(l(e)?)?)?)?)?)?|g(i(t(c(o(n(f(i(g)?)?)?)?)?)?)?)?'
 F_PRE=$F_PRE'|z(s(h[[:alnum:]_]*)?|p(r(o(f(i(l(e)?)?)?)?)?)?|l(o(g[[:alnum:]_]*)?)?)?'
 F_PRE=$F_PRE'|b(a(s(h(r(c)?|_(p(r(o(f(i(l(e)?)?)?)?)?)?|l(o(g(i(n)?)?)?)?)?)?)?)?)?'
-F_PRE=$F_PRE'|config/(git/(c(o(n(f(i(g)?)?)?)?)?)?|(g(i(t)?)?)?)'
+F_PRE=$F_PRE"|config$F_SEP(git$F_SEP(c(o(n(f(i(g)?)?)?)?)?)?|(g(i(t)?)?)?)"
 F_CLASS='\[([!^]|][[:alnum:]_-]|[0-9:-]*[^]0-9:-])[^]/[:space:]]*\]'
-F_GLOB="(^|[[:space:]/;&|<>(=])[.](($F_PRE)([*?]|$F_CLASS)|$F_CLASS)|(~|HOME[}]?)/[.][*?]"
-# Run from home, a bare .* or .? on its own counts too (.*rc). The full read expands
-# a glob from the session's folder, not after a cd, so neither does this.
-[[ "$FCWD" == "$H" ]] && F_GLOB="$F_GLOB|(^|[[:space:];&|<>=])[.][*?]"
+F_HOME='~|HOME[}]?'
+# Home typed out too; a path holding an ERE character other than . is left out.
+case "$H" in /*[]\[\\\(\)\*\+\?\{\}\|\^\$]*) ;; /?*) F_HOME="$F_HOME|${H//./[.]}" ;; esac
+F_GLOB="(^|[[:space:]/;&|<>(=])[.](($F_PRE)([*?]|$F_CLASS)|$F_CLASS)|($F_HOME)${F_SEP}[.][*?]"
+# Run from home, a bare .* or .? on its own counts too (.*rc, ./.?ashrc, $PWD/.*rc).
+# The full read expands a glob from the session's folder, not after a cd, so neither
+# does this.
+[[ "$FCWD" == "$H" ]] && F_GLOB="$F_GLOB|(^|[[:space:];&|<>=])(([.]|[$][{]?PWD[}]?)$F_SEP)?[.][*?]"
 shopt -s nocasematch
 [[ ( "$TOOL" == Bash || "$TOOL" == Monitor ) && ! "$FTARGET" =~ $F_GLOB ]] && case "$FTARGET" in
   *.claude*|*.zsh*|*.zprofile*|*.zlog*|*.bashrc*|*.bash_profile*|*.bash_login*|*.profile*|*gitconfig*|*git/config*|*LaunchAgents*|*Library/*|*--global*) ;;

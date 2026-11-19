@@ -52,7 +52,7 @@ echo "=== fastpath: a guard's fast path answers as the guard behind it ==="
 # Commands a fast-path mutant answered wrongly on the default run, and two it did not.
 for c in 'printenv PATH' "echo hi | 'p'rintenv" "python3 -c \"import subprocess; subprocess.run(['kubectl','delete','pod','x'])\"" \
          'git push --force origin main' 'git reset --hard HEAD~1' $'python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run([\'rm\',\'-rf\',\'/\'])\nEOF' \
-         "cp x ~/.cl''aude/hooks/lib.sh" 'ls -la' 'kubectl get pods'; do
+         "cp x ~/.cl''aude/hooks/lib.sh" 'ls -la' 'kubectl get pods' 'echo x >> ~//.?ashrc'; do
   jq -nc --arg c "$c" '{id: $c, tool_name: "Bash", tool_input: {command: $c}}'
 done > "$TMP/c.jsonl"
 gp --only fastpath --n 0 --corpus "$TMP/c.jsonl"
@@ -70,7 +70,19 @@ fp_mutant gate-no-push git-guard.sh "s/^GG_GATE='hooks\|push\|/GG_GATE='hooks|/"
 fp_mutant gate-no-reset git-guard.sh "s/^GG_GATE='hooks\|push\|reset\|/GG_GATE='hooks|push|/" 1 'git reset --hard HEAD~1: '
 fp_mutant rm-word-unquoted rm-guard.sh "s/^RM_WORD=.*$/RM_WORD='(^|[^[:alnum:]_.-])rm([[:space:]]|\$)'/" 1 'python3 - <<'
 # config-guard's filter reading the command as typed again, as before the bare text: a quote-split path gets past it.
-fp_mutant config-typed config-guard.sh 's/then FSRC=\$TARGET\$....\$PRESET_BARE.*$/then FSRC=$TARGET/' 1 "cp x ~/.cl''aude/hooks/lib.sh: "
+fp_mutant config-typed config-guard.sh 's/^    FSRC=\$TARGET\$....\$PRESET_BARE.*$/    FSRC=$TARGET/' 1 "cp x ~/.cl''aude/hooks/lib.sh: "
+# Its glob rule taking only one / between names, as before #287's review: ~//.?ashrc gets past it.
+# The Runner's HOME holds .bashrc, so the full read's glob finds it and asks.
+fp_mutant config-one-slash config-guard.sh "s|^F_SEP=.*$|F_SEP='/'|" 1 'echo x >> ~//.?ashrc: '
+# The generator spells a protected path each way the filter must see: a glob, //, /./,
+# /DIR/../, and ~, $HOME, ${HOME}, the home path, . or "$PWD" before it.
+D=$(python3 -c 'import importlib.util, random, sys
+spec = importlib.util.spec_from_file_location("gp", sys.argv[1]); gp = importlib.util.module_from_spec(spec); spec.loader.exec_module(gp)
+got = gp.generate_paths(random.Random(1), 400, "/h/home")
+want = {"?": "?", "*": "*", "[": "[", "//": "//", "/./": "/./", "/../": "/../", "~/": " ~/", "$HOME": " $HOME/", "${HOME}": "${HOME}",
+        "home typed": " /h/home/", ". first": " ./", "$PWD": "\"$PWD\""}
+print(" ".join(k for k, v in want.items() if not any(v in c for c in got)) or "all")' "$GP" 2>&1)
+[ "$D" = all ] && pass "the generator spells protected paths with each glob, separator and home" || fail "path spellings" "missing: $D"
 mutant no-filters kubectl-guard.sh 's/^word_filter .*\|\| exit 0$/:/'
 for g in env-guard interpreter-guard network-guard; do sed -E 's/^([ \t]*)word_filter .*\|\| exit 0$/\1:/' "hooks/$g.sh" > "$TMP/no-filters/$g.sh"; done
 gp --only fastpath --n 0 --corpus "$TMP/c.jsonl" --hooks "$TMP/no-filters"

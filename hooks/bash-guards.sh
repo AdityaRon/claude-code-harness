@@ -48,8 +48,10 @@ command -v jq &>/dev/null || { BG_DONE=1; require_jq_or_deny; BG_DONE=""; exit 1
 # field is jq_get's own `EXPR // ""`, and a field jq cannot read is "", as there.
 # Then the command as `tr -d` leaves it with " ' and \ out, for the guards'
 # word filters (word_filter, lib/io.sh): made here, no guard starts tr or grep
-# to find it names none of its words. Last, the epoch second for the timing log:
-# bash 3.2 has no clock that starts no process, and this jq runs anyway.
+# to find it names none of its words. Then the epoch second for the timing log:
+# bash 3.2 has no clock that starts no process, and this jq runs anyway. Last,
+# for config-guard's filter, that bare text with each \ and newline after it out,
+# only for a command holding one: join_continued_lines gives up on some.
 BG_F=()
 while IFS= read -r -d '' bg_f; do BG_F[${#BG_F[@]}]=$bg_f; done < <(
   printf '%s' "$INPUT" | jq -j 'def f(p): try ((p // "") | if type == "string" then split("\u0000") | join("") else . end) catch "";
@@ -57,17 +59,19 @@ while IFS= read -r -d '' bg_f; do BG_F[${#BG_F[@]}]=$bg_f; done < <(
     f(.tool_input.url), "\u0000", f(.tool_input.ws.url), "\u0000", f(.tool_use_id), "\u0000", f(.permission_mode), "\u0000",
     (f(.tool_input.command) | if type == "string" then . else tojson end
       | split("\"") | join("") | split("\u0027") | join("") | split("\\") | join("")), "\u0000",
-    (now | floor | tostring), "\u0000"' 2>/dev/null
+    (now | floor | tostring), "\u0000",
+    (f(.tool_input.command) | if type == "string" and contains("\\\n") then split("\\\n") | join("")
+      | split("\"") | join("") | split("\u0027") | join("") | split("\\") | join("") else "" end), "\u0000"' 2>/dev/null
   printf 'rc=%s\0' "$?")
 PRESET_OK=no
-[[ ${#BG_F[@]} -eq 11 && "${BG_F[10]}" == rc=0 ]] && PRESET_OK=ok
+[[ ${#BG_F[@]} -eq 12 && "${BG_F[11]}" == rc=0 ]] && PRESET_OK=ok
 # Whitespace alone is no document and no error; each guard allowed it.
 [[ ${#BG_F[@]} -eq 1 && "${BG_F[0]}" == rc=0 ]] && { PRESET_OK=ok; BG_F=(); }
 # shellcheck disable=SC2034  # lib.sh reads them in each guard's fork
 {
   PRESET_TOOL=${BG_F[0]:-} PRESET_CMD=${BG_F[1]:-} PRESET_CWD=${BG_F[2]:-} PRESET_SID=${BG_F[3]:-}
   PRESET_URL=${BG_F[4]:-} PRESET_WS=${BG_F[5]:-} PRESET_ID=${BG_F[6]:-} PRESET_MODE=${BG_F[7]:-}
-  PRESET_BARE=${BG_F[8]:-}
+  PRESET_BARE=${BG_F[8]:-} PRESET_NLBARE=${BG_F[10]:-}
   HARNESS_PRESET=$$   # lib.sh honours it only where $$ is this, in these forks
 }
 BG_AT=${BG_F[9]:-}; BG_AT=${BG_AT//[!0-9]/}

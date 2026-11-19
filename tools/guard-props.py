@@ -66,6 +66,10 @@ TEMPLATES = ['{w}', '{w} get pods', '{w} --context prod delete pod api-1', 'echo
              'git {w} --force origin main', 'git {w} -A', '{w} -rf build/ /var/lib/app', 'echo x >> ~/{w}', 'cp x ~/{w}',
              '{w} --hard HEAD~1']
 SUFFIXES = ['2', '_x', '.sh', '-cli', 's', '.exe']
+# Files config-guard protects, made in the Runner's HOME so a glob the full read expands
+# (compgen -G) finds them, and the writes the generator puts a spelling of one in.
+HOME_FILES = ['.bashrc', '.zshrc', '.gitconfig', '.config/git/config', '.claude/settings.json']
+PATH_TEMPLATES = ['cp x {p}', 'echo x >> {p}', 'echo x>{p}', 'sed -i s/a/b/ {p}', 'tee -a {p} < x', 'mv x {p}']
 # Commands a heredoc body is written by or fed to; the property holds only where both bodies drop.
 CARRIERS = ["cat >> notes.md <<'EOF'\n{b}\nEOF", 'cat > notes/todo.md <<EOF\n{b}\nEOF', "tee -a log.txt <<'X'\n{b}\nX",
             "cat <<'EOF' >> README.md\n{b}\nEOF", "mkdir -p notes && cat >> notes/a.md <<'EOF'\n{b}\nEOF",
@@ -188,13 +192,36 @@ def generate(rng, n):
     return [rng.choice(TEMPLATES).replace('{w}', mangle(rng, rng.choice(WORDS))) for _ in range(n)]
 
 
+def path_spelling(rng, f, home):
+    """A spelling of ~/F that bash and config-guard's full read both take to that file: a glob
+    in one part's name (.?ashrc, .*, .[b]ashrc, g?t), //, /./ or /DIR/../ between parts, and ~,
+    $HOME, ${HOME}, the home path typed out, . or "$PWD" (the Runner runs from home) before it."""
+    parts = f.split('/')
+    k = rng.randrange(len(parts))
+    w = parts[k]
+    i = rng.randint(1 if w.startswith('.') else 0, len(w) - 1)
+    parts[k] = rng.choice([w[:i] + '?' + w[i + 1:], w[:i] + '*', w[:i] + '[' + w[i] + ']' + w[i + 1:]])
+    prev = [os.path.basename(home)] + f.split('/')[:-1]   # the folder each part is in, by name
+    out = rng.choice(['~', '$HOME', '${HOME}', home, '.', '"$PWD"'])
+    for j, q in enumerate(parts):
+        out += rng.choice(['/', '/', '//', '/./', f'/../{prev[j]}/'] + (['/.config/../'] if j == 0 else [])) + q
+    return out
+
+
+def generate_paths(rng, n, home):
+    return [rng.choice(PATH_TEMPLATES).replace('{p}', path_spelling(rng, rng.choice(HOME_FILES), home)) for _ in range(n)]
+
+
 class Runner:
     """bash-guards.sh on one command, in an environment blind to this machine's settings."""
 
     def __init__(self, tmp):
         self.tmp, self.n = tmp, 0
         self.home = os.path.join(tmp, 'home')
-        os.makedirs(os.path.join(self.home, '.claude'), exist_ok=True)
+        for f in HOME_FILES:
+            os.makedirs(os.path.dirname(os.path.join(self.home, f)), exist_ok=True)
+            with open(os.path.join(self.home, f), 'w') as fh:
+                fh.write('{}\n' if f.endswith('.json') else '')
         self.env = dict(os.environ, HOME=self.home, CLAUDE_AUDIT_LOG=os.devnull, CLAUDE_GUARD_TIMING_LOG=os.devnull,
                         CLAUDE_NET_ALLOWLIST='', CLAUDE_LOCAL_SETTINGS_DIR=os.path.join(tmp, 'no-local-settings'),
                         CLAUDE_NET_TUNNEL_RE='^cch-no-tunnel$', CLAUDE_STATE_DIR=os.path.join(tmp, 'state'))
@@ -284,7 +311,9 @@ def fastpath(a, rng, run, tmp):
         die(f'corpus {a.corpus}: {e}')
     inputs = [(r['id'], r['tool_input'].get('command', ''), r.get('env')) for r in rows]
     seen = {c for _, c, _ in inputs}
-    gen = [c for c in generate(rng, a.n) if not (c in seen or seen.add(c))]
+    # Path spellings after the rest, so a seed's other generated commands stay as they were.
+    # One that types the home path out holds this run's HOME, so its corpus line needs editing.
+    gen = [c for c in generate(rng, a.n) + generate_paths(rng, a.n // 6, run.home) if not (c in seen or seen.add(c))]
     inputs += [(f'gen-{i}', c, None) for i, c in enumerate(gen)]
     res = pmap(lambda x: (run.answer(a.hooks, x[1], x[2]), run.answer(forced, x[1], x[2])), inputs, a.jobs)
     diffs = [(x, r, f) for x, (r, f) in zip(inputs, res) if r[0] != f[0]]
