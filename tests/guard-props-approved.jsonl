@@ -1,0 +1,1 @@
+{"property": "fastpath", "guard": "env-guard", "command": "ls; nc\\_x -la", "bash_reads": "ls; nc_x -la", "right": "hooks", "issue": "#285", "why": "bash drops the backslash before _ and runs nc_x, not nc; env-guard's full read takes the backslash as a word break and reads nc. A false positive of the full guard, not a bypass: the lexer is frozen under #237."}

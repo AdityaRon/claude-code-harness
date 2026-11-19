@@ -86,6 +86,44 @@ gp --only fastpath --n 0 --corpus "$TMP/c1.jsonl" --force nope
   && pass "--force with a fast path it does not know stops" || fail "--force nope" "rc=$RC $(cat "$TMP/out")"
 
 echo ""
+echo "=== fastpath: an approved difference (tests/guard-props-approved.jsonl) ==="
+# #285: env-guard's full read takes `nc\_x` for nc, where bash runs nc_x. The shipped entry
+# approves that command alone; a sibling the same over-read catches still fails.
+for c in 'ls; nc\_x -la' 'ls; nc\_y -la'; do jq -nc --arg c "$c" '{id: $c, tool_name: "Bash", tool_input: {command: $c}}'; done > "$TMP/a2.jsonl"
+head -1 "$TMP/a2.jsonl" > "$TMP/a1.jsonl"
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl"
+[ "$RC" = 0 ] && grep -qF 'approved, not counted (1, tests/guard-props-approved.jsonl): ls; nc\_x -la (#285)' "$TMP/out" \
+  && grep -q ': 0 answered differently' "$TMP/out" \
+  && pass "the shipped entry approves its command: printed, not failed" || fail "approved" "rc=$RC $(cat "$TMP/out")"
+gp --only fastpath --n 0 --corpus "$TMP/a2.jsonl"
+[ "$RC" = 1 ] && grep -q ': 1 answered differently' "$TMP/out" && grep -qF '  ls; nc\_y -la: ' "$TMP/out" \
+  && grep -qF 'approved, not counted (1' "$TMP/out" \
+  && pass "it approves only its command: a sibling still fails" || fail "approved sibling" "rc=$RC $(cat "$TMP/out")"
+entry() {  # FIELD=VALUE ...: the shipped #285 entry with these fields changed, as $TMP/ap.jsonl
+  python3 -c 'import json, sys
+e = json.loads(open(sys.argv[1]).readline())
+for kv in sys.argv[2:]:
+    k, v = kv.split("=", 1)
+    e[k] = v
+print(json.dumps(e))' tests/guard-props-approved.jsonl "$@" > "$TMP/ap.jsonl"
+}
+entry right=full
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -q "refused: right is 'full'" "$TMP/out" \
+  && pass "an entry approving the full guard's side (a bypass) is refused" || fail "right=full" "rc=$RC $(cat "$TMP/out")"
+entry why=
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -q 'needs property, guard, command, bash_reads, right, issue, why' "$TMP/out" \
+  && pass "an entry with no why is refused" || fail "no why" "rc=$RC $(cat "$TMP/out")"
+entry 'bash_reads=ls; nc -la'
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 1 ] && grep -qF "approval refused (#285): on 'ls; nc -la', the command as bash reads it, the full guard answers deny" "$TMP/out" \
+  && pass "an entry whose bash_reads still holds what the full guard read approves nothing" || fail "bash_reads" "rc=$RC $(cat "$TMP/out")"
+entry guard=network-guard
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 1 ] && grep -q "approval refused (#285): network-guard alone answers allow, not the full guard's deny" "$TMP/out" \
+  && pass "an entry naming a guard that did not give the stricter answer approves nothing" || fail "guard" "rc=$RC $(cat "$TMP/out")"
+echo ""
 echo "=== heredoc: a body strip_inert_heredocs drops cannot change an answer ==="
 gp --only heredoc --n 0
 [ "$RC" = 0 ] && grep -q ': 0 answered differently' "$TMP/out" && ! grep -q 'rm-guard' "$TMP/out" \

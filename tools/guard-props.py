@@ -25,6 +25,15 @@ count: count_mark, read in chunks, must equal data.count(mark) on random data an
 chunk sizes, with marks placed across chunk boundaries: the real mark, a 1-byte
 one, and marks placed as two copies sharing their border (b"aba" + b"ba").
 
+A fastpath difference can be approved in tests/guard-props-approved.jsonl (--approved),
+one JSON object a line: property, guard, command, bash_reads, right, issue, why. It
+holds only where the full guard over-reads what bash runs: right must be "hooks" (an
+entry approving the full guard's side would pass hooks more permissive than bash's
+own command, a bypass, and is refused), the full guard must be the stricter side,
+its answer must be the named guard's, and on bash_reads, the command as bash reads
+it, both sides must answer as hooks/ did. Approved differences are printed and do
+not fail. CI reads the list from the PR's base, so a PR cannot approve its own.
+
 Exit 1 on a counterexample, printed with a line for tests/bench-corpus.jsonl;
 exit 2 when a check cannot run. Stdlib only.
 """
@@ -74,6 +83,72 @@ BODIES = ['meeting notes', 'TODO: tidy the runbook', 'kubectl --context prod del
 def die(msg):
     print(f'guard-props: {msg}', file=sys.stderr)
     sys.exit(2)
+
+
+APPROVED_KEYS = ('property', 'guard', 'command', 'bash_reads', 'right', 'issue', 'why')
+RANK = {'allow': 0, 'ask': 1, 'deny': 2}
+
+
+def load_approved(path, hooks):
+    """The approved differences in PATH by command; none when there is no such file."""
+    if not os.path.isfile(path):
+        return {}
+    out = {}
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError as x:
+                die(f'{path}:{n}: not JSON ({x})')
+            if not isinstance(e, dict) or any(not isinstance(e.get(k), str) or not e[k].strip() for k in APPROVED_KEYS):
+                die(f'{path}:{n}: needs {", ".join(APPROVED_KEYS)}, each a non-empty string')
+            if e['right'] != 'hooks':
+                die(f"{path}:{n}: refused: right is {e['right']!r}, not 'hooks'. Approving the full guard's side would "
+                    "pass hooks more permissive than bash's own command: a bypass, which needs a fix, not an entry")
+            if e['property'] != 'fastpath':
+                die(f"{path}:{n}: property {e['property']!r}: only fastpath differences can be approved")
+            if not re.fullmatch(r'#[0-9]+', e['issue']):
+                die(f"{path}:{n}: issue {e['issue']!r} is not #N")
+            if e['command'] == e['bash_reads']:
+                die(f'{path}:{n}: bash_reads is the command itself, so it explains nothing')
+            if not os.path.isfile(os.path.join(hooks, e['guard'] + '.sh')):
+                die(f"{path}:{n}: no {e['guard']}.sh in {hooks}")
+            if e['command'] in out:
+                die(f'{path}:{n}: a second entry for {e["command"]!r}')
+            out[e['command']] = e
+    return out
+
+
+def guard_only(forced, guard, tmp):
+    """A copy of FORCED whose dispatcher runs GUARD alone (bash-guards.skip), made once."""
+    side = os.path.join(tmp, 'only-' + guard)
+    if not os.path.isdir(side):
+        shutil.copytree(forced, side, symlinks=True)
+        m = re.search(r'^BG_GUARDS=\(([^)]*)\)', open(os.path.join(side, 'bash-guards.sh')).read(), re.M)
+        if not m or guard not in m.group(1).split():
+            die(f'{guard} is not in bash-guards.sh\'s BG_GUARDS')
+        with open(os.path.join(side, 'bash-guards.skip'), 'w') as f:
+            f.write(''.join(g + '\n' for g in m.group(1).split() if g != guard))
+    return side
+
+
+def approval(e, cmd, r, f, hooks, forced, run, tmp):
+    """Why entry E does not approve this difference, or '' when it does."""
+    hd, fd = r[0][0], f[0][0]
+    if hd not in RANK or fd not in RANK or r[0][1] != 0 or f[0][1] != 0:
+        return f'not two plain answers (hooks {r[0][:2]}, full guard {f[0][:2]})'
+    if RANK[fd] <= RANK[hd]:
+        return f'the full guard is not the stricter side (hooks {hd}, full guard {fd})'
+    got = run.answer(guard_only(forced, e['guard'], tmp), cmd)[0][0]
+    if got != fd:
+        return f"{e['guard']} alone answers {got}, not the full guard's {fd}"
+    for side, h in (('the full guard', forced), ('hooks/', hooks)):
+        got = run.answer(h, e['bash_reads'])[0][0]
+        if got != hd:
+            return f"on {e['bash_reads']!r}, the command as bash reads it, {side} answers {got}, not hooks/' {hd}"
+    return ''
 
 
 def mangle(rng, w):
@@ -199,12 +274,23 @@ def fastpath(a, rng, run, tmp):
     inputs += [(f'gen-{i}', c, None) for i, c in enumerate(gen)]
     res = pmap(lambda x: (run.answer(a.hooks, x[1], x[2]), run.answer(forced, x[1], x[2])), inputs, a.jobs)
     diffs = [(x, r, f) for x, (r, f) in zip(inputs, res) if r[0] != f[0]]
+    appr = load_approved(a.approved, a.hooks)
+    ok, bad = [], []
+    for x, r, f in diffs:
+        e = appr.get(x[1])
+        no = approval(e, x[1], r, f, a.hooks, forced, run, tmp) if e and not x[2] else 'no entry' if not e else 'a payload with env'
+        (bad if no else ok).append((x, r, f, e, no))
     print(f"fastpath: {len(inputs)} commands ({len(rows)} corpus, {len(gen)} generated), forced to pass: "
-          f"{'; '.join(took)}: {len(diffs)} answered differently.")
-    for (rid, cmd, _), r, f in diffs:
+          f"{'; '.join(took)}: {len(bad)} answered differently.")
+    if ok:
+        print(f"  approved, not counted ({len(ok)}, {os.path.relpath(a.approved, ROOT)}): "
+              + ', '.join(f"{x[0]} ({e['issue']})" for x, r, f, e, no in ok))
+    for (rid, cmd, _), r, f, e, no in bad:
         line = 'in the corpus already' if not rid.startswith('gen-') else corpus_line(cmd, 'fastpath')
         print(f'  {rid}: {cmd!r}\n    hooks: {r[0]}\n    forced: {f[0]}\n    reason: {f[1] or r[1]}\n    corpus: {line}')
-    return not diffs
+        if e:
+            print(f"    approval refused ({e['issue']}): {no}")
+    return not bad
 
 
 def strip(hooks, cmd):
@@ -310,11 +396,13 @@ def main():
     ap.add_argument('--disk-space', default=os.path.join(ROOT, 'bin', 'disk-space.py'))
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 2)
     ap.add_argument('--force', default='', help='fastpath: comma-separated fast paths off by default to force too (none today)')
+    ap.add_argument('--approved', default=os.path.join(ROOT, 'tests', 'guard-props-approved.jsonl'),
+                    help='fastpath: approved differences, JSON lines (CI passes the base branch\'s copy)')
     a = ap.parse_args()
     seed = random.SystemRandom().randrange(1 << 31) if a.seed == 'random' else int(a.seed)
     print(f'guard-props: seed {seed} (repeat with --seed {seed}), n {a.n}')
     sys.stdout.flush()
-    a.hooks = os.path.abspath(a.hooks)
+    a.hooks, a.approved = os.path.abspath(a.hooks), os.path.abspath(a.approved)
     a.force = set(filter(None, a.force.split(',')))
     if a.force - {k for k, *_ in OTHER_PATHS}:
         die(f"--force: unknown {', '.join(sorted(a.force - {k for k, *_ in OTHER_PATHS}))}")

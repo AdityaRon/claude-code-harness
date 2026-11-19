@@ -100,13 +100,15 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
         run: |
-          if git diff --quiet "origin/$BASE" HEAD -- hooks tools/guard-props.py tests/guard-props.test.sh bin/disk-space.py tests/bench-corpus.jsonl; then
-            echo "hooks/, the property script and its suite, bin/disk-space.py and the corpus match origin/$BASE; property check skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+          if git diff --quiet "origin/$BASE" HEAD -- hooks tools/guard-props.py tests/guard-props.test.sh tests/guard-props-approved.jsonl bin/disk-space.py tests/bench-corpus.jsonl; then
+            echo "hooks/, the property script, its suite and approved list, bin/disk-space.py and the corpus match origin/$BASE; property check skipped." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           command -v jq >/dev/null || .github/install-apt-deps.sh jq
+          # Approved differences come from the base, so a PR cannot approve its own.
+          git show "origin/$BASE:tests/guard-props-approved.jsonl" > "$RUNNER_TEMP/approved.jsonl" 2>/dev/null || : > "$RUNNER_TEMP/approved.jsonl"
           S=$SECONDS; RC=0
-          python3 tools/guard-props.py > props.txt || RC=$?
+          python3 tools/guard-props.py --approved "$RUNNER_TEMP/approved.jsonl" > props.txt || RC=$?
           { echo '```'; cat props.txt; echo '```'; echo "$((SECONDS - S)) s."; } >> "$GITHUB_STEP_SUMMARY"
           cat props.txt
           [ "$RC" = 0 ] || echo "::error::a guard property failed; the job summary has each input and its corpus line."
