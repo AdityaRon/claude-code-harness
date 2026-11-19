@@ -200,9 +200,10 @@ DOTFILES="${DOTFILES}|secrets\.(ya?ml|json|txt|env|cfg|conf|ini|properties|toml|
 
 # Env dumpers. Used after the boundary A, so a bare `env`, `export -p` or `set`
 # counts anywhere in a chain. The old form anchored each to ^ inside the
-# alternation, so `cd /tmp && env` and `set | head` were allowed.
+# alternation, so `cd /tmp && env` and `set | head` were allowed. printenv is a
+# whole word, as the word filter reads it: printenvs or printenv_x is another program.
 ENV_END='\s*($|[|;&>)`])'
-ENV_DUMP="(printenv|export(\s+-p)?${ENV_END}|set${ENV_END}|declare\s+-(p|x)\b|compgen\s+-e)"
+ENV_DUMP="(printenv\b|export(\s+-p)?${ENV_END}|set${ENV_END}|declare\s+-(p|x)\b|compgen\s+-e)"
 # A bare `env` is its own rule, so shadow mode (lib/shadow.sh) can hold it alone.
 ENV_BARE="env(\s+-[0-9A-Za-z]+)*${ENV_END}"
 

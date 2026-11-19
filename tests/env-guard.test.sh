@@ -488,5 +488,31 @@ check "cat, \\ then .env"                    deny  $'cat \\\n.env'
 check "a quoted newline before .env"         deny  $'cat "a\nb" .env'
 check "a body's \$( ), \\ then .env"         deny  $'cat <<EOF > /dev/null\n$(cat \\\n.env)\nEOF'
 echo ""
+echo "=== printenv is a whole word: a longer name is another program (#287 review) ==="
+# The full read took any word starting with printenv for it, where the word filter
+# and bash do not: \`export A=1;\` gets past the filter so the full read is what answers.
+check "printenvs"                       allow 'export A=1; printenvs'
+check "printenv_x"                      allow 'export A=1; printenv_x'
+check "printenv2 and kubectl words"     allow 'export A=1; printenv2 --context prod delete pod api-1'
+check "/usr/bin/printenvs"              allow 'set -e; /usr/bin/printenvs'
+check "PRINTENVS"                       allow 'export A=1; PRINTENVS'
+check "printenvS"                       allow 'export A=1; printenvS'
+check "prInTeNV_x in a cmdsub"          allow 'export A=1; x=$(prInTeNV_x version)'
+check "printenv alone"                  deny  'printenv'
+check "printenv after export"           deny  'export A=1; printenv'
+check "printenv''"                      deny  "printenv''"
+check 'printenv"" piped'                deny  'printenv""|cat'
+check "printenv>f"                      deny  'printenv>f'
+check "printenv;ls"                     deny  'printenv;ls'
+check 'printenv$x'                      deny  'printenv$x'
+check "/usr/bin/printenv"               deny  '/usr/bin/printenv'
+check "PRINTENV"                        deny  'PRINTENV'
+check "\\printenv"                      deny  '\printenv'
+check "command printenv"                deny  'command printenv'
+check "env printenv"                    deny  'env printenv'
+check 'x=$(printenv)'                   deny  'x=$(printenv)'
+check "printenv.sh"                     deny  'printenv.sh'
+check "printenv-cli"                    deny  'printenv-cli'
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

@@ -85,8 +85,8 @@ jobs:
   # tools/guard-props.py: a guard's word_filter fast path answers as the full
   # guard does, a heredoc body strip_inert_heredocs drops cannot change an
   # answer, and count_mark counts as bytes.count does (docs/guards.md). Only
-  # when hooks/ or what it checks changed, on a fixed seed; release.yml runs it
-  # daily on a random one.
+  # when hooks/ or what it checks changed, on a fixed seed;
+  # guard-props-daily.yml runs it daily on a random one.
   guard-props:
     name: guard properties
     if: github.event_name == 'pull_request'
