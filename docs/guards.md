@@ -80,6 +80,47 @@ backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
 - **Timing.** Each call adds one line to `~/.claude/logs/guard-timing.log` (`CLAUDE_GUARD_TIMING_LOG`): the call's `tool_use_id`, the tool, `guard=seconds:status:decision` for each guard that ran, then `at=` and the epoch second the call was read, which the dispatcher's one jq supplies (bash 3.2 has no clock that starts no process). A line from before that column has no `at=`. The seconds are wall time while the guards run side by side, so they overstate what a guard costs alone. `session-start` moves the file to `.1` once it passes 10 MB. `bash doctor.sh --latency` (`tools/hook-latency.py`) prints this log's table first, since it does not depend on Claude Code writing a hook record, and flags a week whose hook records in the transcripts fall under a tenth of the weeks before.
 - **What a call costs.** A tool call's hooks run together, so the call waits for its slowest hook. For Bash that is the dispatcher's fixed start plus its slowest guard; `subagent-cache-guard` runs alongside it. Two PreToolUse command hooks on one Bash call, each sleeping 2 s, started 15 µs apart and both ended 2.07 s later (headless probe, Claude Code 2.1.327, the maintainer's Mac).
 
+## Property checks
+
+`tools/guard-props.py` checks three properties a test case by case would not:
+
+- **fastpath.** A guard's early exit is a fast path: a command naming none of
+  its words is done before the guard reads it. A copy of `hooks/` with each one
+  made to pass must answer as `hooks/` does through `bash-guards.sh` (decision,
+  exit code and shadow rules) on the bench corpus's Bash payloads and N
+  generated commands (guard words with quotes, backslashes, case, suffixes and
+  paths, some in a notes heredoc). Forced: every `word_filter ... || exit 0`
+  line (env-guard, interpreter-guard, kubectl-guard, network-guard), git-guard's
+  two gates (no `git`, then `GG_GATE`) and rm-guard's `RM_WORD`. Each must be
+  found once, or the run stops (exit 2) rather than pass on less. rm-guard's
+  `word_filter` sets a flag rather than exiting, so it stays. config-guard's
+  path test is forced only with `--force config-paths`: forced, it asks where
+  `hooks/` allows a quote-split path such as `cp x ~/.cl''aude/hooks/lib.sh`,
+  which that test lets go today.
+- **heredoc.** Where `strip_inert_heredocs` drops a heredoc body as inert, the
+  same command with another body it also drops gets the same answer from the
+  guards that read past such bodies (those calling `strip_inert_heredocs` or
+  `drop_data_heredocs`; rm-guard reads them, by design, and is left out).
+  Those guards drop a body together, so the answers cannot show a body dropped
+  that should stay; a body piped to a shell, fed to one or written to a script
+  is checked directly to stay.
+- **count.** `count_mark` in `bin/disk-space.py`, read in chunks, counts what
+  `bytes.count` counts: marks across chunk boundaries, a 1-byte mark, and two
+  copies of a mark sharing a border (`aba` then `ba`).
+
+CI's `guard properties` job runs it on a PR that changes `hooks/`, the script
+or its suite, `bin/disk-space.py` or the corpus, on seed 1, then runs
+`tests/guard-props.test.sh`, its mutants. doctor.sh skips that suite (it sets
+`CCH_DOCTOR`); `bash tests/guard-props.test.sh` runs it by hand. The Release
+workflow's daily cron runs the properties on a new seed, printed first, beside
+the release rather than gating it; a counterexample opens an issue titled
+"guard properties: counterexample (seed N)", or comments on the one open. A
+failure prints each input, the reason the full guard gave, and a line for
+`tests/bench-corpus.jsonl`: add that line by PR with the fix, so the bench and
+every later run hold it; `--seed N` repeats the run. The bench gate takes a new
+id as it is, so where the fix changes that payload's answer, the PR names it on
+an `intended-decisions:` line ([releases.md](releases.md)).
+
 ## Allowlisting a wrapper script bypasses every guard
 
 A PreToolUse hook sees only the top-level Bash command, never the `kubectl` or

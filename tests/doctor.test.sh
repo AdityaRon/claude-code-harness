@@ -26,7 +26,8 @@ suite i-255   'exit 255'
 
 echo "=== a kill and a timeout are named, not counted as failures ==="
 # doctor's stdin a pipe open past the limit: a suite that reads it must get EOF, not wait.
-OUT=$(sleep 3 | CCH_SUITE_TIMEOUT=2 bash "$D/doctor.sh" 2>&1); RC=$?
+# 5 s, not 2: on a loaded CI runner a suite that only echoes once ran past 2 s.
+OUT=$(sleep 6 | CCH_SUITE_TIMEOUT=5 bash "$D/doctor.sh" 2>&1); RC=$?
 SUM=$(printf '%s\n' "$OUT" | grep '^SUMMARY:')
 [ "$SUM" = "SUMMARY: 10 suites │ 10 passed │ 132 failed │ 3 suite(s) failed │ 2 killed │ 2 timed out" ] \
   && pass "summary: 3 failed, 2 killed, 2 timed out" || fail "summary" "$SUM"
@@ -43,7 +44,7 @@ SUM=$(printf '%s\n' "$OUT" | grep '^SUMMARY:')
   && pass "a suite killed by a signal reads KILLED" || fail "killed" "$OUT"
 [[ "$OUT" != *"KILLED: tests/c-many"* ]] \
   && pass "a suite with 130 failures that exits 130 is a failure, not a kill: it printed its Results" || fail "exit 130" "$OUT"
-[[ "$OUT" == *"TIMEOUT: tests/e-hang.test.sh ran past doctor's 2 s limit"* ]] \
+[[ "$OUT" == *"TIMEOUT: tests/e-hang.test.sh ran past doctor's 5 s limit"* ]] \
   && pass "a hung suite is stopped at the limit and reads TIMEOUT" || fail "suite timeout" "$OUT"
 CHILD=$(cat "$TMP/child" 2>/dev/null)
 [[ -n "$CHILD" ]] && ! kill -0 "$CHILD" 2>/dev/null \
@@ -68,11 +69,11 @@ awk '{ print $2 }' <<<"$LIST" | sort -rnc 2>/dev/null && [[ "${EH:-0}" -ge 2 && 
 echo ""
 echo "=== --smoke runs only the listed suites ==="
 printf 'tests/a-pass.test.sh\ntests/g-slow.test.sh\n' > "$D/tests/smoke.list"
-OUT=$(CCH_SUITE_TIMEOUT=2 bash "$D/doctor.sh" --smoke 2>&1); RC=$?
+OUT=$(CCH_SUITE_TIMEOUT=5 bash "$D/doctor.sh" --smoke 2>&1); RC=$?
 [[ "$OUT" == *"SUMMARY: 2 suites │ 4 passed │ 0 failed │ 0 suite(s) failed"* && "$RC" = 0 ]] \
   && pass "two suites, green" || fail "--smoke" "rc=$RC $(printf '%s\n' "$OUT" | grep SUMMARY)"
 printf 'tests/a-pass.test.sh\r\ntests/g-slow.test.sh\r\n' > "$D/tests/smoke.list"
-OUT=$(CCH_SUITE_TIMEOUT=2 bash "$D/doctor.sh" --smoke 2>&1); RC=$?
+OUT=$(CCH_SUITE_TIMEOUT=5 bash "$D/doctor.sh" --smoke 2>&1); RC=$?
 [[ "$OUT" == *"SUMMARY: 2 suites │ 4 passed │ 0 failed │ 0 suite(s) failed"* && "$RC" = 0 ]] \
   && pass "a list with CRLF line ends runs the same two" || fail "CRLF" "rc=$RC $(printf '%s\n' "$OUT" | tail -3)"
 printf '# none yet\n' > "$D/tests/smoke.list"
@@ -98,11 +99,12 @@ OUT=$(cat "$TMP/stopped.out")
 [[ "$OUT" == *"SUMMARY: KILLED by SIGTERM while running suite 2 of 2 (tests/b-long.test.sh); nothing after it ran (3 passed, 0 failed before it)"* ]] \
   && pass "the summary names the signal and the suite it stopped in" || fail "stopped summary" "$(tail -3 "$TMP/stopped.out")"
 [ "$RC" = 143 ] && pass "exit 143" || fail "stopped exit" "$RC"
-sleep 0.5
+# Stopping is asynchronous: wait for it, up to 10 s, rather than a fixed half second.
 CHILD=$(cat "$TMP/child" 2>/dev/null)
+for _ in $(seq 1 20); do [[ -n "$CHILD" ]] && kill -0 "$CHILD" 2>/dev/null || break; sleep 0.5; done
 [[ -n "$CHILD" ]] && ! kill -0 "$CHILD" 2>/dev/null \
   && pass "the running suite's group is stopped too" || { fail "suite left running" "pid $CHILD"; kill "$CHILD" 2>/dev/null; }
-WD=$(pgrep -fx "sleep $U")
+for _ in $(seq 1 20); do WD=$(pgrep -fx "sleep $U"); [[ -z "$WD" ]] && break; sleep 0.5; done
 [[ -z "$WD" ]] && pass "and its watchdog" || { fail "watchdog left running" "pids $WD"; kill $WD 2>/dev/null; }
 
 echo ""
@@ -113,9 +115,9 @@ DPID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$TMP/child" ] && break; sleep 0.5; done
 kill -KILL "$DPID"; wait "$DPID" 2>/dev/null
 CHILD=$(cat "$TMP/child" 2>/dev/null)
-for _ in 1 2 3 4 5 6 7 8; do kill -0 "$CHILD" 2>/dev/null || break; sleep 0.5; done
+for _ in $(seq 1 20); do kill -0 "$CHILD" 2>/dev/null || break; sleep 0.5; done
 [[ -n "$CHILD" ]] && ! kill -0 "$CHILD" 2>/dev/null \
-  && pass "the suite is gone within the 2 s limit plus 2 s" || { fail "suite outlived the watchdog" "pid $CHILD"; kill "$CHILD" 2>/dev/null; }
+  && pass "the suite is gone within the 2 s limit plus 10 s" || { fail "suite outlived the watchdog" "pid $CHILD"; kill "$CHILD" 2>/dev/null; }
 
 echo ""
 echo "=== install.sh runs the smoke set; --full runs every suite ==="

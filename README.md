@@ -109,7 +109,7 @@ skip, except in CI, which clones it.
 | `subagent-cache-guard` | a subagent's tool calls, SubagentStop | Deny: a subagent's tool calls once its prompt cache went cold 5 times in one run (`CLAUDE_SUBAGENT_MAX_COLD_STARTS`), until it replies with where it got to. Main sessions are left alone |
 | `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review. Anything else it hooks or calls, outside the guards included, is shown in a notice |
 | `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
-| `memory-lint` | file writes | Advise: name, type, description, `verify:` block and index tier of a memory file. In a `trackers/` folder, a handoff's shape, size, `STATE:` stamp and `Crons:`, ledgers over 20 KB beside it and lines telling a session to read one first; a ledger's size alone; never a `*-archive.md` |
+| `memory-lint` | file writes | Advise: name, type, description, `verify:` block and index tier of a memory file. In a `trackers/` folder, only a marked handoff: its shape, size, `STATE:` stamp and `Crons:`, and lines telling a session to read a ledger over 20 KB first; ledgers, reports and archives are not linted (`CLAUDE_TRACKER_LINT=off`) |
 | `comment-budget` | file writes | Advise: a comment block an edit grew past 6 lines |
 | `tcc-check` | Bash results and failures | Advise: names macOS privacy control (TCC) when a Bash call prints an "Operation not permitted" error (a tool's, zsh's or python's) for a path in `~/Desktop`, `~/Documents`, `~/Downloads` or iCloud Drive, or for no path while the cwd (or a `cd` in the command) is in one. A line quoting one, in backticks or after grep -n's `file:line:`, is not an error; a log line printed whole still is |
 | `session-start` | SessionStart | Inject: branch, status and recent commits; on resume, files that drifted since the last session; once a day, a warning when job folders or Bazel output bases pass a size |
@@ -187,6 +187,28 @@ memory-archive. Their protocols, tests and changelog are there.
 - `bash doctor.sh --skill comms-hub` runs that skill's prerequisite check from
   `~/.claude/skills-src`.
 
+## Verifying a change
+
+Opt in: nothing here runs from a hook.
+
+- `bash doctor.sh --changed [BASE]` diffs the working tree, uncommitted and untracked
+  files included, against its merge base with BASE (default `origin/main`). It prints
+  the rows of `config/verify-checklist.tsv` the change matches, always as "K of N rows
+  matched", and the suites that cover the changed files. A README or docs/ file maps
+  to the suites that read it, not those that only quote its name. `--run` runs those suites;
+  `--stamp` also prints a `Verified:` line naming each with its tally, and none when
+  one fails. `--changed HEAD` reads only what is not committed yet.
+- Each row cites the incident it comes from, and its check is suites (`run:`) or a
+  step to do by hand (`do:`). The table is read from the merge base with `origin/main`,
+  whatever BASE is, plus rows new in the branch, so a branch cannot drop or narrow its own rows.
+- In a session in this clone, `/verify` (`.claude/skills/verify`) walks the same
+  steps, and Claude uses it before a commit or a PR in place of the full `doctor.sh`.
+  Its one-line description loads only in sessions in this clone; its body when it is used.
+- A commit's `Verified:` trailer names what ran, or says `Verified: none (<why>)`.
+  CI's "verification stamps" job lists a PR's commits without one in its summary
+  (`tools/verify-stamp.sh`) and passes. `config/verify.conf` on the base branch sets
+  the mode: `observe` now; `enforce` would fail the job.
+
 ## Design choices
 
 - The guards keep what auto mode cannot see or should not judge: file reads it never classifies, commands an allow rule may pass before the classifier, and actions that cannot be undone. A hook sees the whole command and a permission rule sees a prefix or a space-wildcard pattern, so those checks live in the guards; native ask rules cover kubectl writes and secret reads, and the classifier judges the rest ([docs/permissions.md](docs/permissions.md)).
@@ -213,6 +235,8 @@ everything else is grouped by what it is.
 install.sh  doctor.sh    ← install once per machine; run every suite in tests/
 CHANGELOG.md             ← one entry per release
 LICENSE                  ← MIT
+.claude/skills/verify/   ← /verify in a session in this clone (doctor.sh --changed, then the stamp);
+                           not installed
 bin/                     ← every file installed flat to ~/.claude by install.sh
   statusline.sh  harness-update.sh  net-allowlist.sh  sandbox.sh  sandbox-trial.sh
   skills-sync.sh         ← installs the claude-code-skills release config/skills.pin names
@@ -229,6 +253,7 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
   upstream-check.sh      ← the daily breakage check
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
+  guard-props.py         ← property checks: guard fast paths, inert heredocs, count_mark (docs/guards.md)
   permission-friction.py ← which guard asks and denies cost the most, from local transcripts
   hook-latency.py        ← each hook's wall time per day, from local transcripts (doctor.sh --latency)
   hooknames.py           ← names the hook a transcript record numbers, for the two above: by the guard
@@ -238,13 +263,15 @@ tools/                   ← run from the clone only, by CI, releases and whoeve
                            --sizes adds disk-space.py's report)
   pickup-report.sh       ← after an install, how running sessions pick up each change; install.sh runs it with
                            --prune, which removes what install wrote that the clone deleted
+  verify-changed.sh      ← the checklist rows and suites a branch's changes call for (doctor.sh --changed)
+  verify-stamp.sh        ← a PR's commits with no Verified: trailer, for CI's job summary
 config/                  ← settings.json, merge-settings.jq, retired-rules.json, upstream-contract.json,
-                           skills.pin
+                           skills.pin, verify-checklist.tsv, verify.conf
 hooks/                   ← one file per hook, plus lib.sh, which sources lib/: command, paths,
                            scratch, io, inline, net, host and shadow; bash-guards.sh runs the Bash guards
 rules/                   ← installed to ~/.claude/rules, loaded in every session
   prose-and-comments.md  collaboration.md  working-agreement.md  environment.md
-  python-tests.md        ← path-scoped: loads only when Claude opens Python
+  python-tests.md        ← path-scoped: loads only when Claude opens Python or a file under tests/
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
                            heredoc-openers, repo-layout, shadow, token-shapes and workflow-gates cut across

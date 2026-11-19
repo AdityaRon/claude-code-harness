@@ -210,5 +210,31 @@ grep -q 'removed_payloads=$(bash tools/release-notes.sh --since "$LAST" --prs pr
   && grep -q 'REMOVED: ${{ steps.plan.outputs.removed_payloads }}' "$REL_WF" \
   && pass "release.yml reads removed-payloads from the merged PRs into the bench step" || fail "release removed-payloads" ""
 
+echo ""
+echo "=== release.yml: a guard-props counterexample opens an issue, or comments on the open one ==="
+awk '/name: Record a counterexample in an issue/{f=1} f && /^        run: \|$/{on=1; next}
+     on && $0 != "" && !/^          /{exit} on' "$REL_WF" | sed 's/^          //' > "$TMP/issue.sh"
+if grep -q 'gh issue' "$TMP/issue.sh"; then pass "the issue step is in $REL_WF"; else fail "the issue step is in $REL_WF" "not found"; fi
+d="$TMP/issue"; mkdir -p "$d/bin"
+# props.txt from a real failing run: the count property on a count_mark whose tail is one byte short.
+python3 -c 'import sys; s = open(sys.argv[1]).read(); open(sys.argv[2], "w").write(s.replace("(k - 1)):]", "(k - 2)):]"))' \
+  bin/disk-space.py "$d/ds.py"
+python3 tools/guard-props.py --only count --n 60 --seed 42 --disk-space "$d/ds.py" > "$d/props.txt" 2>&1
+grep -q 'count_mark [0-9]*, data.count' "$d/props.txt" || fail "test setup" "the mutant count_mark did not fail: $(head -3 "$d/props.txt")"
+# gh, stubbed: each call's arguments to gh.log; `issue list` prints STUB_OPEN, an open issue's number or nothing.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> gh.log\n[ "$1 $2" = "issue list" ] && printf "%%s\\n" "${STUB_OPEN:-}"\nexit 0\n' > "$d/bin/gh"
+chmod +x "$d/bin/gh"
+issue_case() {  # STUB_OPEN: runs the step in $d; sets ILOG to gh's calls
+  ( cd "$d" && rm -f gh.log issue.md && STUB_OPEN=$1 GH_TOKEN=x OWNER=o RUN=https://example.invalid/run PATH="$d/bin:$PATH" bash "$TMP/issue.sh" ) > "$d.out" 2>&1
+  ILOG=$(cat "$d/gh.log" 2>/dev/null)
+}
+issue_case ""
+[[ "$ILOG" == *"issue create --title guard properties: counterexample (seed 42) --body-file issue.md --assignee o"* ]] \
+  && grep -q -- '--seed 42' "$d/issue.md" && grep -q 'count_mark [0-9]*, data.count' "$d/issue.md" \
+  && pass "with none open, one issue is opened, titled with the seed, the miscounts in its body" || fail "issue create" "[$ILOG] $(cat "$d.out")"
+issue_case 7
+[[ "$ILOG" == *"issue comment 7 --body-file issue.md"* && "$ILOG" != *"issue create"* ]] \
+  && pass "with one open, the counterexample is a comment on it" || fail "issue comment" "[$ILOG]"
+
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

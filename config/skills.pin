@@ -1,5 +1,5 @@
 # The claude-code-skills release install.sh and harness-update.sh install
 # (bin/skills-sync.sh): its tag, and the commit that tag must be.
 url=https://github.com/AdityaRon/claude-code-skills.git
-tag=v1.2.0
-commit=38fef99f77656c00a844c3fd246166eae8b49a4e
+tag=v1.3.0
+commit=4bffcc96e10baeff3f94110fbc379375f6822e0d

@@ -5,6 +5,8 @@
 - Do not stop between steps to report and wait. Finish the chain, report once.
 - Ask only where the answer changes what gets built and no sane default exists.
   Otherwise state the assumption and continue.
+- The exception: after three rounds of fix and re-run on the same failing check,
+  stop and bring the evidence.
 
 ## Evidence
 
@@ -31,10 +33,11 @@
   be, then measure the effect.
 - Fix the class, not the instance: enumerate the siblings from the built artifact
   and push the fix upstream.
-- Before compacting or clearing, write state into a durable tracker,
-  `trackers/<name>.md`, replaced in place: `## Scope`, `## Open`, `## Owed`,
-  `## Settled`, `## Next on restart`; a `STATE:` line from `date -u`; and
-  `Crons:` with each session cron as its expression and prompt, or `none`.
-  Under 5 KB. memory-lint checks the shape. A log too big for that is read by
-  slice (`grep`, `sed -n`), never whole; before compacting, `tracker-prune.py`
-  moves its settled rows to `<name>-archive.md`.
+- Before compacting or clearing, write a handoff, `trackers/<name>.md`,
+  replaced in place: `## Scope`, `## Open`, `## Owed`, `## Settled`,
+  `## Next on restart`; a `STATE:` line from `date -u`; and `Crons:` with each
+  session cron as its expression and prompt, or `none`. Under 5 KB.
+  memory-lint checks only files marked so. A ledger it points to is read by
+  slice (`grep`, `sed -n`), never whole; `tracker-prune.py FILE` lists the
+  settled rows it would move to `<name>-archive.md`. Never cut a tracker that
+  has no other copy.

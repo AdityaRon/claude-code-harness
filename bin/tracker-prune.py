@@ -29,6 +29,7 @@ its target, and the archive goes beside the path given, where memory-lint looks 
 import argparse
 import collections
 import datetime
+import fcntl
 import hashlib
 import os
 import re
@@ -238,9 +239,19 @@ def pause():
     raise Refuse("%s never appeared" % p)
 
 
-def take_back(archive, old_size, created):
-    """Takes the block back out of the archive, or removes the archive this run created."""
+def take_back(archive, old_size, created, written):
+    """Takes WRITTEN back out of the archive, or removes the archive this run created, only while the
+    archive is exactly what this run left (OLD_SIZE + WRITTEN, ending with it). Otherwise something
+    else wrote to it after this run: the bytes stay, and the rows are in both files, never neither."""
     try:
+        with open(archive, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - len(written)))
+            end = f.read()
+        if size != old_size + len(written) or end != written:
+            return (" %s changed after this run appended to it, so the block stays: its rows are in both files."
+                    % os.path.basename(archive))
         if created:
             os.unlink(archive)
         else:
@@ -248,6 +259,19 @@ def take_back(archive, old_size, created):
         return ""
     except OSError as e:
         return " Could not take the block back out of %s (%s): its rows are in both files." % (archive, e)
+
+
+def lock_folder(folder):
+    """An exclusive lock on FOLDER for one --write, so two never interleave on its trackers. Held
+    until the process exits; refuses at once when another holds it."""
+    try:
+        fd = os.open(folder, os.O_RDONLY)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except BlockingIOError:
+        raise Refuse("another tracker-prune --write is running in %s; run it again after" % folder)
+    except OSError as e:
+        raise Refuse("cannot lock %s: %s" % (folder, e))
 
 
 def main(argv=None):
@@ -276,6 +300,8 @@ def run(a, date):
     archive = os.path.join(os.path.dirname(given), slug + "-archive.md")
     aname = os.path.basename(archive)
     real = os.path.realpath(given)
+    if a.write:
+        lock_folder(os.path.dirname(given))
     try:
         st = os.stat(real)
         if not stat.S_ISREG(st.st_mode):
@@ -352,12 +378,13 @@ def run(a, date):
         fd = os.open(archive, flags, 0o644)
     except OSError as e:
         raise Refuse("cannot open %s to append: %s" % (aname, e))
+    written = b""
     try:
         try:
             body = block
             if os.environ.get(FAULT_ENV) == "short-append":
                 body = b"".join(b for b, _ in pairs[:-1])
-            os.write(fd, body)
+            written = body[:os.write(fd, body)]
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -390,9 +417,9 @@ def run(a, date):
                 pass
             raise
     except Refuse as e:
-        raise Refuse(str(e) + take_back(archive, old_size, created))
+        raise Refuse(str(e) + take_back(archive, old_size, created, written))
     except BaseException as e:
-        msg = take_back(archive, old_size, created)
+        msg = take_back(archive, old_size, created, written)
         if isinstance(e, Exception):
             raise Refuse("%s: %s.%s" % (type(e).__name__, e, msg))
         raise

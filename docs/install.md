@@ -94,7 +94,8 @@ Rules go to `~/.claude/rules/` and load in every session in every project:
 - `collaboration.md`: before replying, and handing work back.
 - `working-agreement.md`: keep going, evidence, cost, finishing the loop.
 - `environment.md`: git and Claude Code facts that hold on this machine.
-- `python-tests.md`: path-scoped, so it loads only when Claude opens Python.
+- `python-tests.md`: path-scoped, so it loads only when Claude opens Python or a
+  file under a `tests/` folder.
 
 Skills come from [claude-code-skills](https://github.com/AdityaRon/claude-code-skills)
 at the release `config/skills.pin` names, installed by that repo's `install.sh`:
