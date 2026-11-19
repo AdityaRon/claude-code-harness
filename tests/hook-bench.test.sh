@@ -335,5 +335,43 @@ launches shim
 ( cd "$F3" && git checkout -q -- hooks )
 
 echo ""
+echo "=== progress goes to stderr; an interrupt prints the table so far, exit 130, and never passes the gate ==="
+F4="$TMP/fix4"; mkdir -p "$F4/hooks" "$F4/config"
+printf '#!/usr/bin/env bash\ncat >/dev/null; sleep 0.2; exit 0\n' > "$F4/hooks/slow.sh"
+echo '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"~/.claude/hooks/slow.sh"}]}]}}' > "$F4/config/settings.json"
+( cd "$F4" && git init -q && git -c user.email=t@example.com -c user.name=t add -A \
+  && git -c user.email=t@example.com -c user.name=t commit -qm base && git tag v0.1.0 ) || { echo "fixture 4 failed"; exit 1; }
+for i in 1 2 3 4 5 6 7 8 9 10; do jq -nc --arg id "s-$i" --arg c "echo $i" '{id:$id,tool_name:"Bash",tool_input:{command:$c}}'; done > "$TMP/c4.jsonl"
+# Numbers (and their signs) stand for the timings, which differ between two runs; what is left is the shape.
+shape() { sed 's/[+-]*[0-9][0-9.]*%*/N/g' "$1"; }
+python3 "$BENCH" --repo "$F4" --corpus "$TMP/c4.jsonl" --base v0.1.0 --head v0.1.0 --progress-every 0 --min-calls 5 >"$TMP/q.out" 2>"$TMP/q.err"
+python3 "$BENCH" --repo "$F4" --corpus "$TMP/c4.jsonl" --base v0.1.0 --head v0.1.0 --progress-every 0.05 --min-calls 5 >"$TMP/p.out" 2>"$TMP/p.err"
+# Not [ ! -s ]: tarfile on Python 3.12 warns on stderr, a line that is not ours (run 44610159230).
+! grep -q '^hook-bench:' "$TMP/q.err" && pass "--progress-every 0 writes no progress line to stderr" || fail "quiet" "$(head -3 "$TMP/q.err")"
+[ "$(shape "$TMP/q.out")" = "$(shape "$TMP/p.out")" ] && ! grep -q 'hook-bench:' "$TMP/p.out" \
+  && pass "stdout is the same with progress on, and carries no progress line" || fail "stdout unchanged" "$(diff <(shape "$TMP/q.out") <(shape "$TMP/p.out") | head -4)"
+grep -q '^hook-bench: 10 payloads x 1 pass x 2 sides; at least .* process start' "$TMP/p.err" && grep -q -- '--quick takes every third' "$TMP/p.err" \
+  && grep -q '^hook-bench: warm base: payload 1 of 2' "$TMP/p.err" && grep -q '^hook-bench: timed [a-z]*: payload [0-9]* of 10, elapsed .*left in timed' "$TMP/p.err" \
+  && pass "stderr: the estimate and --quick up front, then warm and timed lines with side, n of N, elapsed" || fail "progress lines" "$(head -5 "$TMP/p.err")"
+slow_run() {   # slow_run SIGNAL [ARGS]: stop a run of the 0.2 s hook once payload 4 is under way; sets SRC
+  python3 "$BENCH" --repo "$F4" --corpus "$TMP/c4.jsonl" --base v0.1.0 --head v0.1.0 --progress-every 0.05 --min-calls 5 \
+    --json "$TMP/o4.json" --md "$TMP/o4.md" "${@:2}" >"$TMP/o4.out" 2>"$TMP/e4" &
+  local pid=$! i
+  for i in $(seq 1 600); do grep -q 'timed [a-z]*: payload [4-9] of' "$TMP/e4" && break; sleep 0.1; done
+  kill -"$1" "$pid"; wait "$pid"; SRC=$?
+}
+slow_run INT --gate
+DONE=$(jq -r '.partial.done' "$TMP/o4.json" 2>/dev/null)
+[ "$SRC" = 130 ] && [ "${DONE:-0}" -ge 3 ] && [ "${DONE:-0}" -lt 10 ] && grep -q "^\*\*partial: $DONE of 10 payloads\*\*" "$TMP/o4.out" \
+  && grep -q '^| Bash | ' "$TMP/o4.out" && cmp -s "$TMP/o4.out" "$TMP/o4.md" \
+  && pass "SIGINT: the table so far, marked partial: $DONE of 10 payloads, exit 130" || fail "SIGINT partial table" "rc=$SRC done=$DONE $(head -5 "$TMP/o4.out") $(tail -3 "$TMP/e4")"
+[ "$(jq -r '.gate.passed' "$TMP/o4.json")" = false ] && grep -q '^Gate: FAILED' "$TMP/o4.out" \
+  && grep -q "partial run: $DONE of 10 payloads; a partial run cannot pass the gate" "$TMP/o4.out" \
+  && pass "--gate on a partial run fails, and says why" || fail "gate on partial" "$(grep -A3 Gate "$TMP/o4.out")"
+slow_run TERM
+[ "$SRC" = 130 ] && grep -q '^\*\*partial: [0-9]* of 10 payloads\*\*' "$TMP/o4.out" \
+  && pass "SIGTERM is handled the same way" || fail "SIGTERM" "rc=$SRC $(head -3 "$TMP/o4.out") $(tail -3 "$TMP/e4")"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
