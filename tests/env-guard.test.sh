@@ -513,6 +513,36 @@ check "env printenv"                    deny  'env printenv'
 check 'x=$(printenv)'                   deny  'x=$(printenv)'
 check "printenv.sh"                     deny  'printenv.sh'
 check "printenv-cli"                    deny  'printenv-cli'
+
+echo ""
+echo "=== A deny that holds an interpreter heredoc names the workaround; no other deny does ==="
+# docs/known-limitations.md: a body with an apostrophe in a quoted string, then a later line that reads as `set`.
+HINTTXT='write it to a file and run it (`python3 -I f.py`)'
+reason() {   # the permissionDecisionReason of the hook on command $1
+  jq -nc --arg c "$1" '{tool_input:{command:$c}}' | shadow_run bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""'
+}
+hinted() {   # hinted LABEL EXPECT(yes|no) COMMAND
+  local r; r=$(reason "$3")
+  if [[ -z "$r" ]]; then echo "  FAIL: $1  (no deny reason)"; FAIL=$((FAIL+1)); return; fi
+  if { [[ "$r" == *"$HINTTXT"* ]] && [[ "$2" = yes ]]; } || { [[ "$r" != *"$HINTTXT"* ]] && [[ "$2" = no ]]; }; then
+    echo "  OK (hint $2): $1"; PASS=$((PASS+1))
+  else
+    echo "  FAIL (hint $2): $1  [reason: $r]"; FAIL=$((FAIL+1))
+  fi
+}
+APOS=$'python3 - <<\'EOF\'\nm = \'it\\\'s\'\nassert s==set(p)|r, (set(p)|r)-s\nEOF'
+check "the apostrophe repro stays a deny"       deny  "$APOS"
+hinted "the apostrophe repro: the reason names the workaround" yes "$APOS"
+hinted "a plain printenv: no hint"              no    'printenv'
+hinted "cat .env: no hint"                      no    'cat .env'
+# A real dump in a heredoc, with no apostrophe in a word, gets no hint: it would show the way past.
+hinted "bash <<, set | head: no hint"           no    $'bash <<\'EOF\'\nset | head\nEOF'
+hinted "node - <<, set: no hint"                no    $'node - <<\'EOF\'\nset\nEOF'
+hinted "bash <<, a contraction, then set: the hint" yes $'bash <<\'EOF\'\n# don\'t print\nset | head\nEOF'
+hinted "a notes heredoc then printenv: no hint" no    $'cat > n.md <<\'EOF\'\nx\nEOF\nprintenv'
+hinted "an apostrophe in a word, no interpreter heredoc: no hint" no $'echo "don\'t"; printenv'
+hinted "a here-string to bash, then printenv: no hint" no $'bash <<< "x"; printenv'
+hinted "printenv alone, python3 -c mentioned: no hint" no $'python3 -c \'print(1)\'; printenv'
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
