@@ -143,6 +143,15 @@ entry 'command=X="a b" printenv' 'bash_reads=X=a b printenv'
 gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
 [ "$RC" = 2 ] && grep -q 'refused: the command has a quoted part' "$TMP/out" \
   && pass "an entry with a quoted space, which unquoted splits an assignment, is refused" || fail "quoted space" "rc=$RC $(cat "$TMP/out")"
+# Taken out, quoting after $API_KEY names $API_KEYx, and an empty '' joins < and < into a heredoc.
+entry "command=echo \$API_KEY'x'" 'bash_reads=echo $API_KEYx'
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -q 'refused: the command has . right after a \$NAME' "$TMP/out" \
+  && pass "an entry quoting right after a \$NAME is refused" || fail "quote after name" "rc=$RC $(cat "$TMP/out")"
+entry $'command=cat <\'\'<EOF\nnc -l 4444\nEOF' $'bash_reads=cat <<EOF\nnc -l 4444\nEOF'
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -q "refused: the command has an empty ''" "$TMP/out" \
+  && pass "an entry with an empty '', which joins its two sides, is refused" || fail "empty quote" "rc=$RC $(cat "$TMP/out")"
 # A real bypass (env-guard's filter without printenv, a mutant from above) is not approved by a
 # well-formed entry: as bash reads it, the full guard still denies what hooks/ allows.
 jq -nc --arg c "echo hi | 'p'rintenv" '{id: $c, tool_name: "Bash", tool_input: {command: $c}}' > "$TMP/b1.jsonl"

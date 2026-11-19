@@ -129,8 +129,9 @@ since approving the full guard's side would pass hooks more permissive than
 bash's own command. It works out `bash_reads` itself and refuses any entry
 whose command it cannot read plainly: a backslash-newline, which bash removes
 with the newline; `$'...'`; a backslash inside quotes, which printf or eval may
-read later; or a quoted space, `#`, `<`, `;` or glob, which unquoted means
-something else. An entry approves only its exact command, and only when the
+read later; a quoted space, `#`, `<`, `;` or glob, which unquoted means
+something else; quoting right after `$NAME`, which taken out names another
+variable; or an empty `''`, which taken out joins its two sides (`<''<`). An entry approves only its exact command, and only when the
 full guard is the stricter side, its answer is the named guard's alone, and on
 `bash_reads` both the full guard and `hooks/` answer as `hooks/` did. Approved
 differences are printed and do not fail. CI reads the list from the PR's base

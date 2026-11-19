@@ -29,7 +29,8 @@ A fastpath difference can be approved in tests/guard-props-approved.jsonl (--app
 one JSON object a line: property, guard, command, bash_reads, right, issue, why. It
 holds only where the full guard over-reads what bash runs: bash_reads is the command
 as bash reads it, which the script computes and refuses for any but plain quoting (a
-backslash-newline, $'...', a backslash inside quotes, a quoted space, # or <), right must be "hooks" (an
+backslash-newline, $'...', a backslash inside quotes, a quoted space, # or <, quoting
+right after $NAME, an empty '' or ""), right must be "hooks" (an
 entry approving the full guard's side would pass hooks more permissive than bash's
 own command, a bypass, and is refused), the full guard must be the stricter side,
 its answer must be the named guard's, and on bash_reads, the command as bash reads
@@ -141,10 +142,14 @@ def bash_reading(cmd):
     not modelled: a backslash-newline bash removes with the newline; $'...' and $"..." it
     decodes; a backslash in quotes, which printf, echo -e or eval may read later; a quote or
     backslash left in the reading, which a guard would take for quoting where bash took it for
-    text; and a space, # or < that a guard would read differently unquoted."""
+    text; a space, # or < that a guard would read differently unquoted; quoting right after
+    $NAME, which taken out names another variable ($API_KEY'x' read as $API_KEYx); and an empty
+    '' or "", which taken out joins what was either side (<''< read as <<)."""
     out, i, n = [], 0, len(cmd)
     while i < n:
         c = cmd[i]
+        if c in '\\\'"' and re.search(r'\$[A-Za-z0-9_]*$', ''.join(out)):
+            return None, f'{c} right after a $NAME, which taken out would name another variable'
         if c == '\\':
             d = cmd[i + 1] if i + 1 < n else ''
             if d == '\n':
@@ -160,6 +165,8 @@ def bash_reading(cmd):
             if j < 0:
                 return None, 'an unclosed quote'
             body = cmd[i + 1:j]
+            if not body:
+                return None, f'an empty {c}{c}, which taken out joins what is either side of it'
             if not PLAIN.fullmatch(body):
                 return None, f'a quoted part, {body!r}, holding a character that unquoted would read differently'
             out.append(body)
