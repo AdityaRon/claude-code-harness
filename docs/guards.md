@@ -116,7 +116,9 @@ counterexample never turns a release red; it opens an issue titled
 "guard properties: counterexample (seed N)", or comments on the one open. A
 failure prints each input, the reason the full guard gave, and a line for
 `tests/bench-corpus.jsonl`: add that line by PR with the fix, so the bench and
-every later run hold it; `--seed N` repeats the run.
+every later run hold it; `--seed N` repeats the run. A call that runs past
+`--timeout` (60 s) gave no answer, so its command is printed as inconclusive,
+on one side or both, and neither counted as a difference nor as agreement.
 
 A fastpath difference where the full guard over-reads what bash runs is a
 false positive of the full guard, not a bypass. It can be approved in
@@ -124,7 +126,12 @@ false positive of the full guard, not a bypass. It can be approved in
 `guard`, `command`, `bash_reads` (the command as bash reads it), `right`,
 `issue` and `why`. The script refuses an entry whose `right` is not `hooks`,
 since approving the full guard's side would pass hooks more permissive than
-bash's own command. An entry approves only its exact command, and only when the
+bash's own command. It works out `bash_reads` itself and refuses any entry
+whose command it cannot read plainly: a backslash-newline, which bash removes
+with the newline; `$'...'`; a backslash inside quotes, which printf or eval may
+read later; a quoted space, `#`, `<`, `;` or glob, which unquoted means
+something else; quoting right after `$NAME`, which taken out names another
+variable; or an empty `''`, which taken out joins its two sides (`<''<`). An entry approves only its exact command, and only when the
 full guard is the stricter side, its answer is the named guard's alone, and on
 `bash_reads` both the full guard and `hooks/` answer as `hooks/` did. Approved
 differences are printed and do not fail. CI reads the list from the PR's base
