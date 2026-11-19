@@ -262,3 +262,56 @@ jobs:
           else
             gh issue create --title "$TITLE" --body-file issue.md --assignee "${{ github.repository_owner }}"
           fi
+
+  # tools/guard-props.py once a day on a new seed, beside the release and not
+  # gating it: a counterexample is most likely older than the PRs being
+  # released. The seed is printed so a failure repeats; a counterexample opens
+  # one issue, or comments on the open one, and its input goes into
+  # tests/bench-corpus.jsonl by PR (docs/guards.md). PRs run it on a fixed seed.
+  guard-props:
+    name: guard properties, random seed
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check the guard properties on a random seed
+        id: props
+        run: |
+          command -v jq >/dev/null || .github/install-apt-deps.sh jq
+          S=$SECONDS; RC=0
+          python3 tools/guard-props.py --seed random > props.txt || RC=$?
+          echo "rc=$RC" >> "$GITHUB_OUTPUT"
+          { echo '```'; cat props.txt; echo '```'; echo "$((SECONDS - S)) s."; } >> "$GITHUB_STEP_SUMMARY"
+          cat props.txt
+          [ "$RC" = 0 ] || echo "::error::a guard property failed; the summary has the seed, each input and its corpus line."
+          exit $RC
+      # Exit 1 is a counterexample; exit 2, a check that could not run, stays a red run.
+      - name: Record a counterexample in an issue
+        if: failure() && steps.props.outputs.rc == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          SEED=$(sed -n 's/^guard-props: seed \([0-9]*\) .*/\1/p' props.txt | head -1)
+          {
+            echo "Run: $RUN"
+            echo
+            echo "\`tools/guard-props.py --seed $SEED\` repeats it. Add each corpus line below to tests/bench-corpus.jsonl by PR with the fix (docs/guards.md)."
+            echo
+            echo '````'
+            head -c 60000 props.txt
+            echo '````'
+          } > issue.md
+          N=$(gh issue list --state open --search 'in:title "guard properties: counterexample"' --json number -q '.[0].number // empty')
+          if [ -n "$N" ]; then
+            gh issue comment "$N" --body-file issue.md
+          else
+            gh issue create --title "guard properties: counterexample (seed $SEED)" --body-file issue.md --assignee "$OWNER"
+          fi

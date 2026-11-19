@@ -201,6 +201,15 @@ s = u.spec_from_file_location("ds", sys.argv[1]); m = u.module_from_spec(s); s.l
 print(m.count_mark(sys.argv[2], chunk=int(sys.argv[3])))' "$DS" "$@"; }
 CMS=""; for c in 1 7 28 29 30 4096; do CMS="$CMS $(cm "$PR/-p1/aaaa-1111.jsonl" $c)"; done
 [ "$CMS" = " 3 3 3 3 3 3" ] && pass "a mark across a chunk boundary counts once, at any chunk size" || fail "count_mark chunks" "$CMS"
+# An empty mark would find itself at every offset and never end.
+CME=$(python3 -c 'import importlib.util as u, signal, sys
+signal.alarm(10)
+s = u.spec_from_file_location("ds", sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)
+try:
+    m.count_mark(sys.argv[2], mark=b"")
+except ValueError as e:
+    print("ValueError:", e)' "$DS" "$PR/-p1/aaaa-1111.jsonl" 2>&1)
+[ "$CME" = "ValueError: count_mark: an empty mark" ] && pass "count_mark refuses an empty mark" || fail "empty mark" "[$CME]"
 [ "$(grep -c '^transcript=' "$TMP/state/disk-usage")" = 0 ] && pass "no projects folder: no transcript lines" || fail "no projects" "$(cat "$TMP/state/disk-usage")"
 sv2() { sed -n "s/^$1=//p" "$2"; }
 [ "$(sv2 transcripts_active "$TMP/state/tx")" = "4 $SB 1" ] && [ "$(sv2 transcript_mb "$TMP/state/tx")" = 1 ] \
