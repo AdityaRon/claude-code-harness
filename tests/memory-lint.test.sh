@@ -493,6 +493,27 @@ L2B="$TMP/l2b/trackers"; mkdir -p "$L2B"
 pad "$L2B/shapeless.md" 6000
 check_eq "a 6 KB file with no STATE: and no Next on restart is not a handoff: silent" "0" "$(lint_rc "$L2B/shapeless.md")"
 { printf '# Open items\n\n## Open\n'; for i in $(seq 1 1500); do printf '| OI-%d | thing %d | open |\n' "$i" "$i"; done; printf '## Settled\nx\n'; } > "$L2B/open-items.md"
+# A file named as a handoff but not marked as one: one finding, and nothing about its size or headings.
+pad "$L2B/x-handoff.md" 6000
+OUT=$(lint "$L2B/x-handoff.md")
+check_contains "an unmarked 6 KB x-handoff.md: one finding, named as a handoff with no marker" "is named as a handoff but has no \`STATE:\`, \`Crons:\` or \`## Next on restart\`. Add them if it is a handoff; leave it as it is if it is not." "$OUT"
+check_eq "and it is the only finding" "1" "$(printf '%s\n' "$OUT" | grep -c '^  - ')"
+check_absent "none about its size" "past 5000" "$OUT"
+check_eq "exit 2, as the other findings" "2" "$(lint_rc "$L2B/x-handoff.md")"
+pad "$L2B/notes.md" 6000
+check_eq "an unmarked notes.md: silent" "" "$(lint "$L2B/notes.md")"
+pad "$L2B/Weekly-HANDOFF-2.md" 600
+check_contains "the name matches in any case" "is named as a handoff" "$(lint "$L2B/Weekly-HANDOFF-2.md")"
+tracker "$L2B/y-handoff.md" "$NOWS" "$CR" "$(head -c 6000 /dev/zero | tr '\0' x)"
+OUT=$(lint "$L2B/y-handoff.md")
+check_contains "a marked y-handoff.md gets the full lint" "past 5000" "$OUT"
+check_absent "and not the name finding" "is named as a handoff" "$OUT"
+L2C="$TMP/l2c/trackers"; mkdir -p "$L2C"
+pad "$L2C/z-handoff.md" 6000; pad "$L2C/z-handoff-archive.md" 100
+check_eq "an unmarked x-handoff.md with an archive beside it: silent" "" "$(lint "$L2C/z-handoff.md")"
+pad "$L2C/big-handoff.md" 21000
+check_eq "an unmarked x-handoff.md over 20 KB: silent" "" "$(lint "$L2C/big-handoff.md")"
+check_eq "an unmarked x-handoff.md with CLAUDE_TRACKER_LINT=off: silent" "0" "$(CLAUDE_TRACKER_LINT=off lint_rc "$L2B/x-handoff.md")"
 check_eq "a 113 KB-class open-items tracker with ## Open and ## Settled: silent" "" "$(lint "$L2B/open-items.md" Edit)"
 printf '# Report\n\n## Open\nfindings\n' > "$L2B/report.md"
 check_eq "a small report with an ## Open heading: silent" "0" "$(lint_rc "$L2B/report.md")"
