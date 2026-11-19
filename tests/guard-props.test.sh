@@ -115,10 +115,34 @@ entry why=
 gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
 [ "$RC" = 2 ] && grep -q 'needs property, guard, command, bash_reads, right, issue, why' "$TMP/out" \
   && pass "an entry with no why is refused" || fail "no why" "rc=$RC $(cat "$TMP/out")"
-entry 'bash_reads=ls; nc -la'
+# bash_reads is checked against the reading the script computes, not any deletion of quotes.
+entry "command=echo hi | 'p'rintenv" "bash_reads=echo hi | p'rintenv"
 gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
-[ "$RC" = 2 ] && grep -q 'bash_reads is not the command with only quotes or backslashes taken out' "$TMP/out" \
-  && pass "an entry whose bash_reads is not the command less its quoting is refused" || fail "bash_reads shape" "rc=$RC $(cat "$TMP/out")"
+[ "$RC" = 2 ] && grep -qF "bash_reads is not the command as bash reads it: 'echo hi | printenv'" "$TMP/out" \
+  && pass "an entry whose bash_reads is not bash's reading is refused" || fail "bash_reads shape" "rc=$RC $(cat "$TMP/out")"
+# Quoting the script does not model is refused, whatever bash_reads says. The review's repro:
+# bash joins ~/.bash\ and rc into ~/.bashrc, where taking out the \ keeps the newline.
+entry $'command=cp x ~/.bash\\\nrc; echo ${x:-"a}"}' $'bash_reads=cp x ~/.bash\nrc; echo ${x:-a}}'
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -q 'refused: the command has a backslash-newline' "$TMP/out" \
+  && pass "an entry whose command has a backslash-newline is refused" || fail "backslash-newline" "rc=$RC $(cat "$TMP/out")"
+entry "command=eval \$'nc\\x20-l'" "bash_reads=eval nc -l"
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -qF "refused: the command has \$'...'" "$TMP/out" \
+  && pass "an entry whose command has \$'...' is refused" || fail "ansi-c" "rc=$RC $(cat "$TMP/out")"
+entry "command=printf 'nc\\n-l' | sh" "bash_reads=printf ncn-l | sh"
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -q 'refused: the command has a quoted part' "$TMP/out" \
+  && pass "an entry with a backslash in quotes, which printf reads, is refused" || fail "quoted backslash" "rc=$RC $(cat "$TMP/out")"
+entry 'command=echo "#"; ls' 'bash_reads=echo #; ls'
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -q 'refused: the command has a quoted part' "$TMP/out" \
+  && pass "an entry with a quoted #, a comment once unquoted, is refused" || fail "quoted #" "rc=$RC $(cat "$TMP/out")"
+# X="a b" printenv runs printenv, where X=a b printenv runs b: hooks/ denies the one, allows the other.
+entry 'command=X="a b" printenv' 'bash_reads=X=a b printenv'
+gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
+[ "$RC" = 2 ] && grep -q 'refused: the command has a quoted part' "$TMP/out" \
+  && pass "an entry with a quoted space, which unquoted splits an assignment, is refused" || fail "quoted space" "rc=$RC $(cat "$TMP/out")"
 # A real bypass (env-guard's filter without printenv, a mutant from above) is not approved by a
 # well-formed entry: as bash reads it, the full guard still denies what hooks/ allows.
 jq -nc --arg c "echo hi | 'p'rintenv" '{id: $c, tool_name: "Bash", tool_input: {command: $c}}' > "$TMP/b1.jsonl"
@@ -135,6 +159,17 @@ for h, f in (("deny", "allow"), ("ask", "ask"), ("ask", "allow")):
     print(gp.approval(e, e["command"], ((h, 0, ()), ""), ((f, 0, ()), ""), None, None, None, None))' "$GP" tests/guard-props-approved.jsonl 2>&1)
 [ "$(grep -c '^the full guard is not the stricter side' <<< "$D")" = 3 ] \
   && pass "hooks/ as strict as the full guard, or stricter, is never approved" || fail "stricter side" "$D"
+# A check call that timed out answered nothing, so it does not agree with hooks/' allow.
+D=$(python3 -c 'import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gp", sys.argv[1]); gp = importlib.util.module_from_spec(spec); spec.loader.exec_module(gp)
+e = json.loads(open(sys.argv[2]).readline())
+class Late:   # env-guard alone denies the command; each call on bash_reads times out
+    def answer(self, hooks, cmd, extra=None):
+        return (("deny", 0, ()), "") if cmd == e["command"] else (("allow", "timeout", ()), "")
+print(gp.approval(e, e["command"], (("allow", 0, ()), ""), (("deny", 0, ()), ""), "hooks", "hooks", Late(), sys.argv[3]))' \
+  "$GP" tests/guard-props-approved.jsonl "$TMP" 2>&1)
+[[ "$D" == "on 'ls; nc_x -la', the command as bash reads it, the full guard answers allow (exit timeout), not hooks/' allow" ]] \
+  && pass "a check call that timed out is not read as agreement" || fail "approval timeout" "$D"
 entry guard=network-guard
 gp --only fastpath --n 0 --corpus "$TMP/a1.jsonl" --approved "$TMP/ap.jsonl"
 [ "$RC" = 1 ] && grep -q "approval refused (#285): network-guard alone answers allow, not the full guard's deny" "$TMP/out" \
@@ -161,6 +196,28 @@ gp --only heredoc --n 0 --hooks "$TMP/sh-prose"
 grep -E '^    corpus: \{' "$TMP/strip-bash.out" | head -1 | sed 's/^    corpus: //' \
   | jq -e '.tool_name == "Bash" and (.id | startswith("props-")) and (.tool_input.command | test("[|] bash"))' >/dev/null \
   && pass "each counterexample comes with a line for tests/bench-corpus.jsonl" || fail "corpus line" "$(grep corpus "$TMP/strip-bash.out" | head -2)"
+
+echo ""
+echo "=== A call that times out answers nothing ==="
+# kubectl-guard sleeps past --timeout after its fast path, so on `ls` only the forced side
+# times out; sleeping before the fast path, both sides do. Neither is a difference or agreement.
+jq -nc '{id: "t1", tool_name: "Bash", tool_input: {command: "ls"}}' > "$TMP/t1.jsonl"
+mutant slow-full kubectl-guard.sh 's/^unreadable_check kubectl-guard "\$CMD"$/sleep 6; &/'
+gp --only fastpath --n 0 --timeout 2 --corpus "$TMP/t1.jsonl" --hooks "$TMP/slow-full"
+[ "$RC" = 0 ] && grep -q ': 0 answered differently' "$TMP/out" \
+  && grep -qF 'inconclusive, not counted (1, a call timed out after 2 s): t1 (the full guard)' "$TMP/out" \
+  && pass "a timeout on one side is inconclusive, not a counterexample" || fail "one-side timeout" "rc=$RC $(cat "$TMP/out")"
+mutant slow-both kubectl-guard.sh 's/^joined_pass "\$CMD" /sleep 6; &/'
+gp --only fastpath --n 0 --timeout 2 --corpus "$TMP/t1.jsonl" --hooks "$TMP/slow-both"
+[ "$RC" = 0 ] && grep -q ': 0 answered differently' "$TMP/out" \
+  && grep -qF 'inconclusive, not counted (1, a call timed out after 2 s): t1 (both sides)' "$TMP/out" \
+  && pass "a timeout on both sides is inconclusive, not agreement" || fail "both-side timeout" "rc=$RC $(cat "$TMP/out")"
+# In the heredoc property, a body whose answer timed out is no difference from its carrier's first.
+mutant slow-body kubectl-guard.sh 's/^joined_pass "\$CMD" /[[ "$CMD" == *runbook* ]] \&\& sleep 6; &/'
+gp --only heredoc --n 0 --timeout 2 --hooks "$TMP/slow-body"
+[ "$RC" = 0 ] && grep -q ': 0 answered differently' "$TMP/out" \
+  && grep -qE '^  inconclusive, not counted \([1-9][0-9]*, a call timed out after 2 s\): .*runbook' "$TMP/out" \
+  && pass "a heredoc answer that timed out is inconclusive, not a difference" || fail "heredoc timeout" "rc=$RC $(cat "$TMP/out")"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

@@ -28,7 +28,8 @@ one, and marks placed as two copies sharing their border (b"aba" + b"ba").
 A fastpath difference can be approved in tests/guard-props-approved.jsonl (--approved),
 one JSON object a line: property, guard, command, bash_reads, right, issue, why. It
 holds only where the full guard over-reads what bash runs: bash_reads is the command
-with only quotes or backslashes taken out, right must be "hooks" (an
+as bash reads it, which the script computes and refuses for any but plain quoting (a
+backslash-newline, $'...', a backslash inside quotes, a quoted space, # or <), right must be "hooks" (an
 entry approving the full guard's side would pass hooks more permissive than bash's
 own command, a bypass, and is refused), the full guard must be the stricter side,
 its answer must be the named guard's, and on bash_reads, the command as bash reads
@@ -114,8 +115,11 @@ def load_approved(path, hooks):
                 die(f"{path}:{n}: issue {e['issue']!r} is not #N")
             if e['command'] == e['bash_reads']:
                 die(f'{path}:{n}: bash_reads is the command itself, so it explains nothing')
-            if not quoting_out(e['command'], e['bash_reads']):
-                die(f'{path}:{n}: bash_reads is not the command with only quotes or backslashes taken out')
+            reading, why = bash_reading(e['command'])
+            if reading is None:
+                die(f'{path}:{n}: refused: the command has {why}, so its reading by bash cannot be checked here')
+            if e['bash_reads'] != reading:
+                die(f'{path}:{n}: bash_reads is not the command as bash reads it: {reading!r}')
             if not os.path.isfile(os.path.join(hooks, e['guard'] + '.sh')):
                 die(f"{path}:{n}: no {e['guard']}.sh in {hooks}")
             if e['command'] in out:
@@ -124,15 +128,46 @@ def load_approved(path, hooks):
     return out
 
 
-def quoting_out(cmd, reads):
-    """True when READS is CMD with some of its " ' and \\ taken out and nothing else changed."""
-    i = 0
-    for ch in cmd:
-        if i < len(reads) and reads[i] == ch:
+# What quoting may hold for bash_reading to model it: characters that mean the same to bash
+# quoted or not. Not a space (X="a b" printenv, unquoted, runs b), # (a comment), < (a
+# heredoc), ; | & ( ), ~ or a glob, each of which, unquoted, changes what a guard reads.
+PLAIN = re.compile(r'[A-Za-z0-9_.,:/@%+-]*')
+
+
+def bash_reading(cmd):
+    """(CMD with its quotes and backslashes taken out as bash takes them out, '') for plain
+    quoting, or (None, why) for anything else. Plain: a backslash outside quotes before a
+    character PLAIN holds, and '...' or "..." holding only such characters. The rest is refused,
+    not modelled: a backslash-newline bash removes with the newline; $'...' and $"..." it
+    decodes; a backslash in quotes, which printf, echo -e or eval may read later; a quote or
+    backslash left in the reading, which a guard would take for quoting where bash took it for
+    text; and a space, # or < that a guard would read differently unquoted."""
+    out, i, n = [], 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if c == '\\':
+            d = cmd[i + 1] if i + 1 < n else ''
+            if d == '\n':
+                return None, 'a backslash-newline, which bash removes with the newline'
+            if not d or not PLAIN.fullmatch(d):
+                return None, f'a backslash before {d!r}, which unquoted would read differently'
+            out.append(d)
+            i += 2
+        elif c == '$' and i + 1 < n and cmd[i + 1] in '\'"':
+            return None, f"{c}{cmd[i + 1]}...{cmd[i + 1]}, which bash decodes or translates"
+        elif c in '\'"':
+            j = cmd.find(c, i + 1)
+            if j < 0:
+                return None, 'an unclosed quote'
+            body = cmd[i + 1:j]
+            if not PLAIN.fullmatch(body):
+                return None, f'a quoted part, {body!r}, holding a character that unquoted would read differently'
+            out.append(body)
+            i = j + 1
+        else:
+            out.append(c)
             i += 1
-        elif ch not in '"\'\\':
-            return False
-    return i == len(reads)
+    return ''.join(out), ''
 
 
 def guard_only(forced, guard, tmp):
@@ -155,13 +190,15 @@ def approval(e, cmd, r, f, hooks, forced, run, tmp):
         return f'not two plain answers (hooks {r[0][:2]}, full guard {f[0][:2]})'
     if RANK[fd] <= RANK[hd]:
         return f'the full guard is not the stricter side (hooks {hd}, full guard {fd})'
-    got = run.answer(guard_only(forced, e['guard'], tmp), cmd)[0][0]
-    if got != fd:
-        return f"{e['guard']} alone answers {got}, not the full guard's {fd}"
+    # Each check needs a plain answer: a call that timed out or failed answered nothing.
+    said = lambda a: a[0] if a[1] == 0 else f'{a[0]} (exit {a[1]})'
+    got = run.answer(guard_only(forced, e['guard'], tmp), cmd)[0]
+    if got[:2] != (fd, 0):
+        return f"{e['guard']} alone answers {said(got)}, not the full guard's {fd}"
     for side, h in (('the full guard', forced), ('hooks/', hooks)):
-        got = run.answer(h, e['bash_reads'])[0][0]
-        if got != hd:
-            return f"on {e['bash_reads']!r}, the command as bash reads it, {side} answers {got}, not hooks/' {hd}"
+        got = run.answer(h, e['bash_reads'])[0]
+        if got[:2] != (hd, 0):
+            return f"on {e['bash_reads']!r}, the command as bash reads it, {side} answers {said(got)}, not hooks/' {hd}"
     return ''
 
 
@@ -191,8 +228,8 @@ def generate(rng, n):
 class Runner:
     """bash-guards.sh on one command, in an environment blind to this machine's settings."""
 
-    def __init__(self, tmp):
-        self.tmp, self.n = tmp, 0
+    def __init__(self, tmp, timeout=60):
+        self.tmp, self.n, self.timeout = tmp, 0, timeout
         self.home = os.path.join(tmp, 'home')
         os.makedirs(os.path.join(self.home, '.claude'), exist_ok=True)
         self.env = dict(os.environ, HOME=self.home, CLAUDE_AUDIT_LOG=os.devnull, CLAUDE_GUARD_TIMING_LOG=os.devnull,
@@ -214,7 +251,7 @@ class Runner:
                               'tool_use_id': 'props'}).encode()
         try:
             p = subprocess.run(['bash', os.path.join(hooks, 'bash-guards.sh')], input=payload, capture_output=True,
-                               env=env, cwd=self.home, timeout=60)
+                               env=env, cwd=self.home, timeout=self.timeout)
             out, rc = p.stdout.decode('utf-8', 'replace').strip(), p.returncode
         except subprocess.TimeoutExpired:
             out, rc = '', 'timeout'
@@ -243,6 +280,12 @@ class Runner:
 def pmap(fn, items, jobs):
     with concurrent.futures.ThreadPoolExecutor(jobs) as ex:
         return list(ex.map(fn, items))
+
+
+def timed_out(r, f):
+    """Which side's call timed out ('hooks/', 'the full guard', 'both sides'), or ''."""
+    h, g = r[0][1] == 'timeout', f[0][1] == 'timeout'
+    return 'both sides' if h and g else 'hooks/' if h else 'the full guard' if g else ''
 
 
 def corpus_line(cmd, why):
@@ -287,7 +330,9 @@ def fastpath(a, rng, run, tmp):
     gen = [c for c in generate(rng, a.n) if not (c in seen or seen.add(c))]
     inputs += [(f'gen-{i}', c, None) for i, c in enumerate(gen)]
     res = pmap(lambda x: (run.answer(a.hooks, x[1], x[2]), run.answer(forced, x[1], x[2])), inputs, a.jobs)
-    diffs = [(x, r, f) for x, (r, f) in zip(inputs, res) if r[0] != f[0]]
+    # A call that timed out gave no answer: neither agreement nor a difference.
+    late = [(x, timed_out(r, f)) for x, (r, f) in zip(inputs, res) if timed_out(r, f)]
+    diffs = [(x, r, f) for x, (r, f) in zip(inputs, res) if r[0] != f[0] and not timed_out(r, f)]
     appr = load_approved(a.approved, a.hooks)
     ok, bad = [], []
     for x, r, f in diffs:
@@ -296,6 +341,9 @@ def fastpath(a, rng, run, tmp):
         (bad if no else ok).append((x, r, f, e, no))
     print(f"fastpath: {len(inputs)} commands ({len(rows)} corpus, {len(gen)} generated), forced to pass: "
           f"{'; '.join(took)}: {len(bad)} answered differently.")
+    if late:
+        print(f"  inconclusive, not counted ({len(late)}, a call timed out after {run.timeout} s): "
+              + ', '.join(f'{x[0]} ({side})' for x, side in late))
     if ok:
         print(f"  approved, not counted ({len(ok)}, {os.path.relpath(a.approved, ROOT)}): "
               + ', '.join(f"{x[0]} ({e['issue']})" for x, r, f, e, no in ok))
@@ -335,14 +383,20 @@ def heredoc(a, rng, run, tmp):
     dropped = [x for x, s in zip(cmds, stripped) if s is not None and x[1] not in s]
     lost = [x for x in dropped if x[0] in RUNS]
     answers = pmap(lambda x: run.answer(side, x[2]), dropped, a.jobs)
-    first, bad = {}, []
+    first, bad, late = {}, [], []
     for (carrier, body, cmd), ans in zip(dropped, answers):
+        if ans[0][1] == 'timeout':   # no answer, so nothing to compare
+            late.append(cmd)
+            continue
         f = first.setdefault(carrier, (body, cmd, ans))
         if ans[0] != f[2][0]:
             bad.append((f, (body, cmd, ans)))
     print(f"heredoc: {len(cmds)} commands ({len(CARRIERS) + len(RUNS)} carriers x {len(bodies)} bodies), {len(dropped)} with "
           f"the body dropped, guards {', '.join(keep)}: {len(bad)} answered differently from their carrier's first; "
           f"{len(lost)} bodies dropped that run or go to a script.")
+    if late:
+        print(f"  inconclusive, not counted ({len(late)}, a call timed out after {run.timeout} s): "
+              + ', '.join(repr(c[:60]) for c in late[:5]) + (' …' if len(late) > 5 else ''))
     for (b1, c1, a1), (b2, c2, a2) in bad:
         print(f'  {c1!r}\n    -> {a1[0]} {a1[1]}\n  {c2!r}\n    -> {a2[0]} {a2[1]}\n    corpus: {corpus_line(c2, "heredoc")}')
     for _, _, c in lost[:20]:
@@ -409,6 +463,7 @@ def main():
     ap.add_argument('--corpus', default=os.path.join(ROOT, 'tests', 'bench-corpus.jsonl'))
     ap.add_argument('--disk-space', default=os.path.join(ROOT, 'bin', 'disk-space.py'))
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 2)
+    ap.add_argument('--timeout', type=int, default=60, help='seconds a call may take before its answer is inconclusive')
     ap.add_argument('--force', default='', help='fastpath: comma-separated fast paths off by default to force too (none today)')
     ap.add_argument('--approved', default=os.path.join(ROOT, 'tests', 'guard-props-approved.jsonl'),
                     help='fastpath: approved differences, JSON lines (CI passes the base branch\'s copy)')
@@ -426,7 +481,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix='cch-props.', dir=os.environ.get('TMPDIR') or None)
     ok = True
     try:
-        run = Runner(tmp)
+        run = Runner(tmp, a.timeout)
         if 'fastpath' in only:
             ok &= fastpath(a, random.Random(seed), run, tmp)
         if 'heredoc' in only:

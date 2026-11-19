@@ -219,10 +219,32 @@ else pass "release.yml runs no guard-props job: a Release run's color is the rel
 grep -q "^    - cron: '" "$PROPS_WF" && grep -q '^      issues: write$' "$PROPS_WF" \
   && grep -q 'python3 tools/guard-props.py --seed random > props.txt' "$PROPS_WF" \
   && pass "$PROPS_WF runs on a cron, on a random seed, with issues: write" || fail "daily workflow" "$(head -30 "$PROPS_WF")"
-# A PR cannot approve its own differences: CI's property run reads the base's list.
-grep -qF 'git show "origin/$BASE:tests/guard-props-approved.jsonl" > "$RUNNER_TEMP/approved.jsonl"' "$CI_WF" \
-  && [ "$(grep -c 'python3 tools/guard-props.py' "$CI_WF")" = "$(grep -cF 'python3 tools/guard-props.py --approved "$RUNNER_TEMP/approved.jsonl"' "$CI_WF")" ] \
-  && pass "ci.yml's property run takes the approved list from the base branch" || fail "approved from base" "$(grep -n 'guard-props' "$CI_WF")"
+# A PR cannot approve its own differences: CI's property step, run in a scratch repo whose
+# base and PR lists differ, hands the property script the base's list and nothing else.
+awk '/name: Check the guard properties$/{f=1} f && /^        run: \|$/{on=1; next}
+     on && $0 != "" && !/^          /{exit} on' "$CI_WF" | sed 's/^          //' > "$TMP/props-step.sh"
+grep -q 'tools/guard-props.py' "$TMP/props-step.sh" && pass "the property step is in $CI_WF" || fail "the property step is in $CI_WF" "not found"
+props_case() {  # BASE-LIST ('-' for none): sets SEEN to the list the property script read
+  local r="$TMP/props.$PASS.$FAIL"
+  mkdir -p "$r/tools" "$r/tests" "$r/hooks" "$r/tmp" && ( cd "$r" || exit
+    git init -q && git config user.email t@t && git config user.name t
+    # The property script, stubbed: it copies the list it would read, by its own default too.
+    printf '%s\n' 'import argparse, os, shutil' \
+      'ap = argparse.ArgumentParser(); ap.add_argument("--approved", default=os.path.join(os.path.dirname(__file__), "..", "tests", "guard-props-approved.jsonl"))' \
+      'shutil.copyfile(ap.parse_known_args()[0].approved, os.environ["SEEN"])' > tools/guard-props.py
+    echo base > hooks/x.sh
+    [ "$1" = - ] || printf '%s\n' "$1" > tests/guard-props-approved.jsonl
+    git add . && git commit -qm base && git update-ref refs/remotes/origin/main HEAD
+    printf '%s\n' '{"command": "the PR approving its own"}' >> tests/guard-props-approved.jsonl
+    git add . && git commit -qm pr
+    BASE=main RUNNER_TEMP="$r/tmp" GITHUB_STEP_SUMMARY="$r/summary" SEEN="$r/seen" bash "$TMP/props-step.sh" ) > "$r.out" 2>&1
+  SEEN=$(cat "$r/seen" 2>/dev/null || echo "(no list read)")
+}
+props_case '{"command": "the base approving"}'
+[ "$SEEN" = '{"command": "the base approving"}' ] \
+  && pass "ci.yml's property run reads the base's approved list, not the PR's" || fail "approved from base" "[$SEEN] $(cat "$TMP"/props.*.out | tail -5)"
+props_case -
+[ "$SEEN" = "" ] && pass "with no list on the base, the property run reads an empty one" || fail "no base list" "[$SEEN]"
 awk '/name: Record a counterexample in an issue/{f=1} f && /^        run: \|$/{on=1; next}
      on && $0 != "" && !/^          /{exit} on' "$PROPS_WF" | sed 's/^          //' > "$TMP/issue.sh"
 if grep -q 'gh issue' "$TMP/issue.sh"; then pass "the issue step is in $PROPS_WF"; else fail "the issue step is in $PROPS_WF" "not found"; fi
