@@ -24,7 +24,9 @@ Python, not bash: getrusage(RUSAGE_CHILDREN) is the only portable way to read a
 child's CPU to the millisecond; bash and perl `times` round to clock ticks.
 python3 is already required by tools/permission-friction.py.
 
-Progress goes to stderr, never stdout: a line up front with the estimated time, then at most one every
+Progress goes to stderr, never stdout: a line up front with a floor for the time (hooks priced at one `bash -c :`
+start each), a line after warm-up with an upper estimate for the timed phase (each tool's payloads at its own warm call, times
+--repeat), then at most one every
 --progress-every seconds (default 10; 0 is none) per phase (warm, timed, launches). --quick is the way
 to a short run on a slow machine. On SIGINT or SIGTERM the table built so far is printed, marked
 "partial: n of N payloads timed; interrupted during PHASE (side, k of K)", and the exit is 130; a partial run fails --gate.
@@ -724,7 +726,8 @@ def main():
         warm_calls = 2 * len(tools)
         PROG.say(f"{n_all} payloads x {a.repeat} pass x 2 sides, after {warm_calls} warm-up passes ({2 * wstarts} hook starts); "
                  f"at least {fmt_dur(floor_s)} in all, warm-up included, from this machine's process "
-                 f"start (`bash -c :` {proc_start['bash -c :']:.1f} ms), the hooks' own work comes on top. "
+                 f"start (`bash -c :` {proc_start['bash -c :']:.1f} ms): a floor, the hooks' own work comes on top "
+                 f"(the line after warm-up is the estimate). "
                  + ('--quick is on (every third payload).' if a.quick else
                     'On a slow machine --quick takes every third payload.')
                  + ' Ctrl-C prints the table so far.')
@@ -740,13 +743,23 @@ def main():
         t_start = time.time()
         try:
             # Warm the page cache with one call per tool through both sides.
+            t_warm = time.time()
             w = 0
+            warm_call = {}   # (tool, side) -> seconds one warm call took, hooks together and alone as in the timed phase
             for tool in tools:
                 row = next(r for r in rows if r['tool_name'] == tool)
                 for sn, s in sides.items():
                     w += 1
                     PROG.tick('warm', sn, w, 2 * len(tools))
+                    t_call = time.time()
                     run_call(s, row, env, home)
+                    warm_call[(tool, sn)] = time.time() - t_call
+            # An upper estimate: a warm call is the first of its tool, so it pays for any cache the timed calls find hot.
+            est_s = a.repeat * sum(warm_call[(r['tool_name'], sn)] for r in rows for sn in sides)
+            PROG.say(f"warm-up done in {time.time() - t_warm:.1f} s; the timed phase should take at most about {est_s:.1f} s "
+                     f"({fmt_dur(est_s)}): each tool's payloads at its own warm call "
+                     + ', '.join(f"{t} {warm_call[(t, 'base')] * 1000:.0f}+{warm_call[(t, 'head')] * 1000:.0f} ms" for t in tools)
+                     + f" (base+head), x {a.repeat} pass(es). The --launches pass is not in it.")
             t_start = time.time()
             for _ in range(a.repeat):
                 for row in rows:

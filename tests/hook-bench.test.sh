@@ -379,5 +379,26 @@ WAITFOR='warm [a-z]*: payload 2 of 2' slow_run INT --gate
 grep -q '^Gate: FAILED' "$TMP/o4.out" && pass "a warm-up interrupt fails --gate too" || fail "gate in warm-up" "$(grep -A3 Gate "$TMP/o4.out")"
 
 echo ""
+echo "=== after warm-up: an upper estimate of the timed phase, from each tool's own warm calls ==="
+F5="$TMP/fix5"; mkdir -p "$F5/hooks" "$F5/config"
+printf '#!/usr/bin/env bash\ncat >/dev/null; sleep 0.3; exit 0\n' > "$F5/hooks/nap.sh"
+echo '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"~/.claude/hooks/nap.sh"}]}]}}' > "$F5/config/settings.json"
+( cd "$F5" && git init -q && git -c user.email=t@example.com -c user.name=t add config hooks \
+  && git -c user.email=t@example.com -c user.name=t commit -qm base && git tag v0.1.0 ) || { echo "fixture 5 failed"; exit 1; }
+for i in 1 2 3 4; do jq -nc --arg id "n-$i" --arg c "echo $i" '{id:$id,tool_name:"Bash",tool_input:{command:$c}}'; done > "$TMP/c5.jsonl"
+est_run() {   # est_run REPEAT: sets EST (the stderr line's seconds) and ACT (the timed phase's, from --json)
+  python3 "$BENCH" --repo "$F5" --corpus "$TMP/c5.jsonl" --base v0.1.0 --head v0.1.0 --progress-every 100 --repeat "$1" \
+    --json "$TMP/o5.json" --min-calls 5 >/dev/null 2>"$TMP/e5"
+  EST=$(sed -n 's/^hook-bench: warm-up done in [0-9.]* s; the timed phase should take at most about \([0-9.]*\) s .*/\1/p' "$TMP/e5")
+  ACT=$(jq -r '.elapsed_s' "$TMP/o5.json")
+}
+est_run 2
+[ -n "$EST" ] && awk -v e="$EST" -v a="$ACT" 'BEGIN { exit !(e * 1.05 >= a && e <= 3 * a) }' \
+  && pass "--repeat 2: the line says at most ${EST} s; the timed phase took ${ACT} s (at least it, within 3x)" \
+  || fail "warm estimate" "estimate '${EST}' s, timed phase '${ACT}' s; $(grep 'warm-up done' "$TMP/e5")"
+grep -q -- '^hook-bench: .*process start (.*): a floor, the hooks' "$TMP/e5" \
+  && pass "the up-front line is kept and says it is a floor" || fail "the floor line" "$(head -2 "$TMP/e5")"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL
