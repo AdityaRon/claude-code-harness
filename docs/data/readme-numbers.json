@@ -1,0 +1,976 @@
+{
+  "about": "Every number README.md's generated blocks and docs/figures/ show. The summary rows are entered by hand: each says what was measured, n, where, when and the command, and quotes the sentences it is read from. A quote with a file must be found in that file; a quote with a url is copied from that PR or issue body. tests/readme-numbers.test.sh holds every number in a row's measured text and n to its quotes. series is written by tools/readme-figures.py --write from CHANGELOG.md, from cited_release down, so a newer release changes nothing until cited_release is moved by hand.",
+  "cited_release": "v1.4.17",
+  "index_anchor": "v1.0.1",
+  "summary": [
+    {
+      "id": "bash-wait",
+      "what": "Guards on a Bash call",
+      "release": "v1.4.17",
+      "measured": "p50 {p50_head} ms, p95 {p95_head} ms ({p50_base} and {p95_base} at v1.4.16, same run)",
+      "values": {
+        "p50_base": 62.2,
+        "p50_head": 62.6,
+        "p95_base": 113.5,
+        "p95_head": 114.2
+      },
+      "n": "395 Bash payloads, the first of two runs",
+      "environment": "CI runner, Linux, AMD EPYC 9V74",
+      "date": "2026-11-20",
+      "source": "[CHANGELOG.md](CHANGELOG.md#v1417-2026-11-20), v1.4.17, the first Bash row",
+      "quotes": [
+        {
+          "file": "CHANGELOG.md",
+          "text": "| Bash | 395 | 62.2 → 62.6 ms (+1%) | 61.5 → 61.6 ms (+0%) | 113.5 → 114.2 ms (+1%) | 120.9 → 120.9 ms (+0%) |"
+        }
+      ],
+      "command": "`.github/bench-gate.sh v1.4.16` in `.github/workflows/release.yml`, which runs `tools/hook-bench.py --gate`",
+      "details": [
+        [
+          "v1.4.17",
+          "CHANGELOG.md#v1417-2026-11-20"
+        ],
+        [
+          "releases.md",
+          "docs/releases.md"
+        ]
+      ]
+    },
+    {
+      "id": "asks",
+      "what": "Always-approved asks removed",
+      "measured": "{approved} of {asks} guard asks approved over {days} days, the median one holding its call {held} s; in a later {days30} days, still before the removal, {asks30} asks and {rejected30} rejection",
+      "values": {
+        "approved": 849,
+        "asks": 872,
+        "days": 49,
+        "held": 133,
+        "asks30": 476,
+        "rejected30": 1,
+        "days30": 30
+      },
+      "n": "872 asks; 476 asks",
+      "environment": "One machine's transcripts, then a personal machine's",
+      "date": "2026-08-18 to 2026-10-06, then 30 days to 2026-11-15",
+      "source": "[docs/permission-friction.md](docs/permission-friction.md); [#237](https://github.com/AdityaRon/claude-code-harness/issues/237), Measured inputs",
+      "quotes": [
+        {
+          "file": "docs/permission-friction.md",
+          "text": "Measured from one machine's local transcripts, 2026-08-18 to 2026-10-06 (49"
+        },
+        {
+          "file": "docs/permission-friction.md",
+          "text": "Of the 872 asks, 849 were approved and 3 rejected. The median approved ask held"
+        },
+        {
+          "file": "docs/permission-friction.md",
+          "text": "its call 133 s, against 5 s for a Bash call with no prompt"
+        },
+        {
+          "file": "docs/permission-friction.md",
+          "text": "removed the always-approved asks. The 30-day"
+        },
+        {
+          "file": "docs/permission-friction.md",
+          "text": "count #237 cites, 476 asks and 1 rejected, was taken before that change."
+        },
+        {
+          "url": "https://github.com/AdityaRon/claude-code-harness/issues/237",
+          "text": "476 guard asks, 1 rejected (a `kubectl delete`); about 100 hours of waiting on asks"
+        }
+      ],
+      "command": "`python3 bin/permission-friction.py --days 49`; `python3 bin/permission-friction.py --days 30`",
+      "details": [
+        [
+          "permission-friction.md",
+          "docs/permission-friction.md"
+        ],
+        [
+          "#237",
+          "https://github.com/AdityaRon/claude-code-harness/issues/237"
+        ]
+      ]
+    },
+    {
+      "id": "execs",
+      "what": "One dispatcher, fewer process starts",
+      "release": "v1.4.16",
+      "measured": "`bash-guards.sh` execs per payload {base} → {head} at v1.4.16",
+      "values": {
+        "base": 24.53,
+        "head": 21.98
+      },
+      "n": "400 payloads (395 Bash, 5 Monitor), one run",
+      "environment": "CI runner, Linux, AMD EPYC 9V74, strace -f",
+      "date": "2026-11-20",
+      "source": "[CHANGELOG.md](CHANGELOG.md#v1416-2026-11-20), v1.4.16, the launches table",
+      "quotes": [
+        {
+          "file": "CHANGELOG.md",
+          "text": "| bash-guards.sh | 400 | 24.53 → 21.98 | 102.72 → 98.66 | 50902 → 48259 | 25 / 118 | 0 |"
+        },
+        {
+          "file": "CHANGELOG.md",
+          "text": "515 payloads (395 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 MultiEdit, 2 NotebookEdit)"
+        }
+      ],
+      "command": "`tools/hook-bench.py --launches strace`, through `.github/bench-gate.sh v1.4.15`",
+      "details": [
+        [
+          "v1.4.16",
+          "CHANGELOG.md#v1416-2026-11-20"
+        ],
+        [
+          "budgets",
+          "tests/guard-execs.test.sh"
+        ]
+      ]
+    },
+    {
+      "id": "real-use",
+      "what": "Guard wait in real use",
+      "measured": "Slowest guard per Bash call: median {before} s on v1.4.9; on v1.4.14, {recent} s over the last 300 calls and {all} s over all since install, p90 {p90_a} and {p90_b} s",
+      "values": {
+        "before": 0.74,
+        "recent": 0.26,
+        "all": 0.41,
+        "p90_a": 3.02,
+        "p90_b": 3.79
+      },
+      "n": "1,000 calls (v1.4.9); 300 and 1,337 calls (v1.4.14)",
+      "environment": "The work Mac, from the guard timing log",
+      "date": "doc written 2026-11-19, n added 2026-11-20",
+      "source": "[docs/long-running-sessions.md](docs/long-running-sessions.md#measured-with-n)",
+      "quotes": [
+        {
+          "file": "docs/long-running-sessions.md",
+          "text": "| Slowest guard per Bash call (`guard-timing.log`): median 0.74 s on v1.4.9; on v1.4.14, 0.26 s over the last 300 calls and 0.41 s over all 1,337 since install; p90 3.02 and 3.79 s | 1,000 calls (v1.4.9), 300 and 1,337 calls (v1.4.14) | work Mac |"
+        }
+      ],
+      "command": "read from `guard-timing.log`; `bash doctor.sh --latency` reads the same log",
+      "details": [
+        [
+          "long-running-sessions.md",
+          "docs/long-running-sessions.md#measured-with-n"
+        ]
+      ]
+    },
+    {
+      "id": "handoff",
+      "what": "Restart from a handoff",
+      "measured": "{sessions} sessions kept {weeks_lo} to {weeks_hi} weeks reached {mb_lo} to {mb_hi} MB of transcript each; restarted from a handoff, live transcripts were {after_lo} to {after_hi} MB",
+      "values": {
+        "sessions": 3,
+        "weeks_lo": 8,
+        "weeks_hi": 9,
+        "mb_lo": 343,
+        "mb_hi": 395,
+        "after_lo": 6.9,
+        "after_hi": 14.5
+      },
+      "n": "3 sessions before; after, not given",
+      "environment": "The work Mac, about 15 background sessions; no window given",
+      "date": "doc written 2026-11-19",
+      "source": "[docs/long-running-sessions.md](docs/long-running-sessions.md#restart-from-a-handoff-not-from-the-transcript)",
+      "quotes": [
+        {
+          "file": "docs/long-running-sessions.md",
+          "text": "- Three sessions kept for eight to nine weeks reached 343 to 395 MB each"
+        },
+        {
+          "file": "docs/long-running-sessions.md",
+          "text": "On the work Mac, live transcripts went to 6.9 to 14.5 MB."
+        }
+      ],
+      "command": "`ls -lS ~/.claude/projects/*/*.jsonl | head`",
+      "details": [
+        [
+          "long-running-sessions.md",
+          "docs/long-running-sessions.md#restart-from-a-handoff-not-from-the-transcript"
+        ]
+      ]
+    },
+    {
+      "id": "heredoc",
+      "what": "A long heredoc under UTF-8",
+      "measured": "interpreter-guard on a {kb} KB, {lines}-line heredoc: {before} s before #304, {after} s after",
+      "values": {
+        "kb": 13,
+        "lines": 260,
+        "before": 155,
+        "after": 0.29
+      },
+      "n": "not given",
+      "environment": "Apple M2, macOS 26.6.2, bash 3.2.57, en_US.UTF-8; the 155 s at load 4 to 7",
+      "date": "2026-11-20",
+      "source": "[PR #304](https://github.com/AdityaRon/claude-code-harness/pull/304), After; the 155 s also in `tests/guard-latency.test.sh`",
+      "quotes": [
+        {
+          "file": "tests/guard-latency.test.sh",
+          "text": "# a Mac. With shadow_note's old ${c//…}, interpreter-guard took 155 s on this one"
+        },
+        {
+          "url": "https://github.com/AdityaRon/claude-code-harness/pull/304",
+          "text": "`tests/guard-latency.test.sh`: a 13 KB synthetic heredoc of 260 lines through interpreter-guard and bash-guards under a UTF-8 locale, within the suite's 10 s limit, and a check that each reached `shadow_note`."
+        },
+        {
+          "url": "https://github.com/AdityaRon/claude-code-harness/pull/304",
+          "text": "The synthetic heredoc in `tests/guard-latency.test.sh`: interpreter-guard 0.29 s and bash-guards 0.41 s under UTF-8 here, against 155 s and 32 s (UTF-8, C) for interpreter-guard on main at load 4 to 7."
+        }
+      ],
+      "command": "the heredoc in `tests/guard-latency.test.sh` through `hooks/interpreter-guard.sh`",
+      "details": [
+        [
+          "#304",
+          "https://github.com/AdityaRon/claude-code-harness/pull/304"
+        ]
+      ]
+    }
+  ],
+  "series": {
+    "source": "CHANGELOG.md, the first benchmark run of each entry from v1.0.0 to v1.4.17",
+    "bash_wait_runs": [
+      {
+        "release": "v1.0.1",
+        "date": "2026-10-17",
+        "vs": "v1.0.0",
+        "bash_payloads": 321,
+        "p50_ms": [
+          75.6,
+          52.5
+        ],
+        "p95_ms": [
+          96.5,
+          99.4
+        ],
+        "run_at": "2026-10-17T20:21:27Z",
+        "runner": "Linux 6.17.0-1022-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.0.3",
+        "date": "2026-10-18",
+        "vs": "v1.0.2",
+        "bash_payloads": 321,
+        "p50_ms": [
+          51.5,
+          55.1
+        ],
+        "p95_ms": [
+          95.9,
+          96.1
+        ],
+        "run_at": "2026-10-18T02:27:34Z",
+        "runner": "Linux 6.17.0-1022-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.0.5",
+        "date": "2026-10-18",
+        "vs": "v1.0.4",
+        "bash_payloads": 321,
+        "p50_ms": [
+          51.6,
+          51.6
+        ],
+        "p95_ms": [
+          93.2,
+          94.0
+        ],
+        "run_at": "2026-10-18T11:19:06Z",
+        "runner": "Linux 6.17.0-1022-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.0.6",
+        "date": "2026-10-19",
+        "vs": "v1.0.5",
+        "bash_payloads": 321,
+        "p50_ms": [
+          50.7,
+          51.5
+        ],
+        "p95_ms": [
+          92.3,
+          92.3
+        ],
+        "run_at": "2026-10-19T13:40:16Z",
+        "runner": "Linux 6.17.0-1022-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.0.7",
+        "date": "2026-10-19",
+        "vs": "v1.0.6",
+        "bash_payloads": 321,
+        "p50_ms": [
+          42.3,
+          42.5
+        ],
+        "p95_ms": [
+          76.4,
+          77.8
+        ],
+        "run_at": "2026-10-19T23:09:30Z",
+        "runner": "Linux 7.0.0-1017-azure x86_64, AMD EPYC 9V45 96-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.1.0",
+        "date": "2026-10-21",
+        "vs": "v1.0.8",
+        "bash_payloads": 328,
+        "p50_ms": [
+          61.1,
+          61.0
+        ],
+        "p95_ms": [
+          108.9,
+          110.0
+        ],
+        "run_at": "2026-10-21T22:34:37Z",
+        "runner": "Linux 7.0.0-1017-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.1.2",
+        "date": "2026-10-23",
+        "vs": "v1.1.1",
+        "bash_payloads": 366,
+        "p50_ms": [
+          53.7,
+          56.1
+        ],
+        "p95_ms": [
+          95.2,
+          96.1
+        ],
+        "run_at": "2026-10-23T22:28:40Z",
+        "runner": "Linux 6.17.0-1022-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.1.3",
+        "date": "2026-10-24",
+        "vs": "v1.1.2",
+        "bash_payloads": 372,
+        "p50_ms": [
+          56.9,
+          57.1
+        ],
+        "p95_ms": [
+          99.1,
+          98.8
+        ],
+        "run_at": "2026-10-24T11:16:14Z",
+        "runner": "Linux 6.17.0-1022-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.1.5",
+        "date": "2026-10-26",
+        "vs": "v1.1.4",
+        "bash_payloads": 372,
+        "p50_ms": [
+          58.1,
+          58.0
+        ],
+        "p95_ms": [
+          99.9,
+          99.7
+        ],
+        "run_at": "2026-10-26T23:17:24Z",
+        "runner": "Linux 6.17.0-1022-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.1.9",
+        "date": "2026-10-29",
+        "vs": "v1.1.8",
+        "bash_payloads": 372,
+        "p50_ms": [
+          61.2,
+          61.0
+        ],
+        "p95_ms": [
+          104.3,
+          103.9
+        ],
+        "run_at": "2026-10-29T13:16:16Z",
+        "runner": "Linux 7.0.0-1017-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.1.19",
+        "date": "2026-11-11",
+        "vs": "v1.1.18",
+        "bash_payloads": 372,
+        "p50_ms": [
+          69.0,
+          69.2
+        ],
+        "p95_ms": [
+          118.6,
+          117.9
+        ],
+        "run_at": "2026-11-11T14:36:27Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.3.0",
+        "date": "2026-11-12",
+        "vs": "v1.2.0",
+        "bash_payloads": 372,
+        "p50_ms": [
+          52.5,
+          52.4
+        ],
+        "p95_ms": [
+          89.9,
+          90.7
+        ],
+        "run_at": "2026-11-12T15:28:52Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, INTEL(R) XEON(R) PLATINUM 8573C",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.3.1",
+        "date": "2026-11-13",
+        "vs": "v1.3.0",
+        "bash_payloads": 372,
+        "p50_ms": [
+          58.5,
+          58.2
+        ],
+        "p95_ms": [
+          99.8,
+          100.3
+        ],
+        "run_at": "2026-11-13T00:41:42Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor",
+        "hooks_launched": "one at a time"
+      },
+      {
+        "release": "v1.4.0",
+        "date": "2026-11-13",
+        "vs": "v1.3.1",
+        "bash_payloads": 372,
+        "p50_ms": [
+          77.0,
+          63.6
+        ],
+        "p95_ms": [
+          121.6,
+          108.1
+        ],
+        "run_at": "2026-11-13T22:50:52Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V45 96-Core Processor",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.1",
+        "date": "2026-11-14",
+        "vs": "v1.4.0",
+        "bash_payloads": 372,
+        "p50_ms": [
+          87.2,
+          82.3
+        ],
+        "p95_ms": [
+          148.6,
+          142.6
+        ],
+        "run_at": "2026-11-14T00:35:23Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.2",
+        "date": "2026-11-14",
+        "vs": "v1.4.1",
+        "bash_payloads": 372,
+        "p50_ms": [
+          82.9,
+          82.8
+        ],
+        "p95_ms": [
+          143.2,
+          142.4
+        ],
+        "run_at": "2026-11-14T14:09:28Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.3",
+        "date": "2026-11-15",
+        "vs": "v1.4.2",
+        "bash_payloads": 372,
+        "p50_ms": [
+          72.6,
+          78.5
+        ],
+        "p95_ms": [
+          125.2,
+          131.5
+        ],
+        "run_at": "2026-11-15T14:12:37Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, INTEL(R) XEON(R) PLATINUM 8573C",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.4",
+        "date": "2026-11-15",
+        "vs": "v1.4.3",
+        "bash_payloads": 372,
+        "p50_ms": [
+          73.5,
+          72.3
+        ],
+        "p95_ms": [
+          122.8,
+          123.3
+        ],
+        "run_at": "2026-11-15T19:54:36Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.5",
+        "date": "2026-11-16",
+        "vs": "v1.4.4",
+        "bash_payloads": 372,
+        "p50_ms": [
+          56.4,
+          56.0
+        ],
+        "p95_ms": [
+          95.3,
+          95.8
+        ],
+        "run_at": "2026-11-16T19:53:32Z",
+        "runner": "Linux 7.0.0-1016-aws x86_64, Intel(R) Xeon(R) 6975P-C",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.6",
+        "date": "2026-11-17",
+        "vs": "v1.4.5",
+        "bash_payloads": 372,
+        "p50_ms": [
+          56.1,
+          51.6
+        ],
+        "p95_ms": [
+          96.2,
+          91.1
+        ],
+        "run_at": "2026-11-17T02:07:55Z",
+        "runner": "Linux 7.0.0-1016-aws x86_64, Intel(R) Xeon(R) 6975P-C",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.8",
+        "date": "2026-11-18",
+        "vs": "v1.4.7",
+        "bash_payloads": 372,
+        "p50_ms": [
+          79.3,
+          79.2
+        ],
+        "p95_ms": [
+          142.8,
+          142.5
+        ],
+        "run_at": "2026-11-18T01:53:54Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.9",
+        "date": "2026-11-18",
+        "vs": "v1.4.8",
+        "bash_payloads": 372,
+        "p50_ms": [
+          65.1,
+          64.6
+        ],
+        "p95_ms": [
+          119.1,
+          117.0
+        ],
+        "run_at": "2026-11-18T02:49:58Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.10",
+        "date": "2026-11-18",
+        "vs": "v1.4.9",
+        "bash_payloads": 372,
+        "p50_ms": [
+          82.1,
+          81.8
+        ],
+        "p95_ms": [
+          147.0,
+          147.5
+        ],
+        "run_at": "2026-11-18T11:07:41Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 7763 64-Core Processor",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.11",
+        "date": "2026-11-18",
+        "vs": "v1.4.10",
+        "bash_payloads": 372,
+        "p50_ms": [
+          66.1,
+          64.1
+        ],
+        "p95_ms": [
+          118.6,
+          115.9
+        ],
+        "run_at": "2026-11-18T12:08:09Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.12",
+        "date": "2026-11-18",
+        "vs": "v1.4.11",
+        "bash_payloads": 372,
+        "p50_ms": [
+          65.0,
+          64.8
+        ],
+        "p95_ms": [
+          115.3,
+          116.4
+        ],
+        "run_at": "2026-11-18T22:14:21Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, INTEL(R) XEON(R) PLATINUM 8573C",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.14",
+        "date": "2026-11-19",
+        "vs": "v1.4.13",
+        "bash_payloads": 386,
+        "p50_ms": [
+          62.2,
+          63.5
+        ],
+        "p95_ms": [
+          114.2,
+          116.5
+        ],
+        "run_at": "2026-11-19T06:59:27Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.15",
+        "date": "2026-11-19",
+        "vs": "v1.4.14",
+        "bash_payloads": 386,
+        "p50_ms": [
+          63.0,
+          62.7
+        ],
+        "p95_ms": [
+          115.5,
+          115.8
+        ],
+        "run_at": "2026-11-19T23:06:21Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.16",
+        "date": "2026-11-20",
+        "vs": "v1.4.15",
+        "bash_payloads": 395,
+        "p50_ms": [
+          63.3,
+          61.8
+        ],
+        "p95_ms": [
+          118.4,
+          113.0
+        ],
+        "run_at": "2026-11-20T00:12:45Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor",
+        "hooks_launched": "together"
+      },
+      {
+        "release": "v1.4.17",
+        "date": "2026-11-20",
+        "vs": "v1.4.16",
+        "bash_payloads": 395,
+        "p50_ms": [
+          62.2,
+          62.6
+        ],
+        "p95_ms": [
+          113.5,
+          114.2
+        ],
+        "run_at": "2026-11-20T01:35:35Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor",
+        "hooks_launched": "together"
+      }
+    ],
+    "bash_wait_index": [
+      {
+        "release": "v1.0.0",
+        "p50": 144.0,
+        "p95": 97.1
+      },
+      {
+        "release": "v1.0.1",
+        "p50": 100.0,
+        "p95": 100.0
+      },
+      {
+        "release": "v1.0.3",
+        "p50": 107.0,
+        "p95": 100.2
+      },
+      {
+        "release": "v1.0.5",
+        "p50": 107.0,
+        "p95": 101.1
+      },
+      {
+        "release": "v1.0.6",
+        "p50": 108.7,
+        "p95": 101.1
+      },
+      {
+        "release": "v1.0.7",
+        "p50": 109.2,
+        "p95": 102.9
+      },
+      {
+        "release": "v1.1.0",
+        "p50": 109.0,
+        "p95": 104.0
+      },
+      {
+        "release": "v1.1.2",
+        "p50": 113.9,
+        "p95": 104.9
+      },
+      {
+        "release": "v1.1.3",
+        "p50": 114.3,
+        "p95": 104.6
+      },
+      {
+        "release": "v1.1.5",
+        "p50": 114.1,
+        "p95": 104.4
+      },
+      {
+        "release": "v1.1.9",
+        "p50": 113.7,
+        "p95": 104.0
+      },
+      {
+        "release": "v1.1.19",
+        "p50": 114.0,
+        "p95": 103.4
+      },
+      {
+        "release": "v1.3.0",
+        "p50": 113.8,
+        "p95": 104.3
+      },
+      {
+        "release": "v1.3.1",
+        "p50": 113.2,
+        "p95": 104.8
+      },
+      {
+        "release": "v1.4.0",
+        "p50": 93.5,
+        "p95": 93.2
+      },
+      {
+        "release": "v1.4.1",
+        "p50": 88.3,
+        "p95": 89.4
+      },
+      {
+        "release": "v1.4.2",
+        "p50": 88.2,
+        "p95": 88.9
+      },
+      {
+        "release": "v1.4.3",
+        "p50": 95.3,
+        "p95": 93.4
+      },
+      {
+        "release": "v1.4.4",
+        "p50": 93.8,
+        "p95": 93.8
+      },
+      {
+        "release": "v1.4.5",
+        "p50": 93.1,
+        "p95": 94.3
+      },
+      {
+        "release": "v1.4.6",
+        "p50": 85.6,
+        "p95": 89.3
+      },
+      {
+        "release": "v1.4.8",
+        "p50": 85.5,
+        "p95": 89.1
+      },
+      {
+        "release": "v1.4.9",
+        "p50": 84.9,
+        "p95": 87.5
+      },
+      {
+        "release": "v1.4.10",
+        "p50": 84.6,
+        "p95": 87.8
+      },
+      {
+        "release": "v1.4.11",
+        "p50": 82.0,
+        "p95": 85.8
+      },
+      {
+        "release": "v1.4.12",
+        "p50": 81.8,
+        "p95": 86.6
+      },
+      {
+        "release": "v1.4.14",
+        "p50": 83.5,
+        "p95": 88.4
+      },
+      {
+        "release": "v1.4.15",
+        "p50": 83.1,
+        "p95": 88.6
+      },
+      {
+        "release": "v1.4.16",
+        "p50": 81.1,
+        "p95": 84.6
+      },
+      {
+        "release": "v1.4.17",
+        "p50": 81.6,
+        "p95": 85.1
+      }
+    ],
+    "not_benchmarked": [
+      "v1.0.2",
+      "v1.0.4",
+      "v1.0.8",
+      "v1.1.1",
+      "v1.1.4",
+      "v1.1.6",
+      "v1.1.7",
+      "v1.1.8",
+      "v1.1.10",
+      "v1.1.11",
+      "v1.1.12",
+      "v1.1.13",
+      "v1.1.14",
+      "v1.1.15",
+      "v1.1.16",
+      "v1.1.17",
+      "v1.1.18",
+      "v1.2.0",
+      "v1.4.7",
+      "v1.4.13"
+    ],
+    "bash_guards_execs": [
+      {
+        "release": "v1.4.11",
+        "date": "2026-11-18",
+        "vs": "v1.4.10",
+        "payloads": 377,
+        "execs_per_payload": [
+          25.59,
+          23.78
+        ],
+        "run_at": "2026-11-18T12:08:09Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+      },
+      {
+        "release": "v1.4.12",
+        "date": "2026-11-18",
+        "vs": "v1.4.11",
+        "payloads": 377,
+        "execs_per_payload": [
+          23.78,
+          23.78
+        ],
+        "run_at": "2026-11-18T22:14:21Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, INTEL(R) XEON(R) PLATINUM 8573C"
+      },
+      {
+        "release": "v1.4.14",
+        "date": "2026-11-19",
+        "vs": "v1.4.13",
+        "payloads": 391,
+        "execs_per_payload": [
+          23.06,
+          23.6
+        ],
+        "run_at": "2026-11-19T06:59:27Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor"
+      },
+      {
+        "release": "v1.4.15",
+        "date": "2026-11-19",
+        "vs": "v1.4.14",
+        "payloads": 391,
+        "execs_per_payload": [
+          23.6,
+          23.6
+        ],
+        "run_at": "2026-11-19T23:06:21Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor"
+      },
+      {
+        "release": "v1.4.16",
+        "date": "2026-11-20",
+        "vs": "v1.4.15",
+        "payloads": 400,
+        "execs_per_payload": [
+          24.53,
+          21.98
+        ],
+        "run_at": "2026-11-20T00:12:45Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor"
+      },
+      {
+        "release": "v1.4.17",
+        "date": "2026-11-20",
+        "vs": "v1.4.16",
+        "payloads": 400,
+        "execs_per_payload": [
+          21.98,
+          21.98
+        ],
+        "run_at": "2026-11-20T01:35:35Z",
+        "runner": "Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor"
+      }
+    ]
+  }
+}
