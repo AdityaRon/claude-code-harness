@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shared helpers for Claude Code harness hooks.
-# Source from every hook: source "$(dirname "$0")/lib.sh"
+# Source from every hook as they do: "${0%/*}/lib.sh", or ./lib.sh where $0
+# holds no slash. That is dirname "$0" with no process started.
 
 # A Bash guard run by hooks/bash-guards.sh is a fork of it: this file is loaded
 # and the payload read once there, and HARNESS_PRESET says so. It holds the

@@ -9,7 +9,7 @@
 # Env overrides:
 #   CLAUDE_PLANS_HTML_DIR   output directory (default ~/.claude/plans-html)
 #   CLAUDE_PLAN_HTML_NO_OPEN=1  write the file but do not launch a browser (tests)
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 umask 077   # ~/.claude is 755 here: without this a plan was readable by every local account
 
 read_input

@@ -17,7 +17,7 @@
 # Advisory by design. This is a PostToolUse hook, so the write has already
 # happened; the findings go back to the model while the context is still hot and
 # the fix costs one edit. It never blocks and never edits.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 command -v jq &>/dev/null || exit 0     # advisory only; never fail a write

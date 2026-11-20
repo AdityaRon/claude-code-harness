@@ -9,7 +9,7 @@
 # this cannot be a mod file before paying for jq.
 [[ "$INPUT" =~ \.(js|mjs|cjs|jsx|ts|mts|cts|tsx)\" || "$INPUT" =~ (plugin|hooks)\.json\" ]] || exit 0
 
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 export INPUT
 require_jq_or_deny
 require_parsable_or_deny

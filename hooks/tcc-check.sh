@@ -4,7 +4,7 @@
 # (TCC), usually a session host whose binary an upgrade deleted (lib.sh
 # host_binary_check), never file modes or the harness sandbox. Advisory,
 # synchronous: exit 2 with stderr is what reaches the model.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 # PostToolUse sees a call that exited 0 (a denial in a pipeline or before ||);
 # PostToolUseFailure sees the rest. Claude Code puts the output, stderr merged
