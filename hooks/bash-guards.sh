@@ -117,14 +117,15 @@ unset bg_l
 # A guard's stdout, then time's \036 and seconds, then \037 and its status. The
 # status line comes from here, after the guard: no line, or a status but 0, is a
 # deny. The guard's stderr goes straight to this hook's. The guard runs in a
-# process group of its own (set -m), so a signal here stops it and all it started.
+# process group of its own (set -m; bash turns job control off again inside the
+# subshell), so a signal here stops it and all it started.
 bg_run() {
   exec 4>&2
   TIMEFORMAT=$'\036%R'
   set -m; bg_c="" bg_x=""
   trap 'bg_x=1; [[ -n "${bg_c:-}" ]] && { kill -KILL -- "-$bg_c" 2>/dev/null || kill -KILL "$bg_c" 2>/dev/null; }' TERM INT HUP
   # shellcheck disable=SC2034,SC1090  # lib.sh reads GUARD_NAME; the file is the guard's
-  { time { ( set +m; exec 2>&4 4>&-; GUARD_NAME=$1; GUARD_SELF="$BG_DIR/$1.sh"; . "$GUARD_SELF" ) & bg_c=$!
+  { time { ( exec 2>&4 4>&-; GUARD_NAME=$1; GUARD_SELF="$BG_DIR/$1.sh"; . "$GUARD_SELF" ) & bg_c=$!
     [[ -z "${bg_x:-}" ]] || kill -KILL -- "-$bg_c" 2>/dev/null; wait "$bg_c"; bg_s=$?; }; } 2>&1
   printf '\037%s' "$bg_s"
 }

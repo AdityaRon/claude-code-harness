@@ -453,6 +453,9 @@ def alive(pid):
         return open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[0] != 'Z'
     except OSError:
         return True
+# Run from a process substitution, this inherits INT ignored, and so would the
+# hook, which cannot then trap it: put it back, as a spawner that sets none has it.
+signal.signal(signal.SIGINT, signal.SIG_DFL)
 t0 = time.time()
 with open(payload, 'rb') as i, open(outp, 'wb') as o, open(errp, 'wb') as e:
     p = subprocess.Popen(['bash', hook], stdin=i, stdout=o, stderr=e, start_new_session=True)
@@ -462,7 +465,7 @@ if mode != 'late':
     if mode == 'term':
         os.kill(p.pid, signal.SIGTERM)
     else:
-        os.killpg(p.pid, signal.SIGHUP)
+        os.killpg(p.pid, signal.SIGHUP if mode == 'hup' else signal.SIGINT)
 try:
     rc = p.wait(timeout=12)
 except subprocess.TimeoutExpired:
@@ -514,8 +517,13 @@ late late 2
 cp "$TMP/slow-guard.sh" "$TMP/hk/interpreter-guard.sh"
 late term 30
 [[ "$LRC" == -15 ]] && gone "TERM to the hook: it dies of TERM, and the guard with it" || fail "TERM to the hook" "rc=$LRC err=$ERR"
+# bash 5 passes a HUP on to a process substitution's jobs, and 3.2 does not: a
+# guard that ignores HUP shows the fork's own trap stopped it, on both.
+{ echo 'trap "" HUP INT TERM'; cat "$TMP/slow-guard.sh"; } > "$TMP/hk/interpreter-guard.sh"
 late hup 30
-[[ "$LRC" == -1 ]] && gone "HUP to the hook's group: it dies of HUP, and the guard with it" || fail "HUP to the group" "rc=$LRC err=$ERR"
+[[ "$LRC" == -1 ]] && gone "HUP to the hook's group: it dies of HUP, and a guard ignoring HUP with it" || fail "HUP to the group" "rc=$LRC err=$ERR"
+late int 30
+[[ "$LRC" == -2 ]] && gone "INT to the hook's group: it dies of INT, and a guard ignoring INT with it" || fail "INT to the group" "rc=$LRC err=$ERR"
 
 # A Mac that slept through the call: kern.waketime, faked, says it woke after
 # the call was read, so the guard is waited for again. It answers only once that
@@ -562,8 +570,12 @@ for v in 08 x 0 -5 ''; do
   [[ "$OUT" == "$OK_ASK" ]] || BADV="$BADV [$v: $OUT]"
 done
 [[ -z "$BADV" ]] && pass "a deadline of 08, x, 0, -5 or nothing: answered, with no error" || fail "deadline values" "$BADV"
-OUT=$(payload 'git stash drop' | SECONDS=1000 CLAUDE_GUARD_DEADLINE=2 bash hooks/bash-guards.sh 2>&1)
-[[ "$OUT" == "$OK_ASK" ]] && pass "SECONDS in the environment does not make every guard late" || fail "SECONDS from the environment" "$OUT"
+# bash takes SECONDS from the environment: a guard past the deadline gets a second.
+copy_hooks
+printf '%s\n' '/bin/sleep 1.5' 'emit_ask "slow, and in time"' > "$TMP/hk/interpreter-guard.sh"
+OUT=$(payload ls | SECONDS=1000 CLAUDE_GUARD_DEADLINE=5 bash "$TMP/hk/bash-guards.sh" 2>&1)
+[[ "$(dec "$OUT")" == ask && "$(why "$OUT")" == "slow, and in time" ]] \
+  && pass "SECONDS=1000 in the environment: a guard answering in 1.5 s of a 5 s deadline is not late" || fail "SECONDS from the environment" "$OUT"
 
 # Claude Code's timeout is the backstop: past the deadline, one second a further
 # late guard (read -t takes whole seconds), and margin for the denies.
