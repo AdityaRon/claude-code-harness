@@ -38,11 +38,15 @@ release. Charts and full tables are under [Evidence](#evidence).
 
 ## Check your own machine
 
-From a clone: `bash doctor.sh --latency` reads each hook's wall time per day
-from Claude Code's transcripts and the guards' timing log (`--days N`, or
-`--since 2026-10-19`),
-`bash doctor.sh --census` counts claude processes and their memory, and
-`bash doctor.sh --disk` sizes job folders and Bazel output bases.
+`python3 ~/.claude/harness-checkup.py` (or `--days 30`, `--json`) prints this
+machine's three largest costs, each with its n, window and the line it is
+measured against. Offline; it prints no prompt text and no dollar amounts.
+
+From a clone, the detail: `bash doctor.sh --latency` reads each hook's wall time
+per day from Claude Code's transcripts and the guards' timing log (`--days N`,
+or `--since 2026-10-19`), `bash doctor.sh --census` counts claude processes and
+their memory, and `bash doctor.sh --disk` sizes job folders and Bazel output
+bases.
 
 ## Install
 
