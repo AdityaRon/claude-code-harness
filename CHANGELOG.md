@@ -8,6 +8,19 @@ installed machine to the newest tag. After v1.4.2 the skills live in
 [claude-code-skills](https://github.com/AdityaRon/claude-code-skills), with their
 own changelog; `config/skills.pin` names the release each version installs.
 
+## v1.4.20 (2026-11-20)
+
+Merged since v1.4.19: 1 PR.
+
+### Other
+- skills.pin: claude-code-skills v1.4.0, which adds harness-checkup (#321)
+
+### Benchmark vs v1.4.19
+
+Gate script and corpus from `19361eb` (v1.4.19): 515 payloads, 0 of them new in this change.
+
+hooks/ and config/settings.json match v1.4.19; benchmark skipped (both sides would run the same files).
+
 ## v1.4.19 (2026-11-20)
 
 Merged since v1.4.18: 2 PRs.
