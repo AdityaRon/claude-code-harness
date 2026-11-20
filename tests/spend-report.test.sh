@@ -111,6 +111,87 @@ run --json
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["calls"]==8 and d["alerts"]==[]' "$OUT" 2>/dev/null \
   && pass "--json is JSON with the same counts" || fail "--json" "$OUT"
 
+echo "=== rewrite causes ==="
+# Each case is a root of its own: one main session (1 h writes) or one subagent (5 min
+# writes), a first call that writes, then the calls named, minutes after the one before.
+python3 - "$TMP/causes" <<'PY'
+import json, os, sys, datetime as dt
+base = dt.datetime(2026, 10, 20, 9, 0, tzinfo=dt.timezone.utc)
+def at(m): return (base + dt.timedelta(seconds=round(m * 60))).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+def call(m, n, w1=0, w5=0, read=0):
+    u = {'input_tokens': 0, 'output_tokens': 10, 'cache_read_input_tokens': read,
+         'cache_creation_input_tokens': w1 + w5,
+         'cache_creation': {'ephemeral_1h_input_tokens': w1, 'ephemeral_5m_input_tokens': w5}}
+    return {'type': 'assistant', 'timestamp': at(m), 'requestId': f'r{n}',
+            'message': {'id': f'm{n}', 'model': 'claude-opus-5-5', 'usage': u}}
+def boundary(m): return {'type': 'system', 'subtype': 'compact_boundary', 'timestamp': at(m)}
+def tick(m): return {'type': 'user', 'timestamp': at(m), 'isMeta': True, 'scheduledFireId': 'f',
+                     'message': {'role': 'user', 'content': 'loop tick'}}
+K = 100_000
+cases = {
+    'gap70': [call(0, 1, w1=K), tick(69.5), call(70, 2, w1=K)],
+    'gap30': [call(0, 1, w1=K), call(30, 2, w1=K)],
+    'boundary': [call(0, 1, w1=K), boundary(5), call(10, 2, w1=K)],
+    # The call before the rewrite only read: the file's writes are still 1 h.
+    'noprevwrite': [call(0, 1, w1=3 * K), call(1, 2, read=3 * K), call(31, 3, w1=K)],
+    # Exactly the TTL is not past it; a second more is.
+    'edge': [call(0, 1, w1=K), call(60, 2, w1=K), call(120 + 1 / 60, 3, w1=K)],
+    'sub': [call(0, 1, w5=K), call(6, 2, w5=K), call(10, 3, w5=K)],
+}
+for name, rows in cases.items():
+    d = os.path.join(sys.argv[1], name, 'proj')
+    f = os.path.join(d, 'sess', 'subagents', 'agent-a.jsonl') if name == 'sub' else os.path.join(d, 'sess.jsonl')
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    open(f, 'w').write(''.join(json.dumps(r) + '\n' for r in rows))
+PY
+causes() {  # ROOT -> "main ttl-gap/compaction/other, subagents ttl-gap/compaction/other" rewrite calls
+  TZ=UTC python3 "$SR" --root "$TMP/causes/$1" --since 2026-10-20T00:00:00+00:00 --until 2026-10-21T00:00:00+00:00 --json \
+    | python3 -c 'import json,sys; c=json.load(sys.stdin)["rewrite_causes"]
+print(", ".join(g + " " + "/".join(str(c[g][k]["calls"]) for k in ("ttl-gap","compaction","other")) for g in ("main","subagents")))'
+}
+want_causes() {  # CASE WANT WHY
+  local got; got=$(causes "$1" 2>&1)
+  [[ "$got" == "$2" ]] && pass "$3" || fail "$3" "wanted: $2"$'\n'"    got:    $got"
+}
+want_causes gap70 'main 1/0/0, subagents 0/0/0' "a 1 h file, 70 min since the last call: ttl-gap"
+want_causes gap30 'main 0/0/1, subagents 0/0/0' "the same file, 30 min since: other"
+want_causes boundary 'main 0/1/0, subagents 0/0/0' "a compact_boundary between the calls, 10 min apart: compaction"
+want_causes noprevwrite 'main 0/0/1, subagents 0/0/0' "the call before wrote nothing, 30 min since: the file's 1 h TTL still holds, other"
+want_causes edge 'main 1/0/1, subagents 0/0/0' "exactly 60 min is not past a 1 h TTL; 60 min and 1 s is"
+want_causes sub 'main 0/0/0, subagents 1/0/1' "a 5 min subagent file: 6 min since is ttl-gap, 4 min is other"
+OUT=$(TZ=UTC python3 "$SR" --root "$TMP/causes/gap70" --since 2026-10-20T00:00:00+00:00 --until 2026-10-21T00:00:00+00:00 2>&1)
+has 'main sessions: 200k written; ttl-gap 1 calls 100k (50%), compaction 0 calls 0 (0%), other 0 calls 0 (0%)' \
+  "the summary gives each cause's calls, tokens and share of the cache-write tokens"
+has 'subagents:     0 written;' "subagents get a line of their own"
+OUT=$(TZ=UTC python3 "$SR" --root "$TMP/causes/gap70" --since 2026-10-20T00:00:00+00:00 --until 2026-10-21T00:00:00+00:00 --tick-prompt 'loop tick' 2>&1)
+has 'first call a ttl-gap rewrite in 1 of 1 ticks' "--tick-prompt counts the ticks whose first call was a ttl-gap rewrite"
+has '2026-10-20 10:09  sess  first call: ttl-gap rewrite, 100k written after 70 min (TTL 60 min)' "and says so on each tick's line"
+[[ "$(printf '%s\n' "$OUT" | grep -c 'loop tick')" == 1 ]] \
+  && pass "a tick's line carries no prompt text" || fail "prompt text on a tick line" "$OUT"
+
+echo "=== prices ==="
+# One call per model: 1M output, 1M cache read and 1M 1 h cache write.
+python3 - "$TMP/prices" claude-fable-5-2 claude-sonnet-5-5 <<'PY'
+import json, os, sys
+u = {'input_tokens': 0, 'output_tokens': 1_000_000, 'cache_read_input_tokens': 1_000_000,
+     'cache_creation_input_tokens': 1_000_000, 'cache_creation': {'ephemeral_1h_input_tokens': 1_000_000}}
+for m in sys.argv[2:]:
+    os.makedirs(os.path.join(sys.argv[1], m, 'proj'))
+    with open(os.path.join(sys.argv[1], m, 'proj', 's.jsonl'), 'w') as f:
+        f.write(json.dumps({'type': 'assistant', 'timestamp': '2026-10-20T09:00:00Z', 'requestId': 'r',
+                            'message': {'id': 'm', 'model': m, 'usage': u}}) + '\n')
+PY
+price_of() {  # MODEL -> the cost of its call, or what went unpriced
+  TZ=UTC python3 "$SR" --root "$TMP/prices/$1" --since 2026-10-20T00:00:00+00:00 --until 2026-10-21T00:00:00+00:00 --json \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["unpriced"] or "%.2f" % sum(d["total"].values()))'
+}
+# $40 output, $0.20 cache read, $16 write (2x the $8 input).
+[[ "$(price_of claude-fable-5-2)" == 56.20 ]] && pass "claude-fable-5-2 is priced: \$8 in, \$40 out, \$0.20 cache read" \
+  || fail "claude-fable-5-2 price" "$(price_of claude-fable-5-2)"
+# $10 output, $0.10 cache read (0.05x, not Claude Sonnet 5's 0.1x), $4 write.
+[[ "$(price_of claude-sonnet-5-5)" == 14.10 ]] && pass "claude-sonnet-5-5 reads the cache at \$0.10" \
+  || fail "claude-sonnet-5-5 price" "$(price_of claude-sonnet-5-5)"
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit "$FAIL"
