@@ -7,7 +7,7 @@
       "id": "bash-wait",
       "what": "Guards on a Bash call",
       "release": "v1.4.17",
-      "measured": "Wait p50 {p50_base} → {p50_head} ms, p95 {p95_base} → {p95_head} ms, v1.4.16 → v1.4.17 in one run",
+      "measured": "Wait p50 {p50_base} → {p50_head} ms, p95 {p95_base} → {p95_head} ms (v1.4.16 → v1.4.17, same run)",
       "values": {
         "p50_base": 62.2,
         "p50_head": 62.6,
@@ -15,7 +15,7 @@
         "p95_head": 114.2
       },
       "n": "395 Bash payloads, one run",
-      "environment": "CI runner, Linux, AMD EPYC 9V74, release workflow",
+      "environment": "CI runner, Linux, AMD EPYC 9V74",
       "date": "2026-11-20",
       "source": "[CHANGELOG.md](CHANGELOG.md#v1417-2026-11-20), v1.4.17, the first Bash row",
       "source_file": "CHANGELOG.md",
@@ -36,7 +36,7 @@
     },
     {
       "id": "asks",
-      "what": "Asks kept only where people say no",
+      "what": "Always-approved asks removed",
       "measured": "{approved} of {asks} guard asks approved over {days} days, the median one holding its call {held} s; then {asks30} asks and {rejected30} rejection in {days30} days",
       "values": {
         "approved": 849,
@@ -48,8 +48,8 @@
         "days30": 30
       },
       "n": "872 asks; 476 asks",
-      "environment": "One machine's transcripts; then a personal machine's",
-      "date": "2026-08-18 to 2026-10-06; 30 days to 2026-11-15",
+      "environment": "One machine's transcripts, then a personal machine's",
+      "date": "2026-08-18 to 2026-10-06, then 30 days to 2026-11-15",
       "source": "[docs/permission-friction.md](docs/permission-friction.md); [#237](https://github.com/AdityaRon/claude-code-harness/issues/237), Measured inputs",
       "source_file": "docs/permission-friction.md",
       "source_quote": [
@@ -78,7 +78,7 @@
         "head": 21.98
       },
       "n": "400 payloads (395 Bash, 5 Monitor), one run",
-      "environment": "CI runner, Linux, AMD EPYC 9V74, under strace -f",
+      "environment": "CI runner, Linux, AMD EPYC 9V74, strace -f",
       "date": "2026-11-20",
       "source": "[CHANGELOG.md](CHANGELOG.md#v1416-2026-11-20), v1.4.16, the launches table",
       "source_file": "CHANGELOG.md",
