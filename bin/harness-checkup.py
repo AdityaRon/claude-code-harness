@@ -6,7 +6,7 @@
 
 Runs, from beside this file (installed: ~/.claude; in the clone: bin/):
   spend-report.py --json             cache rewrites after a lapsed TTL, by cause
-  permission-friction.py --json      time calls waited on a prompt that was then approved
+  permission-friction.py --json      time calls were held by a prompt that was then approved
   hook-latency.py --total --json     the slowest Bash guard's p95 (bash-guards' timing log)
   disk-space.py report --json        what the job folders hold
   memory-verify.sh --offline --json  each memory index against its load limit, and its findings
@@ -91,26 +91,27 @@ def ttl_gap(d, window):
 
 
 def asks(d, days, window):
-    hours = sum(w.get('ask_total_h') or 0 for w in d['waits'].values())
-    hours += sum(g.get('wait_total_h') or 0 for g in d['prompt_approved'])
-    n = sum(w.get('asks') or 0 for w in d['waits'].values()) + sum(g['count'] for g in d['prompt_approved'])
-    return cost('asks', 'waits on prompts that were then approved', hours / days,
+    """Each group's approved prompts times its median hold: a few prompts left for hours while no one
+    was at the keyboard carry the plain sum (on one Mac, 11 of 284 made 47 of its 83 hours), and
+    should not carry the rank. A hold runs from the call to its result, so it holds the run time too."""
+    groups = [(w.get('asks') or 0, w.get('ask_p50') or 0, w.get('ask_total_h') or 0) for w in d['waits'].values()]
+    groups += [(g['count'], g.get('wait_p50_s') or 0, g.get('wait_total_h') or 0) for g in d['prompt_approved']]
+    n = sum(c for c, _, _ in groups)
+    hours = sum(c * p50 for c, p50, _ in groups) / 3600
+    held = sum(t for _, _, t in groups)
+    return cost('asks', 'calls held by prompts that were then approved, count x median hold', hours / days,
                 f"{n:,} approved prompts of {d['totals']['tool_calls']:,} tool calls", window, 'permission-friction.py',
-                f'{hours:.1f} h held in all, by guard asks and Claude Code\'s own prompts')
+                f'held from call to result, run time included; {held:.1f} h summed, which a few long holds carry')
 
 
 def guard(d, window):
+    """From bash-guards' timing log, which has every Bash call; hook records cover only the calls a hook answered."""
     rows = [g for g in d.get('guards') or [] if g.get('p95') is not None]
-    if rows:
-        g = max(rows, key=lambda r: r['p95'])
-        return cost('guard', 'slowest Bash guard, p95 per call', float(g['p95']), f"{g['n']:,} calls", window,
-                    'hook-latency.py', f"{g['guard']}, from bash-guards' timing log")
-    rows = [r for r in d.get('rows') or [] if r.get('p95') is not None and r['n'] >= 5]
     if not rows:
         return None
-    r = max(rows, key=lambda r: r['p95'])
-    return cost('guard', 'slowest hook, p95 per record', float(r['p95']), f"{r['n']:,} records", window,
-                'hook-latency.py', f"{r['hook']}, from transcript hook records (no timing log)")
+    g = max(rows, key=lambda r: r['p95'])
+    return cost('guard', 'slowest Bash guard, p95 per call', float(g['p95']), f"{g['n']:,} calls", window,
+                'hook-latency.py', f"{g['guard']}, from bash-guards' timing log")
 
 
 def jobs(d):
@@ -188,6 +189,8 @@ def gather(days):
             continue
         if c:
             costs.append(c)
+        else:
+            errors.append(f'{name}: nothing to measure in the window')
     costs.sort(key=lambda c: -c['x'])
     return {'generated': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'days': days, 'costs': costs, 'errors': errors}
 

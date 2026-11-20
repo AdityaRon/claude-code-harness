@@ -16,6 +16,22 @@ CANARY=CANARY-7f3a91c2
 
 # The corpus: 46% of its cache-write tokens are ttl-gap rewrites (75k of 162k), one approved guard ask.
 python3 "$REPO/tests/lib/transcripts.py" "$H/.claude/projects" --canary "$CANARY" >/dev/null
+# Three more approved guard asks, held 60 s, 60 s and 30 h (left overnight). Summed they are 4.3 h a
+# day and would rank second; count x median (4 x 60 s) is near nothing.
+python3 - "$H/.claude/projects/proj2/s2.jsonl" "$REPO/tests/lib" <<'PY'
+import datetime as dt, sys
+sys.path.insert(0, sys.argv[2])
+import transcripts as T
+now = dt.datetime.now(dt.timezone.utc)
+rows = []
+for i, held in enumerate([60, 60, 30 * 3600]):
+    t = now - dt.timedelta(hours=40) + dt.timedelta(hours=i)
+    uid = f'toolu_h{i}'
+    rows += [T.asst(t, f'h{i}', content=[T.tool_use(uid, 'Bash', {'command': 'curl -s https://example.invalid/'})]),
+             T.hook(t, uid, '~/.claude/hooks/network-guard.sh', 100, decision='ask', reason='network-guard: outside the allowlist.'),
+             T.tool_result(t + dt.timedelta(seconds=held), uid)]
+T.write(sys.argv[1], [{**r, 'sessionId': 's2', 'sessionKind': 'interactive'} for r in rows])
+PY
 # bash-guards' timing log: interpreter-guard at 1.5 s on every call, p95 1,500 ms.
 mkdir -p "$H/.claude/logs" "$H/.claude/jobs/0a1b2c3d"
 AT=$(( $(date +%s) - 3600 ))
@@ -56,8 +72,8 @@ suite() {  # suite WHERE SCRIPT
   has '1. cache rewrites after a lapsed TTL: 46% of cache-write tokens, 4.6x the line of 10%' "$1: ranked first, the ttl-gap share"
   has '2. slowest Bash guard, p95 per call: 1,500 ms, 1.5x' "$1: then the guard p95 from the timing log"
   has '3. the largest memory index: 75% of its load limit, 0.8x' "$1: then the memory index"
-  [[ "$(printf '%s\n' "$OUT" | grep '^Below these: ')" == *'waits on prompts that were then approved 0.00x'*'job folders'* \
-     || "$(printf '%s\n' "$OUT" | grep '^Below these: ')" == *'job folders on disk 0.00x'*'waits on prompts'* ]] \
+  local below; below=$(printf '%s\n' "$OUT" | grep '^Below these: ')
+  [[ "$below" == *'calls held by prompts that were then approved, count x median hold 0.01x'* && "$below" == *'job folders on disk 0.00x'* ]] \
     && pass "$1: the other two are named below the three" || fail "$1: below the three" "$OUT"
   [[ "$OUT$JSON" != *"$CANARY"* ]] && pass "$1: no prompt text, text or --json" || fail "$1: prompt text printed" "$OUT"
   [[ "$OUT$JSON" != *'$'* && "$OUT$JSON" != *USD* ]] && pass "$1: no dollar amount" || fail "$1: a dollar amount" "$OUT"
@@ -82,11 +98,13 @@ mkdir -p "$H/.claude/hooks/lib"; cp "$REPO/hooks/lib/memory-limits.sh" "$H/.clau
 suite installed "$H/.claude/harness-checkup.py"
 
 echo ""
-echo "=== a tool that fails is named, and the rest still rank ==="
+echo "=== a tool that fails, or finds nothing, is named, and the rest still rank ==="
 mv "$H/.claude/spend-report.py" "$H/.claude/spend-report.off"
+mv "$H/.claude/logs/guard-timing.log" "$H/.claude/logs/guard-timing.off"
 check "$H/.claude/harness-checkup.py"
 has 'Not measured: spend-report exited 2.' "the failed tool is named with its exit status"
-has '1. slowest Bash guard' "the others still rank"
+has 'Not measured: hook-latency: nothing to measure in the window.' "no timing log: the guard cost is named as not measured"
+has '1. the largest memory index' "the others still rank"
 [[ $RC -eq 0 && "$OUT" != *Traceback* ]] && pass "and the checkup still exits 0" || fail "failed tool" "$OUT"
 
 echo ""
