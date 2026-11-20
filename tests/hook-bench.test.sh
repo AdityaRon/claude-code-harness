@@ -201,6 +201,11 @@ echo ""
 echo "=== --launches: the processes each hook starts, per payload, on a copy of the real hooks ==="
 F3="$TMP/fix3"; mkdir -p "$F3/config"
 cp -R "$PWD/hooks" "$F3/hooks"; cp "$PWD/config/settings.json" "$F3/config/settings.json"
+# The hooks start nothing before lib.sh now. The copy's subagent-cache-guard runs dirname
+# there, as all of them did, so the shims are shown first on the PATH a hook starts with.
+awk '!d && index($0, "source \"${0%/*}/lib.sh\"") { print "dirname \"$0\" >/dev/null"; d=1 } { print }' \
+  "$F3/hooks/subagent-cache-guard.sh" > "$TMP/scg" && cat "$TMP/scg" > "$F3/hooks/subagent-cache-guard.sh"
+grep -qxF 'dirname "$0" >/dev/null' "$F3/hooks/subagent-cache-guard.sh" || fail "test setup" "no lib.sh line in subagent-cache-guard.sh"
 ( cd "$F3" && git init -q && git -c user.email=t@example.com -c user.name=t add -A \
   && git -c user.email=t@example.com -c user.name=t commit -qm base && git tag base ) || { echo "fixture failed"; exit 1; }
 { jq -nc '{id:"ls",tool_name:"Bash",tool_input:{command:"ls -la"}}'
@@ -229,7 +234,7 @@ grep -q '^Processes started: execs found through PATH only' "$TMP/l.md" && grep 
 # docs/guards.md: `ls -la` starts one program, the dispatcher's jq; the hook's own bash is not one.
 [ "$(jq -c '.launches.per_payload.ls.base["bash-guards.sh"][0]' "$TMP/l.json")" = 1 ] \
   && pass "shim: ls -la is one exec in bash-guards, jq" || fail "shim: ls -la" "$(jq -c '.launches.per_payload.ls' "$TMP/l.json")"
-# subagent-cache-guard runs dirname before it loads lib.sh: the shims are first on the PATH it starts with too.
+# The copy's subagent-cache-guard runs dirname before it loads lib.sh: the shims are first on the PATH it starts with too.
 [ "$(jq -c '.launches.per_payload.ls.base["subagent-cache-guard.sh"][0]' "$TMP/l.json")" = 1 ] \
   && pass "shim: subagent-cache-guard's dirname, before lib.sh" || fail "shim: before lib.sh" "$(jq -c '.launches.per_payload.ls' "$TMP/l.json")"
 if [ "$STRACE" = yes ]; then
