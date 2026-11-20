@@ -257,6 +257,12 @@ if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
       fi
     fi
   fi
+  # memory-lint's pending lists (hooks/memory-lint-stop.sh clears them at Stop). A
+  # turn that ended by interrupt never reaches Stop, so its list stays: once per
+  # measurement, one detached find removes the ones a day old.
+  if (( D_AT > 0 )) && [[ -d "$STATE_DIR/lint-pending" ]] && claim "$STATE_DIR/lint-pending-prune" "$D_AT"; then
+    ( find "$STATE_DIR/lint-pending" -type f -mtime +0 -delete ) >/dev/null 2>&1 &
+  fi
   D_GL=${CLAUDE_GUARD_P90_WARN_MS:-1000}
   [[ "$D_GL" =~ ^[0-9]{1,7}$ ]] || D_GL=1000
   if (( D_GP > D_GL && D_AT > 0 )); then

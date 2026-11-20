@@ -6,12 +6,14 @@
 # gets ignored, and then it is worse than no hook at all.
 set -u
 HOOK="${CCH_MEMORY_LINT_SH:-hooks/memory-lint.sh}"   # a mutation run points this at a changed copy
+STOP="${CCH_MEMORY_LINT_STOP_SH:-hooks/memory-lint-stop.sh}"
 PASS=0; FAIL=0
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 STORE="$TMP/projects/teststore/memory"
 mkdir -p "$STORE"
+export CLAUDE_STATE_DIR="$TMP/state"   # where the pending lists go
 
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
@@ -20,12 +22,18 @@ check_absent()   { case "$3" in *"$2"*) fail "$1" "unexpected: $2" ;; *) pass "$
 check_eq()       { if [ "$3" = "$2" ]; then pass "$1"; else fail "$1" "expect=$2 got=$3"; fi; }
 
 lint() {  # lint <file> [tool]
-  printf '{"tool_name":"%s","tool_input":{"file_path":"%s"}}' "${2:-Write}" "$1" \
+  printf '{"tool_name":"%s","tool_input":{"file_path":"%s"},"session_id":"%s"}' "${2:-Write}" "$1" "${SID:-tsess}" \
     | bash "$HOOK" 2>&1
 }
 lint_rc() {
-  printf '{"tool_name":"Write","tool_input":{"file_path":"%s"}}' "$1" \
+  printf '{"tool_name":"Write","tool_input":{"file_path":"%s"},"session_id":"%s"}' "$1" "${SID:-tsess}" \
     | bash "$HOOK" >/dev/null 2>&1; echo $?
+}
+stop() {  # stop [active]: the Stop hook's stdout for this session
+  printf '{"session_id":"%s","hook_event_name":"Stop","stop_hook_active":%s}' "${SID:-tsess}" "${1:-false}" | bash "$STOP" 2>&1
+}
+lintstop() {  # lint <file> [tool], then Stop: what the model is told by the end of the turn
+  lint "$@"; stop
 }
 
 # A healthy memory, plus its index line.
@@ -137,8 +145,8 @@ echo "=== a memory absent from the index will never be recalled ==="
 write_mem indexed "a description" "body"
 cp "$STORE/indexed.md" "$STORE/orphan.md"
 sed -i.bak 's/^name: indexed/name: orphan/' "$STORE/orphan.md" && rm -f "$STORE/orphan.md.bak"
-check_contains "orphan flagged" "no line in MEMORY.md points at orphan.md" "$(lint "$STORE/orphan.md")"
-check_absent   "indexed one is not" "no line in MEMORY.md"                 "$(lint "$STORE/indexed.md")"
+check_contains "orphan flagged at the end of the turn" "no line in MEMORY.md points at orphan.md" "$(lintstop "$STORE/orphan.md")"
+check_absent   "indexed one is not" "no line in MEMORY.md"                 "$(lintstop "$STORE/indexed.md")"
 
 echo ""
 echo "=== the index LINE budget is counted in CHARACTERS, unlike the total ==="
@@ -244,7 +252,7 @@ SUM_BEFORE=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
 lint "$STORE/untouched.md" >/dev/null 2>&1
 SUM_AFTER=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
 check_eq "store byte-identical" "$SUM_BEFORE" "$SUM_AFTER"
-check_eq "exit 2 is advice, not a block" "2" "$(lint_rc "$STORE/untouched.md")"
+check_eq "exit 2 is a problem notice for a write that already happened" "2" "$(lint_rc "$STORE/untouched.md")"
 
 echo ""
 echo ""
@@ -313,21 +321,21 @@ mkmem() {  # mkmem <stem> <type>
 mkmem feedback_hub_result_describes_lookup feedback
 mkmem feedback_hub_test_cannot_fail        feedback
 mkmem feedback_new_lesson                  feedback
-OUT=$(lint "$STORE/feedback_new_lesson.md")
+OUT=$(lintstop "$STORE/feedback_new_lesson.md")
 check_contains "hub advice given"      "principle hubs"                          "$OUT"
 check_contains "names a real hub"      "[[feedback_hub_result_describes_lookup]]" "$OUT"
 check_contains "names the other hub"   "[[feedback_hub_test_cannot_fail]]"        "$OUT"
 check_contains "says where the line goes" "MEMORY_ARCHIVE.md"                     "$OUT"
-check_absent   "not the generic advice" "Add one, in the section for its type"    "$OUT"
+check_absent   "not the generic advice" "Add one, in the section for its type"    "$(lint "$STORE/feedback_new_lesson.md")"
 
 echo ""
 echo "=== the hub itself, other types, and indexed memories are left alone ==="
-OUT=$(lint "$STORE/feedback_hub_test_cannot_fail.md")
+OUT=$(lintstop "$STORE/feedback_hub_test_cannot_fail.md")
 check_absent   "a hub is not told to join a hub" "principle hubs"                  "$OUT"
 check_contains "a hub still needs its own line"  "Add one, in the section"         "$OUT"
 
 mkmem reference_fact reference
-OUT=$(lint "$STORE/reference_fact.md")
+OUT=$(lintstop "$STORE/reference_fact.md")
 check_absent   "reference gets no hub advice"    "principle hubs"                  "$OUT"
 check_contains "reference gets generic advice"   "Add one, in the section"         "$OUT"
 
@@ -363,7 +371,7 @@ echo "=== a store with no hubs never mentions them ==="
 rm -f "$STORE"/feedback_hub_*.md
 : > "$STORE/MEMORY.md"
 mkmem feedback_another feedback
-OUT=$(lint "$STORE/feedback_another.md")
+OUT=$(lintstop "$STORE/feedback_another.md")
 check_absent   "no hubs, no hub advice"          "principle hubs"                  "$OUT"
 check_contains "falls back to generic advice"    "Add one, in the section"         "$OUT"
 
@@ -428,7 +436,7 @@ OUT=$(lint "$STORE/feedback_alone.md")
 check_contains "with hubs, names them"       "[[feedback_hub_b]]" "$OUT"
 check_absent   "and not the new-memory advice" "do NOT add a MEMORY.md line" "$OUT"
 rm -f "$STORE/MEMORY_ARCHIVE.md"
-check_contains "no archive line: the old finding stands" "no line in MEMORY.md points at project_done.md" "$(lint "$STORE/project_done.md")"
+check_contains "no archive line: the old finding stands" "no line in MEMORY.md points at project_done.md" "$(lintstop "$STORE/project_done.md")"
 
 echo ""
 echo "=== a handoff tracker: the shape, size, STATE stamp and crons ==="
@@ -453,7 +461,8 @@ check_eq "TRACKER_MAX_BYTES raises it" "" "$(TRACKER_MAX_BYTES=9000 lint "$TRK/b
 tracker "$TRK/ahead.md" "$(date -u -r $(( $(date +%s) + 720 )) +%Y-%m-%dT%H:%MZ 2>/dev/null || date -u -d @$(( $(date +%s) + 720 )) +%Y-%m-%dT%H:%MZ)" "$CR"
 check_contains "a stamp 12 min ahead of the clock" "min ahead of the clock" "$(lint "$TRK/ahead.md")"
 tracker "$TRK/old.md" "2026-01-01T00:00Z" "$CR"
-check_contains "an old stamp" "min old, older than this write" "$(lint "$TRK/old.md")"
+check_eq "an old stamp: silent at the write, the body may be what this edit is" "" "$(lint "$TRK/old.md")"
+check_contains "an old stamp: reported at Stop" "min older than your last edit" "$(stop)"
 tracker "$TRK/bad.md" "yesterday afternoon" "$CR"
 check_contains "a stamp that is not UTC ISO" "is not a UTC time" "$(lint "$TRK/bad.md")"
 { printf '## Scope\n## Open\n## Owed\n## Settled\n## Next on restart\nCrons: none\n'; } > "$TRK/nostamp.md"
@@ -471,6 +480,109 @@ check_contains "Crons: none with an entry under it" "\`Crons: none\` with entrie
 check_eq "a tracker finding exits 2 (handed to the model)" "2" "$(lint_rc "$TRK/nocron.md")"
 mkdir -p "$TMP/notes"; cp "$TRK/nocron.md" "$TMP/notes/nocron.md"
 check_eq "the same file outside trackers/: not checked" "0" "$(lint_rc "$TMP/notes/nocron.md")"
+
+echo ""
+echo "=== the two-write saves are judged at the end of the turn, not between the writes ==="
+PEND_DIR="$CLAUDE_STATE_DIR/lint-pending"
+epoch_to_stamp() { date -u -r "$1" +%Y-%m-%dT%H:%MZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%MZ; }
+: > "$STORE/MEMORY.md"
+mkmem two_step reference
+SID=two-step
+OUT=$(lint "$STORE/two_step.md"); RC=$(lint_rc "$STORE/two_step.md")
+check_eq "a memory with no index line yet: silent at the write" "" "$OUT"
+check_eq "and exit 0" "0" "$RC"
+check_contains "the write is on the pending list" "two_step.md" "$(cat "$PEND_DIR/two-step")"
+echo "- [T](two_step.md) — hook" >> "$STORE/MEMORY.md"
+check_eq "the line arrives: Stop is silent" "" "$(stop)"
+check_eq "and the list is empty after it" "" "$(cat "$PEND_DIR/two-step")"
+
+mkmem one_step reference
+SID=one-step
+lint "$STORE/one_step.md" >/dev/null
+OUT=$(stop)
+check_contains "a turn that ends without the line: reported" "no line in MEMORY.md points at one_step.md" "$OUT"
+check_contains "as Stop additionalContext, not a block" '"hookEventName":"Stop","additionalContext"' "$OUT"
+check_absent   "no block decision" '"decision"' "$OUT"
+check_eq "the report is valid JSON" "ok" "$(printf '%s' "$OUT" | jq -e '.hookSpecificOutput.additionalContext | length > 0' >/dev/null 2>&1 && echo ok)"
+check_eq "a second Stop is silent" "" "$(stop)"
+
+SID=active
+lint "$STORE/one_step.md" >/dev/null
+check_eq "stop_hook_active true: no output" "" "$(stop true)"
+check_contains "and the list is kept for the next Stop" "one_step.md" "$(cat "$PEND_DIR/active")"
+check_contains "which reports it" "one_step.md" "$(stop)"
+
+echo ""
+echo "=== STATE: is compared with the write it was recorded at, not with Stop ==="
+SID=st-body-state
+tracker "$TRK/s1.md" "$(epoch_to_stamp $(( $(date +%s) - 3600 )))" "$CR"
+lint "$TRK/s1.md" >/dev/null
+tracker "$TRK/s1.md" "$NOWS" "$CR"
+lint "$TRK/s1.md" >/dev/null
+check_eq "body edit, then STATE edit: silent at Stop" "" "$(stop)"
+SID=st-body-only
+tracker "$TRK/s2.md" "$(epoch_to_stamp $(( $(date +%s) - 3600 )))" "$CR"
+check_eq "body edit alone: silent at the write" "" "$(lint "$TRK/s2.md")"
+check_contains "body edit alone: reported at Stop, with the age" "s2.md: its STATE: stamp is 6" "$(stop)"
+SID=st-fresh
+tracker "$TRK/s3.md" "$NOWS" "$CR"
+lint "$TRK/s3.md" >/dev/null
+# Ten minutes pass between the write and Stop: the list and the stamp as they would then read.
+LATER=$(( $(date +%s) - 600 ))
+printf '%s %s\n' "$LATER" "$TRK/s3.md" > "$PEND_DIR/st-fresh"
+tracker "$TRK/s3.md" "$(epoch_to_stamp "$LATER")" "$CR"
+check_eq "a stamp fresh at its write, Stop 10 min later: silent" "" "$(stop)"
+SID=st-ahead
+tracker "$TRK/s4.md" "$(epoch_to_stamp $(( $(date +%s) + 720 )))" "$CR"
+check_contains "ahead of the clock stays immediate" "min ahead of the clock" "$(lint "$TRK/s4.md")"
+SID=st-bad
+tracker "$TRK/s5.md" "tomorrow" "$CR"
+check_contains "not a UTC time stays immediate" "is not a UTC time" "$(lint "$TRK/s5.md")"
+check_eq "and Stop adds nothing for it" "" "$(stop)"
+
+echo ""
+echo "=== the hub hint is advice at the write: additionalContext, exit 0 ==="
+: > "$STORE/MEMORY.md"
+rm -f "$STORE"/feedback_*.md
+mkmem feedback_hub_x feedback
+mkmem feedback_hinted feedback
+SID=hint
+OUT=$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s"},"session_id":"hint"}' "$STORE/feedback_hinted.md" | bash "$HOOK" 2>/dev/null); RC=$?
+check_eq "exit 0" "0" "$RC"
+check_eq "PostToolUse additionalContext carries the hub advice" "ok" "$(printf '%s' "$OUT" | jq -e '.hookSpecificOutput | select(.hookEventName == "PostToolUse") | .additionalContext | contains("principle hubs") and contains("[[feedback_hub_x]]")' >/dev/null 2>&1 && echo ok)"
+
+echo ""
+echo "=== nothing pending: Stop starts no process ==="
+REAL_BASH=$(command -v bash); SHIM="$TMP/shim"; PLOG="$TMP/started"; mkdir -p "$SHIM"
+LIB_PATH=$(sed -n 's/^export PATH="\(.*\)"$/\1/p' hooks/lib.sh)
+IFS=: read -ra PDIRS <<< "${LIB_PATH%:\$PATH}:$PATH"
+for d in "${PDIRS[@]}"; do
+  [ -d "$d" ] || continue
+  for f in "$d"/*; do
+    n=${f##*/}
+    [[ "$n" =~ ^[A-Za-z0-9._+-]+$ && -f "$f" && -x "$f" && ! -e "$SHIM/$n" ]] || continue
+    printf '#!/bin/sh\necho %s >> "%s"\nexec "%s" "$@"\n' "$n" "$PLOG" "$f" > "$SHIM/$n"
+  done
+done
+chmod +x "$SHIM"/*
+mkdir -p "$TMP/hk"; cp -R hooks/. "$TMP/hk/"
+sed "s#^export PATH=\"#export PATH=\"$SHIM:#" hooks/lib.sh > "$TMP/hk/lib.sh"
+[ -n "${CCH_MEMORY_LINT_STOP_SH:-}" ] && cp "$STOP" "$TMP/hk/memory-lint-stop.sh"
+cmp -s hooks/lib.sh "$TMP/hk/lib.sh" && fail "test setup" "lib.sh's PATH line was not found"
+mkdir -p "$TMP/empty-state/lint-pending"
+: > "$PLOG"
+printf '{"session_id":"nothing-here","stop_hook_active":false}' | CLAUDE_STATE_DIR="$TMP/empty-state" PATH="$SHIM:$PATH" "$REAL_BASH" "$TMP/hk/memory-lint-stop.sh" >/dev/null 2>&1
+N=0; while IFS= read -r _; do N=$((N + 1)); done < "$PLOG"
+check_eq "an empty pending dir: zero processes started" "0" "$N"
+printf '%s\n' "$(date +%s) $STORE/one_step.md" > "$TMP/empty-state/lint-pending/some-session"
+: > "$PLOG"
+printf '{"session_id":"some-session","stop_hook_active":false}' | CLAUDE_STATE_DIR="$TMP/empty-state" PATH="$SHIM:$PATH" "$REAL_BASH" "$TMP/hk/memory-lint-stop.sh" >/dev/null 2>&1
+N=0; while IFS= read -r _; do N=$((N + 1)); done < "$PLOG"
+check_eq "a memory on the list: still zero processes" "0" "$N"
+# lib.sh starts no process when sourced, so the shims cannot see it loaded early; the order is held here.
+L_SRC=$(grep -n '^source .*lib\.sh' "$STOP" | head -1 | cut -d: -f1); L_GLOB=$(grep -n '^\[ -s "\$PEND" \] || exit 0' "$STOP" | head -1 | cut -d: -f1)
+if [ -n "$L_SRC" ] && [ -n "$L_GLOB" ] && [ "$L_SRC" -gt "$L_GLOB" ]; then pass "lib.sh is sourced after the pending check"; else fail "lib.sh is sourced after the pending check" "source line ${L_SRC:-none}, check line ${L_GLOB:-none}"; fi
+SID=tsess
 
 echo ""
 echo "=== trackers/: an archive, a ledger, and the ledgers beside a handoff ==="

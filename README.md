@@ -110,6 +110,7 @@ skip, except in CI, which clones it.
 | `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review. Anything else it hooks or calls, outside the guards included, is shown in a notice |
 | `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
 | `memory-lint` | file writes | Advise: name, type, description, `verify:` block and index tier of a memory file. In a `trackers/` folder, only a marked handoff: its shape, size, `STATE:` stamp and `Crons:`, and lines telling a session to read a ledger over 20 KB first; ledgers, reports and archives are not linted (`CLAUDE_TRACKER_LINT=off`) |
+| `memory-lint-stop` | Stop | Advise at the end of the turn: a memory still with no index line, or a handoff whose `STATE:` is older than its write (the two-write saves `memory-lint` defers) |
 | `comment-budget` | file writes | Advise: a comment block an edit grew past 6 lines |
 | `tcc-check` | Bash results and failures | Advise: names macOS privacy control (TCC) when a Bash call prints an "Operation not permitted" error (a tool's, zsh's or python's) for a path in `~/Desktop`, `~/Documents`, `~/Downloads` or iCloud Drive, or for no path while the cwd (or a `cd` in the command) is in one. A line quoting one, in backticks or after grep -n's `file:line:`, is not an error; a log line printed whole still is |
 | `session-start` | SessionStart | Inject: branch, status and recent commits; on resume, files that drifted since the last session; once a day, a warning when job folders or Bazel output bases pass a size |
@@ -244,7 +245,8 @@ bin/                     ← every file installed flat to ~/.claude by install.s
   memory-verify.sh  memory-fix.sh  memory-index.sh  memory-provenance.sh
   session-route.sh       ← which session owns this PR (docs/session-routing.md)
   relocate-clones.sh     ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads (docs/known-limitations.md)
-  spend-report.py        ← what sessions, subagents and loop ticks cost, from local transcripts
+  spend-report.py        ← what sessions, subagents and loop ticks cost, and what caused each context
+                           rewrite (a lapsed cache TTL, a compaction), from local transcripts
   disk-space.py          ← what job folders and Bazel output bases hold (report, bazel); harness-update.sh
                            records the totals, large transcripts and the guards' p90 once a day for
                            session-start's warnings (doctor.sh --disk);
@@ -275,11 +277,14 @@ rules/                   ← installed to ~/.claude/rules, loaded in every sessi
   python-tests.md        ← path-scoped: loads only when Claude opens Python or a file under tests/
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
-                           heredoc-openers, repo-layout, shadow, token-shapes and workflow-gates cut across
-                           files; guard-execs holds bash-guards.sh and each guard to an exec and
-                           fork budget per corpus shape; lib.sh is their shared pass/fail; bench-corpus.jsonl
-                           feeds hook-bench; doctor tests doctor.sh's own report; smoke.list is the
-                           set install.sh and harness-update.sh verify with (doctor.sh --smoke)
+                           heredoc-openers, prompt-canary, repo-layout, shadow, token-shapes and
+                           workflow-gates cut across files; guard-execs holds bash-guards.sh and
+                           each guard to an exec and fork budget per corpus shape; lib.sh is their
+                           shared pass/fail; lib/transcripts.py writes synthetic transcripts at test
+                           time (no real one is committed), and prompt-canary checks that no report
+                           on them prints prompt text; bench-corpus.jsonl feeds hook-bench; doctor
+                           tests doctor.sh's own report; smoke.list is the set install.sh and
+                           harness-update.sh verify with (doctor.sh --smoke)
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
   permissions.md  auto-mode.md  customization.md  known-limitations.md
