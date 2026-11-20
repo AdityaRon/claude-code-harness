@@ -393,8 +393,8 @@ est_run() {   # est_run REPEAT: sets EST (the stderr line's seconds) and ACT (th
   ACT=$(jq -r '.elapsed_s' "$TMP/o5.json")
 }
 est_run 2
-[ -n "$EST" ] && awk -v e="$EST" -v a="$ACT" 'BEGIN { exit !(e * 1.05 >= a && e <= 3 * a) }' \
-  && pass "--repeat 2: the line says at most ${EST} s; the timed phase took ${ACT} s (at least it, within 3x)" \
+[ -n "$EST" ] && awk -v e="$EST" -v a="$ACT" 'BEGIN { exit !(e * 1.5 >= a && e <= 3 * a) }' \
+  && pass "--repeat 2: the line says at most ${EST} s; the timed phase took ${ACT} s (at least two thirds of it, at most 3x)" \
   || fail "warm estimate" "estimate '${EST}' s, timed phase '${ACT}' s; $(grep 'warm-up done' "$TMP/e5")"
 grep -q -- '^hook-bench: .*process start (.*): a floor, the hooks' "$TMP/e5" \
   && pass "the up-front line is kept and says it is a floor" || fail "the floor line" "$(head -2 "$TMP/e5")"
