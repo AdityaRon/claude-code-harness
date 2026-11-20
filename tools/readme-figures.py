@@ -211,7 +211,8 @@ def wait_alt(d):
     lo = min(i, key=lambda x: x["p50"])
     return ("Line chart of a Bash call's wait for the guards by release, as a chained index with %s at 100. "
             "p50 runs from %s at %s to %s at %s, lowest %s at %s; p95 from %s to %s. "
-            "Each step is one release's same-run ratio on one CI runner, from %s; n is %d to %d Bash payloads a run."
+            "Each step is one release's same-run ratio on one CI runner, from %s; n is %d to %d Bash payloads a run. "
+            "From v1.4.0 the benchmark launches the hooks together; earlier ratios ran them one at a time."
             % (d["index_anchor"], i[0]["p50"], i[0]["release"], i[-1]["p50"], i[-1]["release"], lo["p50"],
                lo["release"], i[0]["p95"], i[-1]["p95"], CHANGELOG,
                min(r["bash_payloads"] for r in s["bash_wait_runs"]),
@@ -232,7 +233,8 @@ def wait_caption(d):
     return ("Each point chains one release's ratio, head over base from its entry's first run on one CI runner, "
             "onto the one before; milliseconds differ by runner and are not compared across releases. Source: %s, "
             "the first Bash row of each entry, %s to %s; n = %d to %d Bash payloads a run. %d releases "
-            "changed no hook file, were not benchmarked and are left out."
+            "changed no hook file, were not benchmarked and are left out. From v1.4.0 the benchmark launches the "
+            "hooks together; earlier ratios ran them one at a time, so the chain crosses a change in what wait means."
             % (CHANGELOG, s["bash_wait_index"][0]["release"], d["cited_release"],
                min(r["bash_payloads"] for r in s["bash_wait_runs"]),
                max(r["bash_payloads"] for r in s["bash_wait_runs"]), len(s["not_benchmarked"])))

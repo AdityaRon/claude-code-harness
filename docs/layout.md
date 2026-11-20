@@ -18,7 +18,8 @@ bin/                     ← every file installed flat to ~/.claude by install.s
   memory-verify.sh  memory-fix.sh  memory-index.sh  memory-provenance.sh
   session-route.sh       ← which session owns this PR (docs/session-routing.md)
   relocate-clones.sh     ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads (docs/known-limitations.md)
-  spend-report.py        ← what sessions, subagents and loop ticks cost, from local transcripts
+  spend-report.py        ← what sessions, subagents and loop ticks cost, and what caused each context
+                           rewrite (a lapsed cache TTL, a compaction), from local transcripts
   disk-space.py          ← what job folders and Bazel output bases hold (report, bazel); harness-update.sh
                            records the totals, large transcripts and the guards' p90 once a day for
                            session-start's warnings (doctor.sh --disk);
@@ -51,12 +52,15 @@ rules/                   ← installed to ~/.claude/rules, loaded in every sessi
   python-tests.md        ← path-scoped: loads only when Claude opens Python or a file under tests/
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
-                           heredoc-openers, repo-layout, shadow, token-shapes and workflow-gates cut across
-                           files; guard-execs holds git-guard and interpreter-guard to a process
-                           budget per corpus shape; readme-numbers holds README.md's numbers to the
-                           files they cite; lib.sh is their shared pass/fail; bench-corpus.jsonl
-                           feeds hook-bench; doctor tests doctor.sh's own report; smoke.list is the
-                           set install.sh and harness-update.sh verify with (doctor.sh --smoke)
+                           heredoc-openers, prompt-canary, repo-layout, shadow, token-shapes and
+                           workflow-gates cut across files; guard-execs holds git-guard and
+                           interpreter-guard to a process budget per corpus shape; readme-numbers
+                           holds README.md's numbers to the files they cite; lib.sh is their
+                           shared pass/fail; lib/transcripts.py writes synthetic transcripts at test
+                           time (no real one is committed), and prompt-canary checks that no report
+                           on them prints prompt text; bench-corpus.jsonl feeds hook-bench; doctor
+                           tests doctor.sh's own report; smoke.list is the set install.sh and
+                           harness-update.sh verify with (doctor.sh --smoke)
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
   permissions.md  auto-mode.md  customization.md  known-limitations.md

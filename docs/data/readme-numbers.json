@@ -1,5 +1,5 @@
 {
-  "about": "Every number README.md's generated blocks and docs/figures/ show. The summary rows are entered by hand: each says what was measured, n, where, when, the command, and the file it is read from; source_quote is the line tests/readme-numbers.test.sh finds in source_file. series is written by tools/readme-figures.py --write from CHANGELOG.md, from cited_release down, so a newer release changes nothing until cited_release is moved by hand.",
+  "about": "Every number README.md's generated blocks and docs/figures/ show. The summary rows are entered by hand: each says what was measured, n, where, when and the command, and quotes the sentences it is read from. A quote with a file must be found in that file; a quote with a url is copied from that PR or issue body. tests/readme-numbers.test.sh holds every number in a row's measured text and n to its quotes. series is written by tools/readme-figures.py --write from CHANGELOG.md, from cited_release down, so a newer release changes nothing until cited_release is moved by hand.",
   "cited_release": "v1.4.17",
   "index_anchor": "v1.0.1",
   "summary": [
@@ -7,20 +7,22 @@
       "id": "bash-wait",
       "what": "Guards on a Bash call",
       "release": "v1.4.17",
-      "measured": "Wait p50 {p50_base} → {p50_head} ms, p95 {p95_base} → {p95_head} ms (v1.4.16 → v1.4.17, same run)",
+      "measured": "p50 {p50_head} ms, p95 {p95_head} ms ({p50_base} and {p95_base} at v1.4.16, same run)",
       "values": {
         "p50_base": 62.2,
         "p50_head": 62.6,
         "p95_base": 113.5,
         "p95_head": 114.2
       },
-      "n": "395 Bash payloads, one run",
+      "n": "395 Bash payloads, the first of two runs",
       "environment": "CI runner, Linux, AMD EPYC 9V74",
       "date": "2026-11-20",
       "source": "[CHANGELOG.md](CHANGELOG.md#v1417-2026-11-20), v1.4.17, the first Bash row",
-      "source_file": "CHANGELOG.md",
-      "source_quote": [
-        "| Bash | 395 | 62.2 → 62.6 ms (+1%) | 61.5 → 61.6 ms (+0%) | 113.5 → 114.2 ms (+1%) | 120.9 → 120.9 ms (+0%) |"
+      "quotes": [
+        {
+          "file": "CHANGELOG.md",
+          "text": "| Bash | 395 | 62.2 → 62.6 ms (+1%) | 61.5 → 61.6 ms (+0%) | 113.5 → 114.2 ms (+1%) | 120.9 → 120.9 ms (+0%) |"
+        }
       ],
       "command": "`.github/bench-gate.sh v1.4.16` in `.github/workflows/release.yml`, which runs `tools/hook-bench.py --gate`",
       "details": [
@@ -37,7 +39,7 @@
     {
       "id": "asks",
       "what": "Always-approved asks removed",
-      "measured": "{approved} of {asks} guard asks approved over {days} days, the median one holding its call {held} s; then {asks30} asks and {rejected30} rejection in {days30} days",
+      "measured": "{approved} of {asks} guard asks approved over {days} days, the median one holding its call {held} s; in a later {days30} days, still before the removal, {asks30} asks and {rejected30} rejection",
       "values": {
         "approved": 849,
         "asks": 872,
@@ -51,10 +53,31 @@
       "environment": "One machine's transcripts, then a personal machine's",
       "date": "2026-08-18 to 2026-10-06, then 30 days to 2026-11-15",
       "source": "[docs/permission-friction.md](docs/permission-friction.md); [#237](https://github.com/AdityaRon/claude-code-harness/issues/237), Measured inputs",
-      "source_file": "docs/permission-friction.md",
-      "source_quote": [
-        "Of the 872 asks, 849 were approved and 3 rejected. The median approved ask held",
-        "its call 133 s, against 5 s for a Bash call with no prompt"
+      "quotes": [
+        {
+          "file": "docs/permission-friction.md",
+          "text": "Measured from one machine's local transcripts, 2026-08-18 to 2026-10-06 (49"
+        },
+        {
+          "file": "docs/permission-friction.md",
+          "text": "Of the 872 asks, 849 were approved and 3 rejected. The median approved ask held"
+        },
+        {
+          "file": "docs/permission-friction.md",
+          "text": "its call 133 s, against 5 s for a Bash call with no prompt"
+        },
+        {
+          "file": "docs/permission-friction.md",
+          "text": "removed the always-approved asks. The 30-day"
+        },
+        {
+          "file": "docs/permission-friction.md",
+          "text": "count #237 cites, 476 asks and 1 rejected, was taken before that change."
+        },
+        {
+          "url": "https://github.com/AdityaRon/claude-code-harness/issues/237",
+          "text": "476 guard asks, 1 rejected (a `kubectl delete`); about 100 hours of waiting on asks (`tools/permission-friction.py --days 30`)."
+        }
       ],
       "command": "`tools/permission-friction.py --days 49`; `tools/permission-friction.py --days 30`",
       "details": [
@@ -81,9 +104,15 @@
       "environment": "CI runner, Linux, AMD EPYC 9V74, strace -f",
       "date": "2026-11-20",
       "source": "[CHANGELOG.md](CHANGELOG.md#v1416-2026-11-20), v1.4.16, the launches table",
-      "source_file": "CHANGELOG.md",
-      "source_quote": [
-        "| bash-guards.sh | 400 | 24.53 → 21.98 | 102.72 → 98.66 | 50902 → 48259 | 25 / 118 | 0 |"
+      "quotes": [
+        {
+          "file": "CHANGELOG.md",
+          "text": "| bash-guards.sh | 400 | 24.53 → 21.98 | 102.72 → 98.66 | 50902 → 48259 | 25 / 118 | 0 |"
+        },
+        {
+          "file": "CHANGELOG.md",
+          "text": "515 payloads (395 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 MultiEdit, 2 NotebookEdit)"
+        }
       ],
       "command": "`tools/hook-bench.py --launches strace`, through `.github/bench-gate.sh v1.4.15`",
       "details": [
@@ -100,26 +129,29 @@
     {
       "id": "real-use",
       "what": "Guard wait in real use",
-      "measured": "Slowest guard per Bash call: median {before} s on v1.4.9, {after_lo} to {after_hi} s on v1.4.14; the slowest 10% still wait {tail} s or more",
+      "measured": "Slowest guard per Bash call: median {before} s on v1.4.9; on v1.4.14, {recent} s over the last 300 calls and {all} s over all since install, p90 {p90_a} and {p90_b} s",
       "values": {
         "before": 0.74,
-        "after_lo": 0.26,
-        "after_hi": 0.41,
-        "tail": 3
+        "recent": 0.26,
+        "all": 0.41,
+        "p90_a": 3.02,
+        "p90_b": 3.79
       },
-      "n": "not given",
-      "environment": "Real use, from the guard timing log; the doc names no machine or window",
-      "date": "doc written 2026-11-19",
-      "source": "[docs/long-running-sessions.md](docs/long-running-sessions.md#every-process-a-hook-starts-costs-more-on-a-managed-machine)",
-      "source_file": "docs/long-running-sessions.md",
-      "source_quote": [
-        "In real use, the slowest guard per Bash call (`guard-timing.log`) went from a 0.74 s median on v1.4.9 to 0.26 to 0.41 s on v1.4.14. The slowest 10% still wait 3 s or more, on long chained commands."
+      "n": "1,000 calls (v1.4.9); 300 and 1,337 calls (v1.4.14)",
+      "environment": "The work Mac, from the guard timing log",
+      "date": "doc written 2026-11-19, n added 2026-11-20",
+      "source": "[docs/long-running-sessions.md](docs/long-running-sessions.md#measured-with-n)",
+      "quotes": [
+        {
+          "file": "docs/long-running-sessions.md",
+          "text": "| Slowest guard per Bash call (`guard-timing.log`): median 0.74 s on v1.4.9; on v1.4.14, 0.26 s over the last 300 calls and 0.41 s over all 1,337 since install; p90 3.02 and 3.79 s | 1,000 calls (v1.4.9), 300 and 1,337 calls (v1.4.14) | work Mac |"
+        }
       ],
-      "command": "not given in the doc; `bash doctor.sh --latency` reads the same log",
+      "command": "read from `guard-timing.log`; `bash doctor.sh --latency` reads the same log",
       "details": [
         [
           "long-running-sessions.md",
-          "docs/long-running-sessions.md#every-process-a-hook-starts-costs-more-on-a-managed-machine"
+          "docs/long-running-sessions.md#measured-with-n"
         ]
       ]
     },
@@ -137,13 +169,18 @@
         "after_hi": 14.5
       },
       "n": "3 sessions before; after, not given",
-      "environment": "The work Mac, about 15 background sessions",
+      "environment": "The work Mac, about 15 background sessions; no window given",
       "date": "doc written 2026-11-19",
       "source": "[docs/long-running-sessions.md](docs/long-running-sessions.md#restart-from-a-handoff-not-from-the-transcript)",
-      "source_file": "docs/long-running-sessions.md",
-      "source_quote": [
-        "- Three sessions kept for eight to nine weeks reached 343 to 395 MB each",
-        "On the work Mac, live transcripts went to 6.9 to 14.5 MB."
+      "quotes": [
+        {
+          "file": "docs/long-running-sessions.md",
+          "text": "- Three sessions kept for eight to nine weeks reached 343 to 395 MB each"
+        },
+        {
+          "file": "docs/long-running-sessions.md",
+          "text": "On the work Mac, live transcripts went to 6.9 to 14.5 MB."
+        }
       ],
       "command": "`ls -lS ~/.claude/projects/*/*.jsonl | head`",
       "details": [
@@ -167,9 +204,19 @@
       "environment": "Apple M2, macOS 26.6.2, bash 3.2.57, en_US.UTF-8; the 155 s at load 4 to 7",
       "date": "2026-11-20",
       "source": "[PR #304](https://github.com/AdityaRon/claude-code-harness/pull/304), After; the 155 s also in `tests/guard-latency.test.sh`",
-      "source_file": "tests/guard-latency.test.sh",
-      "source_quote": [
-        "# a Mac. With shadow_note's old ${c//…}, interpreter-guard took 155 s on this one"
+      "quotes": [
+        {
+          "file": "tests/guard-latency.test.sh",
+          "text": "# a Mac. With shadow_note's old ${c//…}, interpreter-guard took 155 s on this one"
+        },
+        {
+          "url": "https://github.com/AdityaRon/claude-code-harness/pull/304",
+          "text": "`tests/guard-latency.test.sh`: a 13 KB synthetic heredoc of 260 lines through interpreter-guard and bash-guards under a UTF-8 locale, within the suite's 10 s limit, and a check that each reached `shadow_note`."
+        },
+        {
+          "url": "https://github.com/AdityaRon/claude-code-harness/pull/304",
+          "text": "The synthetic heredoc in `tests/guard-latency.test.sh`: interpreter-guard 0.29 s and bash-guards 0.41 s under UTF-8 here, against 155 s and 32 s (UTF-8, C) for interpreter-guard on main at load 4 to 7."
+        }
       ],
       "command": "the heredoc in `tests/guard-latency.test.sh` through `hooks/interpreter-guard.sh`",
       "details": [

@@ -25,11 +25,11 @@ mode's classifier decides what no guard or rule names.
 <!-- readme-figures:summary:begin -->
 | What | Measured | n | Where and when | Details |
 |---|---|---|---|---|
-| **Guards on a Bash call** | Wait p50 62.2 → 62.6 ms, p95 113.5 → 114.2 ms (v1.4.16 → v1.4.17, same run) | 395 Bash payloads, one run | CI runner, Linux, AMD EPYC 9V74; 2026-11-20 | [v1.4.17](CHANGELOG.md#v1417-2026-11-20), [releases.md](docs/releases.md) |
-| **Always-approved asks removed** | 849 of 872 guard asks approved over 49 days, the median one holding its call 133 s; then 476 asks and 1 rejection in 30 days | 872 asks; 476 asks | One machine's transcripts, then a personal machine's; 2026-08-18 to 2026-10-06, then 30 days to 2026-11-15 | [permission-friction.md](docs/permission-friction.md), [#237](https://github.com/AdityaRon/claude-code-harness/issues/237) |
+| **Guards on a Bash call** | p50 62.6 ms, p95 114.2 ms (62.2 and 113.5 at v1.4.16, same run) | 395 Bash payloads, the first of two runs | CI runner, Linux, AMD EPYC 9V74; 2026-11-20 | [v1.4.17](CHANGELOG.md#v1417-2026-11-20), [releases.md](docs/releases.md) |
+| **Always-approved asks removed** | 849 of 872 guard asks approved over 49 days, the median one holding its call 133 s; in a later 30 days, still before the removal, 476 asks and 1 rejection | 872 asks; 476 asks | One machine's transcripts, then a personal machine's; 2026-08-18 to 2026-10-06, then 30 days to 2026-11-15 | [permission-friction.md](docs/permission-friction.md), [#237](https://github.com/AdityaRon/claude-code-harness/issues/237) |
 | **One dispatcher, fewer process starts** | `bash-guards.sh` execs per payload 24.53 → 21.98 at v1.4.16 | 400 payloads (395 Bash, 5 Monitor), one run | CI runner, Linux, AMD EPYC 9V74, strace -f; 2026-11-20 | [v1.4.16](CHANGELOG.md#v1416-2026-11-20), [budgets](tests/guard-execs.test.sh) |
-| **Guard wait in real use** | Slowest guard per Bash call: median 0.74 s on v1.4.9, 0.26 to 0.41 s on v1.4.14; the slowest 10% still wait 3 s or more | not given | Real use, from the guard timing log; the doc names no machine or window; doc written 2026-11-19 | [long-running-sessions.md](docs/long-running-sessions.md#every-process-a-hook-starts-costs-more-on-a-managed-machine) |
-| **Restart from a handoff** | 3 sessions kept 8 to 9 weeks reached 343 to 395 MB of transcript each; restarted from a handoff, live transcripts were 6.9 to 14.5 MB | 3 sessions before; after, not given | The work Mac, about 15 background sessions; doc written 2026-11-19 | [long-running-sessions.md](docs/long-running-sessions.md#restart-from-a-handoff-not-from-the-transcript) |
+| **Guard wait in real use** | Slowest guard per Bash call: median 0.74 s on v1.4.9; on v1.4.14, 0.26 s over the last 300 calls and 0.41 s over all since install, p90 3.02 and 3.79 s | 1,000 calls (v1.4.9); 300 and 1,337 calls (v1.4.14) | The work Mac, from the guard timing log; doc written 2026-11-19, n added 2026-11-20 | [long-running-sessions.md](docs/long-running-sessions.md#measured-with-n) |
+| **Restart from a handoff** | 3 sessions kept 8 to 9 weeks reached 343 to 395 MB of transcript each; restarted from a handoff, live transcripts were 6.9 to 14.5 MB | 3 sessions before; after, not given | The work Mac, about 15 background sessions; no window given; doc written 2026-11-19 | [long-running-sessions.md](docs/long-running-sessions.md#restart-from-a-handoff-not-from-the-transcript) |
 | **A long heredoc under UTF-8** | interpreter-guard on a 13 KB, 260-line heredoc: 155 s before #304, 0.29 s after | not given | Apple M2, macOS 26.6.2, bash 3.2.57, en_US.UTF-8; the 155 s at load 4 to 7; 2026-11-20 | [#304](https://github.com/AdityaRon/claude-code-harness/pull/304) |
 <!-- readme-figures:summary:end -->
 
@@ -107,10 +107,10 @@ More: [docs/known-limitations.md](docs/known-limitations.md).
 <!-- readme-figures:figure-wait:begin -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/figures/bash-wait-index-dark.svg">
-  <img alt="Line chart of a Bash call's wait for the guards by release, as a chained index with v1.0.1 at 100. p50 runs from 144.0 at v1.0.0 to 81.6 at v1.4.17, lowest 81.1 at v1.4.16; p95 from 97.1 to 85.1. Each step is one release's same-run ratio on one CI runner, from CHANGELOG.md; n is 321 to 395 Bash payloads a run." src="docs/figures/bash-wait-index-light.svg" width="880">
+  <img alt="Line chart of a Bash call's wait for the guards by release, as a chained index with v1.0.1 at 100. p50 runs from 144.0 at v1.0.0 to 81.6 at v1.4.17, lowest 81.1 at v1.4.16; p95 from 97.1 to 85.1. Each step is one release's same-run ratio on one CI runner, from CHANGELOG.md; n is 321 to 395 Bash payloads a run. From v1.4.0 the benchmark launches the hooks together; earlier ratios ran them one at a time." src="docs/figures/bash-wait-index-light.svg" width="880">
 </picture>
 
-Each point chains one release's ratio, head over base from its entry's first run on one CI runner, onto the one before; milliseconds differ by runner and are not compared across releases. Source: CHANGELOG.md, the first Bash row of each entry, v1.0.0 to v1.4.17; n = 321 to 395 Bash payloads a run. 20 releases changed no hook file, were not benchmarked and are left out.
+Each point chains one release's ratio, head over base from its entry's first run on one CI runner, onto the one before; milliseconds differ by runner and are not compared across releases. Source: CHANGELOG.md, the first Bash row of each entry, v1.0.0 to v1.4.17; n = 321 to 395 Bash payloads a run. 20 releases changed no hook file, were not benchmarked and are left out. From v1.4.0 the benchmark launches the hooks together; earlier ratios ran them one at a time, so the chain crosses a change in what wait means.
 <!-- readme-figures:figure-wait:end -->
 
 <!-- readme-figures:table-wait:begin -->
@@ -186,7 +186,7 @@ Where each row of the summary table comes from:
 | Guards on a Bash call | [CHANGELOG.md](CHANGELOG.md#v1417-2026-11-20), v1.4.17, the first Bash row | `.github/bench-gate.sh v1.4.16` in `.github/workflows/release.yml`, which runs `tools/hook-bench.py --gate` |
 | Always-approved asks removed | [docs/permission-friction.md](docs/permission-friction.md); [#237](https://github.com/AdityaRon/claude-code-harness/issues/237), Measured inputs | `tools/permission-friction.py --days 49`; `tools/permission-friction.py --days 30` |
 | One dispatcher, fewer process starts | [CHANGELOG.md](CHANGELOG.md#v1416-2026-11-20), v1.4.16, the launches table | `tools/hook-bench.py --launches strace`, through `.github/bench-gate.sh v1.4.15` |
-| Guard wait in real use | [docs/long-running-sessions.md](docs/long-running-sessions.md#every-process-a-hook-starts-costs-more-on-a-managed-machine) | not given in the doc; `bash doctor.sh --latency` reads the same log |
+| Guard wait in real use | [docs/long-running-sessions.md](docs/long-running-sessions.md#measured-with-n) | read from `guard-timing.log`; `bash doctor.sh --latency` reads the same log |
 | Restart from a handoff | [docs/long-running-sessions.md](docs/long-running-sessions.md#restart-from-a-handoff-not-from-the-transcript) | `ls -lS ~/.claude/projects/*/*.jsonl | head` |
 | A long heredoc under UTF-8 | [PR #304](https://github.com/AdityaRon/claude-code-harness/pull/304), After; the 155 s also in `tests/guard-latency.test.sh` | the heredoc in `tests/guard-latency.test.sh` through `hooks/interpreter-guard.sh` |
 <!-- readme-figures:sources:end -->

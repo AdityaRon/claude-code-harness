@@ -14,30 +14,40 @@ from the call's `usage.iterations`; the call's top-level usage leaves it out.
 
 Each call splits into input, output, cache read and cache write. A rewrite is a
 call, after a transcript's first, that wrote at least half of a context of 20k
-tokens or more: the cache had expired or changed under it. Away spend is what ran
-when no prompt had been typed in any session for --away minutes, such as a loop's
-ticks overnight or a subagent still running after you left.
+tokens or more: the cache had expired or changed under it. Each rewrite gets a
+cause, from the call before it in the same transcript file:
+  compaction  a compact_boundary record lies between the two calls;
+  ttl-gap     otherwise, more than the file's cache TTL passed between them;
+  other       neither.
+A file's TTL is that of the majority of its cache-write tokens: 1 h, or 5 min
+(the API default, and what a write that names no TTL is priced at). Not the
+previous call's: one that only read the cache says nothing about the TTL.
+Away spend is what ran when no prompt had been typed in any session for --away
+minutes, such as a loop's ticks overnight or a subagent still running after you left.
 
 Exit status: 0; 1 when a --max-* limit is passed (each printed as ALERT); 2 on a
 bad argument.
 """
 import argparse, bisect, collections, datetime as dt, glob, json, os, re, sys
 
-PRICED = '2026-10-06'
+PRICED = '2026-11-03'
 # model: input, output, cache read, in USD per million tokens. A cache write costs
 # 1.25x input with the 5-minute TTL and 2x with the 1-hour one; fast mode doubles all.
 PRICES = {
+    'claude-fable-5-2': (8, 40, 0.20), 'claude-mythos-5-2': (8, 40, 0.20),
     'claude-fable-5-1': (10, 50, 0.25), 'claude-mythos-5-1': (10, 50, 0.25),
     'claude-fable-5': (10, 50, 1.00), 'claude-mythos-5': (10, 50, 1.00),
     'claude-opus-5-5': (4, 20, 0.20), 'claude-opus-5': (5, 25, 0.50),
     'claude-opus-4-8': (5, 25, 0.50), 'claude-opus-4-7': (5, 25, 0.50), 'claude-opus-4-6': (5, 25, 0.50),
-    'claude-sonnet-5-5': (2, 10, 0.20), 'claude-sonnet-5': (2, 10, 0.20), 'claude-sonnet-4-6': (3, 15, 0.30),
+    'claude-sonnet-5-5': (2, 10, 0.10), 'claude-sonnet-5': (2, 10, 0.20), 'claude-sonnet-4-6': (3, 15, 0.30),
     'claude-haiku-5-5': (0.10, 0.50, 0.01), 'claude-haiku-4-5': (1, 5, 0.10),
 }
 # Claude Haiku 5.5 costs more once the prompt passes 100k tokens.
 TIERS = {'claude-haiku-5-5': (100_000, (0.50, 2.50, 0.05))}
 BUCKETS = ('input', 'output', 'read', 'write')
 REWRITE_MIN = 20_000
+CAUSES = ('ttl-gap', 'compaction', 'other')
+TTL_1H, TTL_5M = dt.timedelta(hours=1), dt.timedelta(minutes=5)
 
 
 def when(s, now):
@@ -122,8 +132,9 @@ def prompt_of(d):
 
 
 def load(root, oldest):
-    """Every transcript written since `oldest`: calls, prompts, agent types."""
-    best, prompts, agents = {}, collections.defaultdict(list), {}
+    """Every transcript written since `oldest`: calls, prompts, agent types, and the
+    times of each file's compact_boundary records."""
+    best, prompts, agents, bounds = {}, collections.defaultdict(list), {}, collections.defaultdict(list)
     for path in sorted(glob.glob(os.path.join(root, '**', '*.jsonl'), recursive=True)):
         try:
             if os.path.getmtime(path) < oldest.timestamp():
@@ -146,6 +157,9 @@ def load(root, oldest):
                 t = stamp(d.get('timestamp'))
                 if t is None:
                     continue
+                if d.get('type') == 'system' and d.get('subtype') == 'compact_boundary':
+                    bounds[path].append(t)
+                    continue
                 if d.get('type') == 'user' and not aid:
                     p = prompt_of(d)
                     if p:
@@ -163,7 +177,37 @@ def load(root, oldest):
                              'project': project, 'path': path}
     for v in prompts.values():
         v.sort(key=lambda p: p[0])
-    return list(best.values()), prompts, agents
+    for v in bounds.values():
+        v.sort()
+    return list(best.values()), prompts, agents, bounds
+
+
+def written(u):
+    """(cache-write tokens, of them 1 h). A write that names no TTL is the API's 5 min."""
+    cw = u.get('cache_creation_input_tokens') or 0
+    return cw, min(cw, (u.get('cache_creation') or {}).get('ephemeral_1h_input_tokens') or 0)
+
+
+def file_ttls(calls):
+    """{path: TTL}: 1 h where most of the file's cache-write tokens were 1 h writes, else 5 min."""
+    w = collections.defaultdict(lambda: [0, 0])
+    for c in calls:
+        cw, w1 = written(c['usage'])
+        w[c['path']][0] += cw - w1
+        w[c['path']][1] += w1
+    return {p: TTL_1H if w1 > w5 else TTL_5M for p, (w5, w1) in w.items()}
+
+
+def cause(prev_t, t, ttl, bounds):
+    """Why a rewrite at `t` rewrote, from the call before it at `prev_t` in the same file."""
+    i = bisect.bisect_right(bounds, prev_t)
+    if i < len(bounds) and bounds[i] <= t:
+        return 'compaction'
+    return 'ttl-gap' if t - prev_t > ttl else 'other'
+
+
+def toks(n):
+    return f'{n / 1e6:.1f}M' if n >= 1e6 else f'{n / 1e3:.0f}k' if n >= 1e3 else str(n)
 
 
 def add(acc, c):
@@ -180,10 +224,15 @@ def share(acc):
     return round(100 * acc['write'] / t) if t else 0
 
 
+def first_cause(turn):
+    """The cause of the rewrite a turn's first call made, or 'none'."""
+    return turn['first']['cause'] or 'none'
+
+
 def report(args, now):
     since, until = when(args.since, now), when(args.until, now) if args.until else now
     away = dt.timedelta(minutes=args.away)
-    calls, prompts, agents = load(args.root, since - away)
+    calls, prompts, agents, bounds = load(args.root, since - away)
     prices = dict(PRICES)
     if args.prices:
         prices.update({k: tuple(v) for k, v in json.load(open(args.prices)).items()})
@@ -191,14 +240,19 @@ def report(args, now):
     starts = {sid: [p[0] for p in ps] for sid, ps in prompts.items()}
     unpriced = collections.Counter()
     calls.sort(key=lambda c: (c['path'], c['t']))
-    seen_path, rows = set(), []
+    ttls, prev, rows = file_ttls(calls), {}, []
     for c in calls:
         u = c['usage']
         cw = u.get('cache_creation_input_tokens') or 0
         ctx = (u.get('input_tokens') or 0) + cw + (u.get('cache_read_input_tokens') or 0)
-        c['rewrite'] = c['path'] in seen_path and ctx >= REWRITE_MIN and cw * 2 >= ctx
-        seen_path.add(c['path'])
+        p = prev.get(c['path'])
+        c['rewrite'] = p is not None and ctx >= REWRITE_MIN and cw * 2 >= ctx
+        c['cause'] = cause(p['t'], c['t'], ttls[c['path']], bounds.get(c['path'], [])) if c['rewrite'] else ''
+        c['gap'] = c['t'] - p['t'] if p else None
+        c['ttl'] = ttls[c['path']]
+        prev[c['path']] = c
         c['ctx'] = ctx
+        c['written'] = cw
         if not since <= c['t'] < until:
             continue
         c['own'], c['adv'] = call_cost(c['model'], u, prices, unpriced)
@@ -212,8 +266,15 @@ def report(args, now):
     tot, adv, away_acc = acc(), acc(), acc()
     sessions = collections.defaultdict(lambda: {'cost': acc(), 'calls': 0, 'rewrites': 0, 'away': 0.0, 'project': ''})
     subs = collections.defaultdict(lambda: {'cost': acc(), 'calls': 0, 'rewrites': 0, 'away': 0.0, 'first': None})
-    turns = collections.defaultdict(lambda: {'cost': acc(), 'calls': 0, 'ctx': 0})
+    turns = collections.defaultdict(lambda: {'cost': acc(), 'calls': 0, 'ctx': 0, 'first': None})
+    # Cache-write tokens, and each cause's rewrite calls and tokens, main sessions and subagents apart.
+    causes = {g: {'written': 0, **{k: {'calls': 0, 'tokens': 0} for k in CAUSES}} for g in ('main', 'subagents')}
     for c in rows:
+        g = causes['subagents' if c['aid'] else 'main']
+        g['written'] += c['written']
+        if c['cause']:
+            g[c['cause']]['calls'] += 1
+            g[c['cause']]['tokens'] += c['written']
         both = {k: c['own'][k] + c['adv'][k] for k in BUCKETS}
         add(tot, c['own'])
         add(adv, c['adv'])
@@ -236,6 +297,8 @@ def report(args, now):
             add(tr['cost'], both)
             tr['calls'] += 1
             tr['ctx'] = max(tr['ctx'], c['ctx'])
+            if tr['first'] is None or c['t'] < tr['first']['t']:
+                tr['first'] = c
 
     alerts, out = [], []
     grand = {k: tot[k] + adv[k] for k in BUCKETS}
@@ -251,6 +314,12 @@ def report(args, now):
                f"in {sum(c['away'] for c in rows)} calls")
     if args.max_away is not None and total(away_acc) > args.max_away:
         alerts.append(f"away spend ${total(away_acc):.2f} is over --max-away ${args.max_away:.2f}")
+    out.append('rewrites by cause: calls, cache-write tokens, share of all cache-write tokens '
+               '(ttl-gap: after the cache TTL lapsed; compaction: after a compact_boundary)')
+    for name, g in (('main sessions', causes['main']), ('subagents', causes['subagents'])):
+        out.append(f"  {name + ':':14s} {toks(g['written'])} written; " + ', '.join(
+            f"{k} {g[k]['calls']} calls {toks(g[k]['tokens'])} "
+            f"({100 * g[k]['tokens'] / g['written'] if g['written'] else 0:.0f}%)" for k in CAUSES))
 
     out.append('\nsessions: cost, calls, write share, rewrites, spent away, session, project')
     for sid, s in sorted(sessions.items(), key=lambda kv: -total(kv[1]['cost']))[:args.top]:
@@ -285,6 +354,13 @@ def report(args, now):
                       f"largest context {max(x[4]['ctx'] for x in listed) // 1000}k" if n else ''))
         if args.max_ticks is not None and cost > args.max_ticks:
             alerts.append(f"ticks cost ${cost:.2f}, over --max-ticks ${args.max_ticks:.2f}")
+        if n:
+            out.append(f"  first call a ttl-gap rewrite in {sum(first_cause(x[4]) == 'ttl-gap' for x in listed)} of {n} ticks")
+        for t, sid, _, _, tr in listed:
+            f = tr['first']
+            what = (f"{first_cause(tr)} rewrite, {toks(f['written'])} written" if f['cause'] else 'no rewrite')
+            gap = f" after {f['gap'].total_seconds() / 60:.0f} min (TTL {f['ttl'].total_seconds() / 60:.0f} min)" if f['gap'] else ''
+            out.append(f"  {loc(t)}  {sid[:8]}  first call: {what}{gap}")
     if args.turns:
         out.append('\nturns: started, cost, calls, write share, largest context, session, started by, prompt')
         for t, sid, kind, text, tr in listed:
@@ -294,12 +370,13 @@ def report(args, now):
     if args.json:
         print(json.dumps({'since': since.isoformat(), 'until': until.isoformat(), 'priced': PRICED,
                           'calls': len(rows), 'total': grand, 'advisor': adv, 'away': away_acc,
-                          'unpriced': dict(unpriced), 'alerts': alerts,
+                          'unpriced': dict(unpriced), 'alerts': alerts, 'rewrite_causes': causes,
                           'sessions': sessions,
                           'subagents': {'/'.join(k): {**v, 'first': v['first'] and v['first'].isoformat()}
                                         for k, v in subs.items()},
                           'turns': [{'start': t.isoformat(), 'session': sid, 'kind': kind, 'calls': tr['calls'],
-                                     'ctx': tr['ctx'], 'cost': tr['cost']} for t, sid, kind, _, tr in listed]},
+                                     'ctx': tr['ctx'], 'cost': tr['cost'], 'first_call': first_cause(tr)}
+                                    for t, sid, kind, _, tr in listed]},
                          indent=1))
     else:
         print('\n'.join(out))
