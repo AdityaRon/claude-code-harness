@@ -157,16 +157,22 @@ bg_woke() {
   BG_END=$((BG_S0 + w - BG_AT + BG_DEADLINE))
 }
 # TERM, HUP or INT here stops each guard not yet read, then this hook dies of it.
+# One that comes while the guards are being started waits for the last start: a
+# guard started but not yet in BG_PID would not be stopped.
 bg_stop() {
   local i
+  [[ -n "$BG_STARTING" ]] && { BG_SIG=${BG_SIG:-$1}; return 0; }
   for (( i = BG_AT_I; i < ${#BG_PID[@]}; i++ )); do kill -TERM "${BG_PID[i]}" 2>/dev/null; done
   trap - "$1"; kill -s "$1" $$
 }
+BG_STARTING=1 BG_SIG=""
 trap 'bg_stop TERM' TERM; trap 'bg_stop HUP' HUP; trap 'bg_stop INT' INT
 
 # All at once, on fds 10 up (bash 3.2 has no {fd}), read back in list order.
 bg_i=0
 for bg_g in "${BG_RUN[@]}"; do eval "exec $((10 + bg_i))< <(bg_run \"\$bg_g\")"; BG_PID[bg_i]=$!; bg_i=$((bg_i + 1)); done
+BG_STARTING=""
+[[ -z "$BG_SIG" ]] || bg_stop "$BG_SIG"
 BG_RAW=()
 bg_i=0
 for bg_g in "${BG_RUN[@]}"; do

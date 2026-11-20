@@ -530,7 +530,7 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 t0 = time.time()
 with open(payload, 'rb') as i, open(outp, 'wb') as o, open(errp, 'wb') as e:
     p = subprocess.Popen(['bash', hook], stdin=i, stdout=o, stderr=e, start_new_session=True)
-if mode != 'late':
+if mode not in ('late', 'self'):   # self: the hook signals itself
     while len(recorded()) < 3 and time.time() - t0 < 10:
         time.sleep(0.05)
     if mode == 'term':
@@ -544,6 +544,8 @@ except subprocess.TimeoutExpired:
     p.wait()
     rc = 'watchdog'
 took = time.time() - t0
+if mode == 'self':   # a guard the hook did not stop records itself after the hook is gone
+    time.sleep(1)
 end = time.time() + 3
 while any(alive(x) for x in recorded()) and time.time() < end:
     time.sleep(0.1)
@@ -595,6 +597,16 @@ late hup 30
 [[ "$LRC" == -1 ]] && gone "HUP to the hook's group: it dies of HUP, and a guard ignoring HUP with it" || fail "HUP to the group" "rc=$LRC err=$ERR"
 late int 30
 [[ "$LRC" == -2 ]] && gone "INT to the hook's group: it dies of INT, and a guard ignoring INT with it" || fail "INT to the group" "rc=$LRC err=$ERR"
+# A signal while the guards are being started waits for the last start: a guard
+# started but not yet in BG_PID would run on. Here the hook sends itself TERM in
+# that gap, at the slow guard's turn; such a guard records its pids within 1 s.
+cp "$TMP/slow-guard.sh" "$TMP/hk/interpreter-guard.sh"
+sed 's#; BG_PID\[bg_i\]=\$!;#; [[ $bg_g == interpreter-guard ]] \&\& kill -TERM $$; BG_PID[bg_i]=$!;#' hooks/bash-guards.sh > "$TMP/hk/bash-guards.sh"
+grep -qF '; [[ $bg_g == interpreter-guard ]] && kill -TERM $$; BG_PID[bg_i]=$!;' "$TMP/hk/bash-guards.sh" || fail "test setup" "the start loop was not found"
+late self 30
+[[ "$LRC" == -15 && "$LLEFT" == - && ! -e "$TMP/mark" ]] \
+  && pass "TERM between a guard's start and its pid kept: it dies of TERM, and that guard is stopped" \
+  || fail "TERM while the guards start" "rc=$LRC recorded $LN, alive $LLEFT, mark $(cat "$TMP/mark" 2>/dev/null)"
 
 # A Mac that slept through the call: kern.waketime, faked, says it woke after
 # the call was read, so the guard is waited for again. It answers only once that
