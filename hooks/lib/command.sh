@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 # hooks/lib.sh sources this: normalizing a command, and the heredoc and message strippers the guards scan through.
 
+# CMD with TEXT and a newline on its stdin, as `printf '%s\n' TEXT | CMD` gives
+# it, a fork fewer. bash 3.2, and 5.2 past 64 KB, write the text to a temp file
+# first; where none can be made the body does not run, and the pipe does.
+herestr() {   # TEXT CMD...
+  local _hs=""
+  { _hs=1; "${@:2}" 2>&9 9>&-; } 9>&2 2>/dev/null <<< "$1"
+  local _hs_st=$?
+  [[ -n "$_hs" ]] && return "$_hs_st"
+  printf '%s\n' "$1" | "${@:2}"
+}
+
+# NAME=$(printf '%s\n%s' A B) with no fork: the newlines the capture dropped
+# from the end are dropped here.
+two_lines() {   # NAME A B
+  local _tl _nl=$'\n'
+  printf -v _tl '%s\n%s' "$2" "$3"
+  printf -v "$1" '%s' "${_tl%"${_tl##*[!$_nl]}"}"
+}
+
 # Strip tokens that sit in front of a command without changing what runs:
 # env assignments (FOO=bar), `env`, and the wrapper commands Claude Code itself
 # strips before matching a permission rule (timeout/time/nice/nohup/stdbuf/

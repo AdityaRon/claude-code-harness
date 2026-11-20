@@ -51,22 +51,34 @@ require_parsable_or_deny() {
   exit 0
 }
 
+# Under the dispatcher the fields every Bash guard reads come from its one jq:
+# PRESET_VALUE is set to the field, or this returns 1 for one it did not read.
+preset_field() {   # EXPR
+  [[ -n "${HARNESS_PRESET:-}" ]] || return 1
+  case "$1" in
+    .tool_input.command) PRESET_VALUE=$PRESET_CMD ;;
+    .tool_name) PRESET_VALUE=$PRESET_TOOL ;;
+    .cwd) PRESET_VALUE=$PRESET_CWD ;;
+    .session_id) PRESET_VALUE=$PRESET_SID ;;
+    .tool_input.url) PRESET_VALUE=$PRESET_URL ;;
+    .tool_input.ws.url) PRESET_VALUE=$PRESET_WS ;;
+    .tool_use_id) PRESET_VALUE=$PRESET_ID ;;
+    .permission_mode) PRESET_VALUE=$PRESET_MODE ;;
+    *) return 1 ;;
+  esac
+}
+
+# NAME=$(jq_get EXPR), and under the dispatcher with no fork.
+jq_set() {   # NAME EXPR
+  local _jv _nl=$'\n'
+  if preset_field "$2"; then _jv=$PRESET_VALUE; else _jv=$(jq_get "$2"); fi
+  printf -v "$1" '%s' "${_jv%"${_jv##*[!$_nl]}"}"
+}
+
 # Extract a field from $INPUT using jq. Empty if jq is missing or field absent.
-# Under the dispatcher the fields every Bash guard reads come from its one jq.
 jq_get() {
   local expr="$1"
-  if [[ -n "${HARNESS_PRESET:-}" ]]; then
-    case "$expr" in
-      .tool_input.command) printf '%s\n' "$PRESET_CMD"; return 0 ;;
-      .tool_name) printf '%s\n' "$PRESET_TOOL"; return 0 ;;
-      .cwd) printf '%s\n' "$PRESET_CWD"; return 0 ;;
-      .session_id) printf '%s\n' "$PRESET_SID"; return 0 ;;
-      .tool_input.url) printf '%s\n' "$PRESET_URL"; return 0 ;;
-      .tool_input.ws.url) printf '%s\n' "$PRESET_WS"; return 0 ;;
-      .tool_use_id) printf '%s\n' "$PRESET_ID"; return 0 ;;
-      .permission_mode) printf '%s\n' "$PRESET_MODE"; return 0 ;;
-    esac
-  fi
+  preset_field "$expr" && { printf '%s\n' "$PRESET_VALUE"; return 0; }
   if command -v jq &>/dev/null; then
     printf '%s\n' "$INPUT" | jq -r "$expr // \"\"" 2>/dev/null
   fi

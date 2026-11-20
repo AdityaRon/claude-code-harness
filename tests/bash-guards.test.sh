@@ -288,6 +288,15 @@ cmp -s hooks/lib/io.sh "$TMP/hk/lib/io.sh" && fail "test setup" "word_filter was
 disp "$TMP/hk" "$(payload 'kubectl delete pod web')"
 [[ $RC == 2 && -z "$OUT" && "$ERR" == *"Blocked: bash-guards stopped"* ]] \
   && pass "a lib without word_filter: exit 2, not seven guards that allow" || fail "a lib without word_filter" "rc=$RC out=$OUT err=$ERR"
+# The same for the helpers the guards call in place of a $( ): an unset CMD allows.
+for f in jq_set:io herestr:command two_lines:command; do
+  copy_hooks
+  sed "/^${f%%:*}() {/,/^}/d" "hooks/lib/${f#*:}.sh" > "$TMP/hk/lib/${f#*:}.sh"
+  cmp -s "hooks/lib/${f#*:}.sh" "$TMP/hk/lib/${f#*:}.sh" && fail "test setup" "${f%%:*} was not found"
+  disp "$TMP/hk" "$(payload 'git push --force origin main')"
+  [[ $RC == 2 && -z "$OUT" && "$ERR" == *"Blocked: bash-guards stopped"* ]] \
+    && pass "a lib without ${f%%:*}: exit 2" || fail "a lib without ${f%%:*}" "rc=$RC out=$OUT err=$ERR"
+done
 
 echo ""
 echo "=== a command that names no guard's word starts one process ==="
@@ -438,6 +447,27 @@ for x in "" / // a a/ a// /a /a/ //a a/b a/b/ a//b //a//b/// /usr/local/bin ./x 
 done
 unset -f dirname
 [[ -z "$BADD" ]] && pass "same answer on 19 paths" || fail "dirname differs" "$BADD"
+
+echo ""
+echo "=== the fork-free helpers answer as the captures they replace ==="
+BADH="" i=0
+for a in "" x $'x\n' $'\n\n' $'a b\nc' $'x\n\n\ny' '%s %d \' $'\t'; do
+  i=$((i + 1)) j=0
+  for b in "" y $'y\n' $'\n' $'p\nq\n\n'; do
+    j=$((j + 1))
+    ( source hooks/lib.sh; two_lines T "$a" "$b"; [[ "$T" == "$(printf '%s\n%s' "$a" "$b")" ]] ) || BADH="$BADH two_lines:$i.$j"
+  done
+  ( source hooks/lib.sh
+    [[ "$(herestr "$a" cat; echo "rc=$?")" == "$(printf '%s\n' "$a" | cat; echo "rc=$?")" \
+       && "$(herestr "$a" grep -c x; echo "rc=$?")" == "$(printf '%s\n' "$a" | grep -c x; echo "rc=$?")" ]] ) || BADH="$BADH herestr:$i"
+  P=$(jq -nc --arg c "$a" '{tool_name:"Bash",tool_input:{command:$c},cwd:"/x\n\n"}')
+  for e in .tool_input.command .cwd .tool_name .tool_input.url .session_id; do
+    ( source hooks/lib.sh; INPUT=$P; jq_set V "$e"; [[ "$V" == "$(jq_get "$e")" ]] ) || BADH="$BADH jq_set:$i$e"
+    ( source hooks/lib.sh; HARNESS_PRESET=1 PRESET_CMD=$a PRESET_CWD=$'/x\n\n' PRESET_TOOL=Bash PRESET_URL="" PRESET_SID=""
+      jq_set V "$e"; [[ "$V" == "$(jq_get "$e")" ]] ) || BADH="$BADH jq_set-preset:$i$e"
+  done
+done
+[[ -z "$BADH" ]] && pass "two_lines, herestr and jq_set on 8 texts" || fail "a helper differs" "$BADH"
 
 echo ""
 echo "=== through the dispatcher, disk-space.py with --apply asks in any spelling ==="

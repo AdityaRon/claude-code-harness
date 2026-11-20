@@ -32,7 +32,7 @@ dirname() {
   printf '%s\n' "${p:-/}"
 }
 BG_DIR=$(dirname "$0")
-source "$BG_DIR/lib.sh" && declare -F read_input jq_get emit_deny log_decision decide word_filter >/dev/null || exit 1
+source "$BG_DIR/lib.sh" && declare -F read_input jq_get jq_set herestr two_lines emit_deny log_decision decide word_filter >/dev/null || exit 1
 # A lib.sh without the seams would have each fork read an empty stdin and allow.
 case "$(declare -f read_input)" in *HARNESS_PRESET*) ;; *)
   BG_DONE=1; echo "Blocked: $BG_DIR/lib.sh is older than bash-guards.sh, so the Bash guards cannot run. Run bash install.sh from the harness clone." >&2; exit 2 ;;
