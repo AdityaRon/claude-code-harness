@@ -32,11 +32,11 @@ CMD=$(strip_inert_heredocs "$CMD")
 # all run cat.
 unreadable_check env-guard "$CMD"
 NCMD=$(neutralize_quoted_separators "$CMD")
-SCAN=$(printf '%s\n%s' "$NCMD" "$(normalize_command "$NCMD")" \
-  | sed -E 's#[^[:space:]]*\.(example|sample|template|dist|tpl)([[:space:]]|$)#TEMPLATEFILE\2#g')
+SCAN=$(herestr "$NCMD"$'\n'"$(normalize_command "$NCMD")" \
+  sed -E 's#[^[:space:]]*\.(example|sample|template|dist|tpl)([[:space:]]|$)#TEMPLATEFILE\2#g')
 # `.ENV` is `.env` on the default macOS filesystem, so patterns naming a file
 # also run on a lower-cased copy, as sensitive-file-guard matches without case.
-SCAN_LC=$(printf '%s\n%s' "$SCAN" "$(printf '%s' "$SCAN" | tr 'A-Z' 'a-z')")
+two_lines SCAN_LC "$SCAN" "$(herestr "$SCAN" tr 'A-Z' 'a-z')"
 # grep and rg take a pattern first, and sed and awk a script: `grep -rn '\.env'
 # src/` searches for text and `sed -i 's/cert.pem/tls.pem/' f` edits it. For the
 # reader check that operand becomes PATTERN, after a wrapper (`| xargs -0 grep`)
@@ -168,7 +168,7 @@ drop_text_operands() {
     case "$LINE" in *awk*) drop_operands 'awk|gawk|mawk|nawk' "$AOPT" awk ;; esac
     SCAN_R+=$LINE$'\n'
   done <<<"$(split_procsubs "$SCAN")"
-  SCAN_R_LC=$(printf '%s\n%s' "$SCAN_R" "$(printf '%s' "$SCAN_R" | tr 'A-Z' 'a-z')")
+  two_lines SCAN_R_LC "$SCAN_R" "$(herestr "$SCAN_R" tr 'A-Z' 'a-z')"
 }
 
 # Command boundary: start-of-line, pipe, logical chain, subshell, semicolon, &.

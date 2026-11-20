@@ -37,7 +37,7 @@ CMD=$(strip_inert_heredocs "$CMD")
 unreadable_check interpreter-guard "$CMD"
 # `/usr/bin/python3` and `PYTHON3` run python too. ICMD adds the normalized form
 # (lib.sh) as a second line; the stream-edit exemption below keeps to CMD.
-ICMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
+two_lines ICMD "$CMD" "$(normalize_command "$CMD")"
 # A quoted or escaped ; | or & ended the [^|;&] spans below, so `python3 -X "a;b"
 # -c …` never reached its -c. The reading with those hidden (lib.sh) is added,
 # not swapped in: `bash -c "true; python3 -c …"` does split there. The
@@ -45,7 +45,7 @@ ICMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
 NQS=""; NCMD=""; TYPED=$ICMD
 [[ "$CMD" == *[\"\'\\]* && "$CMD" == *[\;\&\|]* ]] && NQS=$(neutralize_quoted_separators "$CMD")
 [[ "$NQS" == "$CMD" ]] && NQS=""
-[[ -n "$NQS" ]] && NCMD=$(printf '%s\n%s' "$NQS" "$(normalize_command "$NQS")") && ICMD=$(printf '%s\n%s' "$ICMD" "$NCMD")
+[[ -n "$NQS" ]] && two_lines NCMD "$NQS" "$(normalize_command "$NQS")" && two_lines ICMD "$ICMD" "$NCMD"
 
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 

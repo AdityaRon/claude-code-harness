@@ -578,7 +578,7 @@ if [[ $TEXT_ONLY -eq 1 && "$CMD" == *[\"\']* && "$CMD" != *'$('* && "$CMD" != *'
   SRC=$(neutralize_quoted_separators "$CMD")
 elif [[ "$CMD" == *[\"\'\\]* && "$CMD" == *[\;\&\|]* ]]; then
   NQ=$(neutralize_quoted_separators "$CMD")
-  [[ "$NQ" != "$CMD" ]] && SRC=$(printf '%s\n%s' "$CMD" "$NQ")
+  [[ "$NQ" != "$CMD" ]] && two_lines SRC "$CMD" "$NQ"
 fi
 
 # Normalise BEFORE the bail-out, not after. The bail-out's own pattern requires

@@ -54,7 +54,7 @@ check_inline_shellouts git flat
 # The .git/hooks check still reads a quoted message, as it always has.
 MSG_FREE=$(strip_message_args "$CMD")
 HOOKS_TEXT=""
-[[ "$MSG_FREE" != "$CMD" ]] && HOOKS_TEXT=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
+[[ "$MSG_FREE" != "$CMD" ]] && two_lines HOOKS_TEXT "$CMD" "$(normalize_command "$CMD")"
 CMD=$MSG_FREE
 # A quoted or escaped ; | or & is text, but every [^|;&] span below stopped at
 # it: `git push origin "a;b" --force` was allowed. The reading with those hidden
@@ -69,11 +69,11 @@ NQS=""
 # push -f`, `nohup git push -f` and `timeout 60 git push -f` each defeated every
 # check in this file while the bare form was denied. `/usr/bin/git` and `GIT`
 # did the same. The second line is the fully normalized form; see lib.sh.
-CMD=$(printf '%s\n%s' "$(normalize_wrappers "$(separate_groups "$CMD")")" "$(normalize_command "$CMD")")
+two_lines CMD "$(normalize_wrappers "$(separate_groups "$CMD")")" "$(normalize_command "$CMD")"
 TYPED=$CMD   # for a match that lifts a check rather than raising one
 NQREAD=""
-[[ -n "$NQS" ]] && NQREAD=$(printf '%s\n%s' "$(normalize_wrappers "$(separate_groups "$NQS")")" "$(normalize_command "$NQS")") \
-  && CMD=$(printf '%s\n%s' "$CMD" "$NQREAD")
+[[ -n "$NQS" ]] && two_lines NQREAD "$(normalize_wrappers "$(separate_groups "$NQS")")" "$(normalize_command "$NQS")" \
+  && two_lines CMD "$CMD" "$NQREAD"
 
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 

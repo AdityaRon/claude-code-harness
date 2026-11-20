@@ -167,7 +167,7 @@ case "$TOOL" in
     CMD=$(neutralize_quoted_separators "$CMD")
     # `/usr/bin/curl` and `CURL` are curl too: scan the normalized form (lib.sh) as
     # a second line.
-    CMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
+    two_lines CMD "$CMD" "$(normalize_command "$CMD")"
 
     # Other egress channels beyond curl/wget. scp/rsync/sftp copy files to a
     # remote host; a local HTTP server exposes the working tree. All → ask.
