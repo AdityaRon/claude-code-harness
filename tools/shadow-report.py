@@ -4,7 +4,7 @@
 hooks/lib/shadow.sh lists the guards and rules on trial (#237). Each writes what it would have
 decided to ~/.claude/logs/shadow.log and decides nothing. This joins those lines on tool_use_id
 to the auto-mode denials in the audit log (PermissionDenied), to the Bash guards' timing log, and
-to how each call's permission resolved in the transcripts (tools/permission-friction.py reads
+to how each call's permission resolved in the transcripts (bin/permission-friction.py reads
 them), then counts per guard and rule. docs/shadow-mode.md says how step 9 reads it.
 
 Counts and tool_use_ids only: never a command or a reason, since a reason can quote the command.
@@ -15,8 +15,9 @@ Counts and tool_use_ids only: never a command or a reason, since a reason can qu
 """
 import argparse, collections, datetime as dt, importlib.util, json, os, re, sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+# hooknames.py and permission-friction.py install from bin/, beside this tools/ folder.
+BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin')
+sys.path.insert(0, BIN)
 from hooknames import add_window, read_timing, window  # noqa: E402
 
 HOME = os.path.expanduser('~')
@@ -40,7 +41,7 @@ DENIED = re.compile(r'^(\S+) \| DENIED \| [^|]*? \| id=(\S*) mode=(\S*) \| (.*)$
 
 
 def friction():
-    spec = importlib.util.spec_from_file_location('permission_friction', os.path.join(HERE, 'permission-friction.py'))
+    spec = importlib.util.spec_from_file_location('permission_friction', os.path.join(BIN, 'permission-friction.py'))
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m

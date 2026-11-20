@@ -64,13 +64,13 @@ DS() { CLAUDE_CLI_BIN=/nonexistent/claude python3 "$REPO/bin/disk-space.py" repo
 clean "disk-space.py report" "$(DS)" "1 compactions"
 clean "disk-space.py report --json" "$(DS --json)" '"compactions": 1'
 
-PF() { HOME="$TMP/home" python3 "$REPO/tools/permission-friction.py" --days 1 "$@" 2>&1; }
+PF() { HOME="$TMP/home" python3 "$REPO/bin/permission-friction.py" --days 1 "$@" 2>&1; }
 clean "permission-friction" "$(PF)" "| guard_ask | 1 |"
 PF --out "$TMP/pf" >/dev/null
 clean "permission-friction --out" "$(cat "$TMP/pf/report.md" "$TMP/pf/friction.json" 2>&1)" '"friction_events": 1'
 
 echo '{}' > "$TMP/settings.json"
-HL() { python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TMP/none.log" --days 1 "$@" 2>&1; }
+HL() { python3 "$REPO/bin/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TMP/none.log" --days 1 "$@" 2>&1; }
 clean "hook-latency" "$(HL)" "network-guard.sh"
 clean "hook-latency --json" "$(HL --json)" '"network-guard.sh"'
 

@@ -11,7 +11,7 @@ comes to you even in auto mode: Claude Code's
 switching to auto mode, "because auto mode still shows you those prompts". The
 classifier decides only what no guard or rule names; see
 [auto-mode.md](auto-mode.md). An ask costs a person's time: on one Mac,
-`tools/permission-friction.py --days 23` over 2026-09-24 to 2026-10-16 (PR #90)
+`bin/permission-friction.py --days 23` over 2026-09-24 to 2026-10-16 (PR #90)
 found an approved guard ask held its call 92 to 269 s at the median, by guard.
 
 Until step 9 of #237, some of what follows is in shadow mode: kubectl-guard and
@@ -77,7 +77,7 @@ backtick, `<<`, `((` or an interpreter. `git status`, `log`, `diff`, `show`,
   kubectl-guard
   ```
   The file can only take names off the shipped list (`BG_GUARDS` in `hooks/bash-guards.sh`): a missing or empty file runs all seven, a name not on the list is ignored, and a symlink is not read. Naming all seven runs none. `config-guard` asks before Claude writes the file, from Bash or the file tools. A skipped guard still runs where it has an entry of its own: `config-guard` on file writes, `network-guard` on WebFetch.
-- **Timing.** Each call adds one line to `~/.claude/logs/guard-timing.log` (`CLAUDE_GUARD_TIMING_LOG`): the call's `tool_use_id`, the tool, `guard=seconds:status:decision` for each guard that ran (the status is the guard's exit status, `lost` when its status line never came, or `late` when it had not answered by the deadline; neither has seconds, so `interpreter-guard=-:late:deny`), then `at=` and the epoch second the call was read, which the dispatcher's one jq supplies (bash 3.2 has no clock that starts no process). A line from before that column has no `at=`. The seconds are wall time while the guards run side by side, so they overstate what a guard costs alone. `session-start` moves the file to `.1` once it passes 10 MB. `bash doctor.sh --latency` (`tools/hook-latency.py`) prints this log's table first, since it does not depend on Claude Code writing a hook record, and flags a week whose hook records in the transcripts fall under a tenth of the weeks before.
+- **Timing.** Each call adds one line to `~/.claude/logs/guard-timing.log` (`CLAUDE_GUARD_TIMING_LOG`): the call's `tool_use_id`, the tool, `guard=seconds:status:decision` for each guard that ran (the status is the guard's exit status, `lost` when its status line never came, or `late` when it had not answered by the deadline; neither has seconds, so `interpreter-guard=-:late:deny`), then `at=` and the epoch second the call was read, which the dispatcher's one jq supplies (bash 3.2 has no clock that starts no process). A line from before that column has no `at=`. The seconds are wall time while the guards run side by side, so they overstate what a guard costs alone. `session-start` moves the file to `.1` once it passes 10 MB. `bash doctor.sh --latency` (`bin/hook-latency.py`) prints this log's table first, since it does not depend on Claude Code writing a hook record, and flags a week whose hook records in the transcripts fall under a tenth of the weeks before.
 - **What a call costs.** A tool call's hooks run together, so the call waits for its slowest hook. For Bash that is the dispatcher's fixed start plus its slowest guard; `subagent-cache-guard` runs alongside it. Two PreToolUse command hooks on one Bash call, each sleeping 2 s, started 15 µs apart and both ended 2.07 s later (headless probe, Claude Code 2.1.327, the maintainer's Mac).
 
 ## Property checks
