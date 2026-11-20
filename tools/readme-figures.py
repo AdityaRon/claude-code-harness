@@ -248,6 +248,22 @@ def execs_caption(d):
                min(r["payloads"] for r in e), max(r["payloads"] for r in e)))
 
 
+def wait_source(d):
+    s = d["series"]
+    return ("Source: %s, the first Bash row of each entry, %s to %s. n = %d to %d Bash payloads a run, one run "
+            "per release; each step is head over base on one runner, chained."
+            % (CHANGELOG, s["bash_wait_index"][0]["release"], d["cited_release"],
+               min(r["bash_payloads"] for r in s["bash_wait_runs"]),
+               max(r["bash_payloads"] for r in s["bash_wait_runs"])))
+
+
+def execs_source(d):
+    e = d["series"]["bash_guards_execs"]
+    return ("Source: %s launches tables, %s to %s, each payload once under strace -f. n = %d to %d payloads a run, "
+            "one run per release." % (CHANGELOG, e[0]["release"], d["cited_release"],
+                                      min(r["payloads"] for r in e), max(r["payloads"] for r in e)))
+
+
 def blocks(d):
     return {
         "summary": block_summary(d),
@@ -354,12 +370,6 @@ def marker(svg, x, y, shape, color, hollow=False):
                 % (n(x), n(y), "4.5" if hollow else "5", fill, color if hollow else t["bg"], ring))
 
 
-def caption(svg, x, y, s, width):
-    for i, ln in enumerate(wrap(s, 12, width)):
-        svg.text(x, y + i * 17, ln, size=12, fill=svg.t["muted"])
-    return y + len(wrap(s, 12, width)) * 17
-
-
 def chart_wait(d, theme):
     t = THEMES[theme]
     s = d["series"]
@@ -367,9 +377,8 @@ def chart_wait(d, theme):
     runs = {r["release"]: r for r in s["bash_wait_runs"]}
     W, L, R, T = 880, 64, 116, 112
     PH = 250
-    cap = wait_caption(d)
-    cap_lines = wrap(cap, 12, W - 48)
-    H = T + PH + 78 + 26 + len(cap_lines) * 17 + 14
+    cap_lines = wrap(wait_source(d), 13, W - 48)
+    H = T + 14 + PH + 72 + 26 + (len(cap_lines) - 1) * 18 + 22
     svg = Svg(W, H, "Bash call wait for the guards, by release (chained index, %s = 100)" % d["index_anchor"],
               wait_alt(d), t)
     svg.text(24, 32, "A Bash call's wait for the guards, by release", size=17, weight="600")
@@ -395,8 +404,8 @@ def chart_wait(d, theme):
         return y1 - (y1 - y0) * (v - ys[0]) / (ys[-1] - ys[0])
     for v in ys:
         svg.line(x0, Y(v), x1, Y(v), t["grid"], 1)
-        svg.text(x0 - 8, Y(v) + 4, "%d" % v, size=12, fill=t["muted"], anchor="end")
-    svg.text(18, (y0 + y1) / 2, "index (%s = 100)" % d["index_anchor"], size=12, fill=t["muted"], anchor="middle",
+        svg.text(x0 - 8, Y(v) + 4, "%d" % v, size=13, fill=t["muted"], anchor="end")
+    svg.text(18, (y0 + y1) / 2, "index (%s = 100)" % d["index_anchor"], size=13, fill=t["muted"], anchor="middle",
              rotate=-90)
     svg.line(x0, Y(100), x1, Y(100), t["axis"], 1)
     # Corpus growth and the change of method: vertical rules with short labels.
@@ -425,12 +434,12 @@ def chart_wait(d, theme):
     svg.text(x1 + 12, a + 4.5, "p50 %s" % last["p50"], size=13, weight="600")
     svg.text(x1 + 12, b + 4.5, "p95 %s" % last["p95"], size=13, weight="600")
     for k, i in enumerate(idx):
-        svg.text(X(k) + 4, y1 + 14, i["release"], size=11, fill=t["muted"], anchor="end", rotate=-50)
-    svg.text((x0 + x1) / 2, y1 + 72, "release (only those whose hook files changed)", size=12, fill=t["muted"],
+        svg.text(X(k) + 4, y1 + 14, i["release"], size=12, fill=t["muted"], anchor="end", rotate=-50)
+    svg.text((x0 + x1) / 2, y1 + 72, "release (only those whose hook files changed)", size=13, fill=t["muted"],
              anchor="middle")
     yc = y1 + 72 + 26
     for k, ln in enumerate(cap_lines):
-        svg.text(24, yc + k * 17, ln, size=12, fill=t["muted"])
+        svg.text(24, yc + k * 18, ln, size=13, fill=t["muted"])
     return svg.done()
 
 
@@ -438,9 +447,8 @@ def chart_execs(d, theme):
     t = THEMES[theme]
     e = d["series"]["bash_guards_execs"]
     W, L, R, T, PH = 880, 64, 40, 100, 220
-    cap = execs_caption(d)
-    cap_lines = wrap(cap, 12, W - 48)
-    H = T + 20 + PH + 70 + (len(cap_lines) - 1) * 17 + 22
+    cap_lines = wrap(execs_source(d), 13, W - 48)
+    H = T + 20 + PH + 70 + (len(cap_lines) - 1) * 18 + 22
     svg = Svg(W, H, "bash-guards.sh execs per payload, by release", execs_alt(d), t)
     svg.text(24, 32, "Processes bash-guards.sh starts per payload, by release", size=17, weight="600")
     svg.text(24, 54, "execve calls per payload. Each release is measured against the one before, in one run.",
@@ -462,8 +470,8 @@ def chart_execs(d, theme):
         return y1 - (y1 - y0) * (v - ys[0]) / (ys[-1] - ys[0])
     for v in ys:
         svg.line(x0, Y(v), x1, Y(v), t["grid"], 1)
-        svg.text(x0 - 8, Y(v) + 4, "%d" % v, size=12, fill=t["muted"], anchor="end")
-    svg.text(18, (y0 + y1) / 2, "execs per payload", size=12, fill=t["muted"], anchor="middle", rotate=-90)
+        svg.text(x0 - 8, Y(v) + 4, "%d" % v, size=13, fill=t["muted"], anchor="end")
+    svg.text(18, (y0 + y1) / 2, "execs per payload", size=13, fill=t["muted"], anchor="middle", rotate=-90)
     prev = None
     for k, r in enumerate(e):
         cx = x0 + slot * (k + 0.5)
@@ -483,13 +491,13 @@ def chart_execs(d, theme):
         if prev is None or prev[1] != b:
             svg.text(bx - 9, Y(b) + 4.5, "%.2f" % b, size=12, fill=t["muted"], anchor="end")
         svg.text(hx, Y(h) + (20 if h < b else -12), "%.2f" % h, size=13, weight="600", anchor="middle")
-        svg.text(cx, y1 + 22, r["release"], size=12, fill=t["muted"], anchor="middle")
+        svg.text(cx, y1 + 22, r["release"], size=13, fill=t["muted"], anchor="middle")
         prev = (hx, h, r["payloads"])
-    svg.text((x0 + x1) / 2, y1 + 44, "release (launches tables start at %s)" % e[0]["release"], size=12,
+    svg.text((x0 + x1) / 2, y1 + 44, "release (launches tables start at %s)" % e[0]["release"], size=13,
              fill=t["muted"], anchor="middle")
     yc = y1 + 70
     for k, ln in enumerate(cap_lines):
-        svg.text(24, yc + k * 17, ln, size=12, fill=t["muted"])
+        svg.text(24, yc + k * 18, ln, size=13, fill=t["muted"])
     return svg.done()
 
 
