@@ -28,13 +28,26 @@ All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 
 
 ## Advisory checks on writes
 
-Both run on PostToolUse, after the write has happened, so they never block it;
-their notes go back to Claude while the edit is still in context. Both exit
-quietly when jq is missing.
+Both run on PostToolUse, after the write has happened, so they cannot block it;
+their notes go back to Claude while the edit is still in context. A finding
+exits 2, which Claude Code shows as "hook reported a problem" and hands to the
+model. Both exit quietly when jq is missing.
+
+Two `memory-lint` findings are about the state between two writes, so they wait
+for the end of the turn ([`memory-lint-stop`](#advisory-checks-on-writes), below):
+a memory with no `MEMORY.md` line yet (the file is written first, the line
+second), and a handoff whose `STATE:` stamp is older than the write (the body is
+edited first, the stamp second). PostToolUse records `epoch path` in
+`~/.claude/state/sessions/lint-pending/<session id>` with a builtin `printf`.
+Stop reads the list once, reports what is still missing, and empties it. An
+interrupted turn never reaches Stop, so session-start deletes lists over a day
+old once per daily measurement.
 
 | Hook | Event | Behaviour |
 |---|---|---|
 | `memory-lint` | PostToolUse → Write/Edit/MultiEdit | On a file under a `memory/` folder: name matches filename, a valid type, a state-free description, a `verify:` block on any in-flight claim, link typos, an index line in the right tier. See [memory.md](memory.md). On a file under a `trackers/` folder, only a handoff: a file of at most 20,000 bytes (`TRACKER_LEDGER_BYTES`), with no `<name>-archive.md` beside it, marked by a `STATE:` or `Crons:` line or a `## Next on restart` heading. A file there named `*-handoff*.md` (any case) that passes the size and archive tests but has none of those markers gets one finding, saying so and to add them if it is a handoff or leave it if not; no size, heading or stamp finding until it is marked. It checks the five headings once each and in order, at most 5,000 bytes (`TRACKER_MAX_BYTES`), the `STATE:` stamp against the clock and the `Crons:` lines, and flags a line that tells a session to read a ledger over 20,000 bytes beside it first. Every other file there (ledgers, reports, logs, archives) is not linted on its own writes, and no finding says to cut, overwrite or `--write`: a folder of trackers may have no other copy. `CLAUDE_TRACKER_LINT=off` in settings.json `env` turns the tracker lint off. `tracker-prune.py FILE` lists a ledger's settled rows; `--write` moves them to `<name>-archive.md` under a folder lock, and a run that fails leaves a row in both files, never neither. |
+| `memory-lint` | PostToolUse, what it hands the model | A new `feedback_` memory in a store with principle hubs gets the hub advice as `hookSpecificOutput.additionalContext` with exit 0: advice, not a problem notice. A `STATE:` stamp ahead of the clock or not a UTC time is reported at the write; an old one waits for Stop. One jq reads the tool name, path and session id (it was two, three when it stamped `originSessionId`); recording a pending entry starts no process on bash 5, and none for a memory on bash 3.2. A handoff entry asks `date` on 3.2, which that write already outweighs. |
+| `memory-lint-stop` | Stop | Reads the session's pending list. A memory still with no line in `MEMORY.md` or `MEMORY_ARCHIVE.md` and a handoff whose `STATE:` is more than 5 min older than the write recorded for it (the write's time, not Stop's) are reported once as `hookSpecificOutput.additionalContext`, which continues the turn as Stop hook feedback with no error notice; `decision: "block"` would show a hook error for advice. Silent and empty when `stop_hook_active` is true (the list stays for the next Stop). With nothing pending it starts no process and loads no `lib.sh`; with a list, one jq, and only when a handoff is on it. Synchronous, unlike the `session-snapshot` Stop entry beside it. |
 | `comment-budget` | PostToolUse → Edit/MultiEdit/Write | Flags a comment run that this edit grew past 6 lines (`MAX_RUN` in the hook); a long block the file already carried stays silent. Steps aside in a repo that ships its own `.claude/hooks/comment-budget.py`. |
 
 ## Context & continuity
