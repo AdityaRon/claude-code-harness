@@ -60,7 +60,9 @@ done
 # tools live in tools/ and never install. Flat, because settings.json's
 # statusLine, the launchd job and the skills name ~/.claude/<tool>. None is a
 # hook: memory-audit runs the memory tools on demand, comms-hub's tick runs
-# spend-report.py, and harness-update.sh updates from ~/.claude/harness-src.
+# spend-report.py, harness-checkup.py imports permission-friction.py,
+# hook-latency.py and hooknames.py from beside it, and harness-update.sh
+# updates from ~/.claude/harness-src.
 for f in "$REPO"/bin/*; do
   [[ -f "$f" ]] || continue
   b=$(basename "$f")

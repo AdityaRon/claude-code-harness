@@ -96,7 +96,7 @@ py_sites() {   # samples on stdin
   HOME="$TMP/home" "$PY" -c '
 import importlib.util, re, sys
 sys.path[:0] = [sys.argv[1] + "/skills/comms-hub/bin", sys.argv[1] + "/skills/skill-forge/bin"]
-spec = importlib.util.spec_from_file_location("friction", "tools/permission-friction.py")
+spec = importlib.util.spec_from_file_location("friction", "bin/permission-friction.py")
 friction = importlib.util.module_from_spec(spec); spec.loader.exec_module(friction)
 import check_draft, skill_lint
 for s in sys.stdin.read().splitlines():
@@ -158,7 +158,7 @@ if [ -n "$PY" ]; then
   KEYCMD=$(printf "cat > k.pem <<'EOF'\n%s\nMIIEshortline\n%s\nEOF\nchmod 600 k.pem" "$HDR" "-----END RSA PRIVATE"" KEY-----")
   GOT=$(printf '%s' "$KEYCMD" | HOME="$TMP/home" "$PY" -c '
 import importlib.util, sys
-spec = importlib.util.spec_from_file_location("friction", "tools/permission-friction.py")
+spec = importlib.util.spec_from_file_location("friction", "bin/permission-friction.py")
 f = importlib.util.module_from_spec(spec); spec.loader.exec_module(f)
 print(f.mask(sys.stdin.read(), 10000))')
   [[ "$GOT" == *"<MASKED>"* && "$GOT" != *MIIE* && "$GOT" == *"chmod 600 k.pem"* ]] \
