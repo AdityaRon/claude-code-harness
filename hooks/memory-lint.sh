@@ -16,17 +16,37 @@
 #
 # Advisory by design. This is a PostToolUse hook, so the write has already
 # happened; the findings go back to the model while the context is still hot and
-# the fix costs one edit. It never blocks and never edits.
+# the fix costs one edit. It never edits and it cannot undo the write. A finding
+# exits 2, which Claude Code shows as "hook reported a problem" and hands to the
+# model; the hub hint below exits 0 as context.
+#
+# Two findings wait for Stop (memory-lint-stop.sh): a memory's MEMORY.md line and
+# a handoff's STATE: refresh are the second of two writes. pend records them.
 source "$(dirname "$0")/lib.sh"
 
 read_input
 command -v jq &>/dev/null || exit 0     # advisory only; never fail a write
-TOOL=$(jq_get '.tool_name')
+# One jq for the three fields, where jq_get started one each. @sh quotes every
+# value for the eval; on input that is not an object all stay empty.
+TOOL="" FILE="" SID=""
+eval "$(printf '%s\n' "$INPUT" | jq -r '@sh "TOOL=\(.tool_name // "") FILE=\(.tool_input.file_path // "") SID=\(.session_id // "")"' 2>/dev/null)"
 
 case "$TOOL" in
-  Write|Edit|MultiEdit) FILE=$(jq_get '.tool_input.file_path') ;;
+  Write|Edit|MultiEdit) ;;
   *) exit 0 ;;
 esac
+
+# pend KIND PATH: one `epoch path` line in this session's pending list. EPOCHSECONDS
+# is bash 5; under 3.2 a memory records 0 (its entry needs no time) and a handoff
+# asks date, which that write already outweighs with jq and sed.
+PEND_ROOT=${CLAUDE_STATE_DIR:-$HOME/.claude/state/sessions}; PEND_ROOT=${PEND_ROOT/#\~/$HOME}/lint-pending
+pend() {
+  [[ "$SID" =~ ^[A-Za-z0-9_-]+$ ]] || return 0
+  local t=${EPOCHSECONDS:-}
+  [[ "$t" =~ ^[0-9]+$ ]] || { [ "$1" = handoff ] && t=$(date +%s) || t=0; }
+  { [ -d "$PEND_ROOT" ] || mkdir -p "$PEND_ROOT"; } 2>/dev/null || return 0
+  printf '%s %s\n' "$t" "$2" >> "$PEND_ROOT/$SID" 2>/dev/null || true
+}
 
 [ -n "$FILE" ] || exit 0
 TRACKER=""
@@ -69,6 +89,7 @@ if [ -n "$TRACKER" ]; then
   [ "$GOT" = "$WANT" ] || tadd "its ## headings are \"${GOT:-none}\". A handoff has Scope, Open, Owed, Settled, Next on restart, once each, in that order. If this file is not a handoff, leave it as it is."
   TMAX=${TRACKER_MAX_BYTES:-5000}
   [ "$TB" -le "$TMAX" ] || tadd "it is $TB bytes, past $TMAX. Move what a restart does not need into a memory, the PR or a ledger; never delete what has no other copy."
+  pend handoff "$FILE"
   STAMP=$(sed -n 's/^STATE:[[:space:]]*//p' "$FILE" | sed 's/[[:space:]]*$//' | head -1)
   if [ -z "$STAMP" ]; then
     tadd "no \`STATE:\` line. Take it from \`date -u +%Y-%m-%dT%H:%MZ\`, not from the conversation."
@@ -78,7 +99,7 @@ if [ -n "$TRACKER" ]; then
     case "$D" in
       bad|"") tadd "\`STATE: $STAMP\` is not a UTC time like 2026-11-18T14:05Z. Take it from \`date -u +%Y-%m-%dT%H:%MZ\`." ;;
       *) if [ "$D" -gt 120 ]; then tadd "\`STATE: $STAMP\` is $(( D / 60 )) min ahead of the clock. Take it from \`date -u +%Y-%m-%dT%H:%MZ\`."
-         elif [ "$D" -lt -300 ]; then tadd "\`STATE: $STAMP\` is $(( -D / 60 )) min old, older than this write. Refresh it from \`date -u +%Y-%m-%dT%H:%MZ\`."; fi ;;
+         fi ;;   # an old stamp waits for Stop: this write may be the body, with the STATE edit next
     esac
   fi
   # Session crons live only in the session: the tracker is what carries them across a restart.
@@ -250,7 +271,6 @@ esac
 # this is where that gap closes. The hook knows the writing session, so it stamps
 # the field itself: asking cost the writer an edit on 8 of every 9 new memories.
 if ! grep -q 'originSessionId:' "$FILE"; then
-  SID=$(jq_get '.session_id')
   STAMP="$FILE.stamp.$$"
   if [ -n "$SID" ] && awk -v sid="$SID" '
       NR == 1 && $0 != "---" { exit 1 }
@@ -375,9 +395,11 @@ if [ -f "$DIR/MEMORY.md" ]; then
           add "its only index line is in MEMORY_ARCHIVE.md, which holds \`project\` and \`reference\` memories. Give it a type, or move the line back into MEMORY.md." ;;
       esac
     elif [ -n "$HUBS" ]; then
-      add "no MEMORY.md line points at $BASE yet — and this store groups method lessons under principle hubs. If this lesson is an instance of one, do NOT add a MEMORY.md line: add a bullet to that hub and put this memory's index line in MEMORY_ARCHIVE.md under the hub's heading. Give it its own index line only if it is a user preference, a fact about a specific tool, or fits no hub. Hubs:$HUBS"
+      # Not a finding: the line is the second of two writes. Stop checks it.
+      pend memory "$FILE"
+      HINT="no MEMORY.md line points at $BASE yet — and this store groups method lessons under principle hubs. If this lesson is an instance of one, do NOT add a MEMORY.md line: add a bullet to that hub and put this memory's index line in MEMORY_ARCHIVE.md under the hub's heading. Give it its own index line only if it is a user preference, a fact about a specific tool, or fits no hub. Hubs:$HUBS"
     else
-      add "no line in MEMORY.md points at $BASE, so it will never be recalled. Add one, in the section for its type."
+      pend memory "$FILE"   # reported at Stop if still missing: memory-lint-stop.sh
     fi
   else
     # Nothing clips an index line on the way in - a 109-char line arrives in
@@ -444,8 +466,12 @@ if [ -f "$DIR/MEMORY.md" ]; then
   fi
 fi
 
-[ -n "$FINDINGS" ] || exit 0
-
-printf 'memory-lint on %s:\n%s\nFix these now — each one is a single edit here, and none of them is detectable later.\n' \
-  "$BASE" "$FINDINGS" >&2
-exit 2
+if [ -n "$FINDINGS" ]; then
+  printf 'memory-lint on %s:\n%s\nFix these now — each one is a single edit here, and none of them is detectable later.\n' \
+    "$BASE" "$FINDINGS" >&2
+  [ -z "${HINT:-}" ] || printf '\n%s\n' "$HINT" >&2
+  exit 2
+fi
+# The hub hint is advice, not a defect: context for the model, no problem notice.
+[ -z "${HINT:-}" ] || jq -nc --arg c "$HINT" '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $c}}'
+exit 0

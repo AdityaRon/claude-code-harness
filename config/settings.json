@@ -330,6 +330,10 @@
       {
         "matcher": "",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-snapshot.sh", "async": true }]
+      },
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/memory-lint-stop.sh" }]
       }
     ],
     "SubagentStop": [
