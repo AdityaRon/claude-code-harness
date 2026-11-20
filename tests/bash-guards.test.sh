@@ -507,17 +507,23 @@ def recorded():
         return [int(x) for x in open(pids).read().split()]
     except (OSError, ValueError):
         return []
-def alive(pid):
+def gone(pid):
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
-        return False
+        return True
     except PermissionError:
-        return True
-    try:   # a zombie nothing reaps (a container's init) is gone
-        return open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[0] != 'Z'
-    except OSError:
-        return True
+        pass
+    return False
+def alive(pid):
+    if gone(pid):
+        return False
+    # A zombie nothing reaps (a container's init) is gone, and so is one being
+    # reaped (X), which kill 0 still finds; reaped by the time /proc is read is too.
+    try:
+        return open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[0] not in ('Z', 'X', 'x')
+    except OSError:   # no /proc (macOS), or reaped since kill 0: ask kill 0 again
+        return not gone(pid)
 # Run from a process substitution, this inherits INT ignored, and so would the
 # hook, which cannot then trap it: put it back, as a spawner that sets none has it.
 signal.signal(signal.SIGINT, signal.SIG_DFL)
