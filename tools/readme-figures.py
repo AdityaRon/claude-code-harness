@@ -521,8 +521,8 @@ def hero_alt(names):
     return ("Diagram of one Bash call, left to right. The call goes to bash-guards, a dispatcher that parses it "
             "once with jq and forks the %d Bash guards in parallel: %s. Their answers merge, deny over ask over "
             "allow, and a deny ends the call there. Otherwise it goes on to Claude Code's permission rules, then to "
-            "auto mode's classifier, which decides what no guard or rule names. A separate lane below holds the "
-            "session hooks, which are not on the Bash path: %s."
+            "auto mode's classifier, which decides by judgment what no guard or rule names. A separate lane below "
+            "holds the session hooks, which are off the Bash path: %s."
             % (len(names), ", ".join(names[:-1]) + " and " + names[-1],
                ", ".join("%s (%s)" % h for h in SESSION_HOOKS)))
 
@@ -556,41 +556,41 @@ def chart_hero(names, theme):
     mid = 172
     ink, muted, accent = t["ink"], t["muted"], t["s1"]
     # The call, and the dispatcher's one parse.
-    box(svg, 16, mid - 30, 92, 60, [("Bash call", 14, "600", None), ("from Claude", 12, None, muted)])
-    box(svg, 132, mid - 42, 126, 84, [("bash-guards", 14, "600", None), ("one jq parse,", 12, None, muted),
-                                      ("then a fork", 12, None, muted), ("per guard", 12, None, muted)],
+    box(svg, 16, mid - 30, 92, 60, [("Bash call", 15, "600", None), ("from Claude", 13, None, muted)])
+    box(svg, 132, mid - 42, 126, 84, [("bash-guards", 15, "600", None), ("one jq parse,", 13, None, muted),
+                                      ("then a fork", 13, None, muted), ("per guard", 13, None, muted)],
         stroke=accent)
     arrow(svg, 108, mid, 130, mid, t["axis"])
     # The guards, in parallel.
     gx, gw, gh, gap = 292, 140, 26, 6
     top = mid - (len(names) * (gh + gap) - gap) / 2
-    svg.text(gx + gw / 2, top - 12, "%d guards, in parallel" % len(names), size=13, fill=muted, anchor="middle")
+    svg.text(gx + gw / 2, top - 12, "%d guards, in parallel" % len(names), size=14, fill=muted, anchor="middle")
     for k, name in enumerate(names):
         y = top + k * (gh + gap)
-        box(svg, gx, y, gw, gh, [(name, 13, None, None)], rx=6)
+        box(svg, gx, y, gw, gh, [(name, 14, None, None)], rx=6)
         spread = (k - (len(names) - 1) / 2) * 9
         arrow(svg, 258, mid + spread, gx - 2, y + gh / 2, t["axis"], 1.2)
         arrow(svg, gx + gw, y + gh / 2, 466, mid + spread, t["axis"], 1.2)
     # The merge, then Claude Code.
-    box(svg, 468, mid - 42, 146, 84, [("deny > ask > allow", 14, "600", None), ("the strongest answer", 12, None, muted),
-                                      ("wins; a deny ends", 12, None, muted), ("the call here", 12, None, muted)],
+    box(svg, 468, mid - 42, 146, 84, [("deny > ask > allow", 14, "600", None), ("strongest answer", 13, None, muted),
+                                      ("wins; a deny", 13, None, muted), ("ends the call", 13, None, muted)],
         stroke=accent)
     arrow(svg, 614, mid, 640, mid, t["axis"])
     box(svg, 642, mid - 86, 222, 172, [], stroke=t["border"])
-    svg.text(753, mid - 62, "Claude Code", size=14, weight="600", anchor="middle")
-    box(svg, 656, mid - 46, 194, 46, [("permission rules", 13, "600", None), ("deny, ask and allow lists", 12, None, muted)],
+    svg.text(753, mid - 62, "Claude Code", size=15, weight="600", anchor="middle")
+    box(svg, 656, mid - 46, 194, 46, [("permission rules", 14, "600", None), ("deny, ask, allow lists", 13, None, muted)],
         fill=t["bg"], rx=6)
     arrow(svg, 753, mid, 753, mid + 14, t["axis"])
-    box(svg, 656, mid + 16, 194, 46, [("auto mode classifier", 13, "600", None),
-                                      ("what no guard or rule names", 12, None, muted)], fill=t["bg"], rx=6)
+    box(svg, 656, mid + 16, 194, 46, [("auto mode classifier", 14, "600", None),
+                                      ("the rest, by judgment", 13, None, muted)], fill=t["bg"], rx=6)
     # The session hooks, off the Bash path.
     ly, lh = 318, 66
     box(svg, 16, ly, 848, lh, [], fill=t["bg"], dash="5 4")
-    svg.text(32, ly + 28, "Session hooks", size=13, weight="600")
-    svg.text(32, ly + 46, "not on the Bash path", size=12, fill=muted)
+    svg.text(30, ly + 29, "Session hooks", size=14, weight="600")
+    svg.text(30, ly + 47, "off the Bash path", size=13, fill=muted)
     px, pw = 192, 156
     for k, (name, when) in enumerate(SESSION_HOOKS):
-        box(svg, px + k * (pw + 12), ly + 12, pw, lh - 24, [(name, 13, "600", None), (when, 12, None, muted)], rx=6)
+        box(svg, px + k * (pw + 12), ly + 12, pw, lh - 24, [(name, 14, "600", None), (when, 13, None, muted)], rx=6)
     return svg.done()
 
 

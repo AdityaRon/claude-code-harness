@@ -7,7 +7,7 @@ costs.
 <!-- readme-figures:hero:begin -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/figures/hero-dark.svg">
-  <img alt="Diagram of one Bash call, left to right. The call goes to bash-guards, a dispatcher that parses it once with jq and forks the 7 Bash guards in parallel: env-guard, git-guard, interpreter-guard, kubectl-guard, network-guard, rm-guard and config-guard. Their answers merge, deny over ask over allow, and a deny ends the call there. Otherwise it goes on to Claude Code's permission rules, then to auto mode's classifier, which decides what no guard or rule names. A separate lane below holds the session hooks, which are not on the Bash path: session-start (at session start), pre-compact (before compaction), memory-lint (after a memory write), audit (every event, logged)." src="docs/figures/hero-light.svg" width="880">
+  <img alt="Diagram of one Bash call, left to right. The call goes to bash-guards, a dispatcher that parses it once with jq and forks the 7 Bash guards in parallel: env-guard, git-guard, interpreter-guard, kubectl-guard, network-guard, rm-guard and config-guard. Their answers merge, deny over ask over allow, and a deny ends the call there. Otherwise it goes on to Claude Code's permission rules, then to auto mode's classifier, which decides by judgment what no guard or rule names. A separate lane below holds the session hooks, which are off the Bash path: session-start (at session start), pre-compact (before compaction), memory-lint (after a memory write), audit (every event, logged)." src="docs/figures/hero-light.svg" width="880">
 </picture>
 <!-- readme-figures:hero:end -->
 
