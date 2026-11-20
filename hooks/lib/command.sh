@@ -4,12 +4,14 @@
 # CMD with TEXT and a newline on its stdin, as `printf '%s\n' TEXT | CMD` gives
 # it, a fork fewer. bash 3.2, and 5.2 past 64 KB, write the text to a temp file
 # first; where none can be made the body does not run, and the pipe does.
+# shift, not "${@:2}": bash 3.2 joins that into one word under IFS=';'.
 herestr() {   # TEXT CMD...
-  local _hs=""
-  { _hs=1; "${@:2}" 2>&9 9>&-; } 9>&2 2>/dev/null <<< "$1"
+  local _hs="" _ht=$1
+  shift
+  { _hs=1; "$@" 2>&9 9>&-; } 9>&2 2>/dev/null <<< "$_ht"
   local _hs_st=$?
   [[ -n "$_hs" ]] && return "$_hs_st"
-  printf '%s\n' "$1" | "${@:2}"
+  printf '%s\n' "$_ht" | "$@"
 }
 
 # NAME=$(printf '%s\n%s' A B) with no fork: the newlines the capture dropped

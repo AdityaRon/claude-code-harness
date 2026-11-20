@@ -460,6 +460,8 @@ for a in "" x $'x\n' $'\n\n' $'a b\nc' $'x\n\n\ny' '%s %d \' $'\t'; do
   ( source hooks/lib.sh
     [[ "$(herestr "$a" cat; echo "rc=$?")" == "$(printf '%s\n' "$a" | cat; echo "rc=$?")" \
        && "$(herestr "$a" grep -c x; echo "rc=$?")" == "$(printf '%s\n' "$a" | grep -c x; echo "rc=$?")" ]] ) || BADH="$BADH herestr:$i"
+  # kubectl-guard runs one under IFS=';' (bash 3.2 joined "${@:2}" there).
+  ( source hooks/lib.sh; IFS=';'; [[ "$(herestr "$a;z" awk -F';' '{ print $NF }')" == *z ]] ) || BADH="$BADH herestr-ifs:$i"
   P=$(jq -nc --arg c "$a" '{tool_name:"Bash",tool_input:{command:$c},cwd:"/x\n\n"}')
   for e in .tool_input.command .cwd .tool_name .tool_input.url .session_id; do
     ( source hooks/lib.sh; INPUT=$P; jq_set V "$e"; [[ "$V" == "$(jq_get "$e")" ]] ) || BADH="$BADH jq_set:$i$e"
