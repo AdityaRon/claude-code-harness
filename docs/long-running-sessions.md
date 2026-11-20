@@ -107,7 +107,7 @@ preliminary.
 | Process start: 0.5 to 1.4 ms | p50 of 5 | CI runner |
 | Process start at load 22.6: 8.4 and 8.6 ms | p50 of 5 | personal Mac |
 | Process start at load 4.5 to 5: about 2 ms | median of 40 | personal Mac |
-| Slowest guard per Bash call: median 0.74 s on v1.4.9, 0.26 to 0.41 s on v1.4.14; the slowest 10% 3 s or more | not given | not named |
+| Slowest guard per Bash call (`guard-timing.log`): median 0.74 s on v1.4.9; on v1.4.14, 0.26 s over the last 300 calls and 0.41 s over all 1,337 since install; p90 3.02 and 3.79 s | 1,000 calls (v1.4.9), 300 and 1,337 calls (v1.4.14) | work Mac |
 | Pre-compact backups: 2.6 GB in 20 files, then 797 MB in 11 | 1 compaction, preliminary | work Mac |
 | Python venvs inside live jobs: 1.4 and 1.6 GB | 2 jobs, preliminary | work Mac |
 | Transcripts Spotlight had indexed: 1,285, then 0 after Search Privacy | 1 reading each, preliminary | work Mac |
@@ -119,7 +119,5 @@ preliminary.
 - How common long sessions are.
 - Whether transcript size is what slowed the agent view.
 - What Spotlight indexing of growing transcripts costs.
-- The n and the window behind the slowest-guard medians, and which machine
-  they came from.
 - How many sessions the 6.9 to 14.5 MB after a restart covers.
 - Whether the reboot's load repeats on a second reboot.
