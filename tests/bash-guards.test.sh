@@ -272,6 +272,15 @@ WANT=$OUT
 disp "$TMP/hk" "$(payload 'git stash drop')"
 [[ "$OUT" == "$WANT" && "$(dec "$OUT")" == ask && -z "$ERR" ]] \
   && pass "a line on a fork's stderr as it waits: the answer is unchanged, and stderr is empty" || fail "a fork's own stderr" "out=$OUT err=$ERR"
+# Seen under load on macOS, 1 call in 3,000: the guard's child, under set -m, says
+# "child setpgid (N to N): Operation not permitted" before its exec 2>&4.
+sed 's/( exec 2>&4 4>&-;/( echo "bash-guards.sh: child setpgid (1 to 1): Operation not permitted" >\&2; exec 2>\&4 4>\&-;/' \
+  hooks/bash-guards.sh > "$TMP/hk/bash-guards.sh"
+grep -q '( echo "bash-guards.sh: child setpgid (1 to 1): Operation not permitted" >&2; exec 2>&4 4>&-;' "$TMP/hk/bash-guards.sh" \
+  || fail "test setup" "the guard's subshell was not found"
+disp "$TMP/hk" "$(payload 'git stash drop')"
+[[ "$OUT" == "$WANT" && "$(dec "$OUT")" == ask && -z "$ERR" ]] \
+  && pass "a line on the guard's child's stderr before its own redirect: the answer is unchanged" || fail "the child's stderr" "out=$OUT err=$ERR"
 
 echo ""
 echo "=== the payload is read once, and must parse ==="
