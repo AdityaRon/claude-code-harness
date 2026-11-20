@@ -42,7 +42,7 @@ two_lines() {   # NAME A B
 # Output feeds pattern matching only — never execution — so a mangled quote is
 # harmless, and ambiguity makes the guards fail closed by design.
 normalize_wrappers() {
-  local s i e=()
+  local i e=()
   # Give a command-substitution opener its own whitespace BEFORE the assignment
   # rule runs. Without this the assignment pattern swallows the substitution
   # body — `X=$(kubectl delete pod foo)` normalised to `delete pod foo)`, and
@@ -59,8 +59,8 @@ normalize_wrappers() {
       -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(nice([[:space:]]+-n[[:space:]]*[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|stdbuf([[:space:]]+-[ioe][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|env([[:space:]]+-[uSCP][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|sudo([[:space:]]+-[ugCph][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|doas([[:space:]]+-[uC][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|ionice([[:space:]]+-[cnp][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|exec([[:space:]]+-a[[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|caffeinate([[:space:]]+-[tw][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|xargs([[:space:]]+-[IndPLsEa][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*)[[:space:]]+/\1\2/g'
       -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)timeout[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[0-9]+[smhd]?[[:space:]]+/\1\2/g')
   done
-  s=$(printf '%s' "$1" | sed -E "${e[@]}")
-  printf '%s' "$s"
+  # Each caller captures this, which drops the newline herestr adds.
+  herestr "$1" sed -E "${e[@]}"
 }
 
 # `{ git push -f; }`, `(printenv)`, `if X; then`, `! X` and a case arm put the
@@ -120,9 +120,10 @@ exec_fn_suffixes() {
 # A word can end in a quote that closes text around it: `"$(ENV)"`, or the tail
 # of a quoted jq filter after a `(`. Dropping that quote left the line unbalanced
 # and env-guard's jq check read the filter as file names, so the last unpaired
-# quote of each kind goes back after the name, in its order.
+# quote of each kind goes back after the name, in its order. Each caller
+# captures this, which drops the newline herestr adds.
 normalize_binaries() {
-  printf '%s' "$1" | awk '
+  herestr "$1" awk '
     function last(s, c,   i) { for (i = length(s); i > 0; i--) if (substr(s, i, 1) == c) return i; return 0 }
     function fix(seg,   pre, tok, t, n, q, d, a, keep) {
       match(seg, /^[ \t]*/); pre = substr(seg, 1, RLENGTH); seg = substr(seg, RLENGTH + 1)
