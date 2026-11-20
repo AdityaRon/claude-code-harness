@@ -276,11 +276,14 @@ rules/                   ← installed to ~/.claude/rules, loaded in every sessi
   python-tests.md        ← path-scoped: loads only when Claude opens Python or a file under tests/
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
-                           heredoc-openers, repo-layout, shadow, token-shapes and workflow-gates cut across
-                           files; guard-execs holds git-guard and interpreter-guard to a process
-                           budget per corpus shape; lib.sh is their shared pass/fail; bench-corpus.jsonl
-                           feeds hook-bench; doctor tests doctor.sh's own report; smoke.list is the
-                           set install.sh and harness-update.sh verify with (doctor.sh --smoke)
+                           heredoc-openers, prompt-canary, repo-layout, shadow, token-shapes and
+                           workflow-gates cut across files; guard-execs holds git-guard and
+                           interpreter-guard to a process budget per corpus shape; lib.sh is their
+                           shared pass/fail; lib/transcripts.py writes synthetic transcripts at test
+                           time (no real one is committed), and prompt-canary checks that no report
+                           on them prints prompt text; bench-corpus.jsonl feeds hook-bench; doctor
+                           tests doctor.sh's own report; smoke.list is the set install.sh and
+                           harness-update.sh verify with (doctor.sh --smoke)
 docs/
   install.md  releases.md  upstream-contract.md  guards.md  hooks.md
   permissions.md  auto-mode.md  customization.md  known-limitations.md

@@ -10,24 +10,18 @@ fail() { echo "  FAIL: $1"; [[ -n "${2:-}" ]] && printf '    %s\n' "$2"; FAIL=$(
 command -v python3 >/dev/null || { echo "  SKIP: no python3"; exit 0; }
 has() { [[ "$OUT" == *"$1"* ]] && pass "$2" || fail "$2" "wanted: $1"$'\n'"$OUT"; }
 
-# One project, a main session and a subagent. Times are 2026-10-20 UTC.
-python3 - "$TMP/root" <<'PY'
+# One project, a main session and a subagent, from tests/lib/transcripts.py's record
+# helpers. Times are 2026-10-20 UTC.
+python3 - "$TMP/root" "$(dirname "${BASH_SOURCE[0]}")/lib" <<'PY'
 import json, os, sys
+sys.path.insert(0, sys.argv[2])
+import transcripts as T
 root = sys.argv[1]
 main = os.path.join(root, 'proj', 'sess-main.jsonl')
 sub = os.path.join(root, 'proj', 'sess-main', 'subagents', 'agent-sub1.jsonl')
-os.makedirs(os.path.dirname(sub))
-def user(t, text, kind):
-    d = {'type': 'user', 'timestamp': f'2026-10-20T{t}Z', 'message': {'role': 'user', 'content': text}}
-    if kind: d['origin'] = {'kind': kind}
-    return d
-def asst(t, mid, model, out=0, read=0, w5=0, w1=0, inp=0, **extra):
-    u = {'input_tokens': inp, 'output_tokens': out, 'cache_read_input_tokens': read,
-         'cache_creation_input_tokens': w5 + w1,
-         'cache_creation': {'ephemeral_5m_input_tokens': w5, 'ephemeral_1h_input_tokens': w1}}
-    u.update(extra)
-    return {'type': 'assistant', 'timestamp': f'2026-10-20T{t}Z', 'requestId': 'req-' + mid,
-            'message': {'id': mid, 'model': model, 'usage': u}}
+day = lambda t: f'2026-10-20T{t}Z'
+user = lambda t, text, kind: T.user(day(t), text, kind)
+asst = lambda t, mid, model, **kw: T.asst(day(t), mid, model, **kw)
 rows = [
     user('09:00:00', 'fix the build', 'human'),
     # 1M output at $20 = $20.00, streamed as two records.
@@ -37,7 +31,7 @@ rows = [
     asst('09:01:00', 'm2', 'claude-opus-5-5', read=150_000, w1=100_000),
     # Two hours later, no prompt typed since: away. 10k read = $0.002; 200k 5m write at $5 = $1.00, a rewrite.
     # A cron fire, as Claude Code records one: isMeta, with a scheduledFireId and no origin.
-    {**user('11:00:00', 'comms-hub tick', None), 'isMeta': True, 'scheduledFireId': 'fire-1'},
+    T.scheduled(day('11:00:00'), 'comms-hub tick'),
     asst('11:00:05', 'm3', 'claude-opus-5-5', read=10_000, w5=200_000),
     # Any other isMeta record starts no turn, even one quoting the prompt.
     {**user('11:00:20', 'comms-hub tick, quoted in a caveat', None), 'isMeta': True},
@@ -49,15 +43,13 @@ rows = [
         {'type': 'advisor_message', 'model': 'claude-fable-5-1', 'input_tokens': 100_000, 'output_tokens': 0}]),
     asst('11:02:00', 'm6', 'claude-unknown-9', out=1000),
 ]
-with open(main, 'w') as f:
-    f.write('\n'.join(json.dumps(r) for r in rows) + '\n')
+T.write(main, rows)
 # Haiku 5.5 over 100k tokens of prompt: 200k input at $0.50 = $0.10 and a 200k write at
 # $0.625 = $0.125, which is the agent's first call, so not a rewrite. The second call
 # re-writes its whole 30k context at $0.125 = $0.00375: a rewrite.
 subrows = [asst('11:05:00', 's1', 'claude-haiku-5-5', inp=200_000, w5=200_000),
            asst('11:30:00', 's2', 'claude-haiku-5-5', w5=30_000)]
-with open(sub, 'w') as f:
-    f.write('\n'.join(json.dumps(r) for r in subrows) + '\n')
+T.write(sub, subrows)
 json.dump({'agentType': 'reviewer'}, open(sub[:-len('.jsonl')] + '.meta.json', 'w'))
 PY
 run() { OUT=$(TZ=UTC python3 "$SR" --root "$TMP/root" --since 2026-10-20T00:00:00+00:00 --until 2026-10-21T00:00:00+00:00 "$@" 2>&1); RC=$?; }
