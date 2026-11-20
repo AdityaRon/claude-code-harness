@@ -89,8 +89,14 @@ shadow_note() {   # WOULD RULE REASON
   local g=${GUARD_NAME:-${0##*/}} c why f log line
   g=${g%.sh}
   c=$(jq_get '.tool_input.command'); [[ -n "$c" ]] || c=$(jq_get '.tool_input.ws.url')
-  c=${c//[$'\n\r\t']/ }; why=${3//[$'\n\r\t']/ }
-  f=$(printf '%s\n%s\n' "$c" "$why" | LC_ALL=C tr -d '\000-\011\013-\037' | redact_secrets)
+  # The command and the reason one line each: a newline, CR or tab is a space, the
+  # other control bytes go. One awk (under C, lib.sh) reads the command on stdin
+  # and the reason from its environment. Not ${c//…}: there bash 3.2 took 34 s on
+  # an 8 KB heredoc of 136 lines under en_US.UTF-8, and 4 s under C (Apple M2).
+  f=$(printf '%s\n' "$c" | SHADOW_WHY=$3 awk '
+    function clean(s) { gsub(/[\n\r\t]/, " ", s); gsub(/[\001-\010\013-\037]/, "", s); return s }
+    { printf "%s%s", (NR > 1 ? " " : ""), clean($0) }
+    END { printf "\n%s\n", clean(ENVIRON["SHADOW_WHY"]) }' | redact_secrets)
   { IFS= read -r c; IFS= read -r why; } <<<"$f"
   line=$(jq -nc --arg s "$(jq_get '.session_id')" --arg id "$(jq_get '.tool_use_id')" --arg m "$(jq_get '.permission_mode')" \
     --arg g "$g" --arg r "$2" --arg why "$why" --arg w "$1" --arg t "$(jq_get '.tool_name')" --arg c "$c" \

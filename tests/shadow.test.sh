@@ -141,6 +141,15 @@ run kubectl-guard "$(call Bash $'kubectl delete pod web --token '"$TOK"$'\necho 
 C=$(field command)
 [[ "$C" != *"$TOK"* && "$C" == *'***'* && "$C" != *$'\n'* && "$C" != *$'\001'* ]] \
   && pass "secret redacted, newline and control bytes gone" || fail "cleaned" "$C"
+# Each newline, CR and tab a space where it stood, and the other control bytes out.
+run kubectl-guard "$(call Bash $'\n\nkubectl delete pod web\r\n\t--now\002  # a\tb')"
+[[ "$(field command)" == '  kubectl delete pod web   --now  # a b' ]] \
+  && pass "a newline, CR or tab is a space where it stood" || fail "spaces" "[$(field command)]"
+: > "$CLAUDE_SHADOW_LOG"
+bash -c 'source hooks/lib.sh; INPUT=$1; GUARD_NAME=kubectl-guard shadow_note ask mutating-verb "$2"' _ \
+  "$(call Bash 'kubectl delete pod web')" $'two\nlines\tand\001 \r100%s' 2>/dev/null
+[[ "$(field reason)" == 'two lines and  100%s' && "$(field command)" == 'kubectl delete pod web' ]] \
+  && pass "the reason is cleaned the same way" || fail "reason" "[$(field reason)]"
 run kubectl-guard "$(call Bash "kubectl delete pod $(printf 'x%.0s' $(seq 1 400))")"
 [[ ${#C} -gt 0 && "$(field command | awk '{ print length($0) }')" == 200 ]] && pass "the command is cut at 200 characters" || fail "cut" "$(field command | wc -c)"
 rm -f "$CLAUDE_SHADOW_LOG"
