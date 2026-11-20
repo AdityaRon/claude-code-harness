@@ -190,9 +190,14 @@ for bg_g in "${BG_RUN[@]}"; do
   # One byte first, to the deadline: a read that times out keeps nothing it took
   # on bash 3.2, and this one took nothing. Then the rest. An end with no byte
   # before the deadline is no answer (lost); a guard still silent at it is late.
+  # The byte is waited for a second at a time: bash runs a trap only once a read
+  # returns, so a signal caught as one began would otherwise wait for the
+  # deadline. A read that timed out gives over 128, or on bash 3.2 gives 1 as at
+  # an end; a second gone tells it apart, and an end it takes for one is read again.
   while :; do
-    bg_left=$((BG_END - SECONDS)); (( bg_left < 1 )) && bg_left=1
-    bg_r=""; IFS= read -r -d '' -n 1 -t "$bg_left" bg_r <&$((10 + bg_i))
+    bg_s0=$SECONDS
+    bg_r=""; IFS= read -r -d '' -n 1 -t 1 bg_r <&$((10 + bg_i)); bg_rs=$?
+    [[ -z "$bg_r" ]] && (( (bg_rs > 128 || SECONDS > bg_s0) && SECONDS < BG_END )) && continue
     [[ -n "$bg_r" ]] || (( SECONDS < BG_END )) && break
     [[ -z "$BG_WOKE" ]] && BG_WOKE=1 && bg_woke && (( SECONDS < BG_END )) && continue
     bg_r=$'\037late'; break
@@ -207,7 +212,7 @@ for bg_g in "${BG_RUN[@]}"; do
   eval "exec $((10 + bg_i))<&-"
   bg_i=$((bg_i + 1))
 done
-unset bg_rest
+unset bg_rest bg_rs bg_s0
 
 # deny > ask > allow. One guard answering is passed on byte for byte; several
 # are joined in list order. Each guard wrote its own audit line. An answer is one

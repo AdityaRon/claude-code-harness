@@ -614,6 +614,16 @@ late self 30
 [[ "$LRC" == -15 && "$LLEFT" == - && ! -e "$TMP/mark" ]] \
   && pass "TERM between a guard's start and its pid kept: it dies of TERM, and that guard is stopped" \
   || fail "TERM while the guards start" "rc=$LRC recorded $LN, alive $LLEFT, mark $(cat "$TMP/mark" 2>/dev/null)"
+# A signal caught as the hook begins to wait on a guard: bash runs the trap only
+# once that read returns, so it waits a second at a time, not to the deadline.
+# The TERM comes from the read's own arguments here, at the slow guard's turn.
+cp "$TMP/slow-guard.sh" "$TMP/hk/interpreter-guard.sh"
+sed 's#-n 1 -t #-n 1 $([[ $bg_i == 2 ]] \&\& kill -TERM $$) -t #' hooks/bash-guards.sh > "$TMP/hk/bash-guards.sh"
+grep -qF -e '-n 1 $([[ $bg_i == 2 ]] && kill -TERM $$) -t ' "$TMP/hk/bash-guards.sh" || fail "test setup" "the first-byte read was not found"
+late self 30
+[[ "$LRC" == -15 && "$LLEFT" == - && ! -e "$TMP/mark" ]] && awk -v s="$LSECS" 'BEGIN { exit !(s < 5) }' \
+  && pass "TERM as a read of a guard begins: it dies of TERM in $LSECS s, and the guard with it" \
+  || fail "TERM as a read begins" "rc=$LRC in $LSECS s, recorded $LN, alive $LLEFT"
 # Every guard starting children in a loop when TERM comes. On macOS a child being
 # forked as its guard's group is killed escapes that kill, so the group is killed
 # again until it is empty (red in 19 of 20 runs on macOS without that). Linux's
