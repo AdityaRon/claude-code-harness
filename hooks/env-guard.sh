@@ -9,7 +9,7 @@ source "$(dirname "$0")/lib.sh"
 read_input
 require_jq_or_deny
 require_parsable_or_deny
-CMD=$(jq_get '.tool_input.command')
+jq_set CMD .tool_input.command
 [[ -z "$CMD" ]] && exit 0
 joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Every pattern below needs one of these words. Normalizing drops quotes,

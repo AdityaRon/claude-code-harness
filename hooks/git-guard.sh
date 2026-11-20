@@ -20,7 +20,7 @@ strip_messages() { strip_message_args "$(strip_inert_heredocs "$1")"; }
 read_input
 require_jq_or_deny
 require_parsable_or_deny
-CMD=$(jq_get '.tool_input.command')
+jq_set CMD .tool_input.command
 [[ -z "$CMD" ]] && exit 0
 joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Every check below names git. Normalizing drops quotes and backslashes, lowers
@@ -274,7 +274,7 @@ gate_segments() {
 PROOF_TEXT=""; PROOF_N=0
 proved_in_each_reading() {   # FN
   local c q
-  c=$(strip_messages "$(jq_get '.tool_input.command')")
+  jq_set c .tool_input.command; c=$(strip_messages "$c")
   PROOF_TEXT=$c; "$1" && [[ $PROOF_N -gt 0 ]] || return 1
   [[ "$c" == *[\"\'\\]* && "$c" == *[\;\&\|]* ]] || return 0
   q=$(neutralize_quoted_separators "$c")
@@ -340,7 +340,7 @@ remote_tips_held() {   # $1 repo  $2 remote  $3 refs to leave out, one per line 
 push_delete_safe() {
   local raw segs seg t i k r repo cwd n=0 del b fu pu gone=""
   local -a refs names s_repo=() s_remote=() s_names=()
-  cwd=$(jq_get '.cwd')
+  jq_set cwd .cwd
   raw=$(separate_groups "$PROOF_TEXT")
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
   raw=$(normalize_wrappers "$raw")
@@ -430,7 +430,7 @@ SENSITIVE_PATH="$(IFS='|'; printf '%s' "${CREDENTIAL_FILES[*]}")|\.env[.-]|id_rs
 FOUND=""
 broad_add_safe() {
   local raw segs seg t i repo cwd n=0 p out
-  cwd=$(jq_get '.cwd')
+  jq_set cwd .cwd
   raw=$(separate_groups "$PROOF_TEXT")
   # xargs appends stdin, which can hold -f; normalize_wrappers would hide it.
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1

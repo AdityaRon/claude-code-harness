@@ -6,7 +6,7 @@
 # CLAUDE_JOB_DIR, so it is derived. Empty for an interactive session.
 session_scratch() {   # $1: the command and cwd, when the caller has them
   local sid d re='jobs/|CLAUDE_JOB_DIR|claude-[0-9]'
-  sid=$(jq_get '.session_id')
+  jq_set sid .session_id
   [[ "$sid" =~ ^[0-9a-f]{8}- ]] || return 0
   [[ -d "$HOME/.claude/jobs/${sid:0:8}" ]] && { printf '%s\n' "$HOME/.claude/jobs/${sid:0:8}/tmp"; return 0; }
   # A resumed job keeps its folder under the first session's id and runs under
