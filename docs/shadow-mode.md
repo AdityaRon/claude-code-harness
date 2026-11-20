@@ -73,7 +73,7 @@ guard on each call, written for the first hit only:
 The command and reason are cleaned as `audit.sh` cleans a field: one line, no
 control bytes, at most 200 characters for the command and 300 for the reason,
 with secrets redacted. The file is created with mode 0600. A shadowed hit
-writes no `GUARD` line to the audit log, so `tools/permission-friction.py` does
+writes no `GUARD` line to the audit log, so `bin/permission-friction.py` does
 not count it as a prompt. A run on the command's joined lines, or on an inline
 script's shell-out, reports its hit to the outer run, which writes the line.
 

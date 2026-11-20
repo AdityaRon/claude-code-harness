@@ -3,7 +3,7 @@
 # Exit code = number of suites that failed, were killed or timed out (at most 100).
 #   bash doctor.sh --skill comms-hub   that skill's prerequisites, from ~/.claude/skills-src
 #   bash doctor.sh --hosts             running claude processes whose binary is gone
-#   bash doctor.sh --latency [ARGS]    hook wall times from the transcripts (tools/hook-latency.py)
+#   bash doctor.sh --latency [ARGS]    hook wall times from the transcripts (bin/hook-latency.py)
 #   bash doctor.sh --census [ARGS]     claude processes, their memory, idle background jobs
 #   bash doctor.sh --disk              what job folders and Bazel output bases hold (bin/disk-space.py)
 #   bash doctor.sh --smoke             only the suites tests/smoke.list names
@@ -13,7 +13,7 @@ set -u
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 
 case "${1:-}" in
-  --latency) shift; exec python3 tools/hook-latency.py "$@" ;;
+  --latency) shift; exec python3 bin/hook-latency.py "$@" ;;
   --census) shift; exec python3 tools/session-census.py "$@" ;;
   --disk) python3 bin/disk-space.py report; echo ""; exec python3 bin/disk-space.py bazel ;;
   --changed) shift; exec bash tools/verify-changed.sh "$@" ;;

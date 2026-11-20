@@ -49,7 +49,7 @@ After a reboot of the work Mac, every background session resumed together:
 - The OS's own indexing and media analysis took 90 to 275% CPU, and endpoint agents about 120%.
 - All Claude processes together took 12 to 17%.
 
-Do not compare timings across that window: `tools/hook-latency.py` and `tools/shadow-report.py` take `--since` for that.
+Do not compare timings across that window: `bin/hook-latency.py` and `tools/shadow-report.py` take `--since` for that.
 
 ## Every process a hook starts costs more on a managed machine
 

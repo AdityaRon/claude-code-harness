@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for tools/hook-latency.py, tools/hooknames.py and tools/session-census.py on
+# Tests for bin/hook-latency.py, bin/hooknames.py and tools/session-census.py on
 # fixture transcripts, settings, ps output and job folders; and doctor.sh's
 # --latency and --census, which run them.
 # shellcheck disable=SC2088  # records carry a literal ~, as Claude Code writes them
@@ -13,7 +13,7 @@ REPO=$PWD
 P="$TMP/projects"
 # doctor.sh run from a copy whose tests/ is empty: if a flag were not handled it
 # would run every suite, this one included, and never return.
-DOC="$TMP/doc"; mkdir -p "$DOC/tests"; cp doctor.sh "$DOC/"; ln -s "$REPO/tools" "$DOC/tools"; ln -s "$REPO/hooks" "$DOC/hooks"
+DOC="$TMP/doc"; mkdir -p "$DOC/tests"; cp doctor.sh "$DOC/"; ln -s "$REPO/tools" "$DOC/tools"; ln -s "$REPO/bin" "$DOC/bin"; ln -s "$REPO/hooks" "$DOC/hooks"
 mkdir -p "$P/proj/sess1/subagents"
 
 # Settings: Bash has env (1), git (2), config (3); Edit has mod-gate (4), config again
@@ -58,7 +58,7 @@ rec "$T" 40 PreToolUse:Bash "~/.claude/hooks/rm-guard.sh" 63
 rec "$T" 1 PostToolUse:Bash "~/.claude/hooks/tcc-check.sh" "" hook_blocking_error
 rec "$P/proj/sess1/subagents/agent-a.jsonl" 1 PreToolUse:Bash "~/.claude/hooks/network-guard.sh" 250
 
-lat() { python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" "$@"; }
+lat() { python3 "$REPO/bin/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" "$@"; }
 lat --json > "$TMP/day.json" 2>"$TMP/err"; RC=$?
 row() { jq -c --arg e "$1" --arg h "$2" '[.rows[] | select(.event == $e and .hook == $h)] | map([.n, .p50, .p95, .max])' "$3"; }
 
@@ -88,8 +88,8 @@ lat --days 7 > "$TMP/old.txt"
 grep -q 'inside the window: a numbered record from before then may be named for the hook now at its number' "$TMP/now.txt" \
   && ! grep -q 'inside the window' "$TMP/old.txt" \
   && pass "a settings.json changed inside the window is named as a reason a number may mislead" || fail "changed caveat" "$(grep -c window "$TMP/now.txt") $(grep -c window "$TMP/old.txt")"
-[ "$(python3 "$REPO/tools/hooknames.py" PreToolUse 2 --settings "$TMP/settings.json")" = git-guard.sh ] \
-  && pass "tools/hooknames.py PreToolUse 2 names the hook from the command line" || fail "hooknames CLI" ""
+[ "$(python3 "$REPO/bin/hooknames.py" PreToolUse 2 --settings "$TMP/settings.json")" = git-guard.sh ] \
+  && pass "bin/hooknames.py PreToolUse 2 names the hook from the command line" || fail "hooknames CLI" ""
 
 echo ""
 echo "=== what is read and what is not counted ==="
@@ -114,7 +114,7 @@ lat --total --json > "$TMP/tot.json"
   && pass "--total folds the days into one row" || fail "--total" "$(row PreToolUse:Bash git-guard.sh "$TMP/tot.json")"
 [ "$(lat --hook session-start --json | jq -c '[.rows[].hook] | unique')" = '["session-start.sh"]' ] \
   && pass "--hook keeps only matching hooks" || fail "--hook" ""
-[ "$(python3 "$REPO/tools/hook-latency.py" --projects "$TMP/none" --settings "$TMP/none.json" --json | jq -c '[.counted, (.rows|length)]')" = '[0,0]' ] \
+[ "$(python3 "$REPO/bin/hook-latency.py" --projects "$TMP/none" --settings "$TMP/none.json" --json | jq -c '[.counted, (.rows|length)]')" = '[0,0]' ] \
   && pass "no transcripts: an empty report, exit 0" || fail "empty" ""
 [ "$(jq -c '.numbered' "$TMP/day.json")" = '{"from_output":0,"from_map":7}' ] \
   && [ "$(jq -c '[.rows[] | select(.hook == "git-guard.sh") | .unconfirmed] | unique' "$TMP/day.json")" = '[true]' ] \
@@ -146,7 +146,7 @@ orec PreToolUse:Bash "command hook 3" 410 "$NET" ""          # today's hook 3 on
 orec PreToolUse:WebFetch "command hook 3" 420 "$NET" ""      # not a call bash-guards runs on
 orec PreToolUse:Bash "command hook 3" 430 "" "$SHELLINIT"
 orec PreToolUse:Bash "command hook 1" 440 "$SHELLINIT" ""    # the same words on stdout: tcc-check's, as a control
-L2=$(python3 "$REPO/tools/hook-latency.py" --projects "$P2" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --total --json)
+L2=$(python3 "$REPO/bin/hook-latency.py" --projects "$P2" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --total --json)
 orow() { jq -c --arg e "$1" --arg h "$2" '[.rows[] | select(.event == $e and .hook == $h)] | map([.n, .max, .unconfirmed])' <<<"$L2"; }
 [ "$(orow PreToolUse:Bash 'bash-guards.sh (network-guard)')" = '[[1,410,false]]' ] \
   && pass "network-guard's reason on a Bash call is the bash-guards (network-guard) row, though settings.json says config-guard" \
@@ -158,7 +158,7 @@ orow() { jq -c --arg e "$1" --arg h "$2" '[.rows[] | select(.event == $e and .ho
 [ "$(jq -c '.numbered' <<<"$L2")" = '{"from_output":3,"from_map":1}' ] \
   && pass "3 named from output, 1 by the map" || fail "named counts" "$(jq -c '.numbered' <<<"$L2")"
 rm "$T2"; orec PreToolUse:Bash "command hook 3" 410 "$NET" ""
-TXT2=$(python3 "$REPO/tools/hook-latency.py" --projects "$P2" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --total 2>&1)
+TXT2=$(python3 "$REPO/bin/hook-latency.py" --projects "$P2" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --total 2>&1)
 [[ "$TXT2" == *"1 are named by the guard"*"0 by their number."* && "$TXT2" != *"is named through"* && "$TXT2" != *"?"* ]] \
   && pass "with every numbered record named from output, no settings caveat and no ?" || fail "no caveat" "$TXT2"
 
@@ -180,7 +180,7 @@ printf 'g1\tBash\tgit-guard=0.020:0:allow\trm-guard=0.010:0:allow\tkubectl-guard
 printf 'g2\tBash\tgit-guard=0.040:0:ask\trm-guard=-:lost:deny\n' >> "$TL"
 printf 'g3\tBash\tgit-guard=0.900:0:allow\n' >> "$TL"
 printf 'g4\tBash\tgit-guard=0.900:0:allow\n' >> "$TL"
-G=$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total --json)
+G=$(python3 "$REPO/bin/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total --json)
 grow() { jq -c --arg g "$1" '[.guards[] | select(.guard == $g)] | map([.n, (.p50|round), (.p95|round), (.max|round), .not_zero])' <<<"$G"; }
 [ "$(grow git-guard)" = '[[2,20,40,40,0]]' ] \
   && pass "git-guard: two calls in the window, 20 and 40 ms" || fail "git-guard in bash-guards" "$(grow git-guard)"
@@ -192,9 +192,9 @@ grow() { jq -c --arg g "$1" '[.guards[] | select(.guard == $g)] | map([.n, (.p50
   && pass "a column the hook never writes is skipped, not counted as a failure" || fail "malformed column" "$(jq -c '.guards' <<<"$G")"
 [ "$(jq -c '.timing' <<<"$G")" = '{"lines":4,"in_window":2,"no_call_found":1,"dated_by_at":0}' ] \
   && pass "a call older than --days is left out; a line with no call in the transcripts is counted apart" || fail "timing counts" "$(jq -c '.timing' <<<"$G")"
-[ "$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total --hook rm-guard --json | jq -c '[.guards[].guard]')" = '["rm-guard"]' ] \
+[ "$(python3 "$REPO/bin/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total --hook rm-guard --json | jq -c '[.guards[].guard]')" = '["rm-guard"]' ] \
   && pass "--hook keeps one guard" || fail "--hook on guards" ""
-TXT=$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total 2>&1)
+TXT=$(python3 "$REPO/bin/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL" --total 2>&1)
 [[ "$TXT" == *"wall time with the seven running at once"* && "$TXT" == *"4 calls logged, 2 in the window (0 dated by their at= column"*"1 with no at= and no call found"* ]] \
   && pass "the text says what the seconds are and what was left out" || fail "guard table text" "$TXT"
 [ "$(jq -c '[(.guards | length), .timing.lines]' "$TMP/day.json")" = '[0,0]' ] \
@@ -208,13 +208,13 @@ TL2="$TMP/timing2.log"; cp "$TL" "$TL2"
 NOW=$(date +%s)
 printf 'g5\tBash\tgit-guard=0.070:0:allow\tat=%s\n' "$((NOW - 86400))" >> "$TL2"
 printf 'g6\tBash\tgit-guard=0.080:0:allow\tat=%s\n' "$((NOW - 40 * 86400))" >> "$TL2"
-G2=$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL2" --total --json)
+G2=$(python3 "$REPO/bin/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL2" --total --json)
 [ "$(jq -c '.timing' <<<"$G2")" = '{"lines":6,"in_window":3,"no_call_found":1,"dated_by_at":1}' ] \
   && pass "an at= line in the window counts with no call in the transcripts; one older than --days does not" \
   || fail "at= dating" "$(jq -c '.timing' <<<"$G2")"
 [ "$(jq -c '[.guards[] | select(.guard == "git-guard")] | map([.n, (.max|round)])' <<<"$G2")" = '[[3,70]]' ] \
   && pass "git-guard: the two old-format lines and the at= one, 20, 40 and 70 ms" || fail "at= row" "$(jq -c '.guards' <<<"$G2")"
-TXT3=$(python3 "$REPO/tools/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL2" --total 2>&1)
+TXT3=$(python3 "$REPO/bin/hook-latency.py" --projects "$P" --settings "$TMP/settings.json" --timing-log "$TL2" --total 2>&1)
 ORDER=$(printf '%s\n' "$TXT3" | grep -nE '^Bash guards inside bash-guards|^A tool call.s hooks run together|^Hook wall time' | cut -d: -f2- | cut -c1-12 | tr '\n' '|')
 [ "$ORDER" = "Bash guards |A tool call'|Hook wall ti|" ] \
   && pass "the timing-log table, then the line on hooks running together, then the transcript table" || fail "order" "$ORDER"
@@ -241,19 +241,19 @@ with open(sys.argv[1], "w") as fh:
 print(mon.strftime("%Y-%m-%dT%H:%M:%SZ"))
 PY2
 )
-W=$(python3 "$REPO/tools/hook-latency.py" --projects "$P3" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --since "$SINCE" --json)
+W=$(python3 "$REPO/bin/hook-latency.py" --projects "$P3" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --since "$SINCE" --json)
 [ "$(jq -c '[.weeks[:6][] | [.records, .flagged]]' <<<"$W")" = '[[20,false],[20,false],[3,false],[20,false],[0,true],[1,true]]' ] \
   && pass "20, 20, 3 and 20 pass; the week with none and the week with 1 are flagged" || fail "weeks" "$(jq -c '.weeks' <<<"$W")"
 [ "$(jq -c '[.weeks[:6][] | .prior_median]' <<<"$W")" = '[null,null,20,20,20,20]' ] \
   && pass "no week is judged on fewer than two before it; then the median of those before" || fail "median" "$(jq -c '[.weeks[].prior_median]' <<<"$W")"
-TXTW=$(python3 "$REPO/tools/hook-latency.py" --projects "$P3" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --since "$SINCE" 2>&1)
+TXTW=$(python3 "$REPO/bin/hook-latency.py" --projects "$P3" --settings "$TMP/settings.json" --timing-log "$TMP/no-timing.log" --since "$SINCE" 2>&1)
 WK5=$(jq -r '.weeks[5].week' <<<"$W")
 [[ "$TXTW" == *"Week of $WK5: 1 hook records"*"under 10% of the prior weeks' median of 20"* && "$TXTW" == *"since ${SINCE:0:10} 00:00 UTC"* ]] \
   && pass "the text names the flagged week and the window it read" || fail "week text" "$TXTW"
 # weeks() on a fixed clock: the window opens on a Sunday and closes on a Tuesday, so the
 # first and last weeks have one day each and no record. Neither is judged or a baseline:
 # the full weeks hold 50 and then 2, and one week before the 2 is too few to judge it on.
-PW=$(python3 - "$REPO/tools/hook-latency.py" <<'PY2'
+PW=$(python3 - "$REPO/bin/hook-latency.py" <<'PY2'
 import datetime as dt, importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("hl", sys.argv[1]); hl = importlib.util.module_from_spec(spec); spec.loader.exec_module(hl)
 u = dt.timezone.utc

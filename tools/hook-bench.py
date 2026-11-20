@@ -22,7 +22,7 @@ limit AND the floor (both, so a 2 ms wobble on a 5 ms hook is not a failure).
 
 Python, not bash: getrusage(RUSAGE_CHILDREN) is the only portable way to read a
 child's CPU to the millisecond; bash and perl `times` round to clock ticks.
-python3 is already required by tools/permission-friction.py.
+python3 is already required by bin/permission-friction.py.
 
 Progress goes to stderr, never stdout: a line up front with a floor for the time (hooks priced at one `bash -c :`
 start each), a line after warm-up with an upper estimate for the timed phase (each tool's payloads at its own warm call, times
