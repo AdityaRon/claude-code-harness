@@ -227,6 +227,48 @@ disp "$TMP/hk" "$(payload 'ls')"
   && pass "a dead guard whose deny prints nothing is still a deny" || fail "lost answer" "$(printf '%s' "$OUT" | od -c | head -2)"
 
 echo ""
+echo "=== what is printed is one JSON document or nothing ==="
+# Claude Code reads stray text around a decision as no decision, and runs the call.
+one_doc() { [[ -z "$1" ]] || { [[ "$1" != *$'\n'* ]] && printf '%s' "$1" | jq -se 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1; }; }
+NOTICE='[1]+  Done                    sleep 1'
+copy_hooks
+printf '%s\n' 'emit_deny "the guard'\''s own deny"' "echo '$NOTICE'" > "$TMP/hk/env-guard.sh"
+disp "$TMP/hk" "$(payload 'ls')"
+[[ "$(dec "$OUT")" == deny && "$(why "$OUT")" == "Blocked: env-guard's answer was not one JSON document, so this call was not checked by it."* ]] \
+  && one_doc "$OUT" && [[ "$(audit_for deny env-guard)" == 2 ]] \
+  && pass "a deny with a job notice after it: one deny naming the guard" || fail "stray text after" "$OUT"
+printf '%s\n' "echo 'Killed: 9'" 'emit_deny "the guard'\''s own deny"' > "$TMP/hk/env-guard.sh"
+disp "$TMP/hk" "$(payload 'ls')"
+[[ "$(dec "$OUT")" == deny && "$(why "$OUT")" == "Blocked: env-guard's answer was not one JSON document"* ]] && one_doc "$OUT" \
+  && pass "stray text before the deny: one deny naming the guard" || fail "stray text before" "$OUT"
+printf '%s\n' 'emit_deny "the guard'\''s own deny"' "echo '$NOTICE'" > "$TMP/hk/env-guard.sh"
+disp "$TMP/hk" "$(payload 'git stash drop')"
+[[ "$(dec "$OUT")" == deny && "$(why "$OUT")" == "Blocked: env-guard's answer was not one JSON document"* ]] && one_doc "$OUT" \
+  && pass "one of two answers with stray text: that guard is named, not a failed join" || fail "stray text in a join" "$OUT"
+printf '%s\n' "echo '$NOTICE'" > "$TMP/hk/env-guard.sh"
+disp "$TMP/hk" "$(payload 'git stash drop')"
+[[ "$(dec "$OUT")" == ask && "$(why "$OUT")" == *"deletes a stash"* ]] && one_doc "$OUT" \
+  && pass "stray text with no decision in it is an allow, as before, and never printed" || fail "stray text alone" "$OUT"
+# Every path: an answer made bad after the guards ran is caught before printing.
+copy_hooks
+sed 's/^# Whatever path built it, what is printed is one JSON document or nothing\.$/BG_OUT="$BG_OUT[1]+  Done"/' \
+  hooks/bash-guards.sh > "$TMP/hk/bash-guards.sh"
+grep -q '^BG_OUT="\$BG_OUT\[1\]+  Done"$' "$TMP/hk/bash-guards.sh" || fail "test setup" "the final check's comment was not found"
+disp "$TMP/hk" "$(payload 'git stash drop')"
+[[ "$(dec "$OUT")" == deny && "$(why "$OUT")" == "Blocked: the answer built from git-guard was not one JSON document"* ]] && one_doc "$OUT" \
+  && pass "an output gone bad on any path: one deny naming the guards it came from" || fail "the final check" "$OUT"
+# What bash itself writes on a fork's stderr while it waits (a job notice) never
+# joins the answer: here each fork writes one line there after its guard ends.
+copy_hooks
+sed 's/wait "\$bg_c"; bg_s=\$?;/wait "$bg_c"; bg_s=$?; echo "[1]+  Done  sleep 1" >\&2;/' hooks/bash-guards.sh > "$TMP/hk/bash-guards.sh"
+grep -q 'bg_s=\$?; echo "\[1\]+  Done  sleep 1" >&2;' "$TMP/hk/bash-guards.sh" || fail "test setup" "the fork's wait was not found"
+disp hooks "$(payload 'git stash drop')"
+WANT=$OUT
+disp "$TMP/hk" "$(payload 'git stash drop')"
+[[ "$OUT" == "$WANT" && "$(dec "$OUT")" == ask && -z "$ERR" ]] \
+  && pass "a line on a fork's stderr as it waits: the answer is unchanged, and stderr is empty" || fail "a fork's own stderr" "out=$OUT err=$ERR"
+
+echo ""
 echo "=== the payload is read once, and must parse ==="
 disp hooks '{"tool_input":{"command":"git status"}} oops'
 [[ "$(dec "$OUT")" == deny && "$(why "$OUT")" == *"could not parse"* && "$(grep -c ' | GUARD | ' "$CLAUDE_AUDIT_LOG")" == 1 \

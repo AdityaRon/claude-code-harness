@@ -118,7 +118,9 @@ unset bg_l
 # status line comes from here, after the guard: no line, or a status but 0, is a
 # deny. The guard's stderr goes straight to this hook's. The guard runs in a
 # process group of its own (set -m; bash turns job control off again inside the
-# subshell), so a signal here stops it and all it started.
+# subshell), so a signal here stops it and all it started. What bash itself says
+# on this fork's stderr while it waits (a job notice) goes to /dev/null, so only
+# time's report joins the guard's answer.
 bg_run() {
   exec 4>&2
   TIMEFORMAT=$'\036%R'
@@ -126,7 +128,7 @@ bg_run() {
   trap 'bg_x=1; [[ -n "${bg_c:-}" ]] && { kill -KILL -- "-$bg_c" 2>/dev/null || kill -KILL "$bg_c" 2>/dev/null; }' TERM INT HUP
   # shellcheck disable=SC2034,SC1090  # lib.sh reads GUARD_NAME; the file is the guard's
   { time { ( exec 2>&4 4>&-; GUARD_NAME=$1; GUARD_SELF="$BG_DIR/$1.sh"; . "$GUARD_SELF" ) & bg_c=$!
-    [[ -z "${bg_x:-}" ]] || kill -KILL -- "-$bg_c" 2>/dev/null; wait "$bg_c"; bg_s=$?; }; } 2>&1
+    [[ -z "${bg_x:-}" ]] || kill -KILL -- "-$bg_c" 2>/dev/null; wait "$bg_c"; bg_s=$?; } 2>/dev/null; } 2>&1
   printf '\037%s' "$bg_s"
 }
 
@@ -188,8 +190,14 @@ done
 unset bg_rest
 
 # deny > ask > allow. One guard answering is passed on byte for byte; several
-# are joined in list order. Each guard wrote its own audit line.
-BG_N=0 BG_WORST="" BG_ONE="" BG_ALL="" BG_TIMES=""
+# are joined in list order. Each guard wrote its own audit line. An answer is one
+# JSON document on one line, as jq -c writes it: Claude Code reads anything else
+# on stdout (stray text before or after) as no answer, and the call goes ahead.
+bg_one_doc() {
+  local s=${1%$'\n'}
+  [[ "$s" == '{"hookSpecificOutput":{'*'}}' && "$s" != *$'\n'* ]]
+}
+BG_N=0 BG_WORST="" BG_ONE="" BG_ALL="" BG_TIMES="" BG_FROM=""
 bg_i=0
 for bg_g in "${BG_RUN[@]}"; do
   bg_r=${BG_RAW[bg_i]}; bg_i=$((bg_i + 1))
@@ -208,10 +216,13 @@ for bg_g in "${BG_RUN[@]}"; do
   elif [[ "$bg_st" != 0 ]]; then
     bg_d=deny
     bg_body=$(GUARD_NAME=$bg_g emit_deny "Blocked: $bg_g did not finish (status $bg_st), so this call was not checked by it. Retry; if it repeats, run bash ~/.claude/hooks/$bg_g.sh by hand on the payload.")$'\n'
+  elif [[ "$bg_d" != allow ]] && ! bg_one_doc "$bg_body"; then
+    bg_d=deny
+    bg_body=$(GUARD_NAME=$bg_g emit_deny "Blocked: $bg_g's answer was not one JSON document, so this call was not checked by it. Retry; if it repeats, run bash ~/.claude/hooks/$bg_g.sh by hand on the payload.")$'\n'
   fi
   BG_TIMES="$BG_TIMES"$'\t'"$bg_g=$bg_t:$bg_st:$bg_d"
   [[ "$bg_d" == allow ]] && continue
-  BG_N=$((BG_N + 1)) BG_ONE=$bg_body BG_ALL="$BG_ALL$bg_body"
+  BG_N=$((BG_N + 1)) BG_ONE=$bg_body BG_ALL="$BG_ALL$bg_body" BG_FROM="$BG_FROM, $bg_g"
   [[ "$bg_d" == deny || -z "$BG_WORST" ]] && BG_WORST=$bg_d
 done
 
@@ -232,6 +243,9 @@ fi
 # would read as an allow. A deny in its place is as strong or stronger.
 [[ -z "$BG_WORST" || "$BG_OUT" == *"\"permissionDecision\":\"$BG_WORST\""* || "$BG_OUT" == *'"permissionDecision":"deny"'* ]] \
   || bg_static_deny "Blocked: a Bash guard's answer was lost before it could be passed on, so this call is denied. Retry; if it repeats, run each guard by hand on the payload."
+# Whatever path built it, what is printed is one JSON document or nothing.
+[[ -z "$BG_OUT" ]] || bg_one_doc "$BG_OUT" \
+  || bg_static_deny "Blocked: the answer built from ${BG_FROM#, } was not one JSON document, so this call is denied. Retry; if it repeats, run each of them by hand on the payload."
 
 # One line a call, keyed by tool_use_id: the per-guard seconds, status and
 # decision, then at= and the epoch second jq read the call at, written with a
