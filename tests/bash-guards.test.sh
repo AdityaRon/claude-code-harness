@@ -217,6 +217,11 @@ printf '%s' "$OUT" | jq -e . >/dev/null 2>&1 && [[ "$(dec "$OUT")" == ask && "$E
 copy_hooks
 printf '%s\n' 'printf "%s" "{\"hookSpecificOutput\":{\"permissionDecision\":\"ask\""' > "$TMP/hk/env-guard.sh"
 disp "$TMP/hk" "$(payload 'git stash drop')"
+[[ "$(dec "$OUT")" == deny && "$(why "$OUT")" == "Blocked: env-guard's answer was not one JSON document"* && "$(audit_for deny env-guard)" == 1 ]] \
+  && pass "a truncated answer beside another: a deny naming its guard" || fail "truncated answer" "$OUT"
+# One line in the shape of one document, but not JSON: the check is on shape, so jq finds it.
+printf '%s\n' 'printf "%s\n" "{\"hookSpecificOutput\":{\"permissionDecision\":\"ask\",}}"' > "$TMP/hk/env-guard.sh"
+disp "$TMP/hk" "$(payload 'git stash drop')"
 [[ "$(dec "$OUT")" == deny && "$(why "$OUT")" == *"could not be combined"* && "$(audit_for deny bash-guards)" == 1 ]] \
   && pass "answers jq cannot combine are a deny" || fail "uncombinable answers" "$OUT"
 copy_hooks
