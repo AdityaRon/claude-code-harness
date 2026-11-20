@@ -25,15 +25,17 @@ bin/                     ← every file installed flat to ~/.claude by install.s
                            session-start's warnings (doctor.sh --disk);
                            prune, clone and bazel --sweep list what is safe to delete and delete it by digest
   tracker-prune.py       ← moves a tracker's settled rows to <name>-archive.md beside it; a dry run unless --write
+  permission-friction.py ← which guard asks and denies cost the most, from local transcripts
+  hook-latency.py        ← each hook's wall time per day, from local transcripts (doctor.sh --latency)
+  hooknames.py           ← names the hook a transcript record numbers, for the two above: by the guard
+                           whose words are in the reason on its own stdout, else by settings.json
+  harness-checkup.py     ← the three largest costs on this machine, from the tools above and
+                           memory-verify; offline, and it prints no prompt text and no dollar amounts
 tools/                   ← run from the clone only, by CI, releases and whoever maintains a fork
   upstream-check.sh      ← the daily breakage check
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
   hook-bench.py  release-notes.sh  ← the release benchmark and notes
   guard-props.py         ← property checks: guard fast paths, inert heredocs, count_mark (docs/guards.md)
-  permission-friction.py ← which guard asks and denies cost the most, from local transcripts
-  hook-latency.py        ← each hook's wall time per day, from local transcripts (doctor.sh --latency)
-  hooknames.py           ← names the hook a transcript record numbers, for the two above: by the guard
-                           whose words are in the reason on its own stdout, else by settings.json
   shadow-report.py       ← what each shadowed guard or rule would have decided, and what happened instead
   session-census.py      ← claude processes, their memory, and idle background jobs (doctor.sh --census;
                            --sizes adds disk-space.py's report)
@@ -72,7 +74,7 @@ docs/
   permission-friction.md ← which guard asks and denies cost the most, and why
   shadow-mode.md         ← the guards and rules on trial (#237): what they log, how step 9 reads the report
   long-running-sessions.md ← keeping sessions alive for days: transcripts, handoffs, crons, process cost, disk
-  permission-friction-cases.jsonl  ← cases tools/permission-friction.py --cases replays
+  permission-friction-cases.jsonl  ← cases bin/permission-friction.py --cases replays
   history/               ← superseded memory research the memory skills still cite
   data/readme-numbers.json ← every number README.md's tables and charts show, with n, source and command
   figures/               ← README.md's diagram and charts, light and dark, written by tools/readme-figures.py

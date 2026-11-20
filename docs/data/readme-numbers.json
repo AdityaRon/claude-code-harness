@@ -76,10 +76,10 @@
         },
         {
           "url": "https://github.com/AdityaRon/claude-code-harness/issues/237",
-          "text": "476 guard asks, 1 rejected (a `kubectl delete`); about 100 hours of waiting on asks (`tools/permission-friction.py --days 30`)."
+          "text": "476 guard asks, 1 rejected (a `kubectl delete`); about 100 hours of waiting on asks"
         }
       ],
-      "command": "`tools/permission-friction.py --days 49`; `tools/permission-friction.py --days 30`",
+      "command": "`python3 bin/permission-friction.py --days 49`; `python3 bin/permission-friction.py --days 30`",
       "details": [
         [
           "permission-friction.md",

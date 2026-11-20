@@ -6,7 +6,7 @@ tested. Moved from the README.
 ## Requirements
 
 macOS or Linux with bash, `jq` (the guards fail closed without it), `gh`,
-`python3` (for `tools/hook-bench.py` and `tools/permission-friction.py`; 3.10 or
+`python3` (for `tools/hook-bench.py` and `bin/permission-friction.py`; 3.10 or
 newer with a TOML reader for the comms-hub and skill-forge skills) and `claude`.
 
 ```bash
@@ -80,6 +80,10 @@ Paths inside `~/.claude` are flat: every file in the repo's `bin/` lands at
                              sizes ~/.claude/projects and pre-compact.sh's copies;
                              prune, clone and bazel --sweep delete by digest, behind ask rules
   tracker-prune.py         ← moves a tracker's settled rows to <name>-archive.md; a dry run unless --write
+  permission-friction.py  hook-latency.py  hooknames.py
+                           ← which guard asks cost the most, and each hook's wall time, from transcripts
+  harness-checkup.py       ← the three largest costs on this machine, from the tools above and
+                             memory-verify --offline; no network, no prompt text, no dollar amounts
   relocate-clones.sh       ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads
   harness-update.sh        ← moves this machine to the newest release
   harness-update.conf      ← with_cli=1 or 0, from --with-cli or --no-cli

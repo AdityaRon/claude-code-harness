@@ -186,7 +186,7 @@ Where each row of the summary table comes from:
 | Row | Source | Command |
 |---|---|---|
 | Guards on a Bash call | [CHANGELOG.md](CHANGELOG.md#v1417-2026-11-20), v1.4.17, the first Bash row | `.github/bench-gate.sh v1.4.16` in `.github/workflows/release.yml`, which runs `tools/hook-bench.py --gate` |
-| Always-approved asks removed | [docs/permission-friction.md](docs/permission-friction.md); [#237](https://github.com/AdityaRon/claude-code-harness/issues/237), Measured inputs | `tools/permission-friction.py --days 49`; `tools/permission-friction.py --days 30` |
+| Always-approved asks removed | [docs/permission-friction.md](docs/permission-friction.md); [#237](https://github.com/AdityaRon/claude-code-harness/issues/237), Measured inputs | `python3 bin/permission-friction.py --days 49`; `python3 bin/permission-friction.py --days 30` |
 | One dispatcher, fewer process starts | [CHANGELOG.md](CHANGELOG.md#v1416-2026-11-20), v1.4.16, the launches table | `tools/hook-bench.py --launches strace`, through `.github/bench-gate.sh v1.4.15` |
 | Guard wait in real use | [docs/long-running-sessions.md](docs/long-running-sessions.md#measured-with-n) | read from `guard-timing.log`; `bash doctor.sh --latency` reads the same log |
 | Restart from a handoff | [docs/long-running-sessions.md](docs/long-running-sessions.md#restart-from-a-handoff-not-from-the-transcript) | `ls -lS ~/.claude/projects/*/*.jsonl | head` |
