@@ -524,7 +524,7 @@ def hero_alt(names):
             "once with jq and forks the %d Bash guards in parallel: %s. Their answers merge, deny over ask over "
             "allow, and a deny ends the call there. Otherwise it goes on to Claude Code's permission rules, then to "
             "auto mode's classifier, which decides by judgment what no guard or rule names. A separate lane below "
-            "holds the session hooks, which are off the Bash path: %s."
+            "holds the session hooks, which run outside the decision, audit after it on every call: %s."
             % (len(names), ", ".join(names[:-1]) + " and " + names[-1],
                ", ".join("%s (%s)" % h for h in SESSION_HOOKS)))
 
@@ -585,11 +585,11 @@ def chart_hero(names, theme):
     arrow(svg, 753, mid, 753, mid + 14, t["axis"])
     box(svg, 656, mid + 16, 194, 46, [("auto mode classifier", 14, "600", None),
                                       ("the rest, by judgment", 13, None, muted)], fill=t["bg"], rx=6)
-    # The session hooks, off the Bash path.
+    # The session hooks, outside the decision.
     ly, lh = 318, 66
     box(svg, 16, ly, 848, lh, [], fill=t["bg"], dash="5 4")
     svg.text(30, ly + 29, "Session hooks", size=14, weight="600")
-    svg.text(30, ly + 47, "off the Bash path", size=13, fill=muted)
+    svg.text(30, ly + 47, "outside the decision", size=13, fill=muted)
     px, pw = 192, 156
     for k, (name, when) in enumerate(SESSION_HOOKS):
         box(svg, px + k * (pw + 12), ly + 12, pw, lh - 24, [(name, 14, "600", None), (when, 13, None, muted)], rx=6)

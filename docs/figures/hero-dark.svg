@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="404" viewBox="0 0 880 404" role="img" aria-labelledby="t d" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif">
 <title id="t">One Bash call through the harness</title>
-<desc id="d">Diagram of one Bash call, left to right. The call goes to bash-guards, a dispatcher that parses it once with jq and forks the 7 Bash guards in parallel: env-guard, git-guard, interpreter-guard, kubectl-guard, network-guard, rm-guard and config-guard. Their answers merge, deny over ask over allow, and a deny ends the call there. Otherwise it goes on to Claude Code's permission rules, then to auto mode's classifier, which decides by judgment what no guard or rule names. A separate lane below holds the session hooks, which are off the Bash path: session-start (at session start), pre-compact (before compaction), memory-lint (after a memory write), audit (every event, logged).</desc>
+<desc id="d">Diagram of one Bash call, left to right. The call goes to bash-guards, a dispatcher that parses it once with jq and forks the 7 Bash guards in parallel: env-guard, git-guard, interpreter-guard, kubectl-guard, network-guard, rm-guard and config-guard. Their answers merge, deny over ask over allow, and a deny ends the call there. Otherwise it goes on to Claude Code's permission rules, then to auto mode's classifier, which decides by judgment what no guard or rule names. A separate lane below holds the session hooks, which run outside the decision, audit after it on every call: session-start (at session start), pre-compact (before compaction), memory-lint (after a memory write), audit (every event, logged).</desc>
 <rect x="0.5" y="0.5" width="879" height="403" rx="6" fill="#0d1117" stroke="#30363d"/>
 <defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6e7681"/></marker></defs>
 <text x="24" y="32" font-size="17" fill="#e6edf3" font-weight="600">One Bash call, left to right</text>
@@ -59,7 +59,7 @@
 <text x="753" y="224" font-size="13" fill="#9198a1" text-anchor="middle">the rest, by judgment</text>
 <rect x="16" y="318" width="848" height="66" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1.5" stroke-dasharray="5 4"/>
 <text x="30" y="347" font-size="14" fill="#e6edf3" font-weight="600">Session hooks</text>
-<text x="30" y="365" font-size="13" fill="#9198a1">off the Bash path</text>
+<text x="30" y="365" font-size="13" fill="#9198a1">outside the decision</text>
 <rect x="192" y="330" width="156" height="42" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
 <text x="270" y="347" font-size="14" fill="#e6edf3" font-weight="600" text-anchor="middle">session-start</text>
 <text x="270" y="364" font-size="13" fill="#9198a1" text-anchor="middle">at session start</text>

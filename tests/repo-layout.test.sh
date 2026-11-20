@@ -246,6 +246,15 @@ done
 [ -z "$UNLISTED" ] \
   && pass "every suite is named after its file or on the tests/ line" \
   || fail "every suite is named after its file or on the tests/ line" "unlisted:$UNLISTED"
+# A helper the suites import is no suite, so the check above never sees it.
+TESTS_ENTRY=$(entry '^tests/')
+NOLIB=""
+for f in $(tracked ':(glob)tests/lib/*'); do
+  printf '%s' "$TESTS_ENTRY" | grep -qF "lib/$(basename "$f")" || NOLIB="$NOLIB $f"
+done
+[ -z "$NOLIB" ] \
+  && pass "every tests/lib/ file is on the tests/ line" \
+  || fail "every tests/lib/ file is on the tests/ line" "missing:$NOLIB"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

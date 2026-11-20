@@ -1,24 +1,22 @@
 # Claude Code Harness
 
-Guards and hooks for Claude Code, installed once per machine: deny what cannot
-be undone, ask where shared state changes, log the rest, and measure what each
-costs.
+Guards and hooks for people who let Claude Code run Bash unattended or in auto
+mode, installed once per machine: deny what cannot be undone, ask where shared
+state changes, log the rest, and measure what each costs.
 
 <!-- readme-figures:hero:begin -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/figures/hero-dark.svg">
-  <img alt="Diagram of one Bash call, left to right. The call goes to bash-guards, a dispatcher that parses it once with jq and forks the 7 Bash guards in parallel: env-guard, git-guard, interpreter-guard, kubectl-guard, network-guard, rm-guard and config-guard. Their answers merge, deny over ask over allow, and a deny ends the call there. Otherwise it goes on to Claude Code's permission rules, then to auto mode's classifier, which decides by judgment what no guard or rule names. A separate lane below holds the session hooks, which are off the Bash path: session-start (at session start), pre-compact (before compaction), memory-lint (after a memory write), audit (every event, logged)." src="docs/figures/hero-light.svg" width="880">
+  <img alt="Diagram of one Bash call, left to right. The call goes to bash-guards, a dispatcher that parses it once with jq and forks the 7 Bash guards in parallel: env-guard, git-guard, interpreter-guard, kubectl-guard, network-guard, rm-guard and config-guard. Their answers merge, deny over ask over allow, and a deny ends the call there. Otherwise it goes on to Claude Code's permission rules, then to auto mode's classifier, which decides by judgment what no guard or rule names. A separate lane below holds the session hooks, which run outside the decision, audit after it on every call: session-start (at session start), pre-compact (before compaction), memory-lint (after a memory write), audit (every event, logged)." src="docs/figures/hero-light.svg" width="880">
 </picture>
 <!-- readme-figures:hero:end -->
 
 A hook sees the whole command, where a permission rule sees a prefix or a
 pattern, so the checks that must read all of it live in the guards. A guard's
-deny runs before Claude Code's permission system and holds in every mode. The
-exceptions are a loaded mod and, in auto mode until the 2026-11-29 review, the
-guards and rules on trial in [shadow mode](docs/shadow-mode.md). An ask costs a
-person minutes, so the asks that were always approved are gone
-([#237](https://github.com/AdityaRon/claude-code-harness/issues/237)), and auto
-mode's classifier decides what no guard or rule names.
+deny runs before Claude Code's permission system, so it holds in every mode,
+with two exceptions under [Limits](#limits-and-not-measured). An ask costs a
+person minutes, so the asks that were always approved are gone, and auto mode's
+classifier decides what no guard or rule names.
 
 ## What it does, what it costs
 
@@ -40,9 +38,9 @@ release. Charts and full tables are under [Evidence](#evidence).
 
 ## Check your own machine
 
-A self-check that installs with the harness is coming in a separate change.
-Until then, from a clone: `bash doctor.sh --latency` reads each hook's wall
-time per day from Claude Code's transcripts and the guards' timing log,
+From a clone: `bash doctor.sh --latency` reads each hook's wall time per day
+from Claude Code's transcripts and the guards' timing log (`--days N`, or
+`--since 2026-10-19`),
 `bash doctor.sh --census` counts claude processes and their memory, and
 `bash doctor.sh --disk` sizes job folders and Bazel output bases.
 
@@ -84,8 +82,12 @@ other hook: [docs/hooks.md](docs/hooks.md).
 - Regex guards can be evaded by a determined agent; the OS sandbox is the
   containment. Guard hardening is frozen as of 2026-11-15, so a bypass is a
   known limitation, not a fix.
-- A Claude Code mod can override the guards, and MCP connectors are logged, not
-  guarded.
+- A guard's deny does not hold against a loaded Claude Code mod, which can
+  override the guards. In auto mode until the 2026-11-29 review, the guards and
+  rules on trial in [shadow mode](docs/shadow-mode.md) log what they would have
+  decided and decide nothing
+  ([#237](https://github.com/AdityaRon/claude-code-harness/issues/237)).
+- MCP connectors are logged, not guarded.
 - In auto mode the classifier decides, by judgment, everything no guard or rule
   names.
 - The release benchmark runs on CI runners, where a process starts far faster
@@ -93,8 +95,8 @@ other hook: [docs/hooks.md](docs/hooks.md).
   so its numbers are likely a floor for such a machine (inferred, not measured).
 - Not measured:
   - how many asks there have been since the always-approved ones were removed;
-  - the machine, n and window behind the guard wait in real use, and how many
-    sessions the after-handoff transcript sizes cover;
+  - the window of the transcript sizes in the handoff row, and how many
+    sessions the after-handoff sizes cover;
   - each release's guard cost on a Mac, since the release benchmark runs only
     on CI;
   - the n behind the heredoc row's two timings, and the old code on bash 5:
