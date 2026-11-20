@@ -15,7 +15,7 @@
         "p95_head": 114.2
       },
       "n": "395 Bash payloads, the first of two runs",
-      "environment": "CI runner, Linux, AMD EPYC 9V74, release workflow",
+      "environment": "CI runner, Linux, AMD EPYC 9V74",
       "date": "2026-11-20",
       "source": "[CHANGELOG.md](CHANGELOG.md#v1417-2026-11-20), v1.4.17, the first Bash row",
       "quotes": [
@@ -38,7 +38,7 @@
     },
     {
       "id": "asks",
-      "what": "Asks kept only where people say no",
+      "what": "Always-approved asks removed",
       "measured": "{approved} of {asks} guard asks approved over {days} days, the median one holding its call {held} s; in a later {days30} days, still before the removal, {asks30} asks and {rejected30} rejection",
       "values": {
         "approved": 849,
@@ -50,8 +50,8 @@
         "days30": 30
       },
       "n": "872 asks; 476 asks",
-      "environment": "One machine's transcripts; then a personal machine's",
-      "date": "2026-08-18 to 2026-10-06; 30 days to 2026-11-15",
+      "environment": "One machine's transcripts, then a personal machine's",
+      "date": "2026-08-18 to 2026-10-06, then 30 days to 2026-11-15",
       "source": "[docs/permission-friction.md](docs/permission-friction.md); [#237](https://github.com/AdityaRon/claude-code-harness/issues/237), Measured inputs",
       "quotes": [
         {
@@ -101,7 +101,7 @@
         "head": 21.98
       },
       "n": "400 payloads (395 Bash, 5 Monitor), one run",
-      "environment": "CI runner, Linux, AMD EPYC 9V74, under strace -f",
+      "environment": "CI runner, Linux, AMD EPYC 9V74, strace -f",
       "date": "2026-11-20",
       "source": "[CHANGELOG.md](CHANGELOG.md#v1416-2026-11-20), v1.4.16, the launches table",
       "quotes": [
