@@ -74,7 +74,7 @@ def read_timing(path=None, stamps=None):
 
     One line a call: the id, the tool, then guard=seconds:status:decision for each guard that
     ran. seconds is None where the hook wrote '-' (an answer that went missing); status is the
-    guard's exit status, or 'lost'. A line written since the dispatcher's jq stamped it ends in
+    guard's exit status, 'lost', or 'late' (no answer by bash-guards' deadline). A line written since the dispatcher's jq stamped it ends in
     at=EPOCH, the second it read the call; pass a dict as stamps to get tool_use_id -> that epoch.
     An older line has no time of day: join its id to a transcript.
     """
