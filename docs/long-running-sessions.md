@@ -38,9 +38,9 @@ Traps we hit:
 - Until the old session is deleted, two sessions share the name. A send by bare name fails and asks for the `[ref]`. Refs change when sessions restart, so read them from `ListAgents` each time.
 - A `STATE:` stamp written early and saved late, such as a write that waited on a permission check, is flagged as stale: memory-lint flags a stamp more than 5 minutes older than the write. Take the stamp at write time.
 
-## Session crons live in memory
+## Session crons belong to the session
 
-A cron made with CronCreate exists only in that session. A restart drops it without a word, and a recurring one expires after 7 days anyway (CronCreate's own description says both). List each one under `Crons:` as its five fields and its prompt, so the next session can recreate it exactly. A one-shot that has to wait for a condition can re-arm itself with the same prompt.
+A fresh session, which is what the restart above gives you, has none, so list each cron under `Crons:` as its five fields and its prompt and recreate it there. `claude --resume` and `claude --continue` differ: the [scheduled-tasks page](https://code.claude.com/docs/en/scheduled-tasks) (read 2026-11-20) says they restore CronCreate tasks, except a recurring one past its 7-day expiry, a one-shot whose time has passed, anything after `Exit and stop tasks`, and a self-paced `/loop`, which has to be run again. CronCreate's own description in 2.1.328 says the job is gone when Claude exits; we have not tested which holds. After a resume, run CronList before recreating from `Crons:`, or a tick can run twice. A restored task does not catch up on missed runs. A one-shot that has to wait for a condition can re-arm itself with the same prompt.
 
 ## A reboot resumes everything at once
 
