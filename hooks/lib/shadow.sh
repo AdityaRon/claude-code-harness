@@ -90,10 +90,12 @@ shadow_note() {   # WOULD RULE REASON
   g=${g%.sh}
   c=$(jq_get '.tool_input.command'); [[ -n "$c" ]] || c=$(jq_get '.tool_input.ws.url')
   # The command and the reason one line each: a newline, CR or tab is a space, the
-  # other control bytes go. One awk (under C, lib.sh) reads the command on stdin
-  # and the reason from its environment. Not ${c//…}: there bash 3.2 took 34 s on
-  # an 8 KB heredoc of 136 lines under en_US.UTF-8, and 4 s under C (Apple M2).
-  f=$(printf '%s\n' "$c" | SHADOW_WHY=$3 awk '
+  # other control bytes go. One awk, under C as lib.sh runs every awk, reads the
+  # command on stdin and the reason from its environment. exec, since lib.sh's awk()
+  # or `command awk` would fork once more in a pipeline. Not ${c//…}: there bash 3.2
+  # took 34 s on an 8 KB heredoc of 136 lines under en_US.UTF-8, and 4 s under C
+  # (Apple M2).
+  f=$(printf '%s\n' "$c" | SHADOW_WHY=$3 LC_ALL=C exec awk '
     function clean(s) { gsub(/[\n\r\t]/, " ", s); gsub(/[\001-\010\013-\037]/, "", s); return s }
     { printf "%s%s", (NR > 1 ? " " : ""), clean($0) }
     END { printf "\n%s\n", clean(ENVIRON["SHADOW_WHY"]) }' | redact_secrets)
