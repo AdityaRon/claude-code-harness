@@ -74,9 +74,9 @@ GG_GROUPS=$(separate_groups "$CMD")
 two_lines CMD "$(normalize_wrappers "$GG_GROUPS")" "$(normalize_command "$CMD" "$GG_GROUPS")"
 TYPED=$CMD   # for a match that lifts a check rather than raising one
 NQREAD=""
-[[ -n "$NQS" ]] && GG_GROUPS=$(separate_groups "$NQS") \
-  && two_lines NQREAD "$(normalize_wrappers "$GG_GROUPS")" "$(normalize_command "$NQS" "$GG_GROUPS")" \
-  && two_lines CMD "$CMD" "$NQREAD"
+[[ -n "$NQS" ]] && { GG_GROUPS=$(separate_groups "$NQS")
+  two_lines NQREAD "$(normalize_wrappers "$GG_GROUPS")" "$(normalize_command "$NQS" "$GG_GROUPS")"
+  two_lines CMD "$CMD" "$NQREAD"; }
 
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
