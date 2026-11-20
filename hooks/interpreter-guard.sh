@@ -117,11 +117,11 @@ SENSITIVE_TOKENS=(
 INTERP_INLINE_RE="${IB}${INTERP}\b[^|;&]*${INLINE}"
 INTERP_HEREDOC_RE="${IB}${INTERP}\b[^|;&]*<<-?"
 # The three read ICMD with -E, so one grep of their alternation answers as they did.
-printf '%s\n' "$ICMD" | grep -qE "($INTERP_INLINE_RE)|($INLINE_ONLY)|($INTERP_HEREDOC_RE)" || exit 0
+herestr "$ICMD" grep -qE "($INTERP_INLINE_RE)|($INLINE_ONLY)|($INTERP_HEREDOC_RE)" || exit 0
 
 # Yes — scan the payload for sensitive tokens.
 # `templates.env.filters` or `self.env["X"]` is an attribute, not the .env file.
-ICMD_NOATTR=$(printf '%s\n' "$ICMD" | sed -E 's/([]A-Za-z0-9_)])\.env(\.[A-Za-z_]|\[|\()/\1_envattr\2/g')
+ICMD_NOATTR=$(herestr "$ICMD" sed -E 's/([]A-Za-z0-9_)])\.env(\.[A-Za-z_]|\[|\()/\1_envattr\2/g')
 # One grep for the whole list, since every token gets the same ask. A grep each
 # was 28 process starts on inline code holding none, ~88 ms apiece on a laptop
 # whose endpoint agent inspects every exec. `.env` reads ICMD_NOATTR, the rest ICMD.
@@ -129,8 +129,8 @@ TOKENS_RE="" NOATTR_RE=""
 for T in "${SENSITIVE_TOKENS[@]}"; do
   if [[ "$T" == '\.env\b' ]]; then NOATTR_RE="${NOATTR_RE:+$NOATTR_RE|}($T)"; else TOKENS_RE="${TOKENS_RE:+$TOKENS_RE|}($T)"; fi
 done
-if printf '%s\n' "$ICMD" | grep -qE "$TOKENS_RE" \
-   || { [[ -n "$NOATTR_RE" ]] && printf '%s\n' "$ICMD_NOATTR" | grep -qE "$NOATTR_RE"; }; then
+if herestr "$ICMD" grep -qE "$TOKENS_RE" \
+   || { [[ -n "$NOATTR_RE" ]] && herestr "$ICMD_NOATTR" grep -qE "$NOATTR_RE"; }; then
   # Asks rather than denies (#72): a deny had Claude rewrite routine glue as a
   # script file: 15 unique commands in the 16 days to 2026-10-15.
   decide ask sensitive-token "Inline code passed to an interpreter references env vars, dotfiles, sockets, or an env-dumping command. Review the payload before running it."
@@ -212,7 +212,7 @@ hidden_lengths() {
 # On the joined lines (joined_pass, lib/io.sh) a quoted newline is the byte \001,
 # and a length stops there as it does at the newline in the command as typed.
 NB=""; [[ -n "${JOINED_PASS:-}" ]] && NB=$'\001'
-if printf '%s\n' "$TYPED" | grep -qE "${IB}${INTERP}\b[^|;&$NB]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&$NB]{200,}" \
+if herestr "$TYPED" grep -qE "${IB}${INTERP}\b[^|;&$NB]{120,}${INLINE}|${IB}${INTERP}\b[^|;&]*${INLINE}[^|;&$NB]{200,}" \
    || { [[ -n "$NQS" ]] && hidden_lengths; }; then
   decide ask long-inline "Long inline script passed to an interpreter. Review the payload before running — inline code bypasses file-based review."
 fi

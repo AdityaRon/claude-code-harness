@@ -285,12 +285,12 @@ block() {   # block WHY MATCH [RULE]: a shadowed RULE returns, and the scan goes
 # operand rewrite only removes tokens), so a miss here is a miss for all
 # twenty, which otherwise cost a fork each.
 ALLP=""; for P in "${BLOCKED[@]}"; do ALLP="${ALLP:+$ALLP|}$P"; done
-if printf '%s\n' "$SCAN_LC" | grep -qE "$ALLP"; then
+if herestr "$SCAN_LC" grep -qE "$ALLP"; then
   for i in "${!BLOCKED[@]}"; do
     P=${BLOCKED[$i]}
     T=$SCAN; [[ "$P" == *"$DOTFILES"* ]] && T=$SCAN_LC
     if [[ "$P" == "${A}${WRAP}${READERS}"* ]]; then
-      printf '%s\n' "$SCAN_LC" | grep -qE "$P" || continue
+      herestr "$SCAN_LC" grep -qE "$P" || continue
       [[ -n "$SCAN_R_LC" ]] || drop_text_operands
       T=$SCAN_R_LC
     fi

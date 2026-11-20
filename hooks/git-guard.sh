@@ -177,12 +177,13 @@ for P in "${GG_RULES[@]}"; do GG_UNION="$GG_UNION|($P)"; done
 # for it. sed adds each line without " ' and \ where it holds push (push --delete
 # reads that), and without " and ' where it holds add (sensitive files). The
 # other texts feed checks that need a backtick or .git/hooks, so they join only
-# holding one. Only a clean no-match ends the call.
+# holding one. Only a clean no-match ends the call: a here-string bash could not
+# write (lib/command.sh, herestr) is a sed that never ran, status 1.
 GG_TEXT=$CMD
 [[ "$MSG_FREE" == *'`'* ]] && GG_TEXT=$GG_TEXT$'\n'$MSG_FREE
 [[ "$HOOKS_TEXT" == *.git/hooks* ]] && GG_TEXT=$GG_TEXT$'\n'$HOOKS_TEXT
 [[ "$INLINE_TEXT" == *.git/hooks* ]] && GG_TEXT=$GG_TEXT$'\n'$INLINE_TEXT
-printf '%s\n' "$GG_TEXT" | sed -nE "p; h; s/[\"'\\\\]//g; /push/p; g; s/[\"']//g; /add/p" | grep -qiE "$GG_UNION"; [[ "${PIPESTATUS[*]}" != "0 0 1" ]] || exit 0
+sed -nE "p; h; s/[\"'\\\\]//g; /push/p; g; s/[\"']//g; /add/p" <<< "$GG_TEXT" | grep -qiE "$GG_UNION"; [[ "${PIPESTATUS[*]}" != "0 1" ]] || exit 0
 
 # Committed template files (.env.example / .sample / .template / .dist / .tpl)
 # are safe to stage; neutralize them so `git add .env.example` isn't blocked.

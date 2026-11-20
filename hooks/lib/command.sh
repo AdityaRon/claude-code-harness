@@ -75,7 +75,7 @@ normalize_wrappers() {
 # whole body under `| bash`, and $( ) or backticks in an unquoted one.
 separate_groups() {
   case "$1" in *'('*|*')'*|*'{'*|*'}'*) ;; *) printf '%s' "$1"; return ;; esac
-  printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+  herestr "$1" awk "$HEREDOC_AWK"'
     { line[NR] = $0 }
     END {
       # From a line hd_scan cannot read, quotes are not tracked at all: a quote
@@ -434,7 +434,7 @@ strip_message_heredocs() {
 strip_message_args() {
   case "$1" in *commit*|*gh*) ;; *) printf '%s' "$1"; return ;; esac
   case "$1" in *\'*|*\"*) ;; *) printf '%s' "$1"; return ;; esac
-  printf '%s\n' "$1" | awk '
+  herestr "$1" awk '
     function msgflag(    g) {
       if (seg ~ /^[ \t]*git[ \t]+((-[cC][ \t]+[^ \t]+|-[^ \t]+)[ \t]+)*commit[ \t]/) g = "(-[A-Za-z]*m|--message)"
       else if (seg ~ /^[ \t]*gh[ \t]+(pr|issue)[ \t]+[a-z-]+[ \t]/) g = "(-[tb]|--title|--body)"
@@ -603,7 +603,7 @@ join_continued_lines() {
 # reader that drops the body drops them too (strip_inert_heredocs).
 neutralize_quoted_separators() {   # TEXT [inbody]
   case "$1" in *'&'*|*';'*|*'|'*) ;; *) printf '%s' "$1"; return ;; esac
-  printf '%s\n' "$1" | awk -v inbody="${2:-}" "$HEREDOC_AWK"'
+  herestr "$1" awk -v inbody="${2:-}" "$HEREDOC_AWK"'
     function hide(ch) { return ch == "&" ? "%26" : ch == ";" ? "%3B" : ch == "|" ? "%7C" : ch }
     # The reading before hd_scan: quotes and $( only. Kept for heredoc data and
     # for a command hd_scan cannot read; a separator hd_scan marked as code (in
