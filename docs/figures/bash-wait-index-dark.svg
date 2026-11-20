@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="514" viewBox="0 0 880 514" role="img" aria-labelledby="t d" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif">
 <title id="t">Bash call wait for the guards, by release (chained index, v1.0.1 = 100)</title>
-<desc id="d">Line chart of a Bash call's wait for the guards by release, as a chained index with v1.0.1 at 100. p50 runs from 144.0 at v1.0.0 to 81.6 at v1.4.17, lowest 81.1 at v1.4.16; p95 from 97.1 to 85.1. Each step is one release's same-run ratio on one CI runner, from CHANGELOG.md; n is 321 to 395 Bash payloads a run.</desc>
+<desc id="d">Line chart of a Bash call's wait for the guards by release, as a chained index with v1.0.1 at 100. p50 runs from 144.0 at v1.0.0 to 81.6 at v1.4.17, lowest 81.1 at v1.4.16; p95 from 97.1 to 85.1. Each step is one release's same-run ratio on one CI runner, from CHANGELOG.md; n is 321 to 395 Bash payloads a run. From v1.4.0 the benchmark launches the hooks together; earlier ratios ran them one at a time.</desc>
 <rect x="0.5" y="0.5" width="879" height="513" rx="6" fill="#0d1117" stroke="#30363d"/>
 <text x="24" y="32" font-size="17" fill="#e6edf3" font-weight="600">A Bash call's wait for the guards, by release</text>
 <text x="24" y="54" font-size="13" fill="#9198a1">Chained index, v1.0.1 = 100. Lower is faster.</text>

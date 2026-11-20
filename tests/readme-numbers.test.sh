@@ -75,14 +75,53 @@ NROW="${ROW%%|*}"; NROW="${NROW// /}"
   && pass "its n is the table's $NROW payloads" || fail "its n is the table's payload count" "table: $NROW, JSON: $NCELL"
 
 echo ""
-echo "=== Each summary row's quote is in the file it cites ==="
-MISSING=""; N=0
-while IFS=$'\t' read -r f q; do
-  N=$((N + 1))
-  [ -f "$f" ] && grep -qF -- "$q" "$f" || MISSING="$MISSING [$f: $q]"
-done < <(jq -r '.summary[] | select(.source_file) | .source_file as $f | .source_quote[] | "\($f)\t\(.)"' "$DATA")
-[ "$N" -ge 6 ] && pass "$N quotes checked" || fail "$N quotes checked" "too few"
-[ -z "$MISSING" ] && pass "every quote is found" || fail "every quote is found" "$MISSING"
+echo "=== Each summary row's numbers are in the sentences it quotes ==="
+# A quote with a url is a PR or issue body, which a test cannot fetch: it holds the value, not the source.
+python3 - "$DATA" > "$TMP/quotes" 2>&1 <<'PY'
+import json, re, sys
+WORDS = dict((w, i) for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve".split()))
+SKIP = r"v\d+(?:\.\d+)+|#\d+|\d{4}-\d{2}-\d{2}|\bp\d+\b"
+
+def numbers(text, words=False):
+    text = re.sub(SKIP, " ", text)
+    out = {float(m.replace(",", "")) for m in re.findall(r"\d[\d,]*(?:\.\d+)?", text)}
+    if words:
+        out |= {float(WORDS[w]) for w in re.findall(r"[a-z]+", text.lower()) if w in WORDS}
+    return out
+
+def show(v):
+    return ("%d" % v) if isinstance(v, int) else (v if isinstance(v, str) else repr(v))
+
+rows, bad, files, urls = json.load(open(sys.argv[1], encoding="utf-8"))["summary"], [], 0, 0
+for r in rows:
+    quoted = ""
+    for q in r.get("quotes", []):
+        quoted += " " + q["text"]
+        if "file" in q:
+            files += 1
+            try:
+                found = q["text"] in open(q["file"], encoding="utf-8").read()
+            except OSError:
+                found = False
+            if not found:
+                bad.append("%s: not in %s: %s" % (r["id"], q["file"], q["text"]))
+        else:
+            urls += 1
+    unused = [k for k in r["values"] if "{%s}" % k not in r["measured"]]
+    if unused:
+        bad.append("%s: values not in measured: %s" % (r["id"], unused))
+    text = r["measured"].format(**{k: show(v) for k, v in r["values"].items()}) + " " + r["n"]
+    missing = sorted(numbers(text) - numbers(quoted, words=True))
+    if missing:
+        bad.append("%s: %s in no quote" % (r["id"], ", ".join("%g" % m for m in missing)))
+print("%d rows, %d quotes from files, %d from PR and issue bodies" % (len(rows), files, urls))
+for b in bad:
+    print(b)
+sys.exit(1 if bad or len(rows) < 6 else 0)
+PY
+RC=$?
+[ "$RC" = 0 ] && pass "$(head -n 1 "$TMP/quotes"): every file quote found, every number quoted" \
+  || fail "every file quote found, every number quoted" "$(cat "$TMP/quotes")"
 
 echo ""
 echo "=== README.md's links and anchors resolve ==="
