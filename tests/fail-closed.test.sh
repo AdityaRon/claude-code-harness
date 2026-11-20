@@ -161,36 +161,5 @@ GOT=$(sed -n 's/^declare -F \(.*\) >\/dev\/null.*/\1/p' hooks/lib.sh)
   || { echo "  FAIL: lib.sh's part check  want [$WANT] got [$GOT]"; FAIL=$((FAIL+1)); }
 
 echo ""
-echo "=== Where bash can write no here-string file, each answer stands ==="
-# bash 3.2 writes every here-string to a temp file; herestr (lib/command.sh)
-# runs the pipe where it cannot. The sandbox denies writes but to this suite's
-# logs. Each command's answer rests on a site herestr runs. Not kubectl-guard,
-# or env-guard's reader rules: their own `read <<<` sites allow there, as on main.
-TMPR=$(cd "$TMP" && pwd -P)
-SB='(version 1)(allow default)(deny file-write* (subpath "/"))(allow file-write* (literal "/dev/null") (subpath "'$TMPR'"))'
-HS_CMDS=('VAR=1 git push --force origin main' '/usr/bin/git push --force origin main' '{ git push --force origin main; }'
-  'git commit -m "a; b" && git push --force origin main' 'bash -c "true; git push --force origin main"' 'printenv'
-  'python3 -c "import os; print(os.environ)"')
-hs_answer() {   # [sandbox-exec -p PROFILE]: the answer to $P, or the shadow log's would-be one
-  local out
-  : > "$CLAUDE_SHADOW_LOG"
-  out=$(printf '%s' "$P" | "$@" /bin/bash hooks/bash-guards.sh 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null)
-  [[ -z "$out" && -s "$CLAUDE_SHADOW_LOG" ]] && out=shadow-$(jq -r .would "$CLAUDE_SHADOW_LOG" | head -n 1)
-  printf '%s' "${out:-allow}"
-}
-if [[ -x /bin/bash ]] && command -v sandbox-exec >/dev/null && sandbox-exec -p "$SB" /bin/bash -c 'exit 0' 2>/dev/null \
-   && ! sandbox-exec -p "$SB" /bin/bash -c ': <<< x' 2>/dev/null; then
-  for c in "${HS_CMDS[@]}"; do
-    P=$(jq -nc --arg c "$c" '{tool_name:"Bash",tool_input:{command:$c},cwd:"/",session_id:"s"}')
-    WANT=$(hs_answer) GOT=$(hs_answer sandbox-exec -p "$SB")
-    [[ "$WANT" != allow && "$GOT" == "$WANT" ]] \
-      && { echo "  OK: no temp file, still $GOT: $c"; PASS=$((PASS+1)); } \
-      || { echo "  FAIL: no temp file: $c  want $WANT (not allow), got $GOT"; FAIL=$((FAIL+1)); }
-  done
-else
-  echo "  SKIP: no sandbox-exec, or /bin/bash makes a here-string under it (bash 5 pipes one under 64 KB); macOS only"
-fi
-
-echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

@@ -661,6 +661,30 @@ unset -f dirname
 [[ -z "$BADD" ]] && pass "same answer on 19 paths" || fail "dirname differs" "$BADD"
 
 echo ""
+echo "=== where bash can write no here-string file, each answer stands ==="
+# bash 3.2 writes every here-string to a temp file; herestr (lib/command.sh)
+# runs the pipe where it cannot. The sandbox denies writes but to this suite's
+# logs. Each answer rests on a site herestr runs. Not kubectl-guard or env-guard's
+# reader rules (`cat .env`): their own `read <<<` sites allow there, as on main.
+TMPR=$(cd "$TMP" && pwd -P)
+SB='(version 1)(allow default)(deny file-write* (subpath "/"))(allow file-write* (literal "/dev/null") (subpath "'$TMPR'"))'
+if [[ -x /bin/bash ]] && command -v sandbox-exec >/dev/null && sandbox-exec -p "$SB" /bin/bash -c 'exit 0' 2>/dev/null \
+   && ! sandbox-exec -p "$SB" /bin/bash -c ': <<< x' 2>/dev/null; then
+  for c in 'VAR=1 git push --force origin main' '/usr/bin/git push --force origin main' '{ git push --force origin main; }' \
+           'git commit -m "a; b" && git push --force origin main' 'bash -c "true; git push --force origin main"' printenv \
+           'python3 -c "import os; print(os.environ)"'; do
+    P=$(payload "$c")
+    W=$(printf '%s' "$P" | shadow_run /bin/bash hooks/bash-guards.sh 2>/dev/null)
+    G=$(printf '%s' "$P" | shadow_run sandbox-exec -p "$SB" /bin/bash hooks/bash-guards.sh 2>/dev/null)
+    # A shadow line's reason is lost there on main too (lib/shadow.sh's own here-string).
+    [[ "$(dec "$W")" != allow && "$(dec "$G")" == "$(dec "$W")" && ( "$W" == *'"shadow":'* || "$(why "$G")" == "$(why "$W")" ) ]] \
+      && pass "no temp file, still $(dec "$G"), same reason: $c" || fail "no temp file: $c" "want $(dec "$W") (not allow), got $(dec "$G"): $(why "$G" | cut -c1-60)"
+  done
+else
+  echo "  SKIP: no sandbox-exec, or /bin/bash makes a here-string under it (bash 5 pipes one under 64 KB); macOS only"
+fi
+
+echo ""
 echo "=== a guard run from the hooks folder, \$0 with no slash, still loads lib.sh ==="
 # Without it a guard runs on with no functions and allows: each answer here is not one.
 for gc in env-guard:printenv 'git-guard:git push --force origin main' 'interpreter-guard:python3 -c "import os; print(os.environ)"' \
