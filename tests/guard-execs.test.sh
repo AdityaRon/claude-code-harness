@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Processes git-guard and interpreter-guard start per payload, counted by PATH
-# shims, not timed: a CI runner's 1 ms process start hides the cost.
-# GUARD_EXECS_PRINT=1 prints the counts as budget lines.
+# Processes one Bash call starts, per hook and payload, counted, not timed: a
+# CI runner's 1 ms process start hides the cost. strace on Linux, PATH shims
+# (execs only) elsewhere. GUARD_EXECS_PRINT=1 prints the counts as budget lines.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 PASS=0; FAIL=0
@@ -17,80 +17,158 @@ unset CLAUDE_JOB_DIR
 mkdir -p "$HOME/.claude" "$TMP/repo" "$TMP/p"
 git -C "$TMP/repo" init -q && printf 'x\n' > "$TMP/repo/README.md"
 
-# Budgets: a guard's process starts on each payload, today's count. Lower one
-# when a change starts fewer; a change that starts more raises it in the same PR,
-# and says why there.
-#  payload                    git-guard  interpreter-guard
-BUDGETS='
-shape-cd-chain                  12   5
-shape-pipes                     16  10
-shape-python-heredoc             0  27
-shape-notes-then-git            17  14
-shape-commit-heredoc            19  15
-shape-commit-pr-heredoc         19  15
-mult-joined-pass                22  10
-mult-inline-shellouts           48  14
-mult-git-add-all                76   0
+# Today's counts: the dispatcher alone, then each guard past it. Lower one when
+# a change starts fewer; one that starts more says why in its PR. A guard's
+# forks hold the two bash-guards.sh makes to run it; forks are bash 5.2's.
+#  payload                  disp  env  git  int  kub  net   rm  cfg
+EXECS='
+ls-la                         1    0    0    0    0    0    0    0
+shape-cd-chain                1    8   12    5    0    0    0    0
+shape-pipes                   1    0   16   10    0    0    0    0
+shape-python-heredoc          2    0    0   27    0    0    0    0
+shape-notes-then-git          2    0   17   14    0    0    0    0
+shape-commit-heredoc          2    0   19   15    0    0    0    0
+shape-commit-pr-heredoc       2   17   19   15    0    0    0    0
+mult-joined-pass              3    0   22   10    0    0    0    0
+mult-inline-shellouts         2    0   48   14    0    0    0    0
+mult-git-add-all              1    0   76    0    0    0    0    0
 '
-GUARDS="env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard"
+FORKS='
+ls-la                         5    4    4    4    4    5    4    3
+shape-cd-chain                5   36   57   27    4    5    4    3
+shape-pipes                   5    4   71   50    4    5    4    3
+shape-python-heredoc          9    4    4  103    4    5    4    3
+shape-notes-then-git          9    4   65   55    4    5    4    3
+shape-commit-heredoc          9    4   71   58    4    5    4    3
+shape-commit-pr-heredoc       9   64   71   58    4    5    4    3
+mult-joined-pass             12    7  105   53    7    9    7    5
+mult-inline-shellouts         9    4  141   51    4    5    4    3
+mult-git-add-all              5    4  226    4    4    5    4    3
+'
+HOOKS="dispatcher env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard"
+GUARDS=${HOOKS#dispatcher }
+
+cp -R hooks "$TMP/hk"
+LOG="$TMP/started"
+# A Linux CI job without strace fails: its fork budgets would pass, counting none.
+METHOD=shim
+if [[ "$(uname -s)" == Linux ]] && command -v strace >/dev/null \
+   && strace -ff -qq -e trace=process -o "$TMP/st-probe" true 2>/dev/null && cat "$TMP"/st-probe.* 2>/dev/null | grep -q '^execve('; then
+  METHOD=strace
+elif [[ "$(uname -s)" == Linux && -n "${CI:-}" ]]; then
+  fail "strace" "this Linux CI job has no working strace, so no fork was counted (.github/install-apt-deps.sh strace)"
+fi
 
 # A shim for every program on lib.sh's PATH and this one, the first folder's
 # winning as on PATH: each appends its name to the log and runs the real one.
-LOG="$TMP/started"
-mkdir -p "$TMP/shim"
-LIB_PATH=$(sed -n 's/^export PATH="\(.*\)"$/\1/p' hooks/lib.sh)
-IFS=: read -ra DIRS <<< "${LIB_PATH%:\$PATH}:$PATH"
-for d in "${DIRS[@]}"; do
-  [[ -d "$d" ]] || continue
-  for f in "$d"/*; do
-    n=${f##*/}
-    [[ "$n" =~ ^[A-Za-z0-9._+-]+$ && -f "$f" && -x "$f" && ! -e "$TMP/shim/$n" ]] || continue
-    printf '#!/bin/sh\necho %s >> "%s"\nexec "%s" "$@"\n' "$n" "$LOG" "$f" > "$TMP/shim/$n"
+if [[ $METHOD == shim ]]; then
+  mkdir -p "$TMP/shim"
+  LIB_PATH=$(sed -n 's/^export PATH="\(.*\)"$/\1/p' hooks/lib.sh)
+  IFS=: read -ra DIRS <<< "${LIB_PATH%:\$PATH}:$PATH"
+  for d in "${DIRS[@]}"; do
+    [[ -d "$d" ]] || continue
+    for f in "$d"/*; do
+      n=${f##*/}
+      [[ "$n" =~ ^[A-Za-z0-9._+-]+$ && -f "$f" && -x "$f" && ! -e "$TMP/shim/$n" ]] || continue
+      printf '#!/bin/sh\necho %s >> "%s"\nexec "%s" "$@"\n' "$n" "$LOG" "$f" > "$TMP/shim/$n"
+    done
   done
-done
-chmod +x "$TMP/shim"/*
-cp -R hooks "$TMP/hk"
-sed "s#^export PATH=\"#export PATH=\"$TMP/shim:#" hooks/lib.sh > "$TMP/hk/lib.sh"
-cmp -s hooks/lib.sh "$TMP/hk/lib.sh" && { fail "test setup" "lib.sh's PATH line was not found"; results; }
+  chmod +x "$TMP/shim"/*
+  sed "s#^export PATH=\"#export PATH=\"$TMP/shim:#" hooks/lib.sh > "$TMP/hk/lib.sh"
+  cmp -s hooks/lib.sh "$TMP/hk/lib.sh" && { fail "test setup" "lib.sh's PATH line was not found"; results; }
+fi
 
-started() {   # started GUARD|none ID: sets N, the processes one call starts, and WHAT, by name
+# Execs that succeeded, past the traced bash, and forks that made a process (a
+# pid back, not a thread). The names go to $LOG, as the shims write them.
+st_count() {   # PREFIX: sets E and F
+  local f l first=1
+  E=0 F=0; : > "$LOG"
+  for f in "$1".*; do
+    [[ -f "$f" ]] || continue
+    while IFS= read -r l; do
+      case "$l" in
+        execve\(*'= 0'|execveat\(*'= 0')
+          E=$((E + 1)); l=${l#*\"}; l=${l%%\"*}
+          if [[ -n "$first" && "${l##*/}" == bash ]]; then first=""; else echo "${l##*/}" >> "$LOG"; fi ;;
+        clone\(*|clone3\(*|fork\(*|vfork\(*)
+          [[ "$l" =~ \ =\ [1-9][0-9]*$ && "$l" != *CLONE_THREAD* ]] && F=$((F + 1)) ;;
+      esac
+    done < "$f"
+  done
+  E=$((E - 1))
+}
+
+started() {   # started GUARD|none ID: sets E (execs), F (forks, under strace) and WHAT, by name; 1 if nothing was traced
   local g skip=""
+  WHAT=""
   for g in $GUARDS; do [[ "$g" == "$1" ]] || skip="$skip$g"$'\n'; done
   printf '%s' "$skip" > "$TMP/hk/bash-guards.skip"
-  : > "$LOG"; rm -f "$CLAUDE_AUDIT_LOG" "$CLAUDE_SHADOW_LOG"
-  ( cd "$TMP/repo" && bash "$TMP/hk/bash-guards.sh" < "$TMP/p/$2.json" > "$TMP/out" 2>&1 )
-  N=0; while IFS= read -r _; do N=$((N + 1)); done < "$LOG"
+  : > "$LOG"; rm -f "$CLAUDE_AUDIT_LOG" "$CLAUDE_SHADOW_LOG" "$TMP"/st.*
+  if [[ $METHOD == strace ]]; then
+    ( cd "$TMP/repo" && strace -ff -qq -e trace=process -o "$TMP/st" bash "$TMP/hk/bash-guards.sh" < "$TMP/p/$2.json" > "$TMP/out" 2>&1 )
+    st_count "$TMP/st"
+    (( E >= 0 )) || { fail "$2, $1" "strace traced no bash, so nothing was counted"; return 1; }
+  else
+    ( cd "$TMP/repo" && bash "$TMP/hk/bash-guards.sh" < "$TMP/p/$2.json" > "$TMP/out" 2>&1 )
+    E=0; while IFS= read -r _; do E=$((E + 1)); done < "$LOG"; F=""
+  fi
   WHAT=$(sort "$LOG" | uniq -c | awk '{ printf "%s%s x%s", (NR > 1 ? ", " : ""), $2, $1 }')
 }
 
-echo "=== the shims count: ls -la starts the dispatcher's jq and nothing in either guard ==="
-jq -nc --arg d "$TMP/repo" '{tool_name:"Bash",tool_input:{command:"ls -la"},cwd:$d,session_id:"t",tool_use_id:"toolu_T",permission_mode:"default"}' > "$TMP/p/ls.json"
-started none ls; NONE=$N
-started git-guard ls; GG=$N
-[[ $NONE == 1 && $GG == 1 ]] && pass "ls -la: one start, the dispatcher's jq" || fail "ls -la" "none $NONE ($WHAT), git-guard $GG"
+echo "=== the counter counts ==="
+if [[ $METHOD == strace ]]; then
+  # x=$( ) is a fork; /bin/true a fork and an exec.
+  printf 'x=$(echo a)\n/bin/true\n:\n' > "$TMP/cal.sh"
+  rm -f "$TMP"/st.*; strace -ff -qq -e trace=process -o "$TMP/st" bash "$TMP/cal.sh"; st_count "$TMP/st"
+  [[ $E == 1 && $F == 2 ]] && pass "strace: a capture and a program are 2 forks and 1 exec" || fail "strace calibration" "execs $E, forks $F; want 1 and 2"
+else
+  echo "  SKIP: fork budgets: no working strace here (Linux only), so PATH shims count execs alone"
+fi
+jq -nc --arg d "$TMP/repo" '{tool_name:"Bash",tool_input:{command:"ls -la"},cwd:$d,session_id:"t",tool_use_id:"toolu_T",permission_mode:"default"}' > "$TMP/p/ls-la.json"
+started none ls-la
+[[ $E == 1 && "$WHAT" == "jq x1" ]] && pass "ls -la: the dispatcher starts one program, its jq" || fail "ls -la" "$E: $WHAT"
 
 echo ""
-echo "=== each guard starts no more processes than its budget on each payload ==="
-PRINT=""
-while read -r id bg bi; do
+echo "=== the dispatcher and each guard start no more than their budgets on each payload ==="
+PE="" PF=""
+while read -r id rest; do
   [[ -n "$id" ]] || continue
-  jq -c --arg id "$id" --arg d "$TMP/repo" 'select(.id == $id)
-    | {hook_event_name:"PreToolUse", session_id:"t", tool_use_id:"toolu_T", tool_name, tool_input, cwd:$d, permission_mode:"default"}' \
-    tests/bench-corpus.jsonl > "$TMP/p/$id.json"
-  [[ -s "$TMP/p/$id.json" ]] || { fail "$id" "no such payload in tests/bench-corpus.jsonl"; continue; }
-  started none "$id"; NONE=$N
-  line=$(printf '%-30s' "$id")
-  for g in git-guard interpreter-guard; do
-    [[ $g == git-guard ]] && b=$bg || b=$bi
-    started "$g" "$id"; c=$((N - NONE))
-    line="$line $(printf '%3s' "$c")"
-    printf '%s' "$WHAT" > "$TMP/what.$g.$id"
-    if (( c < b )); then pass "$id, $g: $c of $b ($((b - c)) under: lower the budget)"
-    elif (( c == b )); then pass "$id, $g: $c of $b"
-    else fail "$id, $g: $c, budget $b" "$WHAT (the dispatcher's own: $NONE)"; fi
+  BE=() BF=()
+  read -ra BE <<< "$rest"
+  frow=$(printf '%s\n' "$FORKS" | awk -v id="$id" '$1 == id { $1 = ""; print }')
+  [[ -n "$frow" ]] && read -ra BF <<< "$frow"
+  [[ ${#BE[@]} == 8 && ${#BF[@]} == 8 ]] || { fail "$id" "a budget row holds 8 numbers: execs ${#BE[@]}, forks ${#BF[@]}"; continue; }
+  if [[ "$id" != ls-la ]]; then
+    jq -c --arg id "$id" --arg d "$TMP/repo" 'select(.id == $id)
+      | {hook_event_name:"PreToolUse", session_id:"t", tool_use_id:"toolu_T", tool_name, tool_input, cwd:$d, permission_mode:"default"}' \
+      tests/bench-corpus.jsonl > "$TMP/p/$id.json"
+    [[ -s "$TMP/p/$id.json" ]] || { fail "$id" "no such payload in tests/bench-corpus.jsonl"; continue; }
+  fi
+  started none "$id" || continue
+  NE=$E NF=$F NWHAT=$WHAT
+  le=$(printf '%-28s' "$id") lf=$le
+  k=-1
+  for h in $HOOKS; do
+    k=$((k + 1))
+    if [[ $h == dispatcher ]]; then e=$NE f=$NF what=$NWHAT
+    else started "$h" "$id" || continue
+      e=$((E - NE)) what=$WHAT; [[ -n "$F" ]] && f=$((F - NF)) || f=""
+    fi
+    printf '%s' "$what" > "$TMP/what.$h.$id"
+    le="$le $(printf '%4s' "$e")" lf="$lf $(printf '%4s' "${f:--}")"
+    b=${BE[k]}
+    if (( e > b )); then fail "$id, $h: $e execs, budget $b" "$what (the dispatcher's own: $NWHAT)"
+    elif (( e < b )); then pass "$id, $h: $e of $b execs ($((b - e)) under: lower the budget)"
+    else pass "$id, $h: $e of $b execs"; fi
+    if [[ -n "$f" ]]; then
+      b=${BF[k]}
+      if (( f > b )); then fail "$id, $h: $f forks, budget $b" "execs: $what"
+      elif (( f < b )); then pass "$id, $h: $f of $b forks ($((b - f)) under: lower the budget)"
+      else pass "$id, $h: $f of $b forks"; fi
+    fi
   done
-  PRINT="$PRINT$line"$'\n'
-done <<< "$BUDGETS"
+  PE="$PE$le"$'\n' PF="$PF$lf"$'\n'
+done <<< "$EXECS"
 
 echo ""
 echo "=== each multiplier still multiplies ==="
@@ -99,11 +177,12 @@ W=$(cat "$TMP/what.git-guard.mult-git-add-all" 2>/dev/null)
 [[ "$W" == *"git x"* ]] && pass "git add -A: git-guard runs git status" || fail "git add -A runs no git" "$W"
 W=$(cat "$TMP/what.git-guard.mult-inline-shellouts" 2>/dev/null)
 [[ "$W" == *"bash x5"* ]] && pass "five git shell-outs: git-guard runs itself on each" || fail "inline shell-outs" "$W"
-started none mult-joined-pass
-[[ "$WHAT" == *"jq x2"* ]] && pass "a multi-line -m: the dispatcher makes the joined reading, a second jq" || fail "joined pass" "$N: $WHAT"
+W=$(cat "$TMP/what.dispatcher.mult-joined-pass" 2>/dev/null)
+[[ "$W" == *"jq x2"* ]] && pass "a multi-line -m: the dispatcher makes the joined reading, a second jq" || fail "joined pass" "$W"
 
 if [[ -n "${GUARD_EXECS_PRINT:-}" ]]; then
-  echo ""; echo "#  payload                    git-guard  interpreter-guard"; printf '%s' "$PRINT"
+  echo ""; echo "# execs ($METHOD)"; printf '%s' "$PE"
+  [[ $METHOD == strace ]] && { echo "# forks (strace, bash ${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]})"; printf '%s' "$PF"; }
 fi
 
 echo ""

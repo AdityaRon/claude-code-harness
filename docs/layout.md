@@ -55,8 +55,8 @@ rules/                   ← installed to ~/.claude/rules, loaded in every sessi
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
                            heredoc-openers, prompt-canary, repo-layout, shadow, token-shapes and
-                           workflow-gates cut across files; guard-execs holds git-guard and
-                           interpreter-guard to a process budget per corpus shape; readme-numbers
+                           workflow-gates cut across files; guard-execs holds bash-guards.sh and
+                           each guard to an exec and fork budget per corpus shape; readme-numbers
                            holds README.md's numbers to the files they cite; lib.sh is their
                            shared pass/fail; lib/transcripts.py writes synthetic transcripts at test
                            time (no real one is committed), and prompt-canary checks that no report
