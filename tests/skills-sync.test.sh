@@ -165,8 +165,11 @@ AFTER=$(sig "${TREES[@]}")
 # v1.0.0 is the split's own bytes (#239), so the pinned release may change only
 # what it changed since: those rows, each to the pin's blob; every other row as
 # $FROM left it. A file it adds, drops or moves under the templates fails here.
+# The folders above a changed file count as changed too, so a skill the release
+# adds (its folder new beside its files) is part of what it changed.
 CHANGED=$(git -C "$SKSRC" diff --name-only v1.0.0 "$PIN_COMMIT" -- skills/) || fail "the files the pin changed" "no v1.0.0 in $SKSRC"
-unchanged() { awk 'NR == FNR { c[$0] = 1; next } !($3 in c)' <(printf '%s\n' "$CHANGED") <(printf '%s\n' "$1"); }
+CHANGED_DIRS=$(awk -F/ '{ p = $1; for (i = 2; i < NF; i++) { p = p "/" $i; print p } }' <<<"$CHANGED" | sort -u)
+unchanged() { awk 'NR == FNR { c[$0] = 1; next } !($3 in c)' <(printf '%s\n%s\n' "$CHANGED" "$CHANGED_DIRS") <(printf '%s\n' "$1"); }
 pinned_bytes() {   # AFTER BEFORE: each changed file installed holds the pin's blob
   local p want
   while IFS= read -r p; do
