@@ -480,6 +480,13 @@ on() { printf '%s' "$OUT" | jq -c --arg m "$1" '[.hooks.PreToolUse[] | select(.m
   && pass "config-guard stays on the file tools" || fail "file tools entry" "$(on 'Write|Edit|MultiEdit|NotebookEdit')"
 [[ "$(on Bash)" == '[{"command":"/opt/mine.sh","onFailure":null}]' ]] \
   && pass "the user's own Bash hook is kept" || fail "user's Bash hook" "$(on Bash)"
+# bash-guards' timeout is the backstop behind its own deadline (docs/guards.md).
+BGT='[.hooks.PreToolUse[] | select(.matcher == "Bash|Monitor") | .hooks[] | select(.command == "~/.claude/hooks/bash-guards.sh") | .timeout]'
+SHIPPED_T=$(jq -c "$BGT" config/settings.json)
+UPGRADED_T=$(merge '{"hooks":{"PreToolUse":[{"matcher":"Bash|Monitor","hooks":['"$(printf "$G" bash-guards)"']}]}}' "$(cat config/settings.json)" | jq -c "$BGT")
+[[ "$SHIPPED_T" =~ ^\[[0-9]+\]$ && "$(printf '%s' "$OUT" | jq -c "$BGT")" == "$SHIPPED_T" && "$UPGRADED_T" == "$SHIPPED_T" ]] \
+  && pass "the bash-guards entry carries its timeout $SHIPPED_T, over the seven entries and over one without it" \
+  || fail "bash-guards timeout" "shipped=$SHIPPED_T merged=$(printf '%s' "$OUT" | jq -c "$BGT") upgraded=$UPGRADED_T"
 LEFT=$(printf '%s' "$OUT" | jq -r '[.hooks.PreToolUse[] | select(.matcher | test("Bash")) | .hooks[].command
   | select(test("(env|git|interpreter|kubectl|network|rm|config)-guard"))] | length')
 [[ "$LEFT" == 0 ]] && pass "no guard is left on a Bash matcher of its own, in either spelling" || fail "stale guard entries" "$LEFT"

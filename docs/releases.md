@@ -68,7 +68,8 @@ skips the benchmark, since both sides would run the same files.
 To update a machine, run `~/.claude/harness-update.sh`: it fetches tags into
 its own clone, `~/.claude/harness-src` (or `$HARNESS_UPDATE_CLONE`; `--repo DIR`
 uses DIR), checks the newest release out there detached (it refuses that clone
-with local changes or commits), runs `doctor.sh`, and installs only on green.
+with local changes or commits), runs `doctor.sh --smoke` (`--full`: every
+suite), and installs only on green.
 It never touches the clone `install.sh` ran from: macOS keeps scheduled jobs
 out of `~/Desktop`, `~/Documents`, `~/Downloads` and iCloud Drive. The first run
 clones from the `origin=` that `install.sh` records in
