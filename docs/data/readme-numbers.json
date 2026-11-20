@@ -72,7 +72,7 @@
       "id": "execs",
       "what": "One dispatcher, fewer process starts",
       "release": "v1.4.16",
-      "measured": "`bash-guards.sh` execs per payload {base} → {head} at v1.4.16 (#299, #302)",
+      "measured": "`bash-guards.sh` execs per payload {base} → {head} at v1.4.16",
       "values": {
         "base": 24.53,
         "head": 21.98
@@ -108,7 +108,7 @@
         "tail": 3
       },
       "n": "not given",
-      "environment": "A managed Mac in real use, from its guard timing log; window not given",
+      "environment": "Real use, from the guard timing log; the doc names no machine or window",
       "date": "doc written 2026-11-19",
       "source": "[docs/long-running-sessions.md](docs/long-running-sessions.md#every-process-a-hook-starts-costs-more-on-a-managed-machine)",
       "source_file": "docs/long-running-sessions.md",
@@ -163,7 +163,7 @@
         "before": 155,
         "after": 0.29
       },
-      "n": "one timing each",
+      "n": "not given",
       "environment": "Apple M2, macOS 26.6.2, bash 3.2.57, en_US.UTF-8; the 155 s at load 4 to 7",
       "date": "2026-11-20",
       "source": "[PR #304](https://github.com/AdityaRon/claude-code-harness/pull/304), After; the 155 s also in `tests/guard-latency.test.sh`",
