@@ -21,7 +21,7 @@
 # Projects can extend it via the CLAUDE_NET_ALLOWLIST env var (space-separated),
 # and a machine via `netAllowlist` in ~/.claude/local-settings/*.json, which
 # survives every install (bin/net-allowlist.sh). Both pass net_host_problem.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 require_jq_or_deny

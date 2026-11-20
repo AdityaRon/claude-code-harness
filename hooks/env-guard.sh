@@ -4,7 +4,7 @@
 # pipe, chain, $(…), backticks), so a word in another program's arguments does
 # not match. A grep pattern or a sed or awk script that opens no file is text.
 # Matching is still textual: the same words in another quoted string can match.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 require_jq_or_deny

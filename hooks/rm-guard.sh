@@ -2,7 +2,7 @@
 # Recursive remove guard, replacing the Bash(rm -rf:*) deny rules: those matched
 # one spelling and refused this session's own scratch folder. Catastrophic targets
 # deny; rm -rf runs silently only when every target is in a scratch folder.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 require_jq_or_deny

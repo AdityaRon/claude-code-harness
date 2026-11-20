@@ -19,7 +19,7 @@
 # (getattr(os, "en"+"viron"), base64/hex-encoded source) can still evade a
 # token list. The OS sandbox is the real containment for that class — see
 # docs/customization.md "OS sandbox".
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 require_jq_or_deny

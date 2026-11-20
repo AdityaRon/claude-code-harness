@@ -12,7 +12,7 @@
 #         signing config, whose asks were approved every time (#237)
 # Most patterns start at a command boundary, but matching is textual: the same
 # words in a heredoc, or in a message this cannot prove is text, can still match.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 # The command without message heredoc bodies or quoted messages (lib.sh).
 strip_messages() { strip_message_args "$(strip_inert_heredocs "$1")"; }
