@@ -171,7 +171,7 @@ has '2026-10-20 10:09  sess  first call: ttl-gap rewrite, 100k written after 70 
 
 echo "=== prices ==="
 # One call per model: 1M output, 1M cache read and 1M 1 h cache write.
-python3 - "$TMP/prices" claude-fable-5-2 <<'PY'
+python3 - "$TMP/prices" claude-fable-5-2 claude-sonnet-5-5 <<'PY'
 import json, os, sys
 u = {'input_tokens': 0, 'output_tokens': 1_000_000, 'cache_read_input_tokens': 1_000_000,
      'cache_creation_input_tokens': 1_000_000, 'cache_creation': {'ephemeral_1h_input_tokens': 1_000_000}}
@@ -188,6 +188,9 @@ price_of() {  # MODEL -> the cost of its call, or what went unpriced
 # $40 output, $0.20 cache read, $16 write (2x the $8 input).
 [[ "$(price_of claude-fable-5-2)" == 56.20 ]] && pass "claude-fable-5-2 is priced: \$8 in, \$40 out, \$0.20 cache read" \
   || fail "claude-fable-5-2 price" "$(price_of claude-fable-5-2)"
+# $10 output, $0.10 cache read (0.05x, not Claude Sonnet 5's 0.1x), $4 write.
+[[ "$(price_of claude-sonnet-5-5)" == 14.10 ]] && pass "claude-sonnet-5-5 reads the cache at \$0.10" \
+  || fail "claude-sonnet-5-5 price" "$(price_of claude-sonnet-5-5)"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

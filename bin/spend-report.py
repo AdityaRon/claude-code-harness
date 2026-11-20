@@ -30,7 +30,7 @@ bad argument.
 """
 import argparse, bisect, collections, datetime as dt, glob, json, os, re, sys
 
-PRICED = '2026-10-06'
+PRICED = '2026-11-03'
 # model: input, output, cache read, in USD per million tokens. A cache write costs
 # 1.25x input with the 5-minute TTL and 2x with the 1-hour one; fast mode doubles all.
 PRICES = {
@@ -39,7 +39,7 @@ PRICES = {
     'claude-fable-5': (10, 50, 1.00), 'claude-mythos-5': (10, 50, 1.00),
     'claude-opus-5-5': (4, 20, 0.20), 'claude-opus-5': (5, 25, 0.50),
     'claude-opus-4-8': (5, 25, 0.50), 'claude-opus-4-7': (5, 25, 0.50), 'claude-opus-4-6': (5, 25, 0.50),
-    'claude-sonnet-5-5': (2, 10, 0.20), 'claude-sonnet-5': (2, 10, 0.20), 'claude-sonnet-4-6': (3, 15, 0.30),
+    'claude-sonnet-5-5': (2, 10, 0.10), 'claude-sonnet-5': (2, 10, 0.20), 'claude-sonnet-4-6': (3, 15, 0.30),
     'claude-haiku-5-5': (0.10, 0.50, 0.01), 'claude-haiku-4-5': (1, 5, 0.10),
 }
 # Claude Haiku 5.5 costs more once the prompt passes 100k tokens.
