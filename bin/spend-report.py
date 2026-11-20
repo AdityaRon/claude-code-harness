@@ -34,6 +34,7 @@ PRICED = '2026-10-06'
 # model: input, output, cache read, in USD per million tokens. A cache write costs
 # 1.25x input with the 5-minute TTL and 2x with the 1-hour one; fast mode doubles all.
 PRICES = {
+    'claude-fable-5-2': (8, 40, 0.20), 'claude-mythos-5-2': (8, 40, 0.20),
     'claude-fable-5-1': (10, 50, 0.25), 'claude-mythos-5-1': (10, 50, 0.25),
     'claude-fable-5': (10, 50, 1.00), 'claude-mythos-5': (10, 50, 1.00),
     'claude-opus-5-5': (4, 20, 0.20), 'claude-opus-5': (5, 25, 0.50),

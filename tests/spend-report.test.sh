@@ -169,6 +169,26 @@ has '2026-10-20 10:09  sess  first call: ttl-gap rewrite, 100k written after 70 
 [[ "$(printf '%s\n' "$OUT" | grep -c 'loop tick')" == 1 ]] \
   && pass "a tick's line carries no prompt text" || fail "prompt text on a tick line" "$OUT"
 
+echo "=== prices ==="
+# One call per model: 1M output, 1M cache read and 1M 1 h cache write.
+python3 - "$TMP/prices" claude-fable-5-2 <<'PY'
+import json, os, sys
+u = {'input_tokens': 0, 'output_tokens': 1_000_000, 'cache_read_input_tokens': 1_000_000,
+     'cache_creation_input_tokens': 1_000_000, 'cache_creation': {'ephemeral_1h_input_tokens': 1_000_000}}
+for m in sys.argv[2:]:
+    os.makedirs(os.path.join(sys.argv[1], m, 'proj'))
+    with open(os.path.join(sys.argv[1], m, 'proj', 's.jsonl'), 'w') as f:
+        f.write(json.dumps({'type': 'assistant', 'timestamp': '2026-10-20T09:00:00Z', 'requestId': 'r',
+                            'message': {'id': 'm', 'model': m, 'usage': u}}) + '\n')
+PY
+price_of() {  # MODEL -> the cost of its call, or what went unpriced
+  TZ=UTC python3 "$SR" --root "$TMP/prices/$1" --since 2026-10-20T00:00:00+00:00 --until 2026-10-21T00:00:00+00:00 --json \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["unpriced"] or "%.2f" % sum(d["total"].values()))'
+}
+# $40 output, $0.20 cache read, $16 write (2x the $8 input).
+[[ "$(price_of claude-fable-5-2)" == 56.20 ]] && pass "claude-fable-5-2 is priced: \$8 in, \$40 out, \$0.20 cache read" \
+  || fail "claude-fable-5-2 price" "$(price_of claude-fable-5-2)"
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit "$FAIL"
