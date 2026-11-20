@@ -8,6 +8,95 @@ installed machine to the newest tag. After v1.4.2 the skills live in
 [claude-code-skills](https://github.com/AdityaRon/claude-code-skills), with their
 own changelog; `config/skills.pin` names the release each version installs.
 
+## v1.4.17 (2026-11-20)
+
+Merged since v1.4.16: 2 PRs.
+
+### Speed
+- hook-bench: name the phase a partial table stopped in (#305)
+
+### Other
+- shadow_note: clean the line in one awk, not ${c//…} (#304)
+
+### Benchmark vs v1.4.16
+
+Gate script and corpus from `4b8bb13` (v1.4.16): 515 payloads, 0 of them new in this change.
+
+
+
+2026-11-20T01:35:35Z, Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor, python 3.14.4. Corpus ../../_temp/bench-gate.qxJHgh/corpus.jsonl: 515 payloads (395 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 MultiEdit, 2 NotebookEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, launched together as Claude Code does. Wait is from the first launch to the last exit, so hooks that share the cores pay for it; CPU is the sum of each hook's own. The per-hook table runs each hook alone. Process start here: `true` 0.6 ms, `bash -c :` 1.1 ms, `jq -n 1` 1.9 ms (p50 of 20), so only same-run comparisons are meaningful. A machine whose process start is slower pays it again for each process a hook starts: the last column is a hook's p50 past one `bash -c :`.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 395 | 62.2 → 62.6 ms (+1%) | 61.5 → 61.6 ms (+0%) | 113.5 → 114.2 ms (+1%) | 120.9 → 120.9 ms (+0%) |
+| WebFetch | 11 | 5.9 → 5.9 ms (-0%) | 5.9 → 5.9 ms (-0%) | 6.2 → 6.1 ms (-1%) | 5.8 → 5.8 ms (-0%) |
+| Read/Grep | 41 | 41.2 → 41.5 ms (+1%) | 46.0 → 46.4 ms (+1%) | 63.9 → 63.4 ms (-1%) | 56.8 → 57.4 ms (+1%) |
+| Write/Edit | 63 | 48.9 → 48.5 ms (-1%) | 51.7 → 51.6 ms (-0%) | 75.2 → 74.9 ms (-0%) | 120.4 → 120.2 ms (-0%) |
+| Monitor | 5 | 35.3 → 34.8 ms (-1%) | 46.5 → 46.7 ms (+0%) | 90.5 → 92.0 ms (+2%) | 88.3 → 89.6 ms (+2%) |
+| All | 515 | 53.0 → 52.8 ms (-0%) | 57.7 → 57.8 ms (+0%) | 111.6 → 112.2 ms (+1%) | 112.9 → 113.0 ms (+0%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean | p50 past bash start |
+|---|---:|---|---|---|---|
+| bash-guards.sh | 400 | 62.0 → 62.0 ms (+0%) | 113.5 → 112.2 ms (-1%) | 113.7 → 113.7 ms (-0%) | 60.8 → 60.8 ms |
+| config-guard.sh | 63 | 15.9 → 15.8 ms (-0%) | 37.2 → 37.6 ms (+1%) | 22.8 → 22.8 ms (+0%) | 14.7 → 14.7 ms |
+| mod-gate.sh | 63 | 1.5 → 1.5 ms (+1%) | 12.4 → 12.0 ms (-3%) | 2.1 → 2.1 ms (-0%) | 0.4 → 0.4 ms |
+| secret-scanner.sh | 63 | 21.5 → 21.5 ms (-0%) | 65.8 → 65.7 ms (-0%) | 26.6 → 26.6 ms (+0%) | 20.4 → 20.3 ms |
+| sensitive-file-guard.sh | 104 | 40.9 → 41.0 ms (+0%) | 61.2 → 60.7 ms (-1%) | 46.5 → 46.5 ms (-0%) | 39.8 → 39.9 ms |
+| subagent-cache-guard.sh | 515 | 6.1 → 6.1 ms (+0%) | 6.5 → 6.5 ms (+0%) | 5.9 → 5.9 ms (+0%) | 5.0 → 5.0 ms |
+
+Processes started: each hook run alone once per payload under `strace -f`. Execs are execve calls past the hook's own bash; forks are new processes (clone, clone3, fork or vfork without CLONE_THREAD), a `$( )` among them. A machine that pays for each process start pays for both.
+
+| Hook | payloads | execs per payload | forks per payload | in all | payloads with more / fewer | not counted |
+|---|---:|---|---|---|---|---:|
+| bash-guards.sh | 400 | 21.98 → 21.98 | 98.66 → 98.66 | 48259 → 48259 | 0 / 0 | 0 |
+| config-guard.sh | 63 | 5.10 → 5.10 | 15.24 → 15.24 | 1281 → 1281 | 0 / 0 | 0 |
+| mod-gate.sh | 63 | 0.19 → 0.19 | 0.44 → 0.44 | 40 → 40 | 0 / 0 | 0 |
+| secret-scanner.sh | 63 | 7.65 → 7.65 | 19.95 → 19.95 | 1739 → 1739 | 0 / 0 | 0 |
+| sensitive-file-guard.sh | 104 | 13.10 → 13.10 | 30.25 → 30.25 | 4508 → 4508 | 0 / 0 | 0 |
+| subagent-cache-guard.sh | 515 | 1.00 → 1.00 | 1.00 → 1.00 | 1030 → 1030 | 0 / 0 | 0 |
+
+Decisions: 515 of 515 payloads got the same answer on both sides.
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended; no payload's hooks may start more processes unless intended).
+
+This change edits tools/hook-bench.py, so the gate ran again with its copy (exit 0):
+
+
+2026-11-20T01:39:58Z, Linux 7.0.0-1019-azure x86_64, AMD EPYC 9V74 80-Core Processor, python 3.14.4. Corpus ../../_temp/bench-gate.qxJHgh/corpus.jsonl: 515 payloads (395 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 MultiEdit, 2 NotebookEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, launched together as Claude Code does. Wait is from the first launch to the last exit, so hooks that share the cores pay for it; CPU is the sum of each hook's own. The per-hook table runs each hook alone. Process start here: `true` 0.6 ms, `bash -c :` 1.2 ms, `jq -n 1` 2.0 ms (p50 of 20), so only same-run comparisons are meaningful. A machine whose process start is slower pays it again for each process a hook starts: the last column is a hook's p50 past one `bash -c :`.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 395 | 61.5 → 61.2 ms (-0%) | 61.1 → 61.0 ms (-0%) | 113.2 → 112.8 ms (-0%) | 120.1 → 120.0 ms (-0%) |
+| WebFetch | 11 | 5.8 → 5.8 ms (-0%) | 5.9 → 5.8 ms (-1%) | 6.6 → 6.0 ms (-10%) | 5.8 → 5.7 ms (-1%) |
+| Read/Grep | 41 | 42.0 → 41.3 ms (-1%) | 46.0 → 45.7 ms (-1%) | 61.9 → 62.4 ms (+1%) | 56.9 → 56.6 ms (-1%) |
+| Write/Edit | 63 | 48.2 → 47.9 ms (-0%) | 51.0 → 50.9 ms (-0%) | 74.1 → 72.9 ms (-2%) | 118.4 → 118.8 ms (+0%) |
+| Monitor | 5 | 33.6 → 33.3 ms (-1%) | 46.0 → 46.2 ms (+1%) | 90.4 → 91.3 ms (+1%) | 87.8 → 87.9 ms (+0%) |
+| All | 515 | 51.5 → 52.1 ms (+1%) | 57.3 → 57.2 ms (-0%) | 110.8 → 110.9 ms (+0%) | 112.1 → 112.0 ms (-0%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean | p50 past bash start |
+|---|---:|---|---|---|---|
+| bash-guards.sh | 400 | 60.8 → 61.1 ms (+1%) | 111.9 → 112.7 ms (+1%) | 112.8 → 112.8 ms (-0%) | 59.6 → 60.0 ms |
+| config-guard.sh | 63 | 15.5 → 15.6 ms (+0%) | 36.7 → 36.8 ms (+0%) | 22.3 → 22.4 ms (+0%) | 14.3 → 14.4 ms |
+| mod-gate.sh | 63 | 1.4 → 1.4 ms (+0%) | 11.7 → 11.6 ms (-1%) | 2.0 → 2.0 ms (+0%) | 0.3 → 0.3 ms |
+| secret-scanner.sh | 63 | 21.1 → 21.1 ms (-0%) | 65.3 → 65.3 ms (-0%) | 26.1 → 26.3 ms (+1%) | 19.9 → 19.9 ms |
+| sensitive-file-guard.sh | 104 | 40.1 → 40.3 ms (+0%) | 58.7 → 59.9 ms (+2%) | 45.9 → 45.9 ms (+0%) | 39.0 → 39.1 ms |
+| subagent-cache-guard.sh | 515 | 6.0 → 6.0 ms (+0%) | 6.4 → 6.4 ms (-0%) | 5.9 → 5.9 ms (+0%) | 4.8 → 4.9 ms |
+
+Processes started: each hook run alone once per payload under `strace -f`. Execs are execve calls past the hook's own bash; forks are new processes (clone, clone3, fork or vfork without CLONE_THREAD), a `$( )` among them. A machine that pays for each process start pays for both.
+
+| Hook | payloads | execs per payload | forks per payload | in all | payloads with more / fewer | not counted |
+|---|---:|---|---|---|---|---:|
+| bash-guards.sh | 400 | 21.98 → 21.98 | 98.66 → 98.66 | 48259 → 48259 | 0 / 0 | 0 |
+| config-guard.sh | 63 | 5.10 → 5.10 | 15.24 → 15.24 | 1281 → 1281 | 0 / 0 | 0 |
+| mod-gate.sh | 63 | 0.19 → 0.19 | 0.44 → 0.44 | 40 → 40 | 0 / 0 | 0 |
+| secret-scanner.sh | 63 | 7.65 → 7.65 | 19.95 → 19.95 | 1739 → 1739 | 0 / 0 | 0 |
+| sensitive-file-guard.sh | 104 | 13.10 → 13.10 | 30.25 → 30.25 | 4508 → 4508 | 0 / 0 | 0 |
+| subagent-cache-guard.sh | 515 | 1.00 → 1.00 | 1.00 → 1.00 | 1030 → 1030 | 0 / 0 | 0 |
+
+Decisions: 515 of 515 payloads got the same answer on both sides.
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended; no payload's hooks may start more processes unless intended).
+
 ## v1.4.16 (2026-11-20)
 
 Merged since v1.4.15: 4 PRs.
