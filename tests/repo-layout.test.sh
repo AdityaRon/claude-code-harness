@@ -55,10 +55,12 @@ done < <(git ls-files -s)
   || fail "every script's mode matches its invocation" "$BADMODE"
 
 echo ""
-echo "=== The README layout block names every file in docs/ ==="
+echo "=== The layout block in docs/layout.md names every file in docs/ ==="
 # The block listed session-routing.md only, while docs/ held a second file — so
-# the one document a reader most needed was invisible in the map.
-BLOCK=$(awk '/^## Repo layout$/{f=1} f&&/^```$/{n++; if(n==2) exit} f' README.md)
+# the one document a reader most needed was invisible in the map. It lived in the
+# README until the README was cut to a summary.
+LAYOUT=docs/layout.md
+BLOCK=$(awk '/^```$/{n++; if(n==2) exit} n' "$LAYOUT")
 # Tracked files only: an untracked backup or a test's __pycache__/ is not the repo.
 tracked() { git ls-files -- "$@"; }
 # A name counts only as a whole word of the block: index.sh is not memory-index.sh.
@@ -87,7 +89,7 @@ MISSING=$(missing_in "$BLOCK_WORDS" $(tracked ':(glob)docs/*.md'))
   || fail "every docs/ file appears in the layout block" "missing:$MISSING"
 
 echo ""
-echo "=== The README layout block names every file in rules/ ==="
+echo "=== The layout block names every file in rules/ ==="
 # Same reason as docs/: a rule that ships to every session on the machine but is
 # invisible in the map is one nobody reviews before it starts shaping behaviour.
 # shellcheck disable=SC2046
@@ -126,9 +128,10 @@ echo ""
 echo "=== Sibling references inside docs/ resolve from docs/ ==="
 # A doc in docs/ citing `docs/other.md` reads correctly from the repo root but
 # breaks when rendered in place. Bare siblings are the right spelling there.
+# A fenced block is not a link: layout.md's map names docs/ as a folder.
 BADSIB=""
 for d in docs/*.md; do
-  grep -qE '(^|[^A-Za-z0-9._/-])docs/' "$d" && BADSIB="$BADSIB $(basename "$d")"
+  awk '/^```/{f=!f; next} !f' "$d" | grep -qE '(^|[^A-Za-z0-9._/-])docs/' && BADSIB="$BADSIB $(basename "$d")"
 done
 [ -z "$BADSIB" ] \
   && pass "no docs/ file uses a root-relative path to a sibling" \
@@ -155,7 +158,7 @@ HITS=$(grep -nE '\$\([[:space:]]*mktemp' doctor.sh bin/*.sh tools/*.sh tests/*.s
   || fail "every mktemp in tests, doctor and bin has a template" "$HITS"
 
 echo ""
-echo "=== The README hook table and settings.json name the same hooks ==="
+echo "=== The hook table in docs/hooks.md and settings.json name the same hooks ==="
 # subagent-cache-guard and tcc-check were wired and shipped with no row, so the
 # table a reader checks before installing undercounted what runs on their machine.
 WIRED=$(jq -r '.hooks[][]?.hooks[]?.command // empty' config/settings.json 2>/dev/null \
@@ -164,17 +167,17 @@ WIRED=$(jq -r '.hooks[][]?.hooks[]?.command // empty' config/settings.json 2>/de
 if printf '%s\n' "$WIRED" | grep -qx bash-guards; then
   WIRED=$( { printf '%s\n' "$WIRED"; sed -nE 's/^BG_GUARDS=\((.*)\)$/\1/p' hooks/bash-guards.sh | tr ' ' '\n'; } | sort -u)
 fi
-TABLE=$(awk '/^## What it blocks, asks and logs$/{f=1; next} f&&/^## /{exit} f' README.md)
+TABLE=$(awk '/^## Every hook$/{f=1; next} f&&/^## /{exit} f' docs/hooks.md)
 ROWS=$(printf '%s\n' "$TABLE" | sed -nE 's/^\| `([^`]+)` \|.*/\1/p' | sort -u)
 NOROW=$(comm -23 <(printf '%s\n' "$WIRED") <(printf '%s\n' "$ROWS") | tr '\n' ' ')
 UNWIRED=$(comm -13 <(printf '%s\n' "$WIRED") <(printf '%s\n' "$ROWS") | tr '\n' ' ')
 [ -n "$WIRED" ] && pass "settings.json wires hooks" || fail "settings.json wires hooks" "(none found)"
 [ -z "${NOROW// /}" ] \
-  && pass "every wired hook has a README row" \
-  || fail "every wired hook has a README row" "missing: $NOROW"
+  && pass "every wired hook has a row" \
+  || fail "every wired hook has a row" "missing: $NOROW"
 [ -z "${UNWIRED// /}" ] \
-  && pass "every README row is a wired hook" \
-  || fail "every README row is a wired hook" "not wired: $UNWIRED"
+  && pass "every row is a wired hook" \
+  || fail "every row is a wired hook" "not wired: $UNWIRED"
 
 echo ""
 echo "=== tests/smoke.list names real suites, and every wired hook is in one ==="
@@ -190,7 +193,7 @@ done
 [ -z "$UNSMOKED" ] && pass "every wired hook is named by a smoke suite" || fail "hooks no smoke suite names" "$UNSMOKED"
 
 echo ""
-echo "=== The README layout block names every bin/ and tools/ file ==="
+echo "=== The layout block names every bin/ and tools/ file ==="
 # bin/ is what installs and tools/ stays in the clone, so each file must sit under
 # its own heading: one listed under the other misstates what installs.
 section() {  # a top-level heading -> the words of its line and the lines under it
@@ -226,7 +229,7 @@ done
   || fail "every hook, bin/ and tools/ file and .github script is named by a suite" "unnamed:$UNNAMED"
 
 echo ""
-echo "=== Every suite is named after what it tests, or listed on the README tests/ line ==="
+echo "=== Every suite is named after what it tests, or listed on the layout's tests/ line ==="
 # Twelve suites cover no single file of their own name; the tests/ line is where
 # a reader learns what each is for.
 TESTS_WORDS=$(entry '^tests/' | tr -cs 'A-Za-z0-9*-' '\n')

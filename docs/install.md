@@ -3,11 +3,29 @@
 What `install.sh` does, what it leaves in `~/.claude`, and how the harness is
 tested. Moved from the README.
 
+## Requirements
+
+macOS or Linux with bash, `jq` (the guards fail closed without it), `gh`,
+`python3` (for `tools/hook-bench.py` and `tools/permission-friction.py`; 3.10 or
+newer with a TOML reader for the comms-hub and skill-forge skills) and `claude`.
+
+```bash
+git clone https://github.com/AdityaRon/claude-code-harness.git
+cd claude-code-harness
+bash install.sh
+```
+
+Updating a machine after that: [releases.md](releases.md#updating-a-machine).
+
 ## What the installer does
 
 - Merges into any existing `~/.claude/settings.json` (user keys preserved, allow/ask/deny lists unioned, hooks owned by harness). Details in [customization.md](customization.md#what-an-install-keeps).
 - Backs up the previous file as `settings.json.bak.<timestamp>`, and keeps the newest 10 (`CCH_KEEP_BACKUPS` changes the count).
 - Folds in machine-local allow/ask/deny rules from `~/.claude/local-settings/*.json` (see [customization.md](customization.md)).
+- Clones claude-code-skills into `~/.claude/skills-src` at the release
+  `config/skills.pin` names, verifies its commit and runs its `install.sh`
+  (`bin/skills-sync.sh`). If that fetch fails, the installed skills stay as
+  they were, the install says so and finishes, and `harness-update.sh` retries.
 - Runs `doctor.sh` to verify every hook after install.
 - Removes from `~/.claude` a file deleted in a commit between the last install's and HEAD, when install wrote it and nothing uses it. All of these must hold: the clone is its own git repo; HEAD descends from the last install's commit; this install writes no file of that name in any case; the file is a plain file, not reached through a symlinked folder outside `~/.claude`, with the bytes it had at that commit; and nothing names its basename: a `*.json` at the top of `~/.claude`, `~/.claude.json`, the shell startup files (`~/.zshrc`, `~/.zprofile`, `~/.zshenv`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`), any file under `~/.claude/commands` or `~/.claude/agents`, a `*.sh`, `*.py`, `*.md` or `*.toml` under `~/.claude` (outside projects/, logs/, jobs/, state/, todos/ and shell-snapshots/), `crontab -l` or `~/Library/LaunchAgents/*.plist`. The search is for text, so a path built at runtime, such as `$(echo old).sh`, is not found. Any other such file stays, and the report at the end names it with the reason, and for a name found, where. A first install, or one whose clone lacks the last install's commit, removes nothing. `harness.version` is written last, so an install that stops early reports and removes from the same commit next time.
 
@@ -27,13 +45,22 @@ ships neither, so they come from wherever you keep them, such as the repo that
 holds your work skills. A machine that already has its rules in
 `settings.json` keeps them, because the merge never removes an allow rule.
 
+## A fork, or a fresh copy
+
+Clone your own copy instead, then run `tools/fork-setup.sh` from it. It reports
+what GitHub needs before this repo's workflows run: Actions on, the workflows
+GitHub turns off on a fork back on, Actions allowed to open pull requests
+(Release and Upstream drift open them), and the `CLAUDE_CODE_OAUTH_TOKEN`
+secret. `tools/fork-setup.sh --apply` turns on what is off; the secret you set
+yourself, with `/install-github-app` in Claude Code.
+
 ## File layout after install
 
 As written by `install.sh`, plus what the hooks and
 `harness-update.sh` write as they run.
 Paths inside `~/.claude` are flat: every file in the repo's `bin/` lands at
-`~/.claude/<name>`, and `tools/` stays in the clone. The grouping in the README's
-repo layout is for reading the repo, not for the installed tree.
+`~/.claude/<name>`, and `tools/` stays in the clone. The grouping in
+[layout.md](layout.md) is for reading the repo, not for the installed tree.
 
 ```
 ~/.claude/
@@ -106,6 +133,25 @@ and `harness-update.sh` retries at its next run. A machine whose
 `HARNESS_UPDATE_URL` names another clone of this repo sets `HARNESS_SKILLS_URL`
 to a clone of that one.
 
+They were split out of this repo at 6699a5c: comms-hub and slack-draft (one session speaks
+on Slack for all of them, with a panel mod beside its chat), skill-forge (one
+skill per recurring question in a new job), pr-review, memory-audit and
+memory-archive. Their protocols, tests and changelog are there.
+
+- `config/skills.pin` names the release this harness installs: its URL, tag and
+  commit. `install.sh` and `harness-update.sh` both install it through
+  `bin/skills-sync.sh`, so `harness-update.sh` stays the one entry point.
+  `HARNESS_SKILLS_URL` points at another clone of it, as `HARNESS_UPDATE_URL`
+  does for this repo; `HARNESS_SKILLS_CLONE` moves `~/.claude/skills-src`.
+- That repo's `install.sh` owns `~/.claude/skills` and skill-forge's templates in
+  `~/.local/share/skill-forge/`, and records what it wrote in
+  `~/.claude/skills.manifest`. This repo writes nothing there and removes nothing
+  there (`tools/pickup-report.sh`).
+- Several skills run tools this repo installs in `~/.claude`: `memory-verify.sh`,
+  `memory-index.sh`, `session-route.sh` and `spend-report.py`.
+- `bash doctor.sh --skill comms-hub` runs that skill's prerequisite check from
+  `~/.claude/skills-src`.
+
 ## comms-hub's config and state
 
 Neither lives in a repo or in `~/.claude`, and no `install.sh` creates either:
@@ -146,4 +192,15 @@ Runs every test in `tests/*.test.sh` and prints a summary. The suite covers know
 
 The skills' own suites run in claude-code-skills. Three suites here read the skills at the pinned commit, from `$CCH_SKILLS_CLONE` or `~/.claude/skills-src`: `tests/skills-sync.test.sh` (harness v1.4.2 upgraded to this tree leaves `~/.claude/skills` byte for byte), `tests/token-shapes.test.sh` (comms-hub's draft gate and skill_lint against the secret scanner) and part of `tests/heredoc-openers.test.sh` (skill-forge's heredoc reader against bash). Without a clone they skip, except in CI, which clones it.
 
-CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS, with Python 3.12, and lints every hook with `shellcheck` on each push and PR. On a PR it also runs the hook benchmark against the base branch; see [releases.md](releases.md).
+A new suite sources `tests/lib.sh` for `pass` and `fail`. `bash doctor.sh --smoke`
+runs the few in `tests/smoke.list` that name every wired hook, which is what
+`install.sh` runs (`install.sh --full` runs all). A suite gets 30 minutes
+(`CCH_SUITE_TIMEOUT`); the summary lists wall times slowest first and names a
+suite stopped by a signal KILLED and one past its limit TIMEOUT, apart from
+failures.
+
+CI (`.github/workflows/ci.yml`) runs `doctor.sh` on both Linux and macOS, with
+Python 3.12, lints the scripts and suites with `shellcheck`, compiles every
+Python file with macOS's `/usr/bin/python3` (3.9), on each push and PR. On a
+PR it also runs the hook benchmark against the base branch; see
+[releases.md](releases.md).

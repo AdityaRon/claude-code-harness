@@ -141,6 +141,15 @@ for f in docs/figures/*.svg; do grep -qF "\"$f\"" README.md || UNSHOWN="$UNSHOWN
 [ -z "$UNSHOWN" ] && pass "README.md shows every figure" || fail "README.md shows every figure" "not shown:$UNSHOWN"
 
 echo ""
+echo "=== README.md's own prose carries no measured value ==="
+# --check sees only the generated blocks, so a number typed into the prose would go stale unseen.
+PROSE=$(awk '/<!-- readme-figures:[a-z-]+:begin -->/{g=1} /<!-- readme-figures:[a-z-]+:end -->/{g=0; next}
+  /^```/{f=!f; next} !g && !f' README.md)
+HITS=$(printf '%s\n' "$PROSE" | grep -nE '(^|[^A-Za-z0-9.])[0-9]+(\.[0-9]+)? ?(ms|s|sec|min|minutes|h|hours|KB|MB|GB|%|x)([^A-Za-z0-9]|$)')
+[ -n "$PROSE" ] && [ -z "$HITS" ] && pass "no number with a unit outside the generated blocks" \
+  || fail "no number with a unit outside the generated blocks" "${HITS:-(no prose found)}"
+
+echo ""
 echo "=== No private paths, em dashes or dollar amounts ==="
 PUBLIC="README.md $DATA $(ls docs/figures/*.svg)"
 # shellcheck disable=SC2086  # the names hold no spaces

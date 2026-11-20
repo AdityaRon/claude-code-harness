@@ -22,6 +22,21 @@ and `.deny` are unioned (minus `config/retired-rules.json`), the harness
 owns `permissions.defaultMode` and `statusLine` and rewrites them, and it owns
 the hook entries it installed while keeping yours.
 
+What `install.sh` does with a value you set:
+
+| Setting | Shipped | Install keeps yours? |
+|---|---|---|
+| `permissions.defaultMode` | `auto` | No: replaced on every install, with a notice |
+| `permissions.allow`, `permissions.deny` | scoped lists | Yes: unioned with the shipped lists, minus `config/retired-rules.json` |
+| `hooks` | the harness's entries | Yours kept; the harness's own entries rewritten |
+| `statusLine` | `~/.claude/statusline.sh` | No: rewritten on every install |
+| `sandbox` | off, with a domain allowlist | Yes, per key; a list you set replaces the shipped list |
+| `env` | audit log, transcript folder, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Yes, per key |
+| `effortLevel` | `high` | Yes, after one move of an installed `xhigh` to `high` (marker `~/.claude/state/effort-high.migrated`) |
+| `autoDreamEnabled` | `true` | Yes: `false` keeps auto-dream off ([memory.md](memory.md)) |
+| `syncClaudeAiSkills`, `syncClaudeAiPlugins` | `false` | Yes |
+| `remoteControlAtStartup` and the other top-level switches ([permissions.md](permissions.md)) | `true` | Yes |
+
 ## Allow rules, hooks and hosts
 
 **Allow rules for tools this public repo cannot name** (work skills, internal
@@ -54,6 +69,10 @@ harness's hook entries back. To keep it off, remove the entry from
 `config/settings.json` in your clone and run `bash install.sh`. An install from
 a clone with local changes or commits is one `~/.claude/harness-update.sh`
 leaves alone, so update that machine with `git pull && bash install.sh` instead.
+
+**Turning auto mode off**: `claude --permission-mode manual` for one session.
+Every install rewrites `permissions.defaultMode`, so to keep it off set
+`"manual"` in your clone's `config/settings.json`, as for a hook above.
 
 **Hosts this machine reaches often** (an internal log service, a vendor API):
 ```
@@ -107,6 +126,13 @@ command for that host, so each new one costs one prompt and one confirm.
 **Cap pre-compact's transcript copies** (megabytes, default 1000; `0` for no cap; the newest copy always stays):
 ```json
 { "env": { "CLAUDE_TRANSCRIPT_BACKUP_MAX_MB": "500" } }
+```
+
+**Keep more or fewer `settings.json` backups** (default 10): `CCH_KEEP_BACKUPS`, in the shell that runs `install.sh`, not in settings.
+
+**Move session-start's disk warnings** (gigabytes; defaults 50 for `~/.claude/jobs` and 100 for the Bazel output root):
+```json
+{ "env": { "CLAUDE_DISK_WARN_JOBS_GB": "80", "CLAUDE_DISK_WARN_BAZEL_GB": "200" } }
 ```
 
 **Open workflow scripts in a specific editor** (the status-line `wf` link). Auto-detects VS Code/Cursor/Zed; override the URI scheme:

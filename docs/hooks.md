@@ -1,8 +1,47 @@
-# Audit, context and readability hooks
+# Hooks
 
-The hooks that log, carry context and render, as registered in
-`config/settings.json`. Moved from the README; the guards are in
+Every hook the harness wires, then the audit, context and readability hooks in
+detail, as registered in `config/settings.json`. Each guard in detail is in
 [guards.md](guards.md).
+
+## Every hook
+
+| Hook | Runs on | Behaviour |
+|---|---|---|
+| `bash-guards` | Bash, Monitor | Runs the seven Bash guards below as one hook: one parse of the call, each guard a fork, deny over ask over allow. A guard that dies is a deny naming it. `~/.claude/hooks/bash-guards.skip` switches one off ([guards.md](guards.md)) |
+| `env-guard` | Bash | Deny: reading, dumping, copying or sending env values and dotfiles (`cat .env`, `printenv`, `nc`). Shadow: a bare `env` |
+| `sensitive-file-guard` | Read, Grep, file writes | Deny: `.env`, keys, SSH and cloud credentials, credential folders. Ask: a Grep at or above your home folder |
+| `secret-scanner` | file writes | Deny: high-confidence token shapes (AWS, GitHub, Slack, Stripe, Google, Anthropic, OpenAI, PEM) in written content |
+| `git-guard` | Bash | Deny: force push in any spelling, `reset --hard`, `clean -f`, hook tampering, a broad `git add` that would stage a credential file or that it cannot check. Ask: deleting a remote branch whose tip no other ref holds, remote changes, stash drop. Runs: local branch deletes, `worktree remove --force`, identity and signing config |
+| `rm-guard` | Bash | Deny: recursive `rm` of home, root or a top-level folder. Ask: `disk-space.py` with `--apply`, in any spelling. Shadow: `rm -rf` outside the session's scratch folder |
+| `config-guard` | Bash, file writes | Ask: writes to installed hooks, settings, the Bash guards' skip file, shell startup files, `~/.gitconfig`, LaunchAgents, Bash writes into a mod Claude Code loads by itself, and copies or extractions into a `.claude` folder. Deny: moving or emptying `~/.claude` |
+| `network-guard` | Bash | Deny: file uploads and pipe-to-shell. Ask: edits to the machine-local network allowlist. Shadow: request bodies, `DELETE`, `curl`/`wget` to hosts off the allowlist, `scp`/`rsync`, local servers. WebFetch is not guarded |
+| `interpreter-guard` | Bash | Shadow: inline code (`python -c`, `node -e`, heredocs) that touches env, dotfiles, sockets or an env-dumping command, and long inline scripts. Auto mode drops `Bash(python3:*)`, so its classifier sees them |
+| `kubectl-guard` | Bash | Asks on a Secret read in any spelling (`get Secret`, `describe secret`, a kind from xargs), on kubeconfig credentials and on kubectl behind a function. Its other verb rules are in shadow: read verbs are allowed by prefix, and native ask rules in `config/settings.json` ask before every mutating verb, verb first or flags first |
+| `subagent-cache-guard` | a subagent's tool calls, SubagentStop | Deny: a subagent's tool calls once its prompt cache went cold 5 times in one run (`CLAUDE_SUBAGENT_MAX_COLD_STARTS`), until it replies with where it got to. Main sessions are left alone |
+| `mod-gate` | file writes | Deny: a mod hooking `tool.check` or another permission override. Ask: a mod it cannot review. Anything else it hooks or calls, outside the guards included, is shown in a notice |
+| `audit` | most events | Log: edits, Bash, MCP calls (field names only), agents, messages, artifacts, failures, auto-mode denials, model switches, settings changes, session end |
+| `memory-lint` | file writes | Advise: name, type, description, `verify:` block and index tier of a memory file. In a `trackers/` folder, only a marked handoff: its shape, size, `STATE:` stamp and `Crons:`, and lines telling a session to read a ledger over 20 KB first; ledgers, reports and archives are not linted (`CLAUDE_TRACKER_LINT=off`) |
+| `comment-budget` | file writes | Advise: a comment block an edit grew past 6 lines |
+| `tcc-check` | Bash results and failures | Advise: names macOS privacy control (TCC) when a Bash call prints an "Operation not permitted" error (a tool's, zsh's or python's) for a path in `~/Desktop`, `~/Documents`, `~/Downloads` or iCloud Drive, or for no path while the cwd (or a `cd` in the command) is in one. A line quoting one, in backticks or after grep -n's `file:line:`, is not an error; a log line printed whole still is |
+| `session-start` | SessionStart | Inject: branch, status and recent commits; on resume, files that drifted since the last session; once a day, a warning when job folders or Bazel output bases pass a size |
+| `session-snapshot` | Stop, SessionEnd | Record: hashes of the files the session edited, for the resume drift check |
+| `pre-compact` | PreCompact | Back up: the transcript before compaction, one per session, newest 20 within 1000 MB |
+| `notify` | Notification | Notify: a desktop alert titled with the session name |
+| `plan-to-html` | ExitPlanMode | Render: the plan as HTML in your browser, without delaying the prompt |
+| status line | every refresh | Show: model and effort, branch, context, cost, rate limits, plan and workflow links, a cold-cache warning |
+
+A guard's deny runs before the permission system, so it holds in every
+permission mode. The exceptions are a loaded mod and, in auto mode until the
+2026-11-29 review, a guard or rule in shadow mode. A guard's ask still comes to
+you in auto mode: Claude Code's [permission-modes doc](https://code.claude.com/docs/en/permission-modes)
+says auto mode "still shows you those prompts". The auto-mode classifier
+decides only what no guard or rule names. "Shadow" above means the guard or rule
+logs what it would have decided to `~/.claude/logs/shadow.log` and decides
+nothing; the list is `hooks/lib/shadow.sh`, and `tools/shadow-report.py` shows
+what the classifier or a native rule did instead ([shadow-mode.md](shadow-mode.md)).
+Every row in full: [guards.md](guards.md), the sections below, and
+[auto-mode.md](auto-mode.md).
 
 ## Audit
 
