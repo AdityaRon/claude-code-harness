@@ -7,7 +7,7 @@ that machine; this file carries counts and sanitized cases only.
 
 ## Where it is
 
-| Source | Calls | Effect |
+| Source | n (calls) | Effect |
 |---|---:|---|
 | A guard returned `ask` | 872 | session waits on a human |
 | A guard denied | 400 | model rewrites the call |
@@ -20,6 +20,16 @@ its call 133 s, against 5 s for a Bash call with no prompt (tool_use to
 tool_result, so run time and time away are included). Summed across sessions
 that is 229 h. By guard: interpreter-guard 530, kubectl-guard 155,
 network-guard 105, git-guard 70, two guards at once 12.
+
+Each count of calls or asks in this file is its own n: seen in the one window above, on
+one machine. The statistics:
+
+| Statistic | Value | n |
+|---|---:|---|
+| Guard asks approved | 849 | 872 asks |
+| Guard asks rejected | 3 | 872 asks |
+| Median time an approved ask held its call | 133 s | 849 approved asks |
+| Median time a Bash call with no prompt took | 5 s | Bash calls with no prompt; their count is not recorded here |
 
 The harness audit log agrees from the day it started recording GUARD lines
 (2026-09-24): interpreter-guard asks 233 in the log, 223 in transcripts;
@@ -34,7 +44,7 @@ hyphenated word ending in c or e (`team-performance`, `--store`). The length
 test `${INTERP}\s+.{120,}${INLINE}` then spans `&&`, `;` and `|`. What
 completed the match, over all 530:
 
-| Trigger | Asks |
+| Trigger | n (asks) |
 |---|---:|
 | a later command's own flag (`grep -c`, `-R`, `commit -F -`) | 255 |
 | the tail of a hyphenated word or path | 226 |
@@ -62,7 +72,7 @@ grep pattern that mentions kubectl. 11 more were `config current-context` /
 
 ## Policy calls (behaving as designed; whether to keep is the owner's call)
 
-| Rule | Calls | Note |
+| Rule | n (calls) | Note |
 |---|---:|---|
 | interpreter-guard deny on `subprocess` and similar tokens | 205 | 121 are a lone `python3` heredoc or `-c`; often glue that shells out to `gh` |
 | `Bash(rm -rf:*)` deny | 197 | targets: session job tmp 91, relative path 50 (usually after `cd` into job tmp), `/tmp` 21, other 35; a deny on one segment refuses the whole compound command |
@@ -128,6 +138,16 @@ tools/permission-friction.py --cases --replay hooks/
 
 It exits 1 while any `want` misses: 25 on 516db51, 0 with the guard parsing
 fixes. `tests/permission-friction.test.sh` runs it, so doctor fails on a miss.
+
+## Not measured
+
+- A second machine: every count here comes from one machine's transcripts.
+- Asks and rejections since #237 removed the always-approved asks. The 30-day
+  count #237 cites, 476 asks and 1 rejected, was taken before that change.
+- How much of an approved ask's hold was a person reading it, and how much was
+  time away: tool_use to tool_result holds both.
+- What triggered the 33 "Long inline script" asks a Python port of the regex
+  did not reproduce.
 
 ## Re-measure on your own history
 

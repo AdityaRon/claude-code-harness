@@ -38,9 +38,9 @@ Traps we hit:
 - Until the old session is deleted, two sessions share the name. A send by bare name fails and asks for the `[ref]`. Refs change when sessions restart, so read them from `ListAgents` each time.
 - A `STATE:` stamp written early and saved late, such as a write that waited on a permission check, is flagged as stale: memory-lint flags a stamp more than 5 minutes older than the write. Take the stamp at write time.
 
-## Session crons live in memory
+## Session crons belong to the session
 
-A cron made with CronCreate exists only in that session. A restart drops it without a word, and a recurring one expires after 7 days anyway (CronCreate's own description says both). List each one under `Crons:` as its five fields and its prompt, so the next session can recreate it exactly. A one-shot that has to wait for a condition can re-arm itself with the same prompt.
+A fresh session, which is what the restart above gives you, has none, so list each cron under `Crons:` as its five fields and its prompt and recreate it there. `claude --resume` and `claude --continue` differ: the [scheduled-tasks page](https://code.claude.com/docs/en/scheduled-tasks) (read 2026-11-20) says they restore CronCreate tasks, except a recurring one past its 7-day expiry, a one-shot whose time has passed, anything after `Exit and stop tasks`, and a self-paced `/loop`, which has to be run again. CronCreate's own description in 2.1.328 says the job is gone when Claude exits; we have not tested which holds. After a resume, run CronList before recreating from `Crons:`, or a tick can run twice. A restored task does not catch up on missed runs. A one-shot that has to wait for a condition can re-arm itself with the same prompt.
 
 ## A reboot resumes everything at once
 
@@ -90,8 +90,34 @@ A shape lint first matched every file under a `trackers/` folder. It told a sess
 
 Hook details: [hooks.md](hooks.md).
 
+## Measured, with n
+
+Every number above, with its n and machine. A row with n under 3 is
+preliminary.
+
+| Measured | n | Machine |
+|---|---|---|
+| Sessions kept eight to nine weeks: 343 to 395 MB of transcript each | 3 sessions | work Mac |
+| One session: 584 MB in under six weeks | 1 session, preliminary | work Mac |
+| The project folder: 4.7 GB | 94 transcripts | work Mac |
+| The transcript folder: 342 MB, the largest 95 MB | 78 transcripts | personal Mac |
+| Live transcripts after a restart from a handoff: 6.9 to 14.5 MB | not given | work Mac |
+| After a reboot: 1-minute load 5 to 7 for hours; OS indexing 90 to 275% CPU, endpoint agents about 120%, all Claude processes 12 to 17% | 1 reboot, preliminary | work Mac |
+| Process start under load: `bash -c :` 25 to 35 ms, `true` 35 ms | p50 of 5 | work Mac |
+| Process start: 0.5 to 1.4 ms | p50 of 5 | CI runner |
+| Process start at load 22.6: 8.4 and 8.6 ms | p50 of 5 | personal Mac |
+| Process start at load 4.5 to 5: about 2 ms | median of 40 | personal Mac |
+| Slowest guard per Bash call (`guard-timing.log`): median 0.74 s on v1.4.9; on v1.4.14, 0.26 s over the last 300 calls and 0.41 s over all 1,337 since install; p90 3.02 and 3.79 s | 1,000 calls (v1.4.9), 300 and 1,337 calls (v1.4.14) | work Mac |
+| Pre-compact backups: 2.6 GB in 20 files, then 797 MB in 11 | 1 compaction, preliminary | work Mac |
+| Python venvs inside live jobs: 1.4 and 1.6 GB | 2 jobs, preliminary | work Mac |
+| Transcripts Spotlight had indexed: 1,285, then 0 after Search Privacy | 1 reading each, preliminary | work Mac |
+| Transcripts Spotlight had indexed: 919 | 1 reading, preliminary | personal Mac |
+| Oldest transcript's last write, `cleanupPeriodDays` unset: 29.5 days ago | 1 reading, preliminary | personal Mac |
+
 ## Not measured
 
 - How common long sessions are.
 - Whether transcript size is what slowed the agent view.
 - What Spotlight indexing of growing transcripts costs.
+- How many sessions the 6.9 to 14.5 MB after a restart covers.
+- Whether the reboot's load repeats on a second reboot.

@@ -489,6 +489,16 @@ ERR=$(jq -nc '{source:"startup", session_id:"sess-clean", hook_event_name:"Sessi
   | env CLAUDE_DISK_STAMP="$DSTAMP" CLAUDE_STATE_DIR="$TMP/fresh-disk-state" bash "$TREE/hooks/session-start.sh" 2>&1 >/dev/null)
 check_eq "a fresh state folder: nothing on stderr" "" "$ERR"
 check_eq "and the measurement is recorded as warned" "$(sed -n 's/^measured=//p' "$DSTAMP")" "$(cat "$TMP/fresh-disk-state/disk-warning" 2>/dev/null)"
+# memory-lint's pending lists: one a turn that ended by interrupt left two days ago, one from today.
+mkdir -p "$CLAUDE_STATE_DIR/lint-pending"
+printf '1 /x/memory/a.md\n' > "$CLAUDE_STATE_DIR/lint-pending/old-session"; touch -t "$(date -v-2d +%Y%m%d%H%M 2>/dev/null || date -d '2 days ago' +%Y%m%d%H%M)" "$CLAUDE_STATE_DIR/lint-pending/old-session"
+printf '1 /x/memory/b.md\n' > "$CLAUDE_STATE_DIR/lint-pending/new-session"
+dstamp 20000000000 0 3600
+dstart >/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$CLAUDE_STATE_DIR/lint-pending/old-session" ] || break; sleep 0.3; done
+check_eq "a pending list over a day old is deleted at the daily measurement" "gone" "$([ -e "$CLAUDE_STATE_DIR/lint-pending/old-session" ] && echo kept || echo gone)"
+check_eq "and one from today stays" "kept" "$([ -e "$CLAUDE_STATE_DIR/lint-pending/new-session" ] && echo kept || echo gone)"
+rm -rf "$CLAUDE_STATE_DIR/lint-pending" "$CLAUDE_STATE_DIR/lint-pending-prune.claim."*
 rm -f "$DSTAMP"
 
 echo ""
