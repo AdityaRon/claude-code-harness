@@ -4,12 +4,12 @@
 # pipe, chain, $(…), backticks), so a word in another program's arguments does
 # not match. A grep pattern or a sed or awk script that opens no file is text.
 # Matching is still textual: the same words in another quoted string can match.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 require_jq_or_deny
 require_parsable_or_deny
-CMD=$(jq_get '.tool_input.command')
+jq_set CMD .tool_input.command
 [[ -z "$CMD" ]] && exit 0
 joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Every pattern below needs one of these words. Normalizing drops quotes,
@@ -32,11 +32,11 @@ CMD=$(strip_inert_heredocs "$CMD")
 # all run cat.
 unreadable_check env-guard "$CMD"
 NCMD=$(neutralize_quoted_separators "$CMD")
-SCAN=$(printf '%s\n%s' "$NCMD" "$(normalize_command "$NCMD")" \
-  | sed -E 's#[^[:space:]]*\.(example|sample|template|dist|tpl)([[:space:]]|$)#TEMPLATEFILE\2#g')
+SCAN=$(herestr "$NCMD"$'\n'"$(normalize_command "$NCMD")" \
+  sed -E 's#[^[:space:]]*\.(example|sample|template|dist|tpl)([[:space:]]|$)#TEMPLATEFILE\2#g')
 # `.ENV` is `.env` on the default macOS filesystem, so patterns naming a file
 # also run on a lower-cased copy, as sensitive-file-guard matches without case.
-SCAN_LC=$(printf '%s\n%s' "$SCAN" "$(printf '%s' "$SCAN" | tr 'A-Z' 'a-z')")
+two_lines SCAN_LC "$SCAN" "$(herestr "$SCAN" tr 'A-Z' 'a-z')"
 # grep and rg take a pattern first, and sed and awk a script: `grep -rn '\.env'
 # src/` searches for text and `sed -i 's/cert.pem/tls.pem/' f` edits it. For the
 # reader check that operand becomes PATTERN, after a wrapper (`| xargs -0 grep`)
@@ -168,7 +168,7 @@ drop_text_operands() {
     case "$LINE" in *awk*) drop_operands 'awk|gawk|mawk|nawk' "$AOPT" awk ;; esac
     SCAN_R+=$LINE$'\n'
   done <<<"$(split_procsubs "$SCAN")"
-  SCAN_R_LC=$(printf '%s\n%s' "$SCAN_R" "$(printf '%s' "$SCAN_R" | tr 'A-Z' 'a-z')")
+  two_lines SCAN_R_LC "$SCAN_R" "$(herestr "$SCAN_R" tr 'A-Z' 'a-z')"
 }
 
 # Command boundary: start-of-line, pipe, logical chain, subshell, semicolon, &.
@@ -285,12 +285,12 @@ block() {   # block WHY MATCH [RULE]: a shadowed RULE returns, and the scan goes
 # operand rewrite only removes tokens), so a miss here is a miss for all
 # twenty, which otherwise cost a fork each.
 ALLP=""; for P in "${BLOCKED[@]}"; do ALLP="${ALLP:+$ALLP|}$P"; done
-if printf '%s\n' "$SCAN_LC" | grep -qE "$ALLP"; then
+if herestr "$SCAN_LC" grep -qE "$ALLP"; then
   for i in "${!BLOCKED[@]}"; do
     P=${BLOCKED[$i]}
     T=$SCAN; [[ "$P" == *"$DOTFILES"* ]] && T=$SCAN_LC
     if [[ "$P" == "${A}${WRAP}${READERS}"* ]]; then
-      printf '%s\n' "$SCAN_LC" | grep -qE "$P" || continue
+      herestr "$SCAN_LC" grep -qE "$P" || continue
       [[ -n "$SCAN_R_LC" ]] || drop_text_operands
       T=$SCAN_R_LC
     fi

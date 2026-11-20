@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Desktop notification when Claude needs input, titled with the session's name
 # so one of several sessions can be told apart.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 MSG=$(jq_get '.message'); MSG=${MSG:-Claude needs your attention}

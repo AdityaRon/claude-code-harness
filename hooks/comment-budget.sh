@@ -15,7 +15,7 @@
 #
 # Advisory only: PostToolUse, exit 2 feeds the note back to Claude while the
 # edit is still hot, and never blocks the write.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 command -v jq &>/dev/null || exit 0     # advisory only; never fail a write

@@ -36,12 +36,12 @@
 # The silent-allow path is what the `Bash(kubectl:*)` allow entry buys: reads
 # stay quiet, everything else is escalated here. Unknown verbs ask, so a verb
 # missing from the lists below fails closed rather than riding the allow entry.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 require_jq_or_deny
 require_parsable_or_deny
-CMD=$(jq_get '.tool_input.command')
+jq_set CMD .tool_input.command
 [[ -z "$CMD" ]] && exit 0
 joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Normalizing drops quotes, backslashes and case but never adds a letter, so a
@@ -578,7 +578,7 @@ if [[ $TEXT_ONLY -eq 1 && "$CMD" == *[\"\']* && "$CMD" != *'$('* && "$CMD" != *'
   SRC=$(neutralize_quoted_separators "$CMD")
 elif [[ "$CMD" == *[\"\'\\]* && "$CMD" == *[\;\&\|]* ]]; then
   NQ=$(neutralize_quoted_separators "$CMD")
-  [[ "$NQ" != "$CMD" ]] && SRC=$(printf '%s\n%s' "$CMD" "$NQ")
+  [[ "$NQ" != "$CMD" ]] && two_lines SRC "$CMD" "$NQ"
 fi
 
 # Normalise BEFORE the bail-out, not after. The bail-out's own pattern requires

@@ -11,7 +11,7 @@
 # folder asks too, since the names it writes are not in the command. Names match
 # case-folded, and what follows an expansion the guard does not resolve ($d,
 # ${x}, ~user) is also read as under ~. Reads pass; interpreter writes are not seen.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 require_jq_or_deny

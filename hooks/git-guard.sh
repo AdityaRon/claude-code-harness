@@ -12,7 +12,7 @@
 #         signing config, whose asks were approved every time (#237)
 # Most patterns start at a command boundary, but matching is textual: the same
 # words in a heredoc, or in a message this cannot prove is text, can still match.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 # The command without message heredoc bodies or quoted messages (lib.sh).
 strip_messages() { strip_message_args "$(strip_inert_heredocs "$1")"; }
@@ -20,7 +20,7 @@ strip_messages() { strip_message_args "$(strip_inert_heredocs "$1")"; }
 read_input
 require_jq_or_deny
 require_parsable_or_deny
-CMD=$(jq_get '.tool_input.command')
+jq_set CMD .tool_input.command
 [[ -z "$CMD" ]] && exit 0
 joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # Every check below names git. Normalizing drops quotes and backslashes, lowers
@@ -54,7 +54,7 @@ check_inline_shellouts git flat
 # The .git/hooks check still reads a quoted message, as it always has.
 MSG_FREE=$(strip_message_args "$CMD")
 HOOKS_TEXT=""
-[[ "$MSG_FREE" != "$CMD" ]] && HOOKS_TEXT=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
+[[ "$MSG_FREE" != "$CMD" ]] && two_lines HOOKS_TEXT "$CMD" "$(normalize_command "$CMD")"
 CMD=$MSG_FREE
 # A quoted or escaped ; | or & is text, but every [^|;&] span below stopped at
 # it: `git push origin "a;b" --force` was allowed. The reading with those hidden
@@ -69,11 +69,14 @@ NQS=""
 # push -f`, `nohup git push -f` and `timeout 60 git push -f` each defeated every
 # check in this file while the bare form was denied. `/usr/bin/git` and `GIT`
 # did the same. The second line is the fully normalized form; see lib.sh.
-CMD=$(printf '%s\n%s' "$(normalize_wrappers "$(separate_groups "$CMD")")" "$(normalize_command "$CMD")")
+# Both lines start from separate_groups' reading, made once for both.
+GG_GROUPS=$(separate_groups "$CMD")
+two_lines CMD "$(normalize_wrappers "$GG_GROUPS")" "$(normalize_command "$CMD" "$GG_GROUPS")"
 TYPED=$CMD   # for a match that lifts a check rather than raising one
 NQREAD=""
-[[ -n "$NQS" ]] && NQREAD=$(printf '%s\n%s' "$(normalize_wrappers "$(separate_groups "$NQS")")" "$(normalize_command "$NQS")") \
-  && CMD=$(printf '%s\n%s' "$CMD" "$NQREAD")
+[[ -n "$NQS" ]] && { GG_GROUPS=$(separate_groups "$NQS")
+  two_lines NQREAD "$(normalize_wrappers "$GG_GROUPS")" "$(normalize_command "$NQS" "$GG_GROUPS")"
+  two_lines CMD "$CMD" "$NQREAD"; }
 
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
 
@@ -177,12 +180,13 @@ for P in "${GG_RULES[@]}"; do GG_UNION="$GG_UNION|($P)"; done
 # for it. sed adds each line without " ' and \ where it holds push (push --delete
 # reads that), and without " and ' where it holds add (sensitive files). The
 # other texts feed checks that need a backtick or .git/hooks, so they join only
-# holding one. Only a clean no-match ends the call.
+# holding one. Only a clean no-match ends the call: a here-string bash could not
+# write (lib/command.sh, herestr) is a sed that never ran, status 1.
 GG_TEXT=$CMD
 [[ "$MSG_FREE" == *'`'* ]] && GG_TEXT=$GG_TEXT$'\n'$MSG_FREE
 [[ "$HOOKS_TEXT" == *.git/hooks* ]] && GG_TEXT=$GG_TEXT$'\n'$HOOKS_TEXT
 [[ "$INLINE_TEXT" == *.git/hooks* ]] && GG_TEXT=$GG_TEXT$'\n'$INLINE_TEXT
-printf '%s\n' "$GG_TEXT" | sed -nE "p; h; s/[\"'\\\\]//g; /push/p; g; s/[\"']//g; /add/p" | grep -qiE "$GG_UNION"; [[ "${PIPESTATUS[*]}" != "0 0 1" ]] || exit 0
+sed -nE "p; h; s/[\"'\\\\]//g; /push/p; g; s/[\"']//g; /add/p" <<< "$GG_TEXT" | grep -qiE "$GG_UNION"; [[ "${PIPESTATUS[*]}" != "0 1" ]] || exit 0
 
 # Committed template files (.env.example / .sample / .template / .dist / .tpl)
 # are safe to stage; neutralize them so `git add .env.example` isn't blocked.
@@ -273,7 +277,7 @@ gate_segments() {
 PROOF_TEXT=""; PROOF_N=0
 proved_in_each_reading() {   # FN
   local c q
-  c=$(strip_messages "$(jq_get '.tool_input.command')")
+  jq_set c .tool_input.command; c=$(strip_messages "$c")
   PROOF_TEXT=$c; "$1" && [[ $PROOF_N -gt 0 ]] || return 1
   [[ "$c" == *[\"\'\\]* && "$c" == *[\;\&\|]* ]] || return 0
   q=$(neutralize_quoted_separators "$c")
@@ -339,7 +343,7 @@ remote_tips_held() {   # $1 repo  $2 remote  $3 refs to leave out, one per line 
 push_delete_safe() {
   local raw segs seg t i k r repo cwd n=0 del b fu pu gone=""
   local -a refs names s_repo=() s_remote=() s_names=()
-  cwd=$(jq_get '.cwd')
+  jq_set cwd .cwd
   raw=$(separate_groups "$PROOF_TEXT")
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1
   raw=$(normalize_wrappers "$raw")
@@ -429,7 +433,7 @@ SENSITIVE_PATH="$(IFS='|'; printf '%s' "${CREDENTIAL_FILES[*]}")|\.env[.-]|id_rs
 FOUND=""
 broad_add_safe() {
   local raw segs seg t i repo cwd n=0 p out
-  cwd=$(jq_get '.cwd')
+  jq_set cwd .cwd
   raw=$(separate_groups "$PROOF_TEXT")
   # xargs appends stdin, which can hold -f; normalize_wrappers would hide it.
   printf '%s\n' "$raw" | grep -qiE '(^|[^A-Za-z0-9_])xargs([^A-Za-z0-9_]|$)' && return 1

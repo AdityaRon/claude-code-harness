@@ -7,7 +7,7 @@
 # session-snapshot.sh at the prior session's Stop: if the files the prior
 # session edited no longer match their recorded hashes, surface that drift so
 # Claude re-verifies before trusting the transcript's narrative.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 # One jq for the three fields, where jq_get would start one each. @sh quotes

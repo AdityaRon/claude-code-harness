@@ -3,7 +3,7 @@
 # hashes. session-start.sh reads this back on resume to detect drift between
 # what the prior session landed on disk and what's actually there now —
 # catches the "edits were reverted / never persisted" failure mode.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 SESSION_ID=$(jq_get '.session_id')

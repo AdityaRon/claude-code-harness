@@ -3,7 +3,7 @@
 # Keeps one copy per session (the largest), the 20 most recent within
 # CLAUDE_TRANSCRIPT_BACKUP_MAX_MB (1000; 0 for no cap), and none older than
 # Claude Code keeps transcripts itself (cleanupPeriodDays, default 30).
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 TRANSCRIPT=$(jq_get '.transcript_path')

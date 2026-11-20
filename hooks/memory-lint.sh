@@ -22,7 +22,7 @@
 #
 # Two findings wait for Stop (memory-lint-stop.sh): a memory's MEMORY.md line and
 # a handoff's STATE: refresh are the second of two writes. pend records them.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 command -v jq &>/dev/null || exit 0     # advisory only; never fail a write

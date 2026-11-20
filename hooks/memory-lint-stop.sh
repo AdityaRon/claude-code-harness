@@ -17,7 +17,7 @@ PEND="$PEND_ROOT/$SID"
 ACT_RE='"stop_hook_active"[[:space:]]*:[[:space:]]*true'
 [[ $IN =~ $ACT_RE ]] && exit 0
 
-source "${0%/*}/lib.sh"   # PATH for jq; nothing before this point needed it
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # PATH for jq; nothing before this point needed it
 
 # The list, newest write last: a memory once, a handoff at its last write's time.
 KINDS=() PATHS=() EPOCHS=()

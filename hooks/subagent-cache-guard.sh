@@ -5,7 +5,7 @@
 # CLAUDE_SUBAGENT_MAX_COLD_STARTS of them in one run (5; 0 is off) it denies
 # tool calls until the agent replies with where it got to. SubagentStop ends a
 # run, so a resume starts a fresh count. Main sessions are left alone.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 [[ "$INPUT" == *'"agent_id"'* ]] || exit 0

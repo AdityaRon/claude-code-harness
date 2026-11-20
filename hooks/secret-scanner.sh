@@ -4,7 +4,7 @@
 #
 # Only high-signal patterns are included — entropy-based "is this an AWS
 # secret access key" heuristics false-positive too often on source code.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 require_jq_or_deny

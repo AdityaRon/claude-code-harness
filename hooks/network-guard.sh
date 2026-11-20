@@ -21,12 +21,12 @@
 # Projects can extend it via the CLAUDE_NET_ALLOWLIST env var (space-separated),
 # and a machine via `netAllowlist` in ~/.claude/local-settings/*.json, which
 # survives every install (bin/net-allowlist.sh). Both pass net_host_problem.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 require_jq_or_deny
 require_parsable_or_deny
-TOOL=$(jq_get '.tool_name')
+jq_set TOOL .tool_name
 
 # Default allowlist. Extendable via CLAUDE_NET_ALLOWLIST in settings.json env.
 DEFAULT_ALLOW=(
@@ -144,7 +144,7 @@ extract_host() {
 # A monitor's `ws` source opens a WebSocket itself: its host must be allowed.
 # An allowed one falls through, so a command sent alongside is still checked.
 if [[ "$TOOL" == Monitor ]]; then
-  URL=$(jq_get '.tool_input.ws.url')
+  jq_set URL .tool_input.ws.url
   if [[ -n "$URL" ]]; then
     HOST=$(extract_host "$URL")
     if ! host_allowed "$HOST"; then
@@ -155,7 +155,7 @@ fi
 
 case "$TOOL" in
   Bash|Monitor)
-    CMD=$(jq_get '.tool_input.command')
+    jq_set CMD .tool_input.command
     [[ -z "$CMD" ]] && exit 0
     joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
     # Every check below needs one of these words. Normalizing drops quotes,
@@ -167,7 +167,7 @@ case "$TOOL" in
     CMD=$(neutralize_quoted_separators "$CMD")
     # `/usr/bin/curl` and `CURL` are curl too: scan the normalized form (lib.sh) as
     # a second line.
-    CMD=$(printf '%s\n%s' "$CMD" "$(normalize_command "$CMD")")
+    two_lines CMD "$CMD" "$(normalize_command "$CMD")"
 
     # Other egress channels beyond curl/wget. scp/rsync/sftp copy files to a
     # remote host; a local HTTP server exposes the working tree. All → ask.

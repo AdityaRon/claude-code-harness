@@ -2,12 +2,12 @@
 # Recursive remove guard, replacing the Bash(rm -rf:*) deny rules: those matched
 # one spelling and refused this session's own scratch folder. Catastrophic targets
 # deny; rm -rf runs silently only when every target is in a scratch folder.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 require_jq_or_deny
 require_parsable_or_deny
-CMD=$(jq_get '.tool_input.command')
+jq_set CMD .tool_input.command
 [[ -z "$CMD" ]] && exit 0
 joined_pass "$CMD"   # the command as bash joins its lines too (lib/io.sh)
 # disk-space.py deletes only with --apply. Its native ask rules see four prefixes,
@@ -27,13 +27,13 @@ RM_BARE='(^|[^[:alnum:]_.-])rm([^[:alnum:]_.-]|$)'
 # A script's shell-outs are checked as commands of their own (lib.sh).
 check_inline_shellouts rm flat
 
-SCRATCH=$(session_scratch "$CMD"$'\n'"$(jq_get '.cwd')")
+jq_set CWD .cwd
+SCRATCH=$(session_scratch "$CMD"$'\n'"$CWD")
 # A command that sets the variables in_scratch trusts gets no scratch allowance.
 if printf '%s\n' "$CMD" | grep -qE '(^|[^A-Za-z0-9_])(CLAUDE_JOB_DIR|HOME|TMPDIR)[[:space:]]*='; then
   SCRATCH=""; TMPDIR=""
 fi
 BASE=""
-CWD=$(jq_get '.cwd')
 [[ -n "$CWD" ]] && BASE=$(in_scratch "$CWD" "$SCRATCH" "") || BASE=""
 
 # One segment per line, quoted separators kept as text. Split before normalizing:

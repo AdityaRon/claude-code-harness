@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 # hooks/lib.sh sources this: normalizing a command, and the heredoc and message strippers the guards scan through.
 
+# CMD with TEXT and a newline on its stdin, as `printf '%s\n' TEXT | CMD` gives
+# it, a fork fewer. bash 3.2, and 5.2 past 64 KB, write the text to a temp file
+# first; where none can be made the body does not run, and the pipe does.
+# shift, not "${@:2}": bash 3.2 joins that into one word under IFS=';'.
+herestr() {   # TEXT CMD...
+  local _hs="" _ht=$1
+  shift
+  { _hs=1; "$@" 2>&9 9>&-; } 9>&2 2>/dev/null <<< "$_ht"
+  local _hs_st=$?
+  [[ -n "$_hs" ]] && return "$_hs_st"
+  printf '%s\n' "$_ht" | "$@"
+}
+
+# NAME=$(printf '%s\n%s' A B) with no fork: the newlines the capture dropped
+# from the end are dropped here.
+two_lines() {   # NAME A B
+  local _tl _nl=$'\n'
+  printf -v _tl '%s\n%s' "$2" "$3"
+  printf -v "$1" '%s' "${_tl%"${_tl##*[!$_nl]}"}"
+}
+
 # Strip tokens that sit in front of a command without changing what runs:
 # env assignments (FOO=bar), `env`, and the wrapper commands Claude Code itself
 # strips before matching a permission rule (timeout/time/nice/nohup/stdbuf/
@@ -23,7 +44,7 @@
 # Output feeds pattern matching only — never execution — so a mangled quote is
 # harmless, and ambiguity makes the guards fail closed by design.
 normalize_wrappers() {
-  local s i e=()
+  local i e=()
   # Give a command-substitution opener its own whitespace BEFORE the assignment
   # rule runs. Without this the assignment pattern swallows the substitution
   # body — `X=$(kubectl delete pod foo)` normalised to `delete pod foo)`, and
@@ -40,8 +61,8 @@ normalize_wrappers() {
       -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)(nice([[:space:]]+-n[[:space:]]*[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|stdbuf([[:space:]]+-[ioe][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|env([[:space:]]+-[uSCP][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|sudo([[:space:]]+-[ugCph][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|doas([[:space:]]+-[uC][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|ionice([[:space:]]+-[cnp][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|exec([[:space:]]+-a[[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|caffeinate([[:space:]]+-[tw][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*|xargs([[:space:]]+-[IndPLsEa][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*)[[:space:]]+/\1\2/g'
       -e 's/(^|[|&;`]|&&|\|\||\$\()([[:space:]]*)timeout[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[0-9]+[smhd]?[[:space:]]+/\1\2/g')
   done
-  s=$(printf '%s' "$1" | sed -E "${e[@]}")
-  printf '%s' "$s"
+  # Each caller captures this, which drops the newline herestr adds.
+  herestr "$1" sed -E "${e[@]}"
 }
 
 # `{ git push -f; }`, `(printenv)`, `if X; then`, `! X` and a case arm put the
@@ -54,7 +75,7 @@ normalize_wrappers() {
 # whole body under `| bash`, and $( ) or backticks in an unquoted one.
 separate_groups() {
   case "$1" in *'('*|*')'*|*'{'*|*'}'*) ;; *) printf '%s' "$1"; return ;; esac
-  printf '%s\n' "$1" | awk "$HEREDOC_AWK"'
+  herestr "$1" awk "$HEREDOC_AWK"'
     { line[NR] = $0 }
     END {
       # From a line hd_scan cannot read, quotes are not tracked at all: a quote
@@ -101,9 +122,10 @@ exec_fn_suffixes() {
 # A word can end in a quote that closes text around it: `"$(ENV)"`, or the tail
 # of a quoted jq filter after a `(`. Dropping that quote left the line unbalanced
 # and env-guard's jq check read the filter as file names, so the last unpaired
-# quote of each kind goes back after the name, in its order.
+# quote of each kind goes back after the name, in its order. Each caller
+# captures this, which drops the newline herestr adds.
 normalize_binaries() {
-  printf '%s' "$1" | awk '
+  herestr "$1" awk '
     function last(s, c,   i) { for (i = length(s); i > 0; i--) if (substr(s, i, 1) == c) return i; return 0 }
     function fix(seg,   pre, tok, t, n, q, d, a, keep) {
       match(seg, /^[ \t]*/); pre = substr(seg, 1, RLENGTH); seg = substr(seg, RLENGTH + 1)
@@ -129,10 +151,12 @@ normalize_binaries() {
 # wrapper gone before its binary is at a boundary. Guards scan this alongside
 # the original, never instead of it, so a rewrite can only add a match.
 # separate_groups goes first: normalize_binaries drops quotes from a first word,
-# and the group pass needs them to tell `"a (b)"` from `(b)`.
-normalize_command() {
+# and the group pass needs them to tell `"a (b)"` from `(b)`. A caller holding
+# $(separate_groups TEXT) already passes it, and it is not made again.
+normalize_command() {   # TEXT [GROUPS]
   local s x
-  s=$(separate_groups "$1"); x=$(exec_fn_suffixes "$1")
+  if [[ $# -ge 2 ]]; then s=$2; else s=$(separate_groups "$1"); fi
+  x=$(exec_fn_suffixes "$1")
   [[ -n "$x" ]] && s="$s"$'\n'"$x"
   s=$(normalize_binaries "$s"); s=$(normalize_wrappers "$s"); s=$(normalize_binaries "$s")
   printf '%s' "${s:-$1}"
@@ -412,7 +436,7 @@ strip_message_heredocs() {
 strip_message_args() {
   case "$1" in *commit*|*gh*) ;; *) printf '%s' "$1"; return ;; esac
   case "$1" in *\'*|*\"*) ;; *) printf '%s' "$1"; return ;; esac
-  printf '%s\n' "$1" | awk '
+  herestr "$1" awk '
     function msgflag(    g) {
       if (seg ~ /^[ \t]*git[ \t]+((-[cC][ \t]+[^ \t]+|-[^ \t]+)[ \t]+)*commit[ \t]/) g = "(-[A-Za-z]*m|--message)"
       else if (seg ~ /^[ \t]*gh[ \t]+(pr|issue)[ \t]+[a-z-]+[ \t]/) g = "(-[tb]|--title|--body)"
@@ -581,7 +605,7 @@ join_continued_lines() {
 # reader that drops the body drops them too (strip_inert_heredocs).
 neutralize_quoted_separators() {   # TEXT [inbody]
   case "$1" in *'&'*|*';'*|*'|'*) ;; *) printf '%s' "$1"; return ;; esac
-  printf '%s\n' "$1" | awk -v inbody="${2:-}" "$HEREDOC_AWK"'
+  herestr "$1" awk -v inbody="${2:-}" "$HEREDOC_AWK"'
     function hide(ch) { return ch == "&" ? "%26" : ch == ";" ? "%3B" : ch == "|" ? "%7C" : ch }
     # The reading before hd_scan: quotes and $( only. Kept for heredoc data and
     # for a command hd_scan cannot read; a separator hd_scan marked as code (in

@@ -9,7 +9,7 @@
 #   Stop             — same summary shape; accepted so the hook still works if
 #                      wired to Stop, but note Stop fires at every turn end, so
 #                      the harness wires the summary to SessionEnd instead.
-source "$(dirname "$0")/lib.sh"
+if [[ "$0" == */* ]]; then source "${0%/*}/lib.sh"; else source ./lib.sh; fi   # dirname "$0", with no process
 
 read_input
 EVENT=$(jq_get '.hook_event_name')
