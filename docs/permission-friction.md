@@ -2,7 +2,7 @@
 
 Measured from one machine's local transcripts, 2026-08-18 to 2026-10-06 (49
 days, UTC): 81,603 tool calls, 67,520 of them Bash, in 114 sessions, nearly all
-in auto mode. Produced by `tools/permission-friction.py`. The raw report stays on
+in auto mode. Produced by `bin/permission-friction.py`. The raw report stays on
 that machine; this file carries counts and sanitized cases only.
 
 ## Where it is
@@ -123,7 +123,7 @@ allowed, two controls, and two false denies on python heredocs that edit files,
 shaped like 9 recorded on this Mac in 30 days.
 
 ```
-tools/permission-friction.py --cases --replay hooks/
+bin/permission-friction.py --cases --replay hooks/
 ```
 
 It exits 1 while any `want` misses: 25 on 516db51, 0 with the guard parsing
@@ -132,13 +132,13 @@ fixes. `tests/permission-friction.test.sh` runs it, so doctor fails on a miss.
 ## Re-measure on your own history
 
 ```
-tools/permission-friction.py --days 49 --out "$CLAUDE_JOB_DIR/tmp/pf"
-tools/permission-friction.py --days 49 --replay hooks/ --out "$CLAUDE_JOB_DIR/tmp/pf-replay"
-tools/permission-friction.py --since 2026-10-19T08:00:00Z --out "$CLAUDE_JOB_DIR/tmp/pf"
+bin/permission-friction.py --days 49 --out "$CLAUDE_JOB_DIR/tmp/pf"
+bin/permission-friction.py --days 49 --replay hooks/ --out "$CLAUDE_JOB_DIR/tmp/pf-replay"
+bin/permission-friction.py --since 2026-10-19T08:00:00Z --out "$CLAUDE_JOB_DIR/tmp/pf"
 ```
 
 `--since` takes an ISO 8601 date or time in place of `--days`; one with no zone is UTC.
-`tools/hook-latency.py` and `tools/shadow-report.py` take it too.
+`bin/hook-latency.py` and `tools/shadow-report.py` take it too.
 
 The first takes about 30 s. The replay starts each guard once per recorded call
 and takes 15 to 20 minutes. Put site-specific mask patterns in

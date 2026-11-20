@@ -12,7 +12,7 @@ That is settings.json as it is now, so a record from before a change can be name
 hook now at its number. name_from_output names a numbered record by the guard whose words
 are in the decision reason on its own stdout instead, and never reads its stderr.
 
-  tools/hooknames.py PreToolUse 4 [--settings PATH]   the hook a record calls "command hook 4"
+  bin/hooknames.py PreToolUse 4 [--settings PATH]   the hook a record calls "command hook 4"
 
 Also the --days or --since window the report tools share (add_window, window).
 """
@@ -159,6 +159,8 @@ def _hook_texts(repo, hooks_dir):
     """[(guard, file text)] for every version of hooks/*.sh in repo's history, else the files in hooks_dir."""
     out = []
     try:
+        if not os.path.isdir(os.path.join(repo, "hooks")):   # installed flat in ~/.claude: no clone above it
+            raise OSError("no clone")
         objs = subprocess.run(["git", "-C", repo, "rev-list", "--objects", "--all", "--", "hooks"],
                               capture_output=True, text=True, timeout=120, check=True).stdout.splitlines()
         # Not lib.sh: every guard sourced it, so its words are no one guard's.

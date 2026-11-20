@@ -14,13 +14,14 @@ transcripts show only the rejections.
 
 From 2.1.319 a hook record names its hook only as "command hook N". The guard
 whose words are in the reason on that hook's own stdout names it, never its
-stderr (tools/hooknames.py); with none, settings.json as it is now does.
+stderr (bin/hooknames.py); with none, settings.json as it is now does.
 
-  tools/permission-friction.py --days 49 --out DIR   # DIR/report.md + DIR/friction.json
-  tools/permission-friction.py --days 49             # report to stdout
-  tools/permission-friction.py --since 2026-10-19    # from that day on (UTC), in place of --days
-  tools/permission-friction.py --replay hooks/       # also re-run recorded asks/blocks through these guards
-  tools/permission-friction.py --days 2 --project tradedesk   # only calls whose cwd contains this
+  bin/permission-friction.py --days 49 --out DIR   # DIR/report.md + DIR/friction.json
+  bin/permission-friction.py --days 49             # report to stdout
+  bin/permission-friction.py --days 7 --json       # friction.json's data to stdout, no report
+  bin/permission-friction.py --since 2026-10-19    # from that day on (UTC), in place of --days
+  bin/permission-friction.py --replay hooks/       # also re-run recorded asks/blocks through these guards
+  bin/permission-friction.py --days 2 --project tradedesk   # only calls whose cwd contains this
 """
 import argparse, collections, datetime as dt, glob, json, os, re, shlex, subprocess, sys
 
@@ -556,7 +557,7 @@ def render(d):
     L.append('# Claude Code permission friction\n')
     L.append(f"Window {w['start']} to {w['end']} (UTC). Source: {w['transcript_files']} transcript files under "
              "`~/.claude/projects` (main sessions and subagents), cross-checked against `~/.claude/logs/audit.log*`. "
-             "Produced by `tools/permission-friction.py` in claude-code-harness.\n")
+             "Produced by `bin/permission-friction.py` in claude-code-harness.\n")
     L.append(f"{t['tool_calls']} tool calls ({t['bash_calls']} Bash) across {t['sessions']} sessions. "
              f"{t['friction_events']} calls met a permission decision other than a silent allow.\n")
     meaning = dict(guard_ask='harness guard returned `ask`: a human prompt',
@@ -740,6 +741,7 @@ def main():
     add_window(ap, 49, int)
     ap.add_argument('--project', default='', help='only tool calls whose working directory contains this text')
     ap.add_argument('--out', help='directory for report.md and friction.json (default: report to stdout)')
+    ap.add_argument('--json', action='store_true', help="print friction.json's data to stdout instead of the report")
     ap.add_argument('--replay', metavar='HOOKS_DIR', help="re-run recorded asks/blocks through the guards in HOOKS_DIR (e.g. a branch's hooks/)")
     ap.add_argument('--cases', metavar='JSONL', nargs='?',
                     const=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'docs', 'permission-friction-cases.jsonl'),
@@ -764,7 +766,9 @@ def main():
     if a.replay:
         data['replay'] = replay(events, os.path.abspath(a.replay))
         md += render_replay(data['replay'], a.replay)
-    if a.out:
+    if a.json and not a.out:
+        print(json.dumps(data, indent=1, default=str))
+    elif a.out:
         os.makedirs(a.out, exist_ok=True)
         json.dump(data, open(os.path.join(a.out, 'friction.json'), 'w'), indent=1, default=str)
         open(os.path.join(a.out, 'report.md'), 'w').write(md)
