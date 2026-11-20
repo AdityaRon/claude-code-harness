@@ -752,5 +752,25 @@ rm -f "$STORE"/MEMORY.md "$STORE"/MEMORY_ARCHIVE.md
 check_absent   "no index at all: nothing to orphan from" "ORPHAN" "$(run)"
 rm -f "$STORE"/*.md
 
+echo ""
+echo "=== --offline runs no gh at all ==="
+rm -f "$STORE"/*.md
+mem stale.md 40 "verify:" "  - gh acme/api#4821 open" "" "Still a held draft."
+mem lost.md 40 "plain"
+printf -- '- [S](stale.md) — hook\n' > "$STORE/MEMORY.md"
+# A gh on PATH that logs every call, with the testing seam unset: the path a real machine takes.
+mkdir -p "$TMP/bin"
+printf '#!/usr/bin/env bash\necho "gh $*" >> "%s"\nexit 0\n' "$TMP/pathgh.log" > "$TMP/bin/gh"; chmod +x "$TMP/bin/gh"
+: > "$FAKEGH_LOG"
+OUT=$(PATH="$TMP/bin:$PATH" MEMORY_VERIFY_GH_CMD="" bash "$SCRIPT" --store teststore --offline 2>&1)
+check_eq       "no gh on PATH ran, not even auth status" "0" "$(cat "$TMP/pathgh.log" 2>/dev/null | wc -l | tr -d ' ')"
+check_contains "the claim is a SKIP, marked offline" "offline" "$(printf '%s\n' "$OUT" | grep stale.md)"
+check_absent   "and is not called stale"             "STALE " "$OUT"
+check_contains "what needs no network still reports" "ORPHAN   lost.md" "$OUT"
+OUT=$(bash "$SCRIPT" --store teststore --offline 2>&1)
+check_eq       "the testing seam is not called either" "0" "$(calls)"
+check_contains "and the run says why"                 "NOTE: --offline" "$OUT"
+rm -f "$STORE"/*.md
+
 echo "--- Results: $PASS passed, $FAIL failed"
 exit "$FAIL"

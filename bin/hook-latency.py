@@ -10,10 +10,10 @@ are in the decision reason on its own stdout names it, never its stderr (hooknam
 such reason is named through settings.json as it is now and marked ?: a record from before a settings
 change can be named for the hook now at its number.
 
-  tools/hook-latency.py                      last 30 days, per hook per day
-  tools/hook-latency.py --days 8 --total     one row per hook for the window
-  tools/hook-latency.py --since 2026-10-19   from that day on (UTC), in place of --days
-  tools/hook-latency.py --hook session-start
+  bin/hook-latency.py                      last 30 days, per hook per day
+  bin/hook-latency.py --days 8 --total     one row per hook for the window
+  bin/hook-latency.py --since 2026-10-19   from that day on (UTC), in place of --days
+  bin/hook-latency.py --hook session-start
   bash doctor.sh --latency [ARGS]            the same
 
 hooks/bash-guards.sh runs the seven Bash guards as one hook, so a numbered record on a Bash or
