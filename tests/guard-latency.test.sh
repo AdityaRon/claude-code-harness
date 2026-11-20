@@ -61,5 +61,32 @@ echo "=== and a ${#CMD}-byte inline python script ==="
 each_guard "$CMD"
 
 echo ""
+# A shadowed ask (hooks/lib/shadow.sh) on a long heredoc, in a UTF-8 locale as on
+# a Mac. With shadow_note's old ${c//…}, interpreter-guard took 155 s on this one
+# under en_US.UTF-8 and 32 s under C; 0.2 s without it (bash 3.2, Apple M2, load 4
+# to 7). bash 5 may not be quadratic there, so the macOS runner is the one that sees it.
+U8=$(locale -a 2>/dev/null | grep -ixE 'en_US\.utf-?8|c\.utf-?8' | head -n 1)
+PY=$(printf 'import os\nhome = os.environ.get("HOME", "")\n'; for i in $(seq 1 258); do
+  printf 'row_%d = {"name": "item %d", "tags": ["a", "b"]}\n' "$i" "$i"
+done)
+CMD="cd /repo && python3 - <<'PY'
+$PY
+PY"
+if [[ -z "$U8" ]]; then
+  echo "  SKIP: no UTF-8 locale in locale -a, for the ${#CMD}-byte shadowed heredoc"
+else
+  echo "=== a shadowed ask on a ${#CMD}-byte heredoc of 260 lines under $U8, in under ${LIMIT}s ==="
+  payload=$(jq -nc --arg c "$CMD" '{tool_name:"Bash",tool_input:{command:$c},cwd:"/repo",session_id:"00000000-test",permission_mode:"auto"}')
+  for g in interpreter-guard bash-guards; do
+    : > "$CLAUDE_SHADOW_LOG"
+    LC_ALL=$U8 timed "$g" "$payload" "$g"
+    # Not a pass that skipped the slow path: the guard reached shadow_note.
+    [[ "$(jq -r '.guard + ":" + .rule' "$CLAUDE_SHADOW_LOG" 2>/dev/null)" == interpreter-guard:sensitive-token ]] \
+      && { echo "  OK: $g wrote its shadow line"; PASS=$((PASS + 1)); } \
+      || { echo "  FAIL: $g wrote no shadow line: $(cat "$CLAUDE_SHADOW_LOG" 2>/dev/null)"; FAIL=$((FAIL + 1)); }
+  done
+fi
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 [[ $FAIL -eq 0 ]]
