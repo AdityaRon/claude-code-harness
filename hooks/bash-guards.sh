@@ -21,8 +21,8 @@ trap bg_exit EXIT
 unset HARNESS_PRESET GUARD_NAME GUARD_SELF
 SECONDS=0   # the guards' deadline counts from here; bash takes SECONDS from the environment
 
-# Every guard starts with source "$(dirname "$0")/lib.sh": seven execs a call.
-# This is POSIX dirname without one.
+# log_audit, in each guard that answers, runs dirname on its log path. This is
+# POSIX dirname without an exec.
 dirname() {
   local p=$1
   case "$p" in *[!/]*) ;; '') printf '.\n'; return 0 ;; *) printf '/\n'; return 0 ;; esac
@@ -32,12 +32,15 @@ dirname() {
   p=${p%"${p##*[!/]}"}
   printf '%s\n' "${p:-/}"
 }
-BG_DIR=$(dirname "$0")
+if [[ "$0" == */* ]]; then BG_DIR=${0%/*}; else BG_DIR=.; fi   # dirname "$0", with no fork
 source "$BG_DIR/lib.sh" && declare -F read_input jq_get jq_set herestr two_lines emit_deny log_decision decide word_filter >/dev/null || exit 1
 # A lib.sh without the seams would have each fork read an empty stdin and allow.
-case "$(declare -f read_input)" in *HARNESS_PRESET*) ;; *)
-  BG_DONE=1; echo "Blocked: $BG_DIR/lib.sh is older than bash-guards.sh, so the Bash guards cannot run. Run bash install.sh from the harness clone." >&2; exit 2 ;;
-esac
+# Its read_input reads /dev/null over INPUT; this one, preset, leaves it.
+HARNESS_PRESET=$$ INPUT=$'\001'
+read_input < /dev/null
+[[ "$INPUT" == $'\001' ]] || {
+  BG_DONE=1; echo "Blocked: $BG_DIR/lib.sh is older than bash-guards.sh, so the Bash guards cannot run. Run bash install.sh from the harness clone." >&2; exit 2; }
+unset HARNESS_PRESET INPUT
 
 read_input
 if [[ -z "$INPUT" ]]; then BG_DONE=1; exit 0; fi
@@ -55,7 +58,7 @@ command -v jq &>/dev/null || { BG_DONE=1; require_jq_or_deny; BG_DONE=""; exit 1
 # only for a command holding one: join_continued_lines gives up on some.
 BG_F=()
 while IFS= read -r -d '' bg_f; do BG_F[${#BG_F[@]}]=$bg_f; done < <(
-  printf '%s' "$INPUT" | jq -j 'def f(p): try ((p // "") | if type == "string" then split("\u0000") | join("") else . end) catch "";
+  herestr "$INPUT" jq -j 'def f(p): try ((p // "") | if type == "string" then split("\u0000") | join("") else . end) catch "";
     f(.tool_name), "\u0000", f(.tool_input.command), "\u0000", f(.cwd), "\u0000", f(.session_id), "\u0000",
     f(.tool_input.url), "\u0000", f(.tool_input.ws.url), "\u0000", f(.tool_use_id), "\u0000", f(.permission_mode), "\u0000",
     (f(.tool_input.command) | if type == "string" then . else tojson end
@@ -90,7 +93,7 @@ PRESET_JOINED="" PRESET_JINPUT="" PRESET_JBARE=""
 if [[ "$PRESET_CMD" == *$'\n'* && "$PRESET_CMD" == *[\"\'\\]* ]] && PRESET_JOINED=$(join_continued_lines "$PRESET_CMD"); then
   # The payload is jq's first line (tojson holds no newline), the bare text the rest. read
   # and an offset split them: ${bg_j#*$'\n'} took 2.5 s on a 64 KB command under bash 3.2.
-  bg_j=$(printf '%s' "$INPUT" | jq -j --arg c "$PRESET_JOINED" '(.tool_input.command = $c | tojson), "\n",
+  bg_j=$(herestr "$INPUT" jq -j --arg c "$PRESET_JOINED" '(.tool_input.command = $c | tojson), "\n",
     ($c | split("\"") | join("") | split("\u0027") | join("") | split("\\") | join(""))' 2>/dev/null) \
     && IFS= read -r PRESET_JINPUT <<< "$bg_j" && PRESET_JBARE=${bg_j:${#PRESET_JINPUT}+1} \
     || PRESET_JOINED="" PRESET_JINPUT="" PRESET_JBARE=""
