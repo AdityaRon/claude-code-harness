@@ -542,6 +542,16 @@ export CCH_WAKE_SHIFT=0; late late 2
 export CCH_WAKE_SHIFT=-100; late late 2
 [[ "$(dec "$OUT")" == deny && "$(why "$OUT")" == "Blocked: interpreter-guard had not answered"* && "$(cat "$TMP/woke")" == "-n kern.waketime" ]] \
   && pass "woke before the call was read: still late" || fail "a wake before the start" "out=$OUT woke=$(cat "$TMP/woke" 2>/dev/null)"
+# Half a deny before the deadline, the rest after: bash 3.2 drops what a read
+# that times out took, so a read again after a wake would see only the rest.
+cat > "$TMP/hk/interpreter-guard.sh" <<'SH'
+printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",'
+i=0; while [ ! -s "$CCH_WOKE_LOG" ] && [ $i -lt 40 ]; do /bin/sleep 0.1; i=$((i + 1)); done
+printf '%s\n' '"permissionDecisionReason":"the second half"}}'
+SH
+export CCH_WAKE_SHIFT=0; late late 2
+[[ "$(dec "$OUT")" == deny && "$(why "$OUT")" == "Blocked: interpreter-guard had not answered"* ]] \
+  && pass "a guard part way through its answer at the deadline: late, wake or not" || fail "half an answer" "out=$OUT woke=$(cat "$TMP/woke" 2>/dev/null)"
 unset CCH_SYSCTL CCH_WAKE_SHIFT
 
 disp hooks "$(payload 'git stash drop')"
