@@ -29,10 +29,10 @@ kubectl one is a native ask rule (#237).
 |---|---|---|---|---|
 | **Guards on a Bash call** | Wait p50 62.2 → 62.6 ms, p95 113.5 → 114.2 ms, v1.4.16 → v1.4.17 in one run | 395 Bash payloads, one run | CI runner, Linux, AMD EPYC 9V74, release workflow; 2026-11-20 | [v1.4.17](CHANGELOG.md#v1417-2026-11-20), [releases.md](docs/releases.md) |
 | **Asks kept only where people say no** | 849 of 872 guard asks approved over 49 days, the median one holding its call 133 s; then 476 asks and 1 rejection in 30 days | 872 asks; 476 asks | One machine's transcripts; then a personal machine's; 2026-08-18 to 2026-10-06; 30 days to 2026-11-15 | [permission-friction.md](docs/permission-friction.md), [#237](https://github.com/AdityaRon/claude-code-harness/issues/237) |
-| **One dispatcher, fewer process starts** | `bash-guards.sh` execs per payload 24.53 → 21.98 at v1.4.16 (#299, #302) | 400 payloads (395 Bash, 5 Monitor), one run | CI runner, Linux, AMD EPYC 9V74, under strace -f; 2026-11-20 | [v1.4.16](CHANGELOG.md#v1416-2026-11-20), [budgets](tests/guard-execs.test.sh) |
-| **Guard wait in real use** | Slowest guard per Bash call: median 0.74 s on v1.4.9, 0.26 to 0.41 s on v1.4.14; the slowest 10% still wait 3 s or more | not given | A managed Mac in real use, from its guard timing log; window not given; doc written 2026-11-19 | [long-running-sessions.md](docs/long-running-sessions.md#every-process-a-hook-starts-costs-more-on-a-managed-machine) |
+| **One dispatcher, fewer process starts** | `bash-guards.sh` execs per payload 24.53 → 21.98 at v1.4.16 | 400 payloads (395 Bash, 5 Monitor), one run | CI runner, Linux, AMD EPYC 9V74, under strace -f; 2026-11-20 | [v1.4.16](CHANGELOG.md#v1416-2026-11-20), [budgets](tests/guard-execs.test.sh) |
+| **Guard wait in real use** | Slowest guard per Bash call: median 0.74 s on v1.4.9, 0.26 to 0.41 s on v1.4.14; the slowest 10% still wait 3 s or more | not given | Real use, from the guard timing log; the doc names no machine or window; doc written 2026-11-19 | [long-running-sessions.md](docs/long-running-sessions.md#every-process-a-hook-starts-costs-more-on-a-managed-machine) |
 | **Restart from a handoff** | 3 sessions kept 8 to 9 weeks reached 343 to 395 MB of transcript each; restarted from a handoff, live transcripts were 6.9 to 14.5 MB | 3 sessions before; after, not given | The work Mac, about 15 background sessions; doc written 2026-11-19 | [long-running-sessions.md](docs/long-running-sessions.md#restart-from-a-handoff-not-from-the-transcript) |
-| **A long heredoc under UTF-8** | interpreter-guard on a 13 KB, 260-line heredoc: 155 s before #304, 0.29 s after | one timing each | Apple M2, macOS 26.6.2, bash 3.2.57, en_US.UTF-8; the 155 s at load 4 to 7; 2026-11-20 | [#304](https://github.com/AdityaRon/claude-code-harness/pull/304) |
+| **A long heredoc under UTF-8** | interpreter-guard on a 13 KB, 260-line heredoc: 155 s before #304, 0.29 s after | not given | Apple M2, macOS 26.6.2, bash 3.2.57, en_US.UTF-8; the 155 s at load 4 to 7; 2026-11-20 | [#304](https://github.com/AdityaRon/claude-code-harness/pull/304) |
 <!-- readme-figures:summary:end -->
 
 On your own machine, `bash doctor.sh --latency` reads each hook's wall time per day from
@@ -47,7 +47,7 @@ and `bash doctor.sh --disk` sizes job folders and Bazel output bases.
   <img alt="Line chart of a Bash call's wait for the guards by release, as a chained index with v1.0.1 at 100. p50 runs from 144.0 at v1.0.0 to 81.6 at v1.4.17, lowest 81.1 at v1.4.16; p95 from 97.1 to 85.1. Each step is one release's same-run ratio on one CI runner, from CHANGELOG.md; n is 321 to 395 Bash payloads a run." src="docs/figures/bash-wait-index-light.svg" width="880">
 </picture>
 
-Each point chains one release's ratio, head over base from one run on one CI runner, onto the one before; milliseconds differ by runner and are not compared across releases. Source: CHANGELOG.md, the first Bash row of each entry, v1.0.0 to v1.4.17; n = 321 to 395 Bash payloads a run, one run per release. 20 releases changed no hook file, were not benchmarked and are left out.
+Each point chains one release's ratio, head over base from its entry's first run on one CI runner, onto the one before; milliseconds differ by runner and are not compared across releases. Source: CHANGELOG.md, the first Bash row of each entry, v1.0.0 to v1.4.17; n = 321 to 395 Bash payloads a run. 20 releases changed no hook file, were not benchmarked and are left out.
 <!-- readme-figures:figure-wait:end -->
 
 <!-- readme-figures:table-wait:begin -->

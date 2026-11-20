@@ -67,5 +67,5 @@
 <text x="775.3" y="362" font-size="13" fill="#9198a1" text-anchor="middle">v1.4.17</text>
 <text x="452" y="384" font-size="13" fill="#9198a1" text-anchor="middle">release (launches tables start at v1.4.11)</text>
 <text x="24" y="410" font-size="13" fill="#9198a1">Source: CHANGELOG.md launches tables, v1.4.11 to v1.4.17, each payload once under strace -f. n = 377 to 400 payloads</text>
-<text x="24" y="428" font-size="13" fill="#9198a1">a run, one run per release.</text>
+<text x="24" y="428" font-size="13" fill="#9198a1">a run, the entry's first run.</text>
 </svg>

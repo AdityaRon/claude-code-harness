@@ -229,9 +229,9 @@ def execs_alt(d):
 
 def wait_caption(d):
     s = d["series"]
-    return ("Each point chains one release's ratio, head over base from one run on one CI runner, onto the one "
-            "before; milliseconds differ by runner and are not compared across releases. Source: %s, the first "
-            "Bash row of each entry, %s to %s; n = %d to %d Bash payloads a run, one run per release. %d releases "
+    return ("Each point chains one release's ratio, head over base from its entry's first run on one CI runner, "
+            "onto the one before; milliseconds differ by runner and are not compared across releases. Source: %s, "
+            "the first Bash row of each entry, %s to %s; n = %d to %d Bash payloads a run. %d releases "
             "changed no hook file, were not benchmarked and are left out."
             % (CHANGELOG, s["bash_wait_index"][0]["release"], d["cited_release"],
                min(r["bash_payloads"] for r in s["bash_wait_runs"]),
@@ -250,8 +250,8 @@ def execs_caption(d):
 
 def wait_source(d):
     s = d["series"]
-    return ("Source: %s, the first Bash row of each entry, %s to %s. n = %d to %d Bash payloads a run, one run "
-            "per release; each step is head over base on one runner, chained."
+    return ("Source: %s, the first Bash row of each entry, %s to %s. n = %d to %d Bash payloads a run, the "
+            "entry's first run; each step is head over base on one runner, chained."
             % (CHANGELOG, s["bash_wait_index"][0]["release"], d["cited_release"],
                min(r["bash_payloads"] for r in s["bash_wait_runs"]),
                max(r["bash_payloads"] for r in s["bash_wait_runs"])))
@@ -260,7 +260,7 @@ def wait_source(d):
 def execs_source(d):
     e = d["series"]["bash_guards_execs"]
     return ("Source: %s launches tables, %s to %s, each payload once under strace -f. n = %d to %d payloads a run, "
-            "one run per release." % (CHANGELOG, e[0]["release"], d["cited_release"],
+            "the entry's first run." % (CHANGELOG, e[0]["release"], d["cited_release"],
                                       min(r["payloads"] for r in e), max(r["payloads"] for r in e)))
 
 

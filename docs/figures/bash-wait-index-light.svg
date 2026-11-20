@@ -138,6 +138,6 @@
 <text x="743.9" y="390" font-size="12" fill="#59636e" text-anchor="end" transform="rotate(-50 743.9 390)">v1.4.16</text>
 <text x="768" y="390" font-size="12" fill="#59636e" text-anchor="end" transform="rotate(-50 768 390)">v1.4.17</text>
 <text x="414" y="448" font-size="13" fill="#59636e" text-anchor="middle">release (only those whose hook files changed)</text>
-<text x="24" y="474" font-size="13" fill="#59636e">Source: CHANGELOG.md, the first Bash row of each entry, v1.0.0 to v1.4.17. n = 321 to 395 Bash payloads a run, one</text>
-<text x="24" y="492" font-size="13" fill="#59636e">run per release; each step is head over base on one runner, chained.</text>
+<text x="24" y="474" font-size="13" fill="#59636e">Source: CHANGELOG.md, the first Bash row of each entry, v1.0.0 to v1.4.17. n = 321 to 395 Bash payloads a run, the</text>
+<text x="24" y="492" font-size="13" fill="#59636e">entry's first run; each step is head over base on one runner, chained.</text>
 </svg>
