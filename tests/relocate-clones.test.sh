@@ -127,10 +127,10 @@ OUT=$(bash "$REL" --apply --launch-dir "$HOME/x" --memory-from "$HOME/nowhere" 2
 echo ""
 echo "=== the hooks work through the link: memory-lint and session-start ==="
 # memory-lint on a file written by its linked path finds the same defects as by
-# its real path (it reads MEMORY.md beside the file).
+# its real path (it reads MEMORY.md beside the file); the missing-line finding comes at Stop.
 MEM="$LINK/project_x.md"
 printf -- '---\nname: project_x\ndescription: d\nmetadata:\n  type: project\n  originSessionId: s\n---\nbody\n' > "$MEM"
-lint() { jq -nc --arg f "$1" '{tool_name:"Write", tool_input:{file_path:$f}, session_id:"s"}' | bash hooks/memory-lint.sh 2>&1 >/dev/null; echo "rc=$?"; }
+lint() { jq -nc --arg f "$1" '{tool_name:"Write", tool_input:{file_path:$f}, session_id:"s"}' | bash hooks/memory-lint.sh 2>&1 >/dev/null; echo "rc=$?"; jq -nc '{session_id:"s"}' | bash hooks/memory-lint-stop.sh 2>&1; }
 VIA_LINK=$(lint "$MEM"); VIA_REAL=$(lint "$P/$(slug "$D")/memory/project_x.md")
 has "memory-lint reads the index through the link" "no line in MEMORY.md points at project_x.md" "$VIA_LINK"
 [ "$VIA_LINK" = "$VIA_REAL" ] && pass "and says the same as by the real path" || fail "same findings" "[$VIA_LINK] vs [$VIA_REAL]"
