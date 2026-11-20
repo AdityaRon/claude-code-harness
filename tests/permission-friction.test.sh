@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Tests for tools/permission-friction.py: guard errors, case env, masking.
+# Tests for bin/permission-friction.py: guard errors, case env, masking.
 set -u
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
-PF="$PWD/tools/permission-friction.py"
+PF="$PWD/bin/permission-friction.py"
 PASS=0; FAIL=0
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
