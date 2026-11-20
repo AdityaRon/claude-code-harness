@@ -27,7 +27,7 @@ python3 is already required by tools/permission-friction.py.
 Progress goes to stderr, never stdout: a line up front with the estimated time, then at most one every
 --progress-every seconds (default 10; 0 is none) per phase (warm, timed, launches). --quick is the way
 to a short run on a slow machine. On SIGINT or SIGTERM the table built so far is printed, marked
-"partial: n of N payloads", and the exit is 130; a partial run fails --gate.
+"partial: n of N payloads timed; interrupted during PHASE (side, k of K)", and the exit is 130; a partial run fails --gate.
 
 Absolute numbers depend on the machine (process start cost varies 3x between
 laptops), which is why both sides run in the same process on the same corpus
@@ -69,6 +69,7 @@ class Progress:
     def __init__(self, every=10.0):
         self.every, self.t0 = every, time.time()
         self.last, self.phase, self.p0 = self.t0, None, self.t0
+        self.at = None   # (phase, side, n, total) of the latest tick, kept even when nothing is printed
 
     def say(self, msg):
         if self.every > 0:
@@ -77,6 +78,7 @@ class Progress:
     def tick(self, phase, side, n, total):
         """About to do payload N of TOTAL in PHASE on SIDE."""
         now = time.time()
+        self.at = (phase, side, n, total)
         if phase != self.phase:
             self.phase, self.p0 = phase, now
         if self.every <= 0 or now - self.last < self.every:
@@ -582,13 +584,20 @@ def render_launches(la):
     return L
 
 
+PHASE_LABEL = {'warm': 'warm-up', 'timed': 'the timed phase', 'launches': 'the launches phase'}
+
+
 def render_md(r):
     b, h = r['base'], r['head']
     L = [f"## Hook benchmark: {b['ref']} ({b['commit']}) vs {h['ref']} ({h['commit']})", '']
     if r.get('partial'):
         pt = r['partial']
-        L += [f"**partial: {pt['done']} of {pt['of']} payloads**" + (f" ({pt['note']})" if pt.get('note') else '')
-              + ', interrupted; these are not the numbers of a full run.', '']
+        ph = pt.get('phase') or {}
+        where = ('before warm-up started' if not ph.get('name') else
+                 f"during {PHASE_LABEL[ph['name']]} ({ph['side']}, {ph['n']} of {ph['of']})")
+        L += [f"**partial: {pt['done']} of {pt['of']} payloads timed; interrupted {where}**"
+              + (f" ({pt['note']})" if pt.get('note') else '')
+              + '; these are not the numbers of a full run.', '']
     m = r['machine']
     counts = ', '.join(f'{v} {k}' for k, v in r['corpus']['tools'].items())
     note = ' (local audit corpus, not for publishing)' if r['corpus']['local'] else ''
@@ -712,7 +721,9 @@ def main():
         wstarts = sum(sum(1 for _, p in hooks_for(sd, t) if p) for t in tools for sd in sides.values())
         # Each call starts every hook twice (together, then alone); a real hook starts more than bash, so a floor.
         floor_s = (2 * (starts * a.repeat + wstarts) + (starts if method != 'off' else 0)) * proc_start['bash -c :'] / 1000.0
-        PROG.say(f"{n_all} payloads x {a.repeat} pass x 2 sides; at least {fmt_dur(floor_s)} from this machine's process "
+        warm_calls = 2 * len(tools)
+        PROG.say(f"{n_all} payloads x {a.repeat} pass x 2 sides, after {warm_calls} warm-up passes ({2 * wstarts} hook starts); "
+                 f"at least {fmt_dur(floor_s)} in all, warm-up included, from this machine's process "
                  f"start (`bash -c :` {proc_start['bash -c :']:.1f} ms), the hooks' own work comes on top. "
                  + ('--quick is on (every third payload).' if a.quick else
                     'On a slow machine --quick takes every third payload.')
@@ -759,7 +770,9 @@ def main():
                 if m:
                     keep.append(row)
             note = '' if len(keep) < n_all else 'the processes-started pass did not finish'
-            partial = {'done': len(keep), 'of': n_all, 'note': note}
+            ph, sd, pn, pt = PROG.at or (None, '', 0, 0)
+            partial = {'done': len(keep), 'of': n_all, 'note': note,
+                       'phase': {'name': ph, 'side': sd, 'n': pn, 'of': pt}}
             rows = keep
         finally:
             signal.signal(signal.SIGINT, signal.default_int_handler)
