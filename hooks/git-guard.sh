@@ -69,10 +69,13 @@ NQS=""
 # push -f`, `nohup git push -f` and `timeout 60 git push -f` each defeated every
 # check in this file while the bare form was denied. `/usr/bin/git` and `GIT`
 # did the same. The second line is the fully normalized form; see lib.sh.
-two_lines CMD "$(normalize_wrappers "$(separate_groups "$CMD")")" "$(normalize_command "$CMD")"
+# Both lines start from separate_groups' reading, made once for both.
+GG_GROUPS=$(separate_groups "$CMD")
+two_lines CMD "$(normalize_wrappers "$GG_GROUPS")" "$(normalize_command "$CMD" "$GG_GROUPS")"
 TYPED=$CMD   # for a match that lifts a check rather than raising one
 NQREAD=""
-[[ -n "$NQS" ]] && two_lines NQREAD "$(normalize_wrappers "$(separate_groups "$NQS")")" "$(normalize_command "$NQS")" \
+[[ -n "$NQS" ]] && GG_GROUPS=$(separate_groups "$NQS") \
+  && two_lines NQREAD "$(normalize_wrappers "$GG_GROUPS")" "$(normalize_command "$NQS" "$GG_GROUPS")" \
   && two_lines CMD "$CMD" "$NQREAD"
 
 A='(^|[|&;]|&&|\|\||\$\(|`)\s*'

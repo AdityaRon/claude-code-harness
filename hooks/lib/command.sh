@@ -151,10 +151,12 @@ normalize_binaries() {
 # wrapper gone before its binary is at a boundary. Guards scan this alongside
 # the original, never instead of it, so a rewrite can only add a match.
 # separate_groups goes first: normalize_binaries drops quotes from a first word,
-# and the group pass needs them to tell `"a (b)"` from `(b)`.
-normalize_command() {
+# and the group pass needs them to tell `"a (b)"` from `(b)`. A caller holding
+# $(separate_groups TEXT) already passes it, and it is not made again.
+normalize_command() {   # TEXT [GROUPS]
   local s x
-  s=$(separate_groups "$1"); x=$(exec_fn_suffixes "$1")
+  if [[ $# -ge 2 ]]; then s=$2; else s=$(separate_groups "$1"); fi
+  x=$(exec_fn_suffixes "$1")
   [[ -n "$x" ]] && s="$s"$'\n'"$x"
   s=$(normalize_binaries "$s"); s=$(normalize_wrappers "$s"); s=$(normalize_binaries "$s")
   printf '%s' "${s:-$1}"
