@@ -580,7 +580,7 @@ printf '{"session_id":"some-session","stop_hook_active":false}' | CLAUDE_STATE_D
 N=0; while IFS= read -r _; do N=$((N + 1)); done < "$PLOG"
 check_eq "a memory on the list: still zero processes" "0" "$N"
 # lib.sh starts no process when sourced, so the shims cannot see it loaded early; the order is held here.
-L_SRC=$(grep -n '^source .*lib\.sh' "$STOP" | head -1 | cut -d: -f1); L_GLOB=$(grep -n '^\[ -s "\$PEND" \] || exit 0' "$STOP" | head -1 | cut -d: -f1)
+L_SRC=$(grep -nE '^(if .*; then )?source .*lib\.sh' "$STOP" | head -1 | cut -d: -f1); L_GLOB=$(grep -n '^\[ -s "\$PEND" \] || exit 0' "$STOP" | head -1 | cut -d: -f1)
 if [ -n "$L_SRC" ] && [ -n "$L_GLOB" ] && [ "$L_SRC" -gt "$L_GLOB" ]; then pass "lib.sh is sourced after the pending check"; else fail "lib.sh is sourced after the pending check" "source line ${L_SRC:-none}, check line ${L_GLOB:-none}"; fi
 SID=tsess
 
