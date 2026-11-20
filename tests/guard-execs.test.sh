@@ -24,26 +24,26 @@ git -C "$TMP/repo" init -q && printf 'x\n' > "$TMP/repo/README.md"
 EXECS='
 ls-la                         1    0    0    0    0    0    0    0
 shape-cd-chain                1    8   12    5    0    0    0    0
-shape-pipes                   1    0   16   10    0    0    0    0
+shape-pipes                   1    0   14   10    0    0    0    0
 shape-python-heredoc          2    0    0   27    0    0    0    0
 shape-notes-then-git          2    0   17   14    0    0    0    0
-shape-commit-heredoc          2    0   19   15    0    0    0    0
-shape-commit-pr-heredoc       2   17   19   15    0    0    0    0
+shape-commit-heredoc          2    0   18   15    0    0    0    0
+shape-commit-pr-heredoc       2   17   18   15    0    0    0    0
 mult-joined-pass              3    0   22   10    0    0    0    0
-mult-inline-shellouts         2    0   48   14    0    0    0    0
-mult-git-add-all              1    0   76    0    0    0    0    0
+mult-inline-shellouts         2    0   43   14    0    0    0    0
+mult-git-add-all              1    0   74    0    0    0    0    0
 '
 FORKS='
-ls-la                         5    4    4    4    4    5    4    3
-shape-cd-chain                5   36   57   27    4    5    4    3
-shape-pipes                   5    4   71   50    4    5    4    3
-shape-python-heredoc          9    4    4  103    4    5    4    3
-shape-notes-then-git          9    4   65   55    4    5    4    3
-shape-commit-heredoc          9    4   71   58    4    5    4    3
-shape-commit-pr-heredoc       9   64   71   58    4    5    4    3
-mult-joined-pass             12    7  105   53    7    9    7    5
-mult-inline-shellouts         9    4  141   51    4    5    4    3
-mult-git-add-all              5    4  226    4    4    5    4    3
+ls-la                         2    2    2    2    2    2    2    2
+shape-cd-chain                2   22   33   15    2    2    2    2
+shape-pipes                   2    2   33   26    2    2    2    2
+shape-python-heredoc          6    2    2   65    2    2    2    2
+shape-notes-then-git          6    2   46   41    2    2    2    2
+shape-commit-heredoc          6    2   47   42    2    2    2    2
+shape-commit-pr-heredoc       6   46   47   42    2    2    2    2
+mult-joined-pass              8    3   57   29    3    3    3    3
+mult-inline-shellouts         6    2  112   35    2    2    2    2
+mult-git-add-all              2    2  157    2    2    2    2    2
 '
 HOOKS="dispatcher env-guard git-guard interpreter-guard kubectl-guard network-guard rm-guard config-guard"
 GUARDS=${HOOKS#dispatcher }
