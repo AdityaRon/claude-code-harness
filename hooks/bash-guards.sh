@@ -128,11 +128,22 @@ bg_run() {
   exec 4>&2
   TIMEFORMAT=$'\036%R'
   set -m; bg_c="" bg_x=""
-  trap 'bg_x=1; [[ -n "${bg_c:-}" ]] && { kill -KILL -- "-$bg_c" 2>/dev/null || kill -KILL "$bg_c" 2>/dev/null; }' TERM INT HUP
+  trap 'bg_x=1; [[ -n "${bg_c:-}" ]] && bg_kill' TERM INT HUP
   # shellcheck disable=SC2034,SC1090  # lib.sh reads GUARD_NAME; the file is the guard's
   { time { ( exec 2>&4 4>&-; GUARD_NAME=$1; GUARD_SELF="$BG_DIR/$1.sh"; . "$GUARD_SELF" ) & bg_c=$!
-    [[ -z "${bg_x:-}" ]] || kill -KILL -- "-$bg_c" 2>/dev/null; wait "$bg_c"; bg_s=$?; } 2>/dev/null; } 2>&1
+    [[ -z "${bg_x:-}" ]] || bg_kill; wait "$bg_c"; bg_s=$?; } 2>/dev/null; } 2>&1
   printf '\037%s' "$bg_s"
+}
+# The guard's group is killed, then killed again until nothing is left in it: on
+# macOS a child the guard is forking as the group is killed escapes that kill,
+# and is in the group once the guard, reaped here, is gone. At most 1000 more,
+# since a zombie no init reaps keeps a kill to its group succeeding.
+bg_kill() {
+  local n=0
+  kill -KILL -- "-$bg_c" 2>/dev/null || { kill -KILL "$bg_c" 2>/dev/null; return 0; }
+  wait "$bg_c" 2>/dev/null
+  while (( n++ < 1000 )) && kill -KILL -- "-$bg_c" 2>/dev/null; do :; done
+  return 0
 }
 
 # A guard that has not answered CLAUDE_GUARD_DEADLINE seconds (45) after this

@@ -533,7 +533,7 @@ with open(payload, 'rb') as i, open(outp, 'wb') as o, open(errp, 'wb') as e:
 if mode not in ('late', 'self'):   # self: the hook signals itself
     while len(recorded()) < 3 and time.time() - t0 < 10:
         time.sleep(0.05)
-    if mode == 'term':
+    if mode in ('term', 'storm'):
         os.kill(p.pid, signal.SIGTERM)
     else:
         os.killpg(p.pid, signal.SIGHUP if mode == 'hup' else signal.SIGINT)
@@ -544,7 +544,7 @@ except subprocess.TimeoutExpired:
     p.wait()
     rc = 'watchdog'
 took = time.time() - t0
-if mode == 'self':   # a guard the hook did not stop records itself after the hook is gone
+if mode in ('self', 'storm'):   # a process the hook did not stop records itself after the hook is gone
     time.sleep(1)
 end = time.time() + 3
 while any(alive(x) for x in recorded()) and time.time() < end:
@@ -561,6 +561,13 @@ PY
 cat > "$TMP/slow-guard.sh" <<'SH'
 echo "$(exec sh -c 'echo $PPID')" >> "$CCH_PIDS"
 sh -c 'echo $$ >> "$CCH_PIDS"; exec /bin/sleep 30' | sh -c 'echo $$ >> "$CCH_PIDS"; exec /bin/cat'
+echo ran >> "$CCH_MARK"
+SH
+# The fake guard forking when it is stopped: its pid, then children started in a loop.
+cat > "$TMP/storm-guard.sh" <<'SH'
+echo "$(exec sh -c 'echo $PPID')" >> "$CCH_PIDS"
+i=0; while [ $i -lt 50 ]; do sh -c 'echo $$ >> "$CCH_PIDS"; exec /bin/sleep 30' & i=$((i + 1)); done
+wait
 echo ran >> "$CCH_MARK"
 SH
 late() {   # late MODE DEADLINE: sets LRC LSECS LN LLEFT, OUT and ERR
@@ -607,6 +614,15 @@ late self 30
 [[ "$LRC" == -15 && "$LLEFT" == - && ! -e "$TMP/mark" ]] \
   && pass "TERM between a guard's start and its pid kept: it dies of TERM, and that guard is stopped" \
   || fail "TERM while the guards start" "rc=$LRC recorded $LN, alive $LLEFT, mark $(cat "$TMP/mark" 2>/dev/null)"
+# Every guard starting children in a loop when TERM comes. On macOS a child being
+# forked as its guard's group is killed escapes that kill, so the group is killed
+# again until it is empty (red in 19 of 20 runs on macOS without that). Linux's
+# fork lets no child escape, so there this cannot go red for that reason.
+copy_hooks; for g in $GUARDS; do cp "$TMP/storm-guard.sh" "$TMP/hk/$g.sh"; done
+late storm 30
+[[ "$LRC" == -15 && "$LN" -ge 3 && "$LLEFT" == - && ! -e "$TMP/mark" ]] \
+  && pass "TERM while every guard is forking: it dies of TERM, and every child each started with it ($LN)" \
+  || fail "TERM while the guards fork" "rc=$LRC recorded $LN, alive ${LLEFT:0:80}, mark $(cat "$TMP/mark" 2>/dev/null)"
 
 # A Mac that slept through the call: kern.waketime, faked, says it woke after
 # the call was read, so the guard is waited for again. It answers only once that
