@@ -430,6 +430,140 @@ disp hooks "$(payload 'ls' $'toolu_a\tb\nc')"
   && pass "a tab or newline in the id stays on one line" || fail "id injection" "$(tail -2 "$CLAUDE_GUARD_TIMING_LOG")"
 
 echo ""
+echo "=== a guard that has not answered by the deadline is a deny naming it, and is stopped ==="
+# late.py runs the hook as a group leader under a 12 s watchdog, signals it when
+# asked, then prints its status, seconds, how many pids the fake guard recorded,
+# and those still alive after 3 s (killed then). Pids are recorded, never matched.
+cat > "$TMP/late.py" <<'PY'
+import os, signal, subprocess, sys, time
+hook, payload, pids, mode, outp, errp = sys.argv[1:7]
+def recorded():
+    try:
+        return [int(x) for x in open(pids).read().split()]
+    except (OSError, ValueError):
+        return []
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:   # a zombie nothing reaps (a container's init) is gone
+        return open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[0] != 'Z'
+    except OSError:
+        return True
+t0 = time.time()
+with open(payload, 'rb') as i, open(outp, 'wb') as o, open(errp, 'wb') as e:
+    p = subprocess.Popen(['bash', hook], stdin=i, stdout=o, stderr=e, start_new_session=True)
+if mode != 'late':
+    while len(recorded()) < 3 and time.time() - t0 < 10:
+        time.sleep(0.05)
+    if mode == 'term':
+        os.kill(p.pid, signal.SIGTERM)
+    else:
+        os.killpg(p.pid, signal.SIGHUP)
+try:
+    rc = p.wait(timeout=12)
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL)
+    p.wait()
+    rc = 'watchdog'
+took = time.time() - t0
+end = time.time() + 3
+while any(alive(x) for x in recorded()) and time.time() < end:
+    time.sleep(0.1)
+left = [x for x in recorded() if alive(x)]
+for x in left:
+    try:
+        os.kill(x, signal.SIGKILL)
+    except OSError:
+        pass
+print(rc, '%.1f' % took, len(recorded()), ','.join(map(str, left)) or '-')
+PY
+# The fake interpreter-guard: its own pid and its pipeline's, then 30 s, then a mark.
+cat > "$TMP/slow-guard.sh" <<'SH'
+echo "$(exec sh -c 'echo $PPID')" >> "$CCH_PIDS"
+sh -c 'echo $$ >> "$CCH_PIDS"; exec /bin/sleep 30' | sh -c 'echo $$ >> "$CCH_PIDS"; exec /bin/cat'
+echo ran >> "$CCH_MARK"
+SH
+late() {   # late MODE DEADLINE: sets LRC LSECS LN LLEFT, OUT and ERR
+  : > "$CLAUDE_AUDIT_LOG"; rm -f "$TMP/pids" "$TMP/mark" "$TMP/woke"
+  payload ls toolu_LATE > "$TMP/late.json"
+  read -r LRC LSECS LN LLEFT < <(CCH_PIDS="$TMP/pids" CCH_MARK="$TMP/mark" CCH_WOKE_LOG="$TMP/woke" CLAUDE_GUARD_DEADLINE=$2 \
+    python3 "$TMP/late.py" "$TMP/hk/bash-guards.sh" "$TMP/late.json" "$TMP/pids" "$1" "$TMP/out" "$TMP/err")
+  OUT=$(cat "$TMP/out"); ERR=$(cat "$TMP/err")
+}
+gone() {   # gone LABEL: three pids recorded, none alive, no mark
+  [[ "$LN" == 3 && "$LLEFT" == - && ! -e "$TMP/mark" ]] && pass "$1" || fail "$1" "recorded $LN, alive $LLEFT, mark $(cat "$TMP/mark" 2>/dev/null)"
+}
+copy_hooks; cp "$TMP/slow-guard.sh" "$TMP/hk/interpreter-guard.sh"
+late late 2
+[[ "$LRC" == 0 && "$(dec "$OUT")" == deny && "$(why "$OUT")" == "Blocked: interpreter-guard had not answered 2 s after bash-guards started, so it was stopped"* ]] \
+  && pass "a guard silent at the deadline: a deny naming it" || fail "late deny" "rc=$LRC out=$OUT"
+awk -v s="$LSECS" 'BEGIN { exit !(s < 5) }' && pass "back in $LSECS s with a 2 s deadline" || fail "late took" "$LSECS s"
+[[ "$(last_timing)" == toolu_LATE$'\t'*$'\t'interpreter-guard=-:late:deny$'\t'* && "$(audit_for deny interpreter-guard)" == 1 \
+   && "$(grep -c ' | GUARD | ' "$CLAUDE_AUDIT_LOG")" == 1 ]] \
+  && pass "timing says late, and one audit deny under the guard" || fail "late logs" "$(last_timing) $(cat "$CLAUDE_AUDIT_LOG")"
+gone "the guard's subshell and its pipeline are gone, and it wrote nothing more"
+[[ -z "$ERR" && "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" == 1 ]] \
+  && pass "one JSON document, nothing on stderr (no job notice)" || fail "late output" "out=$OUT err=$ERR"
+{ echo 'trap "" TERM'; cat "$TMP/slow-guard.sh"; } > "$TMP/hk/interpreter-guard.sh"
+late late 2
+[[ "$(dec "$OUT")" == deny ]] && gone "a guard that ignores TERM is stopped too" || fail "a guard that ignores TERM" "$OUT"
+cp "$TMP/slow-guard.sh" "$TMP/hk/interpreter-guard.sh"
+late term 30
+[[ "$LRC" == -15 ]] && gone "TERM to the hook: it dies of TERM, and the guard with it" || fail "TERM to the hook" "rc=$LRC err=$ERR"
+late hup 30
+[[ "$LRC" == -1 ]] && gone "HUP to the hook's group: it dies of HUP, and the guard with it" || fail "HUP to the group" "rc=$LRC err=$ERR"
+
+# A Mac that slept through the call: kern.waketime, faked, says it woke after
+# the call was read, so the guard is waited for again. It answers only once that
+# check has run, so its answer comes after the first deadline.
+copy_hooks
+sed 's#^BG_SYSCTL=/usr/sbin/sysctl$#BG_SYSCTL=$CCH_SYSCTL#' hooks/bash-guards.sh > "$TMP/hk/bash-guards.sh"
+grep -q '^BG_SYSCTL=\$CCH_SYSCTL$' "$TMP/hk/bash-guards.sh" || fail "test setup" "BG_SYSCTL was not found"
+cat > "$TMP/sysctl" <<'SH'
+#!/bin/sh
+echo "$*" >> "$CCH_WOKE_LOG"
+[ "$*" = "-n kern.waketime" ] || exit 1
+echo "{ sec = $(( $(date +%s) + CCH_WAKE_SHIFT )), usec = 376900 } Thu Nov 19 14:20:25 2026"
+SH
+chmod +x "$TMP/sysctl"
+cat > "$TMP/hk/interpreter-guard.sh" <<'SH'
+i=0; while [ ! -s "$CCH_WOKE_LOG" ] && [ $i -lt 100 ]; do /bin/sleep 0.1; i=$((i + 1)); done
+emit_ask "answered after its deadline"
+SH
+export CCH_SYSCTL="$TMP/sysctl"
+export CCH_WAKE_SHIFT=0; late late 2
+[[ "$(dec "$OUT")" == ask && "$(why "$OUT")" == "answered after its deadline" && "$(cat "$TMP/woke")" == "-n kern.waketime" \
+   && "$(last_timing)" == *$'\t'interpreter-guard=*:0:ask$'\t'* ]] \
+  && pass "woke after the call was read: the guard is waited for again, and answers" || fail "a wake after the start" "out=$OUT woke=$(cat "$TMP/woke" 2>/dev/null) $(last_timing)"
+export CCH_WAKE_SHIFT=-100; late late 2
+[[ "$(dec "$OUT")" == deny && "$(why "$OUT")" == "Blocked: interpreter-guard had not answered"* && "$(cat "$TMP/woke")" == "-n kern.waketime" ]] \
+  && pass "woke before the call was read: still late" || fail "a wake before the start" "out=$OUT woke=$(cat "$TMP/woke" 2>/dev/null)"
+unset CCH_SYSCTL CCH_WAKE_SHIFT
+
+disp hooks "$(payload 'git stash drop')"
+OK_ASK=$OUT
+BADV=""
+for v in 08 x 0 -5 ''; do
+  OUT=$(payload 'git stash drop' | CLAUDE_GUARD_DEADLINE=$v bash hooks/bash-guards.sh 2>&1)
+  [[ "$OUT" == "$OK_ASK" ]] || BADV="$BADV [$v: $OUT]"
+done
+[[ -z "$BADV" ]] && pass "a deadline of 08, x, 0, -5 or nothing: answered, with no error" || fail "deadline values" "$BADV"
+OUT=$(payload 'git stash drop' | SECONDS=1000 CLAUDE_GUARD_DEADLINE=2 bash hooks/bash-guards.sh 2>&1)
+[[ "$OUT" == "$OK_ASK" ]] && pass "SECONDS in the environment does not make every guard late" || fail "SECONDS from the environment" "$OUT"
+
+# Claude Code's timeout is the backstop: past the deadline, one second a further
+# late guard (read -t takes whole seconds), and margin for the denies.
+DL=$(sed -n 's/^BG_DEADLINE=\${CLAUDE_GUARD_DEADLINE:-\([0-9][0-9]*\)}$/\1/p' hooks/bash-guards.sh)
+NG=$(sed -nE 's/^BG_GUARDS=\((.*)\)$/\1/p' hooks/bash-guards.sh | wc -w | tr -d ' ')
+TO=$(jq '[.hooks.PreToolUse[] | .hooks[] | select(.command == "~/.claude/hooks/bash-guards.sh") | .timeout] | .[0] // 0' config/settings.json)
+[[ -n "$DL" && "$NG" == 7 ]] && (( TO >= DL + NG + 5 )) \
+  && pass "settings.json's timeout $TO s covers the $DL s deadline, $NG guards and 5 s" || fail "timeout backstop" "timeout=$TO deadline=$DL guards=$NG"
+
+echo ""
 echo "=== the exec-free dirname is POSIX dirname ==="
 eval "$(sed -n '/^dirname() {/,/^}/p' hooks/bash-guards.sh)"
 BADD=""

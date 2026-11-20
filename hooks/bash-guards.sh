@@ -19,6 +19,7 @@ bg_exit() {
 }
 trap bg_exit EXIT
 unset HARNESS_PRESET GUARD_NAME GUARD_SELF
+SECONDS=0   # the guards' deadline counts from here; bash takes SECONDS from the environment
 
 # Every guard starts with source "$(dirname "$0")/lib.sh": seven execs a call.
 # This is POSIX dirname without one.
@@ -74,7 +75,7 @@ PRESET_OK=no
   PRESET_BARE=${BG_F[8]:-} PRESET_NLBARE=${BG_F[10]:-}
   HARNESS_PRESET=$$   # lib.sh honours it only where $$ is this, in these forks
 }
-BG_AT=${BG_F[9]:-}; BG_AT=${BG_AT//[!0-9]/}
+BG_AT=${BG_F[9]:-}; BG_AT=${BG_AT//[!0-9]/} BG_S0=$SECONDS
 unset BG_F bg_f
 # A payload that does not parse is denied once, here, under this hook's name.
 [[ "$PRESET_OK" == ok ]] || { BG_DONE=1; require_parsable_or_deny; BG_DONE=""; exit 1; }
@@ -115,25 +116,75 @@ unset bg_l
 
 # A guard's stdout, then time's \036 and seconds, then \037 and its status. The
 # status line comes from here, after the guard: no line, or a status but 0, is a
-# deny. The guard's stderr goes straight to this hook's.
+# deny. The guard's stderr goes straight to this hook's. The guard runs in a
+# process group of its own (set -m), so a signal here stops it and all it started.
 bg_run() {
   exec 4>&2
   TIMEFORMAT=$'\036%R'
+  set -m; bg_c="" bg_x=""
+  trap 'bg_x=1; [[ -n "${bg_c:-}" ]] && { kill -KILL -- "-$bg_c" 2>/dev/null || kill -KILL "$bg_c" 2>/dev/null; }' TERM INT HUP
   # shellcheck disable=SC2034,SC1090  # lib.sh reads GUARD_NAME; the file is the guard's
-  { time { ( exec 2>&4 4>&-; GUARD_NAME=$1; GUARD_SELF="$BG_DIR/$1.sh"; . "$GUARD_SELF" ); }; } 2>&1
-  printf '\037%s' "$?"
+  { time { ( set +m; exec 2>&4 4>&-; GUARD_NAME=$1; GUARD_SELF="$BG_DIR/$1.sh"; . "$GUARD_SELF" ) & bg_c=$!
+    [[ -z "${bg_x:-}" ]] || kill -KILL -- "-$bg_c" 2>/dev/null; wait "$bg_c"; bg_s=$?; }; } 2>&1
+  printf '\037%s' "$bg_s"
 }
+
+# A guard that has not answered CLAUDE_GUARD_DEADLINE seconds (45) after this
+# hook started is a deny naming it, and its fork is stopped. settings.json's
+# timeout (60) is the backstop; when it fires, Claude Code names no guard.
+BG_DEADLINE=${CLAUDE_GUARD_DEADLINE:-45}
+case "$BG_DEADLINE" in ''|*[!0-9]*) BG_DEADLINE=45 ;; esac
+BG_DEADLINE=$((10#$BG_DEADLINE)); (( BG_DEADLINE > 0 )) || BG_DEADLINE=45
+BG_END=$BG_DEADLINE BG_WOKE="" BG_AT_I=0
+BG_PID=()
+# SECONDS is wall time, so a call the Mac slept through would be late on waking.
+# On the late path only, kern.waketime says whether it woke after the call was
+# read, and the deadline starts again once from the wake. Linux has no check as
+# cheap, so a call there that spans a suspend is late.
+BG_SYSCTL=/usr/sbin/sysctl
+bg_woke() {
+  local w
+  [[ -n "$BG_AT" ]] && w=$("$BG_SYSCTL" -n kern.waketime 2>/dev/null) || return 1
+  w=${w#*sec = }; w=${w%%,*}   # { sec = 1795126825, usec = 376900 } Thu Nov 19 ...
+  case "$w" in ''|*[!0-9]*) return 1 ;; esac
+  (( w > BG_AT )) || return 1
+  BG_END=$((BG_S0 + w - BG_AT + BG_DEADLINE))
+}
+# TERM, HUP or INT here stops each guard not yet read, then this hook dies of it.
+bg_stop() {
+  local i
+  for (( i = BG_AT_I; i < ${#BG_PID[@]}; i++ )); do kill -TERM "${BG_PID[i]}" 2>/dev/null; done
+  trap - "$1"; kill -s "$1" $$
+}
+trap 'bg_stop TERM' TERM; trap 'bg_stop HUP' HUP; trap 'bg_stop INT' INT
+
 # All at once, on fds 10 up (bash 3.2 has no {fd}), read back in list order.
 bg_i=0
-for bg_g in "${BG_RUN[@]}"; do eval "exec $((10 + bg_i))< <(bg_run \"\$bg_g\")"; bg_i=$((bg_i + 1)); done
+for bg_g in "${BG_RUN[@]}"; do eval "exec $((10 + bg_i))< <(bg_run \"\$bg_g\")"; BG_PID[bg_i]=$!; bg_i=$((bg_i + 1)); done
 BG_RAW=()
 bg_i=0
 for bg_g in "${BG_RUN[@]}"; do
-  bg_r=""; IFS= read -r -d '' bg_r <&$((10 + bg_i))
-  BG_RAW[bg_i]=$bg_r
+  # One byte first, to the deadline: a read that times out keeps nothing it took
+  # on bash 3.2, and this one took nothing. Then the rest. An end with no byte
+  # before the deadline is no answer (lost); a guard still silent at it is late.
+  while :; do
+    bg_left=$((BG_END - SECONDS)); (( bg_left < 1 )) && bg_left=1
+    bg_r=""; IFS= read -r -d '' -n 1 -t "$bg_left" bg_r <&$((10 + bg_i))
+    [[ -n "$bg_r" ]] || (( SECONDS < BG_END )) && break
+    [[ -z "$BG_WOKE" ]] && BG_WOKE=1 && bg_woke && (( SECONDS < BG_END )) && continue
+    bg_r=$'\037late'; break
+  done
+  if [[ -n "$bg_r" && "$bg_r" != $'\037late' ]]; then
+    bg_left=$((BG_END - SECONDS)); (( bg_left < 1 )) && bg_left=1
+    bg_rest=""; IFS= read -r -d '' -t "$bg_left" bg_rest <&$((10 + bg_i)); bg_r=$bg_r$bg_rest
+    [[ "$bg_r" != *$'\037'* ]] && (( SECONDS >= BG_END )) && bg_r=$'\037late'
+  fi
+  [[ "$bg_r" == $'\037late' ]] && kill -TERM "${BG_PID[bg_i]}" 2>/dev/null
+  BG_RAW[bg_i]=$bg_r; BG_AT_I=$((bg_i + 1))
   eval "exec $((10 + bg_i))<&-"
   bg_i=$((bg_i + 1))
 done
+unset bg_rest
 
 # deny > ask > allow. One guard answering is passed on byte for byte; several
 # are joined in list order. Each guard wrote its own audit line.
@@ -144,13 +195,16 @@ for bg_g in "${BG_RUN[@]}"; do
   bg_st=lost bg_t=- bg_body=""
   if [[ "$bg_r" == *$'\037'* ]]; then
     bg_st=${bg_r##*$'\037'}; bg_r=${bg_r%$'\037'*}
-    case "$bg_st" in ''|*[!0-9]*) bg_st=lost ;; esac
+    case "$bg_st" in late) ;; ''|*[!0-9]*) bg_st=lost ;; esac
     bg_body=$bg_r
     if [[ "$bg_r" == *$'\036'* ]]; then bg_t=${bg_r##*$'\036'}; bg_t=${bg_t%$'\n'}; bg_body=${bg_r%$'\036'*}; fi
   fi
   bg_d=allow
   case "$bg_body" in *'"permissionDecision":"deny"'*) bg_d=deny ;; *'"permissionDecision":"ask"'*) bg_d=ask ;; esac
-  if [[ "$bg_st" != 0 ]]; then
+  if [[ "$bg_st" == late ]]; then
+    bg_d=deny
+    bg_body=$(GUARD_NAME=$bg_g emit_deny "Blocked: $bg_g had not answered $BG_DEADLINE s after bash-guards started, so it was stopped and this call was not checked by it. Retry once; if it repeats, split the command into smaller calls.")$'\n'
+  elif [[ "$bg_st" != 0 ]]; then
     bg_d=deny
     bg_body=$(GUARD_NAME=$bg_g emit_deny "Blocked: $bg_g did not finish (status $bg_st), so this call was not checked by it. Retry; if it repeats, run bash ~/.claude/hooks/$bg_g.sh by hand on the payload.")$'\n'
   fi

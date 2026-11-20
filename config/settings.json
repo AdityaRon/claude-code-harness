@@ -237,7 +237,7 @@
     "PreToolUse": [
       {
         "matcher": "Bash|Monitor",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/bash-guards.sh", "onFailure": "block" }]
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/bash-guards.sh", "onFailure": "block", "timeout": 60 }]
       },
       {
         "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit|Grep",
