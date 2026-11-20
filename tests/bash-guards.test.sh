@@ -507,27 +507,33 @@ def recorded():
         return [int(x) for x in open(pids).read().split()]
     except (OSError, ValueError):
         return []
-def alive(pid):
+def gone(pid):
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
-        return False
+        return True
     except PermissionError:
-        return True
-    try:   # a zombie nothing reaps (a container's init) is gone
-        return open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[0] != 'Z'
-    except OSError:
-        return True
+        pass
+    return False
+def alive(pid):
+    if gone(pid):
+        return False
+    # A zombie nothing reaps (a container's init) is gone, and so is one being
+    # reaped (X), which kill 0 still finds; reaped by the time /proc is read is too.
+    try:
+        return open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[0] not in ('Z', 'X', 'x')
+    except OSError:   # no /proc (macOS), or reaped since kill 0: ask kill 0 again
+        return not gone(pid)
 # Run from a process substitution, this inherits INT ignored, and so would the
 # hook, which cannot then trap it: put it back, as a spawner that sets none has it.
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 t0 = time.time()
 with open(payload, 'rb') as i, open(outp, 'wb') as o, open(errp, 'wb') as e:
     p = subprocess.Popen(['bash', hook], stdin=i, stdout=o, stderr=e, start_new_session=True)
-if mode != 'late':
+if mode not in ('late', 'self'):   # self: the hook signals itself
     while len(recorded()) < 3 and time.time() - t0 < 10:
         time.sleep(0.05)
-    if mode == 'term':
+    if mode in ('term', 'storm'):
         os.kill(p.pid, signal.SIGTERM)
     else:
         os.killpg(p.pid, signal.SIGHUP if mode == 'hup' else signal.SIGINT)
@@ -538,6 +544,8 @@ except subprocess.TimeoutExpired:
     p.wait()
     rc = 'watchdog'
 took = time.time() - t0
+if mode in ('self', 'storm'):   # a process the hook did not stop records itself after the hook is gone
+    time.sleep(1)
 end = time.time() + 3
 while any(alive(x) for x in recorded()) and time.time() < end:
     time.sleep(0.1)
@@ -553,6 +561,13 @@ PY
 cat > "$TMP/slow-guard.sh" <<'SH'
 echo "$(exec sh -c 'echo $PPID')" >> "$CCH_PIDS"
 sh -c 'echo $$ >> "$CCH_PIDS"; exec /bin/sleep 30' | sh -c 'echo $$ >> "$CCH_PIDS"; exec /bin/cat'
+echo ran >> "$CCH_MARK"
+SH
+# The fake guard forking when it is stopped: its pid, then children started in a loop.
+cat > "$TMP/storm-guard.sh" <<'SH'
+echo "$(exec sh -c 'echo $PPID')" >> "$CCH_PIDS"
+i=0; while [ $i -lt 50 ]; do sh -c 'echo $$ >> "$CCH_PIDS"; exec /bin/sleep 30' & i=$((i + 1)); done
+wait
 echo ran >> "$CCH_MARK"
 SH
 late() {   # late MODE DEADLINE: sets LRC LSECS LN LLEFT, OUT and ERR
@@ -589,6 +604,35 @@ late hup 30
 [[ "$LRC" == -1 ]] && gone "HUP to the hook's group: it dies of HUP, and a guard ignoring HUP with it" || fail "HUP to the group" "rc=$LRC err=$ERR"
 late int 30
 [[ "$LRC" == -2 ]] && gone "INT to the hook's group: it dies of INT, and a guard ignoring INT with it" || fail "INT to the group" "rc=$LRC err=$ERR"
+# A signal while the guards are being started waits for the last start: a guard
+# started but not yet in BG_PID would run on. Here the hook sends itself TERM in
+# that gap, at the slow guard's turn; such a guard records its pids within 1 s.
+cp "$TMP/slow-guard.sh" "$TMP/hk/interpreter-guard.sh"
+sed 's#; BG_PID\[bg_i\]=\$!;#; [[ $bg_g == interpreter-guard ]] \&\& kill -TERM $$; BG_PID[bg_i]=$!;#' hooks/bash-guards.sh > "$TMP/hk/bash-guards.sh"
+grep -qF '; [[ $bg_g == interpreter-guard ]] && kill -TERM $$; BG_PID[bg_i]=$!;' "$TMP/hk/bash-guards.sh" || fail "test setup" "the start loop was not found"
+late self 30
+[[ "$LRC" == -15 && "$LLEFT" == - && ! -e "$TMP/mark" ]] \
+  && pass "TERM between a guard's start and its pid kept: it dies of TERM, and that guard is stopped" \
+  || fail "TERM while the guards start" "rc=$LRC recorded $LN, alive $LLEFT, mark $(cat "$TMP/mark" 2>/dev/null)"
+# A signal caught as the hook begins to wait on a guard: bash runs the trap only
+# once that read returns, so it waits a second at a time, not to the deadline.
+# The TERM comes from the read's own arguments here, at the slow guard's turn.
+cp "$TMP/slow-guard.sh" "$TMP/hk/interpreter-guard.sh"
+sed 's#-n 1 -t #-n 1 $([[ $bg_i == 2 ]] \&\& kill -TERM $$) -t #' hooks/bash-guards.sh > "$TMP/hk/bash-guards.sh"
+grep -qF -e '-n 1 $([[ $bg_i == 2 ]] && kill -TERM $$) -t ' "$TMP/hk/bash-guards.sh" || fail "test setup" "the first-byte read was not found"
+late self 30
+[[ "$LRC" == -15 && "$LLEFT" == - && ! -e "$TMP/mark" ]] && awk -v s="$LSECS" 'BEGIN { exit !(s < 5) }' \
+  && pass "TERM as a read of a guard begins: it dies of TERM in $LSECS s, and the guard with it" \
+  || fail "TERM as a read begins" "rc=$LRC in $LSECS s, recorded $LN, alive $LLEFT"
+# Every guard starting children in a loop when TERM comes. On macOS a child being
+# forked as its guard's group is killed escapes that kill, so the group is killed
+# again until it is empty (red in 19 of 20 runs on macOS without that). Linux's
+# fork lets no child escape, so there this cannot go red for that reason.
+copy_hooks; for g in $GUARDS; do cp "$TMP/storm-guard.sh" "$TMP/hk/$g.sh"; done
+late storm 30
+[[ "$LRC" == -15 && "$LN" -ge 3 && "$LLEFT" == - && ! -e "$TMP/mark" ]] \
+  && pass "TERM while every guard is forking: it dies of TERM, and every child each started with it ($LN)" \
+  || fail "TERM while the guards fork" "rc=$LRC recorded $LN, alive ${LLEFT:0:80}, mark $(cat "$TMP/mark" 2>/dev/null)"
 
 # A Mac that slept through the call: kern.waketime, faked, says it woke after
 # the call was read, so the guard is waited for again. It answers only once that

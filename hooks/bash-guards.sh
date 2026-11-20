@@ -128,11 +128,22 @@ bg_run() {
   exec 4>&2
   TIMEFORMAT=$'\036%R'
   set -m; bg_c="" bg_x=""
-  trap 'bg_x=1; [[ -n "${bg_c:-}" ]] && { kill -KILL -- "-$bg_c" 2>/dev/null || kill -KILL "$bg_c" 2>/dev/null; }' TERM INT HUP
+  trap 'bg_x=1; [[ -n "${bg_c:-}" ]] && bg_kill' TERM INT HUP
   # shellcheck disable=SC2034,SC1090  # lib.sh reads GUARD_NAME; the file is the guard's
   { time { ( exec 2>&4 4>&-; GUARD_NAME=$1; GUARD_SELF="$BG_DIR/$1.sh"; . "$GUARD_SELF" ) & bg_c=$!
-    [[ -z "${bg_x:-}" ]] || kill -KILL -- "-$bg_c" 2>/dev/null; wait "$bg_c"; bg_s=$?; } 2>/dev/null; } 2>&1
+    [[ -z "${bg_x:-}" ]] || bg_kill; wait "$bg_c"; bg_s=$?; } 2>/dev/null; } 2>&1
   printf '\037%s' "$bg_s"
+}
+# The guard's group is killed, then killed again until nothing is left in it: on
+# macOS a child the guard is forking as the group is killed escapes that kill,
+# and is in the group once the guard, reaped here, is gone. At most 1000 more,
+# since a zombie no init reaps keeps a kill to its group succeeding.
+bg_kill() {
+  local n=0
+  kill -KILL -- "-$bg_c" 2>/dev/null || { kill -KILL "$bg_c" 2>/dev/null; return 0; }
+  wait "$bg_c" 2>/dev/null
+  while (( n++ < 1000 )) && kill -KILL -- "-$bg_c" 2>/dev/null; do :; done
+  return 0
 }
 
 # A guard that has not answered CLAUDE_GUARD_DEADLINE seconds (45) after this
@@ -157,25 +168,36 @@ bg_woke() {
   BG_END=$((BG_S0 + w - BG_AT + BG_DEADLINE))
 }
 # TERM, HUP or INT here stops each guard not yet read, then this hook dies of it.
+# One that comes while the guards are being started waits for the last start: a
+# guard started but not yet in BG_PID would not be stopped.
 bg_stop() {
   local i
+  [[ -n "$BG_STARTING" ]] && { BG_SIG=${BG_SIG:-$1}; return 0; }
   for (( i = BG_AT_I; i < ${#BG_PID[@]}; i++ )); do kill -TERM "${BG_PID[i]}" 2>/dev/null; done
   trap - "$1"; kill -s "$1" $$
 }
+BG_STARTING=1 BG_SIG=""
 trap 'bg_stop TERM' TERM; trap 'bg_stop HUP' HUP; trap 'bg_stop INT' INT
 
 # All at once, on fds 10 up (bash 3.2 has no {fd}), read back in list order.
 bg_i=0
 for bg_g in "${BG_RUN[@]}"; do eval "exec $((10 + bg_i))< <(bg_run \"\$bg_g\")"; BG_PID[bg_i]=$!; bg_i=$((bg_i + 1)); done
+BG_STARTING=""
+[[ -z "$BG_SIG" ]] || bg_stop "$BG_SIG"
 BG_RAW=()
 bg_i=0
 for bg_g in "${BG_RUN[@]}"; do
   # One byte first, to the deadline: a read that times out keeps nothing it took
   # on bash 3.2, and this one took nothing. Then the rest. An end with no byte
   # before the deadline is no answer (lost); a guard still silent at it is late.
+  # The byte is waited for a second at a time: bash runs a trap only once a read
+  # returns, so a signal caught as one began would otherwise wait for the
+  # deadline. A read that timed out gives over 128, or on bash 3.2 gives 1 as at
+  # an end; a second gone tells it apart, and an end it takes for one is read again.
   while :; do
-    bg_left=$((BG_END - SECONDS)); (( bg_left < 1 )) && bg_left=1
-    bg_r=""; IFS= read -r -d '' -n 1 -t "$bg_left" bg_r <&$((10 + bg_i))
+    bg_s0=$SECONDS
+    bg_r=""; IFS= read -r -d '' -n 1 -t 1 bg_r <&$((10 + bg_i)); bg_rs=$?
+    [[ -z "$bg_r" ]] && (( (bg_rs > 128 || SECONDS > bg_s0) && SECONDS < BG_END )) && continue
     [[ -n "$bg_r" ]] || (( SECONDS < BG_END )) && break
     [[ -z "$BG_WOKE" ]] && BG_WOKE=1 && bg_woke && (( SECONDS < BG_END )) && continue
     bg_r=$'\037late'; break
@@ -190,7 +212,7 @@ for bg_g in "${BG_RUN[@]}"; do
   eval "exec $((10 + bg_i))<&-"
   bg_i=$((bg_i + 1))
 done
-unset bg_rest
+unset bg_rest bg_rs bg_s0
 
 # deny > ask > allow. One guard answering is passed on byte for byte; several
 # are joined in list order. Each guard wrote its own audit line. An answer is one
