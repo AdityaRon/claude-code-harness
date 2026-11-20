@@ -276,8 +276,8 @@ rules/                   ← installed to ~/.claude/rules, loaded in every sessi
 tests/                   ← <name>.test.sh for most hooks, tools and .github scripts; host-binary covers
                            tcc-check and the host check; install-*, fail-closed, guard-latency,
                            heredoc-openers, repo-layout, shadow, token-shapes and workflow-gates cut across
-                           files; guard-execs holds git-guard and interpreter-guard to a process
-                           budget per corpus shape; lib.sh is their shared pass/fail; bench-corpus.jsonl
+                           files; guard-execs holds bash-guards.sh and each guard to an exec and
+                           fork budget per corpus shape; lib.sh is their shared pass/fail; bench-corpus.jsonl
                            feeds hook-bench; doctor tests doctor.sh's own report; smoke.list is the
                            set install.sh and harness-update.sh verify with (doctor.sh --smoke)
 docs/
