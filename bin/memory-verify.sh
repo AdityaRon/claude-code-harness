@@ -20,9 +20,11 @@
 # Deleting on a heuristic destroys knowledge silently, which is strictly worse
 # than staleness. It reports; a human or the skill decides.
 #
-# Usage:  bash memory-verify.sh [--store SLUG] [--json] [--all]
+# Usage:  bash memory-verify.sh [--store SLUG] [--json] [--all] [--offline]
 #   --store SLUG  only this store (default: every store under ~/.claude/projects)
 #   --json        one JSON object per finding, for the skill to consume
+#   --offline     never run gh, not even `gh auth status`: each GitHub claim is a SKIP
+#                 ("offline"), and everything checked on this machine is reported as usual
 #   --all         also list VERIFIED and WAIVED memories (default: only what needs attention)
 #   --curate      also report merge candidates and settled entries (advisory; never deletes,
 #                 and deliberately proposes no retirements — see the note by CLOSED_RE)
@@ -71,6 +73,7 @@ INDEX_MAX_LINES="$MEMORY_MAX_LINES"
 INDEX_MAX_BYTES="$MEMORY_MAX_BYTES"
 CURATE=0
 JIRA_KEYS=0
+OFFLINE=0
 # GitHub claims are looked up this many to one GraphQL call, per repo.
 GH_BATCH="${MEMORY_VERIFY_GH_BATCH:-100}"
 case "$GH_BATCH" in ''|*[!0-9]*|0) GH_BATCH=100 ;; esac
@@ -85,7 +88,8 @@ while [ $# -gt 0 ]; do
     --all)   SHOW_ALL=1; shift ;;
     --curate) CURATE=1; shift ;;
     --jira-keys) JIRA_KEYS=1; shift ;;
-    -h|--help) sed -n '2,51p' "$0"; exit 0 ;;
+    --offline) OFFLINE=1; shift ;;
+    -h|--help) sed -n '2,53p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 3 ;;
   esac
 done
@@ -100,7 +104,9 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 # there is no gh credential.
 GH_CMD="${MEMORY_VERIFY_GH_CMD:-gh}"
 HAVE_GH=0
-if [ -n "${MEMORY_VERIFY_GH_CMD:-}" ]; then
+if [ "$OFFLINE" -eq 1 ]; then
+  :
+elif [ -n "${MEMORY_VERIFY_GH_CMD:-}" ]; then
   HAVE_GH=1
 elif [ "$JIRA_KEYS" -eq 0 ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   HAVE_GH=1
@@ -270,6 +276,7 @@ resolve_gh() {
   case "$repo" in */*/*|/*|*/|*[!A-Za-z0-9_./-]*) R_VAL="ref-malformed"; return ;; esac
   num=$((10#$num))
   [ "${#num}" -le 9 ] || { R_VAL="ref-malformed"; return; }
+  [ "$OFFLINE" -eq 0 ] || { R_VAL="offline"; return; }
   [ "$HAVE_GH" -eq 1 ] || { R_VAL="gh-unavailable-or-unauthenticated"; return; }
 
   case "$GH_STATES" in
@@ -674,7 +681,8 @@ scan_store() {
 
 [ "$AS_JSON" -eq 0 ] && [ "$JIRA_KEYS" -eq 0 ] && {
   echo "Checking memories against external truth."
-  [ "$HAVE_GH" -eq 1 ] || echo "NOTE: gh unavailable or unauthenticated — GitHub claims will be SKIPped."
+  if [ "$OFFLINE" -eq 1 ]; then echo "NOTE: --offline: GitHub claims are SKIPped, not looked up."
+  elif [ "$HAVE_GH" -eq 0 ]; then echo "NOTE: gh unavailable or unauthenticated — GitHub claims will be SKIPped."; fi
 }
 
 STORES_SCANNED=0
