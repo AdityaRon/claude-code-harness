@@ -113,8 +113,11 @@ check_decision "env-guard, empty input"               env-guard.sh            ''
 # out (checked on 2.1.296). Async hooks cannot block, so they are left out.
 echo ""
 echo "=== Every blocking PreToolUse hook blocks when it fails ==="
+# peer-redirect only removes a prompt: failing open leaves Claude Code's own ask.
+FAIL_OPEN="peer-redirect.sh"
 while IFS=$'\t' read -r matcher cmd on; do
   if [[ "$on" == block ]]; then echo "  OK: $matcher ${cmd##*/}"; PASS=$((PASS+1))
+  elif [[ " $FAIL_OPEN " == *" ${cmd##*/} "* && "$on" == unset ]]; then echo "  OK (fails open by design): $matcher ${cmd##*/}"; PASS=$((PASS+1))
   else echo "  FAIL (onFailure=$on): $matcher ${cmd##*/}"; FAIL=$((FAIL+1)); fi
 # An empty matcher (every tool) prints as (all): read collapses an empty first field.
 done < <(jq -r '.hooks.PreToolUse[] | (if (.matcher // "") == "" then "(all)" else .matcher end) as $m

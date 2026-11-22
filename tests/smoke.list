@@ -9,6 +9,7 @@ tests/rm-guard.test.sh
 tests/memory-lint.test.sh
 tests/mod-gate.test.sh
 tests/notify.test.sh
+tests/peer-redirect.test.sh
 tests/plan-to-html.test.sh
 tests/pre-compact.test.sh
 tests/secret-scanner.test.sh

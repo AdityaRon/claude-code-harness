@@ -5,6 +5,8 @@
 - Read the whole thread and PR conversation, not just the diff or last message.
 - Re-read state that moves: current head, checks, and whether the ticket already
   answers what you were about to ask a person.
+- A local peer listed only as an offline Remote Control row is restarting:
+  re-run ListAgents in a minute; do not send.
 
 ## Handing work back
 
