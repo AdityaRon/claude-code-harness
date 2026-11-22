@@ -252,6 +252,10 @@
         ]
       },
       {
+        "matcher": "SendMessage",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/peer-redirect.sh", "timeout": 10 }]
+      },
+      {
         "matcher": "ExitPlanMode",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/plan-to-html.sh", "async": true }]
       },

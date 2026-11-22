@@ -28,6 +28,7 @@ covers one rule.
 | `network-guard:` each ask but one | No allow rule covers curl, wget, scp, rsync or sftp, so the classifier sees each call. |
 | `rm-guard:rf-outside-scratch` | `rm` has no allow rule, so the classifier sees it. |
 | `env-guard:bare-env` | `env` has no allow rule, so the classifier sees it. |
+| `peer-redirect:redirect` | Not a guard: it removes a prompt, so shadowing it leaves Claude Code's own `isolatePeerMachines` prompt, as before the hook. In auto mode the classifier allowed the redirected resend in 5 of 5 headless trials whose incoming message carried `from-name` and refused it in 5 of 5 without (haiku, CLI 2.1.330, 2026-11-22). Delete the line once real Remote Control messages are shown to carry `from-name` ([permissions.md](permissions.md)). |
 
 These stay live:
 

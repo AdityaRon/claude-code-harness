@@ -32,6 +32,8 @@ SHADOW=(
   network-guard:unreadable
   rm-guard:rf-outside-scratch      # rm has no allow rule, so the classifier sees it
   env-guard:bare-env               # env has no allow rule, so the classifier sees it
+  peer-redirect:redirect           # the classifier refused the resend when the message had no
+                                   # from-name; live once bridge messages are shown to carry it
 )
 
 # shadow_hit WOULD RULE REASON: when this guard's RULE is on the list and the call
