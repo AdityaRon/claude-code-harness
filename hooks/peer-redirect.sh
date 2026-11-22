@@ -43,7 +43,8 @@ done
 NAME_RE='^[A-Za-z0-9 ._:/-]{1,80}$'
 [[ $NAME =~ $NAME_RE ]] || exit 0
 WHY="Harness hook peer-redirect: $TO is the Remote Control address of '$NAME', a session running on this machine. Run ListAgents, then send the same message to '$NAME' as it is listed there on this machine (its name [ref]): delivered locally with no cross-machine approval. If it is not listed, it is restarting: wait a minute and list again."
-INPUT=$IN   # shadow_hit reads the payload through jq_get
+# shellcheck disable=SC2034  # shadow_hit reads the payload through lib.sh's jq_get
+INPUT=$IN
 shadow_hit deny redirect "$WHY" && exit 0   # auto mode: on the shadow list (docs/shadow-mode.md)
 log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | PEER | redirect | $TO -> name=$NAME, uds:$SOCK | $PWD"
 jq -nc --arg r "$WHY" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
