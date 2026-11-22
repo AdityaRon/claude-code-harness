@@ -8,6 +8,54 @@ installed machine to the newest tag. After v1.4.2 the skills live in
 [claude-code-skills](https://github.com/AdityaRon/claude-code-skills), with their
 own changelog; `config/skills.pin` names the release each version installs.
 
+## v1.4.22 (2026-11-22)
+
+Merged since v1.4.21: 1 PR.
+
+### Other
+- peer-redirect: a bridge: send to a session on this machine goes to its name (#326)
+
+### Benchmark vs v1.4.21
+
+Gate script and corpus from `ec92308` (v1.4.21): 515 payloads, 0 of them new in this change.
+
+
+
+2026-11-22T21:54:33Z, Linux 7.0.0-1020-azure x86_64, AMD EPYC 7763 64-Core Processor, python 3.14.4. Corpus ../../_temp/bench-gate.DT2adf/corpus.jsonl: 515 payloads (395 Bash, 36 Write, 31 Read, 23 Edit, 11 WebFetch, 10 Grep, 5 Monitor, 2 MultiEdit, 2 NotebookEdit), each run through both sides, alternating which side goes first. Hooks: the PreToolUse command hooks each side registers in config/settings.json, launched together as Claude Code does. Wait is from the first launch to the last exit, so hooks that share the cores pay for it; CPU is the sum of each hook's own. The per-hook table runs each hook alone. Process start here: `true` 0.7 ms, `bash -c :` 1.4 ms, `jq -n 1` 2.5 ms (p50 of 20), so only same-run comparisons are meaningful. A machine whose process start is slower pays it again for each process a hook starts: the last column is a hook's p50 past one `bash -c :`.
+
+| Tool class | calls | wait p50 | wait mean | wait p95 | CPU mean |
+|---|---:|---|---|---|---|
+| Bash | 395 | 67.5 → 67.8 ms (+0%) | 66.6 → 66.5 ms (-0%) | 128.7 → 127.7 ms (-1%) | 123.9 → 123.9 ms (+0%) |
+| WebFetch | 11 | 4.4 → 4.4 ms (-0%) | 4.4 → 4.4 ms (+0%) | 4.5 → 4.6 ms (+1%) | 4.2 → 4.2 ms (+0%) |
+| Read/Grep | 41 | 46.7 → 47.3 ms (+1%) | 52.5 → 52.6 ms (+0%) | 73.1 → 72.3 ms (-1%) | 63.0 → 63.1 ms (+0%) |
+| Write/Edit | 63 | 56.9 → 57.0 ms (+0%) | 60.1 → 59.9 ms (-0%) | 89.0 → 89.2 ms (+0%) | 135.6 → 135.9 ms (+0%) |
+| Monitor | 5 | 35.1 → 35.5 ms (+1%) | 48.8 → 48.8 ms (-0%) | 101.0 → 98.9 ms (-2%) | 86.8 → 86.7 ms (-0%) |
+| All | 515 | 59.1 → 58.7 ms (-1%) | 63.2 → 63.1 ms (-0%) | 125.8 → 125.2 ms (-0%) | 117.6 → 117.6 ms (+0%) |
+
+| Hook | runs | wall p50 | wall p95 | CPU mean | p50 past bash start |
+|---|---:|---|---|---|---|
+| bash-guards.sh | 400 | 67.2 → 67.5 ms (+0%) | 127.3 → 126.9 ms (-0%) | 119.2 → 119.3 ms (+0%) | 65.8 → 66.1 ms |
+| config-guard.sh | 63 | 16.1 → 16.1 ms (-0%) | 41.3 → 41.6 ms (+1%) | 24.4 → 24.4 ms (+0%) | 14.7 → 14.7 ms |
+| mod-gate.sh | 63 | 1.7 → 1.7 ms (+0%) | 11.3 → 11.2 ms (-0%) | 2.2 → 2.2 ms (-0%) | 0.3 → 0.4 ms |
+| secret-scanner.sh | 63 | 22.6 → 22.6 ms (-0%) | 76.5 → 76.3 ms (-0%) | 29.0 → 28.9 ms (-0%) | 21.3 → 21.2 ms |
+| sensitive-file-guard.sh | 104 | 45.8 → 45.9 ms (+0%) | 69.1 → 69.7 ms (+1%) | 52.8 → 52.6 ms (-0%) | 44.4 → 44.5 ms |
+| subagent-cache-guard.sh | 515 | 4.4 → 4.4 ms (-0%) | 4.6 → 4.6 ms (+0%) | 4.2 → 4.2 ms (+0%) | 3.0 → 3.0 ms |
+
+Processes started: each hook run alone once per payload under `strace -f`. Execs are execve calls past the hook's own bash; forks are new processes (clone, clone3, fork or vfork without CLONE_THREAD), a `$( )` among them. A machine that pays for each process start pays for both.
+
+| Hook | payloads | execs per payload | forks per payload | in all | payloads with more / fewer | not counted |
+|---|---:|---|---|---|---|---:|
+| bash-guards.sh | 400 | 21.88 → 21.88 | 66.67 → 66.67 | 35418 → 35418 | 0 / 0 | 0 |
+| config-guard.sh | 63 | 4.10 → 4.10 | 14.24 → 14.24 | 1155 → 1155 | 0 / 0 | 0 |
+| mod-gate.sh | 63 | 0.13 → 0.13 | 0.38 → 0.38 | 32 → 32 | 0 / 0 | 0 |
+| secret-scanner.sh | 63 | 6.65 → 6.65 | 18.95 → 18.95 | 1613 → 1613 | 0 / 0 | 0 |
+| sensitive-file-guard.sh | 104 | 12.10 → 12.10 | 29.25 → 29.25 | 4300 → 4300 | 0 / 0 | 0 |
+| subagent-cache-guard.sh | 515 | 0.00 → 0.00 | 0.00 → 0.00 | 0 → 0 | 0 / 0 | 0 |
+
+Decisions: 515 of 515 payloads got the same answer on both sides.
+
+Gate: passed (p50 and p95 wait may not grow more than 20% and 5 ms, per class with at least 20 calls; every decision change must be intended; no payload's hooks may start more processes unless intended).
+
 ## v1.4.21 (2026-11-20)
 
 Merged since v1.4.20: 1 PR.
