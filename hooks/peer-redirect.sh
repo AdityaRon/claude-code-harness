@@ -50,8 +50,10 @@ redirect() {
 
   # The name goes out as an address: plain text only, no ':' (an address or a
   # label-like instruction), and no other live session here with the same name.
-  [[ $NAME =~ $NAME_RE ]] || exit 0
+  # A name that fails either is never shown; the socket stands in for it.
+  [[ $NAME =~ $NAME_RE ]] || NAME=""
   for f in "$SESS"/*.json; do
+    [ -n "$NAME" ] || break
     [ -f "$f" ] || continue
     c=""; IFS= read -r -d '' c < "$f"
     [[ $c == *"\"name\":\"$NAME\""* ]] || continue
@@ -60,15 +62,18 @@ redirect() {
     pid=${row%%$'\t'*}; row=${row#*$'\t'}; owner=${row%%$'\t'*}; start=${row#*$'\t'}
     [[ $pid =~ ^[1-9][0-9]*$ && $owner != "$SID" ]] && live "$pid" "$start" && SAME=$((SAME + 1))
   done
-  [ "$SAME" -eq 1 ] || exit 0
+  [ "$SAME" -eq 1 ] || NAME=""
 
+  RULE=redirect
   WHY="Harness hook peer-redirect: $TO is the Remote Control address of the session named '$NAME', running on this machine. Run ListAgents, then send the same message to '$NAME' as it is listed there on this machine (its name [ref]): delivered locally with no cross-machine approval. If it is not listed, it is restarting: wait a minute and list again."
+  [ -n "$NAME" ] || { RULE=redirect-uds
+    WHY="Harness hook peer-redirect: $TO is the Remote Control address of a session running on this machine. Send the same message to uds:$SOCK instead, its local socket: delivered locally with no cross-machine approval. If that send fails, the session is restarting: wait a minute and run ListAgents."; }
   case $MODE in
     default|acceptEdits) ;;                                  # probed live: no classifier in between
-    auto|'') shadow_hit deny redirect "$WHY" && exit 0 ;;    # live; peer-redirect:redirect in shadow.sh mutes it
+    auto|'') shadow_hit deny "$RULE" "$WHY" && exit 0 ;;     # on the shadow list in shadow.sh: muted
     *) exit 0 ;;                                             # plan, bypassPermissions: not probed
   esac
-  log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | PEER | redirect | $TO -> name=$NAME, uds:$SOCK | $PWD"
+  log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | PEER | $RULE | $TO -> ${NAME:+name=$NAME, }uds:$SOCK | $PWD"
   jq -nc --arg r "$WHY" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
 }
 

@@ -33,7 +33,7 @@ redacted() { bash -c 'source hooks/lib.sh; printf "%s\n" "$1" | redact_secrets' 
 
 echo "=== the shipped list ==="
 # Pinned here, so a line added or dropped is a change this suite sees (step 9 of #237).
-WANT="kubectl-guard:mutating-verb kubectl-guard:subverb-change kubectl-guard:exec kubectl-guard:unknown-verb kubectl-guard:input-verb kubectl-guard:ambiguous-var kubectl-guard:inline-unreadable kubectl-guard:inline-opaque kubectl-guard:inline-unchecked interpreter-guard network-guard:monitor-ws-host network-guard:remote-copy network-guard:http-server network-guard:curl-reroute network-guard:proxy-unlisted network-guard:sends-body network-guard:no-scheme network-guard:local-admin-api network-guard:host-unlisted network-guard:unreadable rm-guard:rf-outside-scratch env-guard:bare-env"
+WANT="kubectl-guard:mutating-verb kubectl-guard:subverb-change kubectl-guard:exec kubectl-guard:unknown-verb kubectl-guard:input-verb kubectl-guard:ambiguous-var kubectl-guard:inline-unreadable kubectl-guard:inline-opaque kubectl-guard:inline-unchecked interpreter-guard network-guard:monitor-ws-host network-guard:remote-copy network-guard:http-server network-guard:curl-reroute network-guard:proxy-unlisted network-guard:sends-body network-guard:no-scheme network-guard:local-admin-api network-guard:host-unlisted network-guard:unreadable rm-guard:rf-outside-scratch env-guard:bare-env peer-redirect:redirect-uds"
 GOT=$(bash -c 'source hooks/lib.sh; printf "%s" "${SHADOW[*]}"')
 [[ "$GOT" == "$WANT" ]] && pass "the list is the one #237 step 4 names" || fail "the list" "$GOT"
 

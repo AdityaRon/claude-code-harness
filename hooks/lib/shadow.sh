@@ -32,6 +32,8 @@ SHADOW=(
   network-guard:unreadable
   rm-guard:rf-outside-scratch      # rm has no allow rule, so the classifier sees it
   env-guard:bare-env               # env has no allow rule, so the classifier sees it
+  peer-redirect:redirect-uds       # the classifier refused 4 of 5 resends to a uds: path
+                                   # named only in a deny (docs/permissions.md)
 )
 
 # shadow_hit WOULD RULE REASON: when this guard's RULE is on the list and the call
