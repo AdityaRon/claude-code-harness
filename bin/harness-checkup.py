@@ -46,6 +46,10 @@ def run(name, argv, env=None):
     """(parsed JSON or None, why not). A tool's stdout and stderr are never printed."""
     try:
         p = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT, env=env, errors='replace')
+    except subprocess.TimeoutExpired as e:
+        # Its size tells a stall from slowness; its text is never printed. stdout can be bytes here.
+        got = e.stdout or b''
+        return None, f'{name} timed out after {TIMEOUT} s, {len(got):,} bytes of output'
     except (OSError, subprocess.SubprocessError) as e:
         return None, f'{name} did not run ({type(e).__name__})'
     out = p.stdout
@@ -187,11 +191,15 @@ def gather(days):
             costs.append(c)
         else:
             errors.append(f'{name}: nothing to measure in the window')
-    c = memory(projects)
-    if c:
-        costs.append(c)
+    try:
+        c = memory(projects)
+    except (OSError, ValueError, ZeroDivisionError) as e:
+        errors.append(f'memory: the indexes could not be measured ({type(e).__name__})')
     else:
-        errors.append('memory: no memory index to measure')
+        if c:
+            costs.append(c)
+        else:
+            errors.append('memory: no memory index to measure')
     costs.sort(key=lambda c: -c['x'])
     return {'generated': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'days': days, 'costs': costs, 'errors': errors,
             'steps': timings}

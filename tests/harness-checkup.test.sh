@@ -117,6 +117,20 @@ has 'Not measured: spend-report exited 2.' "the failed tool is named with its ex
 has 'Not measured: hook-latency: nothing to measure in the window.' "no timing log: the guard cost is named as not measured"
 has '1. the largest memory index' "the others still rank"
 [[ $RC -eq 0 && "$OUT$ERR" != *Traceback* ]] && pass "and the checkup still exits 0" || fail "failed tool" "$OUT"
+# A step past its timeout says so, with how much it had printed, so a stall reads apart from slowness.
+OUT=$(python3 - "$REPO/bin/harness-checkup.py" <<'PY' 2>&1
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('hc', sys.argv[1]); m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m); m.TIMEOUT = 1
+print(m.run('slow-tool', ['bash', '-c', 'printf "%s" "{\\"partial\\":"; exec sleep 5'])[1])
+PY
+)
+[[ "$OUT" == 'slow-tool timed out after 1 s, 11 bytes of output' ]] && pass "a step past its timeout is named with its partial byte count" \
+  || fail "timeout wording" "$OUT"
+# The memory line is read in place, not by a tool: a bad limit is named the same way.
+OUT=$(HOME="$H" PATH="$STUB:$PATH" CLAUDE_GUARD_TIMING_LOG="" MEMORY_INDEX_MAX_LINES=abc python3 "$H/.claude/harness-checkup.py" 2>&1); RC=$?
+has 'Not measured: memory: the indexes could not be measured (ValueError).' "a bad memory limit is named as not measured"
+[[ $RC -eq 0 && "$OUT" != *Traceback* ]] && pass "and the checkup still exits 0" || fail "bad memory limit" "$OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
