@@ -1551,17 +1551,15 @@ def registry_live(sessions):
 
 
 class AsideCtx:
-    """What the registry and the jobs say is live. A re-check reads them again when the last read is
-    over REFRESH seconds old: claude agents costs about a second."""
-    REFRESH = 5
+    """What the registry and the jobs say is live. Each re-check reads both again, never an earlier
+    read: the candidates are few, and a session may have started since the listing."""
 
     def __init__(self, a):
         self.a = a
         self.refresh()
 
     def recheck(self):
-        if time.time() - self.read_at > self.REFRESH:
-            self.refresh()
+        self.refresh()
 
     def refresh(self):
         self.read_at = self.now = time.time()
@@ -1718,8 +1716,9 @@ def print_aside(a, plan):
     print(RESUME_NOTE)
     if a.days < ASIDE_DAYS:
         print("--days %g is under %g: spend-report, permission-friction and hook-latency read only projects/, so a"
-              " transcript moved from it drops out of their windows. hook-latency's default window is 30 days and"
-              " spend-report's 7; any window longer than %g days loses these sessions." % (a.days, ASIDE_DAYS, a.days))
+              " transcript moved from it drops out of their windows. Default windows: spend-report 7 days,"
+              " hook-latency 30, permission-friction 49; one longer than %g days loses these sessions."
+              % (a.days, ASIDE_DAYS, a.days))
     print("")
     for c in plan["candidates"]:
         print("move  %10s  idle %5.1f d  %s  %s" % (fmt(c["bytes"]), c["idle_days"],
@@ -1855,7 +1854,9 @@ def cmd_restore(a):
             print("refused: manifest line %d is not a row this wrote" % i)
             bad += 1
             continue
-        groups.setdefault((os.path.dirname(o), r.get("sessionId")), []).append((o, s))
+        g = groups.setdefault((os.path.dirname(o), r.get("sessionId")), [])
+        if (o, s) not in g:  # an apply that ran twice the same day wrote the row twice
+            g.append((o, s))
     restored = 0
     for (_, sid), rows in groups.items():
         problems = []

@@ -809,6 +809,9 @@ S_NOPS=22222222-0000-4000-8000-000000000008   # registry pid alive, no procStart
 S_DEAD=33333333-0000-4000-8000-000000000009   # registry row, pid dead
 S_EPERM=44444444-0000-4000-8000-00000000000a  # pid 1: alive, and not ours to signal
 S_LATE=55555555-0000-4000-8000-00000000000b   # added later, for a second apply the same day
+S_R1=66666666-0000-4000-8000-00000000000c     # the re-check test: a registry row appears after the listing
+S_R2=77777777-0000-4000-8000-00000000000d     # a write appears after the listing
+S_R3=88888888-0000-4000-8000-00000000000e     # a job appears after the listing
 mkt -work-a $S_BIG 40 40; mkt -work-a $S_REG 40; mkt -work-b $S_JOB 40; mkt -work-b $S_YNG 1; mkt -work-b $S_YF 40 1
 mkt -work-a $S_RUSE 40; mkt -work-a $S_NOPS 40; mkt -work-a $S_DEAD 40; mkt -work-a $S_EPERM 40
 fill "$TP/-work-a/$S_SML.jsonl" 500000; age 100 "$TP/-work-a/$S_SML.jsonl"
@@ -916,6 +919,33 @@ OUT3=$(ds transcripts --restore "$TMP/evil.jsonl" 2>&1); RC=$?
 rm -rf "$TA"
 
 echo ""
+echo "=== transcripts: each guard is read again right before each move; a duplicate manifest row still restores ==="
+sleep 300 & SL3=$!; SLEEPERS="$SLEEPERS $SL3"
+mkt -work-b $S_R1 40; mkt -work-b $S_R2 40; mkt -work-b $S_R3 40
+OUT=$(tl); DG=$(printf '%s\n' "$OUT" | digest_of)
+GOT="$TMP/go-transcripts"; rm -f "$GOT" "$GOT.ready"
+CLAUDE_DISK_SPACE_TEST_PAUSE="$GOT" python3 "$DS" transcripts --apply "$DG" --jobs "$TJ" --transcript-mb 1 > "$TMP/tapply.out" 2>&1 & APID=$!
+for _ in $(seq 100); do [ -e "$GOT.ready" ] && break; sleep 0.1; done
+[ -e "$GOT.ready" ] || fail "setup: the apply paused" "$(cat "$TMP/tapply.out")"
+reg "$SL3" $S_R1 "$(lstart "$SL3")"                 # a session starts after the listing
+touch "$TP/-work-b/$S_R2.jsonl"                      # a session writes after the listing
+mkdir -p "$TJ/e0000005"; printf '{"state":"working","sessionId":"%s"}\n' $S_R3 > "$TJ/e0000005/state.json"; : > "$TJ/e0000005/timeline.jsonl"
+printf '[{"id":"c0000003","pid":4343},{"id":"e0000005","pid":4545}]' > "$TMP/agents.json"
+touch "$GOT"; wait "$APID"; RC=$?
+OUT3=$(cat "$TMP/tapply.out")
+[ "$RC" = 0 ] && [[ "$OUT3" == *"kept at the re-check: $TP/-work-b/$S_R1.jsonl: live in the sessions registry"* ]] \
+  && [[ "$OUT3" == *"kept at the re-check: $TP/-work-b/$S_R2.jsonl: "* ]] && [[ "$OUT3" == *"kept at the re-check: $TP/-work-b/$S_R3.jsonl: live job e0000005"* ]] \
+  && [ -f "$TP/-work-b/$S_R1.jsonl" ] && [ -f "$TP/-work-b/$S_R2.jsonl" ] && [ -f "$TP/-work-b/$S_R3.jsonl" ] && [ ! -e "$TP/-work-a/$S_DEAD.jsonl" ] \
+  && pass "a registry row, a write and a job that appear after the listing keep their transcripts at the re-check; the rest still move" || fail "re-check" "rc=$RC $OUT3"
+M="$TA/$DAY/manifest.jsonl"; sed -n 1p "$M" >> "$M"    # the same row twice, as a second run the same day writes it
+OUT3=$(ds transcripts --restore "$M" 2>&1); RC=$?
+[ -f "$TP/-work-a/$S_DEAD.jsonl" ] && [ -f "$TP/-work-a/$S_BIG.jsonl" ] && [ -d "$TP/-work-a/$S_BIG" ] && [[ "$OUT3" != *"already there"* ]] \
+  && pass "a manifest holding the same row twice restores it once" || fail "duplicate row" "rc=$RC $OUT3"
+rm -rf "$TA" "$TJ/e0000005"; rm -f "$TP"/-work-b/"$S_R1".jsonl "$TP"/-work-b/"$S_R2".jsonl "$TP"/-work-b/"$S_R3".jsonl "$TP/-work-b/$S_R1" "$TR/$SL3.json"
+printf '[{"id":"c0000003","pid":4343}]' > "$TMP/agents.json"
+rm -rf "$TP/-work-b/$S_R1" "$TP/-work-b/$S_R2" "$TP/-work-b/$S_R3"
+
+echo ""
 echo "=== transcripts: a live job that cannot be mapped, an ended job, a cross-device destination ==="
 OUT=$(tl); [ "$(printf '%s\n' "$OUT" | grep -c '^move ')" = 4 ] || fail "setup: four listed" "$OUT"
 mkdir -p "$TJ/d0000004"; printf '{"state":"working"}\n' > "$TJ/d0000004/state.json"; : > "$TJ/d0000004/timeline.jsonl"
@@ -935,7 +965,7 @@ echo 0 > "$TMP/agents.rc"; printf '[{"id":"c0000003","pid":4343}]' > "$TMP/agent
 SHM=/dev/shm
 if [ -d "$SHM" ] && [ -w "$SHM" ] && [ "$(python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_dev == os.stat(sys.argv[2]).st_dev)' "$SHM" "$TP")" = False ]; then
   XA=$(mktemp -d "$SHM/cch-aside.XXXXXX"); OUT=$(tl --aside "$XA"); DG=$(printf '%s\n' "$OUT" | digest_of)
-  OUT3=$(ds transcripts --jobs "$TJ" --transcript-mb 1 --aside "$XA" --apply "$DG" 2>&1); RC=$?
+  OUT3=$(ds transcripts --apply "$DG" --jobs "$TJ" --transcript-mb 1 --aside "$XA" 2>&1); RC=$?
   [ "$RC" = 1 ] && [[ "$OUT3" == *"is on another filesystem"* && "$OUT3" == *"never copies"* ]] && [ -z "$(find "$XA" -type f)" ] && [ -f "$TP/-work-a/$S_DEAD.jsonl" ] \
     && pass "an aside folder on another filesystem is refused up front: nothing copied, nothing moved" || fail "cross-device" "rc=$RC $OUT3"
   rm -rf "$XA"
