@@ -780,5 +780,169 @@ OUT=$(ds clone --apply "$CD" "$CL/prclone" --jobs "$PJ" --root "$PB" 2>&1); RC=$
   && pass "the clone and its output base are gone; the kept clones stay" || fail "clone apply" "rc=$RC $OUT"
 
 echo ""
+echo "=== transcripts: idle, oversized transcripts move aside, with a manifest; every guard keeps ==="
+# Fixture: its own HOME-relative folders, its own jobs folder, a registry with real pids.
+TP="$HOME/.claude/projects" TR="$HOME/.claude/sessions" TJ="$TMP/tjobs" TA="$HOME/.claude/transcripts-aside"
+mkdir -p "$TP/-work-a" "$TP/-work-b" "$TR" "$TJ"; echo 0 > "$TMP/agents.rc"; printf '[]' > "$TMP/agents.json"
+sleep 300 & SL1=$!; sleep 300 & SL2=$!; SLEEPERS="$SLEEPERS $SL1 $SL2"
+sleep 0 & DEAD=$!; wait "$DEAD"
+lstart() { TZ=UTC LC_ALL=C ps -o lstart= -p "$1"; }
+tl() { ds transcripts --jobs "$TJ" --transcript-mb 1 "$@"; }
+digest_of() { sed -n 's/.*Digest \([0-9a-f]\{16\}\)\.$/\1/p'; }
+mkt() {  # mkt SLUG SID AGE_DAYS [FOLDER_FILE_AGE_DAYS]: a 2 MiB transcript; with a 4th argument, a session folder too
+  local f="$TP/$1/$2.jsonl"; fill "$f" $((2 * MiB)); age "$3" "$f"
+  if [ -n "${4:-}" ]; then mkdir -p "$TP/$1/$2/subagents"; printf 'sub %s\n' "$2" > "$TP/$1/$2/subagents/agent-1.jsonl"; age "$4" "$TP/$1/$2/subagents/agent-1.jsonl" "$TP/$1/$2/subagents" "$TP/$1/$2"; fi
+}
+reg() {  # reg PID SID [PROCSTART]: a registry row; with no third argument, no procStart key
+  if [ $# = 3 ]; then jq -n --argjson p "$1" --arg s "$2" --arg t "$3" '{pid:$p,sessionId:$s,procStart:$t}' > "$TR/$1.json"
+  else jq -n --argjson p "$1" --arg s "$2" '{pid:$p,sessionId:$s}' > "$TR/$1.json"; fi
+}
+sum() { cksum "$@" | awk '{print $1 ":" $2}' | tr '\n' ' '; }
+S_BIG=aaaaaaaa-0000-4000-8000-000000000001    # big, idle 40 d, a session folder: moves
+S_REG=bbbbbbbb-0000-4000-8000-000000000002    # live in the registry
+S_JOB=cccccccc-0000-4000-8000-000000000003    # live job
+S_YNG=dddddddd-0000-4000-8000-000000000004    # .jsonl written 1 d ago
+S_YF=eeeeeeee-0000-4000-8000-000000000005     # .jsonl 40 d, a file in its folder written 1 d ago
+S_SML=ffffffff-0000-4000-8000-000000000006    # under the size line
+S_RUSE=11111111-0000-4000-8000-000000000007   # registry pid alive, procStart another process's
+S_NOPS=22222222-0000-4000-8000-000000000008   # registry pid alive, no procStart
+S_DEAD=33333333-0000-4000-8000-000000000009   # registry row, pid dead
+S_EPERM=44444444-0000-4000-8000-00000000000a  # pid 1: alive, and not ours to signal
+S_LATE=55555555-0000-4000-8000-00000000000b   # added later, for a second apply the same day
+mkt -work-a $S_BIG 40 40; mkt -work-a $S_REG 40; mkt -work-b $S_JOB 40; mkt -work-b $S_YNG 1; mkt -work-b $S_YF 40 1
+mkt -work-a $S_RUSE 40; mkt -work-a $S_NOPS 40; mkt -work-a $S_DEAD 40; mkt -work-a $S_EPERM 40
+fill "$TP/-work-a/$S_SML.jsonl" 500000; age 100 "$TP/-work-a/$S_SML.jsonl"
+reg "$SL1" $S_REG "$(lstart "$SL1")"
+reg "$$" $S_RUSE "Mon Jan  1 00:00:00 2001"
+reg "$SL2" $S_NOPS
+reg "$DEAD" $S_DEAD "Mon Jan  1 00:00:00 2001"
+[ -n "$(lstart 1)" ] && reg 1 $S_EPERM "$(lstart 1)"
+mkdir -p "$TJ/c0000003"; printf '{"state":"working","sessionId":"%s"}\n' $S_JOB > "$TJ/c0000003/state.json"
+: > "$TJ/c0000003/timeline.jsonl"
+printf '[{"id":"c0000003","pid":4343,"state":"working"}]' > "$TMP/agents.json"
+OUT=$(tl); DG=$(printf '%s\n' "$OUT" | digest_of)
+listed() { printf '%s\n' "$OUT" | grep -c "^move .*$TP/$1/$2.jsonl\$"; }
+kept() { printf '%s\n' "$OUT" | grep -c "^keep .*$TP/$1/$2.jsonl: $3"; }
+[ "$(listed -work-a $S_BIG)" = 1 ] && printf '%s\n' "$OUT" | grep "^move .*$S_BIG.jsonl" | grep -q "idle  40.0 d.*with session folder" \
+  && pass "a big, idle, unguarded transcript is listed with its idle days and its session folder" || fail "candidate listed" "$OUT"
+[ "$(listed -work-a $S_DEAD)" = 1 ] && [ "$(listed -work-a $S_RUSE)" = 1 ] \
+  && pass "a registry row whose pid is dead, or alive with another process's procStart (a reused pid), does not keep it" || fail "dead / reused pid" "$OUT"
+[ "$(kept -work-a $S_REG 'live in the sessions registry')" = 1 ] && pass "guard registry: a live pid with its own procStart keeps the transcript" || fail "guard registry" "$OUT"
+[ "$(kept -work-a $S_NOPS 'live in the sessions registry')" = 1 ] && pass "a live pid with no procStart counts as live" || fail "no procStart" "$OUT"
+if [ -n "$(lstart 1)" ]; then
+  [ "$(kept -work-a $S_EPERM 'live in the sessions registry')" = 1 ] && pass "a pid we may not signal (EPERM, pid 1) counts as alive" || fail "EPERM" "$OUT"
+fi
+[ "$(kept -work-b $S_JOB 'live job c0000003')" = 1 ] && pass "guard jobs: a live job whose state.json names the session keeps it" || fail "guard jobs" "$OUT"
+[ "$(kept -work-b $S_YNG 'written 1.0 days ago')" = 1 ] && pass "guard idle: a .jsonl written 1 day ago is kept" || fail "guard idle jsonl" "$OUT"
+[ "$(kept -work-b $S_YF 'written 1.0 days ago')" = 1 ] && pass "guard idle: a 1-day-old file in the session folder keeps a 40-day-old .jsonl" || fail "guard idle folder" "$OUT"
+[ "$(printf '%s\n' "$OUT" | grep -c "$S_SML")" = 0 ] && [[ "$OUT" == *"under the size line, not listed: 1."* ]] \
+  && pass "a transcript under the size line is never listed" || fail "small" "$OUT"
+[[ "$OUT" == *"does not appear in \`claude --resume\` until it is restored (inferred"* ]] && pass "the listing says a moved session leaves claude --resume (inferred)" || fail "resume note" "$OUT"
+[[ "$OUT" == *"To move exactly these: python3 "*" transcripts --apply $DG"* && "$OUT" != *"--days"* ]] \
+  && pass "the digest and the exact command, --apply right after transcripts, default --days 30 not repeated" || fail "command" "$OUT"
+OUT2=$(tl --days 7)
+[[ "$OUT2" == *"--days 7 is under 30: spend-report, permission-friction and hook-latency read only projects/"* ]] \
+  && pass "--days under 30 names the tools whose windows lose data" || fail "days warning" "$OUT2"
+[[ "$OUT" != *"--days 7 is under"* ]] && pass "the default 30 prints no such warning" || fail "no warning at 30" "$OUT"
+OUT3=$(ds transcripts --jobs "$TJ" --transcript-mb 1 "--apply" 2>&1); RC=$?
+[ "$RC" = 2 ] && pass "--apply with no digest is a usage error" || fail "apply no digest" "rc=$RC $OUT3"
+OUT3=$(ds transcripts --jobs "$TJ" --transcript-mb 1 --days 30 --apply "$DG" 2>&1); RC=$?
+[ "$RC" = 2 ] && [ -f "$TP/-work-a/$S_BIG.jsonl" ] && pass "--apply not right after transcripts is refused, nothing moved" || fail "apply misplaced" "rc=$RC $OUT3"
+
+echo ""
+echo "=== transcripts: a stale digest or an existing destination moves nothing ==="
+BEFORE=$(sum "$TP/-work-a/$S_BIG.jsonl" "$TP/-work-a/$S_BIG/subagents/agent-1.jsonl")
+OUT3=$(ds transcripts --apply 0000000000000000 --jobs "$TJ" --transcript-mb 1 2>&1); RC=$?
+[ "$RC" = 1 ] && [[ "$OUT3" == *"Nothing moved: this listing's digest is $DG, not 0000000000000000"* ]] && [ ! -e "$TA" ] \
+  && [ "$(sum "$TP/-work-a/$S_BIG.jsonl" "$TP/-work-a/$S_BIG/subagents/agent-1.jsonl")" = "$BEFORE" ] \
+  && pass "a wrong digest moves nothing and creates no aside folder" || fail "stale digest" "rc=$RC $OUT3"
+printf 'more\n' >> "$TP/-work-a/$S_BIG.jsonl"; age 40 "$TP/-work-a/$S_BIG.jsonl"
+OUT3=$(ds transcripts --apply "$DG" --jobs "$TJ" --transcript-mb 1 2>&1); RC=$?
+[ "$RC" = 1 ] && [ -f "$TP/-work-a/$S_BIG.jsonl" ] && [ ! -e "$TA" ] && pass "a transcript that changed since the listing: the digest differs, nothing moves" || fail "changed since listing" "rc=$RC $OUT3"
+OUT=$(tl); DG=$(printf '%s\n' "$OUT" | digest_of); BEFORE=$(sum "$TP/-work-a/$S_BIG.jsonl" "$TP/-work-a/$S_BIG/subagents/agent-1.jsonl")
+DAY=$(date +%F); mkdir -p "$TA/$DAY/-work-a"; printf 'keep me\n' > "$TA/$DAY/-work-a/$S_BIG.jsonl"
+OUT3=$(ds transcripts --apply "$DG" --jobs "$TJ" --transcript-mb 1 2>&1); RC=$?
+[ "$RC" = 1 ] && [[ "$OUT3" == *"refused: $TP/-work-a/$S_BIG.jsonl: a destination exists"* ]] \
+  && [ "$(cat "$TA/$DAY/-work-a/$S_BIG.jsonl")" = "keep me" ] && [ -f "$TP/-work-a/$S_BIG.jsonl" ] && [ -d "$TP/-work-a/$S_BIG" ] \
+  && pass "an existing destination is refused, never overwritten, and the source stays" || fail "destination exists" "rc=$RC $OUT3"
+[ ! -e "$TP/-work-a/$S_DEAD.jsonl" ] && [ -f "$TA/$DAY/-work-a/$S_DEAD.jsonl" ] && ! grep -q "$S_BIG" "$TA/$DAY/manifest.jsonl" \
+  && pass "the refused entry is not in the manifest; the others in that run still moved" || fail "partial apply" "$(cat "$TA/$DAY/manifest.jsonl")"
+ds transcripts --restore "$TA/$DAY/manifest.jsonl" > /dev/null 2>&1; rm -rf "$TA"
+[ -f "$TP/-work-a/$S_DEAD.jsonl" ] && [ -f "$TP/-work-a/$S_RUSE.jsonl" ] || fail "setup: restored after the partial apply" "$(ls "$TP/-work-a")"
+
+echo ""
+echo "=== transcripts: apply, the manifest, restore ==="
+OUT=$(tl); DG=$(printf '%s\n' "$OUT" | digest_of)
+CMDLINE=$(printf '%s\n' "$OUT" | sed -n 's/^To move exactly these: //p')
+OUT3=$(eval "$CMDLINE" 2>&1); RC=$?
+M="$TA/$DAY/manifest.jsonl"
+[ "$RC" = 0 ] && [ ! -e "$TP/-work-a/$S_BIG.jsonl" ] && [ ! -e "$TP/-work-a/$S_BIG" ] \
+  && [ "$(sum "$TA/$DAY/-work-a/$S_BIG.jsonl" "$TA/$DAY/-work-a/$S_BIG/subagents/agent-1.jsonl")" = "$BEFORE" ] \
+  && pass "the digest's own command moves the .jsonl and its session folder, bytes unchanged (cksum)" || fail "apply" "rc=$RC $OUT3 $(find "$TA")"
+[ "$(wc -l < "$M" | tr -d ' ')" = 4 ] && [ "$(jq -s '[.[] | select(has("original") and has("aside") and has("bytes") and has("mtime") and has("sessionId") and has("kind"))] | length' "$M")" = 4 ] \
+  && [ "$(jq -s -r '[.[] | select(.kind == "file" and .sessionId == "'$S_BIG'") | .original, .aside, .sessionId] | join(" ")' "$M")" = "$TP/-work-a/$S_BIG.jsonl $TA/$DAY/-work-a/$S_BIG.jsonl $S_BIG" ] \
+  && [ "$(jq -s -r '[.[] | select(.kind == "file" and .sessionId == "'$S_BIG'") | .bytes] | .[0]' "$M")" = $((2 * MiB + 5)) ] \
+  && pass "the manifest has original, aside, bytes, mtime, sessionId and kind: 4 rows for 3 sessions, the folder its own row" || fail "manifest" "$(cat "$M")"
+[[ "$OUT3" == *"does not appear in \`claude --resume\` until it is restored (inferred"* ]] && pass "the apply output says the same, inferred" || fail "apply resume note" "$OUT3"
+OUT=$(tl)
+for x in "$S_REG" "$S_JOB" "$S_YNG" "$S_YF" "$S_NOPS" "$S_SML"; do
+  [ -n "$(find "$TP" -name "$x.jsonl")" ] || fail "kept transcript gone" "$x"
+done
+[ "$(printf '%s\n' "$OUT" | grep -c '^move ')" = 0 ] && pass "the guarded and small transcripts are still in projects/; nothing else is listed" || fail "kept stay" "$OUT"
+mkt -work-b $S_LATE 40; printf 'partial' >> "$M"
+OUT=$(tl); DG=$(printf '%s\n' "$OUT" | digest_of)
+OUT3=$(ds transcripts --apply "$DG" --jobs "$TJ" --transcript-mb 1 2>&1); RC=$?
+[ "$RC" = 0 ] && [ "$(grep -c '^{"original"' "$M")" = 5 ] && grep -qx partial "$M" && [ ! -e "$TP/-work-b/$S_LATE.jsonl" ] \
+  && pass "a second apply the same day appends to the manifest, on a fresh line after a partial one" || fail "append-safe" "rc=$RC $OUT3 $(cat "$M")"
+grep -vx partial "$M" > "$M.new" && mv "$M.new" "$M"
+# restore
+ORIG_SUM=$BEFORE
+mkdir -p "$TP/-work-a"; printf 'in the way\n' > "$TP/-work-a/$S_BIG.jsonl"
+OUT3=$(ds transcripts --restore "$M" 2>&1); RC=$?
+[ "$RC" = 1 ] && [[ "$OUT3" == *"refused: $TP/-work-a/$S_BIG.jsonl: something is already there"* ]] \
+  && [ "$(cat "$TP/-work-a/$S_BIG.jsonl")" = "in the way" ] && [ -f "$TA/$DAY/-work-a/$S_BIG.jsonl" ] && [ -d "$TA/$DAY/-work-a/$S_BIG" ] && [ ! -e "$TP/-work-a/$S_BIG" ] \
+  && pass "restore refuses to overwrite, and a session's .jsonl and folder go back together or not at all" || fail "restore refuses" "rc=$RC $OUT3"
+[ -f "$TP/-work-a/$S_DEAD.jsonl" ] && [[ "$OUT3" == *"restored $TP/-work-a/$S_DEAD.jsonl"* ]] \
+  && pass "the other sessions in the manifest are restored in the same run" || fail "restore others" "$OUT3"
+rm -f "$TP/-work-a/$S_BIG.jsonl"
+OUT3=$(ds transcripts --restore "$M" 2>&1); RC=$?
+[ "$(sum "$TP/-work-a/$S_BIG.jsonl" "$TP/-work-a/$S_BIG/subagents/agent-1.jsonl")" = "$ORIG_SUM" ] && [ ! -e "$TA/$DAY/-work-a/$S_BIG.jsonl" ] \
+  && pass "restore round-trips: files back at the original paths, byte-identical (cksum)" || fail "round trip" "rc=$RC $OUT3"
+OUT3=$(ds transcripts --restore "$M" 2>&1); RC=$?
+[ "$RC" = 1 ] && [[ "$OUT3" == *"nothing at"* && "$OUT3" == *"already restored"* ]] && pass "restoring again refuses: nothing at the aside paths" || fail "restore twice" "rc=$RC $OUT3"
+printf '{"original":"%s/evil","aside":"%s/x/y/z"}\n' "$TMP" "$TA" > "$TMP/evil.jsonl"; : > "$TMP/evil"
+OUT3=$(ds transcripts --restore "$TMP/evil.jsonl" 2>&1); RC=$?
+[ "$RC" = 1 ] && [[ "$OUT3" == *"not a path this moves"* ]] && pass "a manifest row outside projects/ and the aside folder is refused" || fail "restore outside" "rc=$RC $OUT3"
+rm -rf "$TA"
+
+echo ""
+echo "=== transcripts: a live job that cannot be mapped, an ended job, a cross-device destination ==="
+OUT=$(tl); [ "$(printf '%s\n' "$OUT" | grep -c '^move ')" = 4 ] || fail "setup: four listed" "$OUT"
+mkdir -p "$TJ/d0000004"; printf '{"state":"working"}\n' > "$TJ/d0000004/state.json"; : > "$TJ/d0000004/timeline.jsonl"
+printf '[{"id":"c0000003","pid":4343},{"id":"d0000004","pid":4444}]' > "$TMP/agents.json"
+OUT=$(tl)
+[ "$(printf '%s\n' "$OUT" | grep -c '^move ')" = 0 ] && [[ "$OUT" == *"live job d0000004 has no readable session in its state.json"* ]] \
+  && pass "a live job whose session cannot be told keeps EVERY transcript, and says why" || fail "unmapped live job" "$OUT"
+printf '[{"id":"c0000003","pid":4343}]' > "$TMP/agents.json"; age 3 "$TJ/d0000004/state.json" "$TJ/d0000004/timeline.jsonl"
+OUT=$(tl)
+[ "$(printf '%s\n' "$OUT" | grep -c '^move ')" -ge 1 ] && pass "the same job, with no pid and no activity for 24 h, is ended: it keeps nothing" || fail "ended job" "$OUT"
+printf '{"state":"done","sessionId":"%s"}\n' $S_DEAD > "$TJ/d0000004/state.json"; age 3 "$TJ/d0000004/state.json"
+printf '[{"id":"c0000003","pid":4343},{"id":"d0000004","pid":4444}]' > "$TMP/agents.json"
+OUT=$(tl); [ "$(kept -work-a $S_DEAD 'live job d0000004')" = 1 ] && pass "a job claude agents gives a pid is live whatever its state says; its session is kept" || fail "pid wins" "$OUT"
+printf '[]' > "$TMP/agents.json"; echo 1 > "$TMP/agents.rc"
+OUT=$(tl); [ "$(kept -work-b $S_JOB 'live job c0000003 (liveness unknown')" = 1 ] && pass "claude agents failing: every job counts as live, so its session is kept" || fail "agents failing" "$OUT"
+echo 0 > "$TMP/agents.rc"; printf '[{"id":"c0000003","pid":4343}]' > "$TMP/agents.json"; rm -rf "$TJ/d0000004"
+SHM=/dev/shm
+if [ -d "$SHM" ] && [ -w "$SHM" ] && [ "$(python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_dev == os.stat(sys.argv[2]).st_dev)' "$SHM" "$TP")" = False ]; then
+  XA=$(mktemp -d "$SHM/cch-aside.XXXXXX"); OUT=$(tl --aside "$XA"); DG=$(printf '%s\n' "$OUT" | digest_of)
+  OUT3=$(ds transcripts --jobs "$TJ" --transcript-mb 1 --aside "$XA" --apply "$DG" 2>&1); RC=$?
+  [ "$RC" = 1 ] && [[ "$OUT3" == *"is on another filesystem"* && "$OUT3" == *"never copies"* ]] && [ -z "$(find "$XA" -type f)" ] && [ -f "$TP/-work-a/$S_DEAD.jsonl" ] \
+    && pass "an aside folder on another filesystem is refused up front: nothing copied, nothing moved" || fail "cross-device" "rc=$RC $OUT3"
+  rm -rf "$XA"
+else
+  echo "  SKIP: no second filesystem at /dev/shm; the cross-device refusal is not tested"
+fi
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 exit $FAIL

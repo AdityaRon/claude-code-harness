@@ -15,8 +15,13 @@
   disk-space.py clone PATH                     a clone anywhere in your home folder and its output
                                                bases: the same checks, no age test
   disk-space.py clone --apply DIGEST PATH      deletes them
+  disk-space.py transcripts [--days 30]        session transcripts at the size line and idle that long, with
+                                               a digest; not one a live session or job holds
+  disk-space.py transcripts --apply DIGEST     moves each, with its session folder, to
+                                               ~/.claude/transcripts-aside/<date>/<slug>/, with a manifest
+  disk-space.py transcripts --restore MANIFEST moves them back, never over anything
 
-Only --apply deletes, and it must come right after prune, clone or bazel --sweep, where the ask
+Only --apply deletes or moves, and it must come right after prune, clone, transcripts or bazel --sweep, where the ask
 rules in settings.json look for it; rm-guard asks on any other spelling. Commits only a reflog
 holds are not looked for. An apply stopped by TERM or HUP puts the entry it holds back; one stopped
 harder leaves it under a quarantine name, which each listing names with the mv that restores it.
@@ -1219,11 +1224,11 @@ def cmd_clone(a):
 
 
 def apply_misplaced(argv):
-    """--apply anywhere but right after `prune`, `clone` or `bazel --sweep`, where the ask rules look."""
+    """--apply anywhere but right after `prune`, `clone`, `transcripts` or `bazel --sweep`, where the ask rules look."""
     at = [i for i, t in enumerate(argv) if t.startswith("--app")]
     if not at:
         return False
-    want = 1 if argv[:1] in (["prune"], ["clone"]) else 2 if argv[:2] == ["bazel", "--sweep"] else None
+    want = 1 if argv[:1] in (["prune"], ["clone"], ["transcripts"]) else 2 if argv[:2] == ["bazel", "--sweep"] else None
     return want is None or at != [want] or argv[want] != "--apply"
 
 
@@ -1474,6 +1479,436 @@ def cmd_stamp(a):
     return 0
 
 
+# ---- transcripts aside ------------------------------------------------------
+
+ASIDE_DAYS = 30.0
+RESUME_NOTE = ("A moved session does not appear in `claude --resume` until it is restored (inferred from"
+               " where the CLI keeps transcripts, projects/<slug>/; not tried against the CLI).")
+
+
+def pid_alive(pid):
+    """True unless the kernel says no such process; EPERM, and anything unexpected, count as alive."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def ps_start(pid):
+    """The process's start time as ps prints it, whitespace removed, or None when ps gave none."""
+    env = dict(os.environ, TZ="UTC", LC_ALL="C")
+    try:
+        p = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=10, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return "".join(p.stdout.split()) or None
+
+
+def registry_live(sessions):
+    """({sessionId: why} for each live row of the sessions registry, why every transcript is kept or ""). A
+    row is live when its pid is alive and ps's start time matches its procStart; with no procStart, or ps
+    giving none, a live pid counts. A row that cannot be read or names no session, with a live pid, is
+    "unknown", and then every transcript is kept."""
+    live, unknown = {}, ""
+    try:
+        names = sorted(os.listdir(sessions))
+    except FileNotFoundError:
+        return live, ""
+    except OSError as e:
+        return live, "the sessions folder %s cannot be read (%s)" % (shown(sessions), e.strerror)
+    for n in names:
+        if not n.endswith(".json"):
+            continue
+        row, pid = None, int(n[:-5]) if re.fullmatch(r"[1-9][0-9]*", n[:-5]) else None
+        try:
+            with open(os.path.join(sessions, n)) as f:
+                row = json.load(f)
+        except (OSError, ValueError):
+            pass
+        if not isinstance(row, dict):
+            row = None
+        elif isinstance(row.get("pid"), int) and not isinstance(row["pid"], bool) and row["pid"] > 1:
+            pid = row["pid"]
+        if pid is None:
+            unknown = unknown or "%s is unreadable and names no pid" % shown(n)
+            continue
+        if not pid_alive(pid):
+            continue
+        sid = row.get("sessionId") if row else None
+        if not isinstance(sid, str) or not sid:
+            unknown = unknown or "%s: pid %d is alive and the row is unreadable or names no session" % (shown(n), pid)
+            continue
+        start = row.get("procStart")
+        if isinstance(start, str) and start.strip():
+            now = ps_start(pid)
+            if now is not None and now != "".join(start.split()):
+                continue  # the pid is another process now
+        live[sid] = "pid %d" % pid
+    return live, unknown
+
+
+class AsideCtx:
+    """What the registry and the jobs say is live. A re-check reads them again when the last read is
+    over REFRESH seconds old: claude agents costs about a second."""
+    REFRESH = 5
+
+    def __init__(self, a):
+        self.a = a
+        self.refresh()
+
+    def recheck(self):
+        if time.time() - self.read_at > self.REFRESH:
+            self.refresh()
+
+    def refresh(self):
+        self.read_at = self.now = time.time()
+        self.reg, self.reg_unknown = registry_live(self.a.sessions)
+        self.pids, self.live_note = claude_agents()
+        self.jobs_note = ""
+        self.live, _, self.unreadable = live_jobs(self)
+        self.job_ids, self.unmapped = {}, []
+        for n in self.live:
+            got = False
+            try:
+                with open(os.path.join(os.path.normpath(self.a.jobs), n, "state.json")) as f:
+                    s = json.load(f)
+            except (OSError, ValueError):
+                s = None
+            if isinstance(s, dict):
+                for k in ("sessionId", "resumeSessionId"):
+                    if isinstance(s.get(k), str) and s[k]:
+                        self.job_ids[s[k]], got = n, True
+                lp = s.get("linkScanPath")
+                if isinstance(lp, str) and lp.endswith(".jsonl"):
+                    self.job_ids[os.path.basename(lp)[:-len(".jsonl")]], got = n, True
+            if not got:
+                self.unmapped.append(n)
+
+
+def guard_registry(ctx, sid):
+    """Why the sessions registry keeps SID's transcript, or None."""
+    if ctx.reg_unknown:
+        return "registry: " + ctx.reg_unknown
+    if sid in ctx.reg:
+        return "live in the sessions registry (%s)" % ctx.reg[sid]
+    return None
+
+
+def guard_jobs(ctx, sid):
+    """Why a live job keeps SID's transcript, or None. A job maps to a session by the sessionId,
+    resumeSessionId or linkScanPath in its state.json, or by its id being the session id's first 8
+    characters. A live job that cannot be mapped, or a jobs folder or claude agents that cannot be
+    read, keeps every transcript."""
+    if ctx.jobs_note:
+        return "jobs: " + ctx.jobs_note
+    if ctx.unmapped:
+        return "live job %s has no readable session in its state.json, so which transcript it holds is unknown" % ctx.unmapped[0]
+    if sid in ctx.job_ids:
+        return "live job %s (%s)" % (ctx.job_ids[sid], ctx.live[ctx.job_ids[sid]])
+    if sid[:8] in ctx.live:
+        return "live job %s (%s)" % (sid[:8], ctx.live[sid[:8]])
+    return None
+
+
+def guard_idle(newest, cutoff):
+    """Why a write at NEWEST keeps the transcript, or None. NEWEST None: a folder that could not be read."""
+    if newest is None:
+        return "its session folder could not be read, so its newest write is unknown"
+    if newest >= cutoff:
+        return "written %.1f days ago" % ((time.time() - newest) / 86400)
+    return None
+
+
+def walk_folder(path):
+    """(newest mtime, bytes, entries) over PATH and all inside it, links not followed; newest None when
+    anything could not be read."""
+    newest, size, n, stack = 0.0, 0, 0, [path]
+    while stack:
+        d = stack.pop()
+        try:
+            st = os.lstat(d)
+            newest = max(newest, st.st_mtime)
+            for e in os.scandir(d):
+                est = e.stat(follow_symlinks=False)
+                n += 1
+                newest = max(newest, est.st_mtime)
+                if stat.S_ISDIR(est.st_mode):
+                    stack.append(e.path)
+                elif stat.S_ISREG(est.st_mode):
+                    size += est.st_size
+        except OSError:
+            return None, size, n
+    return newest, size, n
+
+
+def aside_entry(ctx, slug, sid, path, st):
+    """(entry, None) for a transcript every guard lets go, or (None, why it stays). ST: its lstat."""
+    folder = path[:-len(".jsonl")]
+    fst = lstat(folder)
+    e = {"slug": slug, "sid": sid, "path": path, "bytes": st.st_size, "mtime": st.st_mtime, "mtime_ns": st.st_mtime_ns,
+         "ino": st.st_ino, "dev": st.st_dev, "folder": None, "folder_bytes": 0, "folder_ino": None, "idle_days": None}
+    newest = st.st_mtime
+    if kind(fst) == "dir":
+        fnew, e["folder_bytes"], _ = walk_folder(folder)
+        e["folder"], e["folder_ino"] = folder, fst.st_ino
+        newest = None if fnew is None else max(newest, fnew)
+    elif fst is not None:
+        return None, "a same-named %s, not a folder, is beside it" % kind(fst)
+    if newest is not None:
+        e["idle_days"] = max(0.0, (time.time() - newest) / 86400)
+    why = guard_registry(ctx, sid) or guard_jobs(ctx, sid) or guard_idle(newest, time.time() - ctx.a.days * 86400)
+    return (None, why) if why else (e, None)
+
+
+def aside_plan(ctx):
+    a = ctx.a
+    plan = {"candidates": [], "kept": [], "small": 0, "warn_bytes": a.transcript_mb * 1e6}
+    try:
+        slugs = sorted(d.name for d in os.scandir(a.projects) if d.is_dir(follow_symlinks=False))
+    except OSError:
+        slugs = []
+    for slug in slugs:
+        try:
+            ents = sorted(os.scandir(os.path.join(a.projects, slug)), key=lambda x: x.name)
+        except OSError:
+            continue
+        for ent in ents:
+            if not ent.name.endswith(".jsonl") or not ent.is_file(follow_symlinks=False):
+                continue
+            st = lstat(ent.path)
+            if st is None:
+                continue
+            if st.st_size < plan["warn_bytes"]:
+                plan["small"] += 1
+                continue
+            e, why = aside_entry(ctx, slug, ent.name[:-len(".jsonl")], ent.path, st)
+            if e:
+                plan["candidates"].append(e)
+            else:
+                plan["kept"].append({"path": ent.path, "bytes": st.st_size, "reason": why})
+    plan["digest"] = aside_digest(plan["candidates"])
+    return plan
+
+
+def aside_digest(cands):
+    rows = ["%s\t%d\t%d\t%d\t%s" % (c["path"], c["bytes"], c["mtime_ns"], c["folder_bytes"], c["folder"] or "-") for c in cands]
+    return hashlib.sha256("\n".join(sorted(rows)).encode("utf-8", "surrogateescape")).hexdigest()[:16]
+
+
+def aside_command(a, d):
+    parts = ["transcripts", "--apply", d]
+    for flag, val, dflt in (("--days", a.days, ASIDE_DAYS), ("--transcript-mb", a.transcript_mb, transcript_mb_default()),
+                            ("--live-hours", a.live_hours, 24.0)):
+        if val != dflt:
+            parts += [flag, "%g" % val]
+    for flag, val, dflt in (("--projects", a.projects, "projects"), ("--sessions", a.sessions, "sessions"),
+                            ("--jobs", a.jobs, "jobs"), ("--aside", a.aside, "transcripts-aside")):
+        if os.path.normpath(val) != os.path.join(HOME, ".claude", dflt):
+            parts += [flag, val]
+    return "python3 %s %s" % (shown_self(), " ".join(shlex.quote(x) for x in parts))
+
+
+def print_aside(a, plan):
+    print("Transcripts of %g MB or more (CLAUDE_TRANSCRIPT_WARN_MB) in %s, idle %g days or more by the newest write"
+          % (a.transcript_mb, shown(a.projects), a.days))
+    print("to the .jsonl or anything in its session folder. Kept: a session live in %s, a live job's session." % shown(a.sessions))
+    print(RESUME_NOTE)
+    if a.days < ASIDE_DAYS:
+        print("--days %g is under %g: spend-report, permission-friction and hook-latency read only projects/, so a"
+              " transcript moved from it drops out of their windows. hook-latency's default window is 30 days and"
+              " spend-report's 7; any window longer than %g days loses these sessions." % (a.days, ASIDE_DAYS, a.days))
+    print("")
+    for c in plan["candidates"]:
+        print("move  %10s  idle %5.1f d  %s  %s" % (fmt(c["bytes"]), c["idle_days"],
+              ("with session folder (%s)" % fmt(c["folder_bytes"])) if c["folder"] else "no session folder     ", shown(c["path"])))
+    for k in plan["kept"]:
+        print("keep  %10s  %s: %s" % (fmt(k["bytes"]), shown(k["path"]), k["reason"]))
+    print("Transcripts under the size line, not listed: %d." % plan["small"])
+    print("")
+    cs = plan["candidates"]
+    if not cs:
+        print("Nothing to move.")
+        return
+    print("To move: %d transcripts, %s, with %s of session folders. They go to %s/<date>/<slug>/ with a manifest. Digest %s."
+          % (len(cs), fmt(sum(c["bytes"] for c in cs)), fmt(sum(c["folder_bytes"] for c in cs)), shown(a.aside), plan["digest"]))
+    print("To move exactly these: " + aside_command(a, plan["digest"]))
+
+
+def nearest_dev(path):
+    while not os.path.lexists(path):
+        path = os.path.dirname(path)
+    return os.stat(path).st_dev
+
+
+def same_entry(c, e):
+    return all(c[k] == e[k] for k in ("bytes", "mtime_ns", "ino", "folder_bytes", "folder_ino"))
+
+
+def move_unit(src, dst, folder_src, folder_dst):
+    """Rename the .jsonl, then its folder; when the folder cannot move, the .jsonl goes back. Raises OSError."""
+    os.rename(src, dst)
+    if folder_src:
+        try:
+            os.rename(folder_src, folder_dst)
+        except OSError:
+            os.rename(dst, src)
+            raise
+
+
+def apply_aside(ctx, plan, want):
+    a = ctx.a
+    if want != plan["digest"]:
+        print("Nothing moved: this listing's digest is %s, not %s. Read it, then run the command it prints." % (plan["digest"], want))
+        return 1
+    print(RESUME_NOTE)
+    day = time.strftime("%Y-%m-%d")
+    dated = os.path.join(a.aside, day)
+    adev = nearest_dev(dated)
+    todo, refused = [], 0
+    for c in plan["candidates"]:
+        dest = os.path.join(dated, c["slug"])
+        dj, df = os.path.join(dest, c["sid"] + ".jsonl"), os.path.join(dest, c["sid"])
+        fdev = lstat(c["folder"]).st_dev if c["folder"] and lstat(c["folder"]) else c["dev"]
+        if c["dev"] != adev or fdev != adev:
+            print("Nothing moved: %s is on another filesystem than %s; this never copies." % (shown(c["path"]), shown(dated)))
+            return 1
+        if lstat(dj) or lstat(df):
+            print("refused: %s: a destination exists in %s" % (shown(c["path"]), shown(dest)))
+            refused += 1
+            continue
+        todo.append((c, dest, dj, df))
+    if not todo:
+        return 1 if refused else 0
+    rows = []
+    for c, dest, dj, df in todo:
+        rows.append({"original": c["path"], "aside": dj, "bytes": c["bytes"], "mtime": c["mtime"], "sessionId": c["sid"], "kind": "file"})
+        if c["folder"]:
+            rows.append({"original": c["folder"], "aside": df, "bytes": c["folder_bytes"], "mtime": lstat(c["folder"]).st_mtime,
+                         "sessionId": c["sid"], "kind": "dir"})
+    manifest = os.path.join(dated, "manifest.jsonl")
+    try:
+        os.makedirs(dated, exist_ok=True)
+        with open(manifest, "ab+") as f:
+            f.seek(0, os.SEEK_END)
+            if f.tell():
+                f.seek(-1, os.SEEK_END)
+                lead = b"" if f.read(1) == b"\n" else b"\n"
+            else:
+                lead = b""
+            f.write(lead + "".join(json.dumps(r) + "\n" for r in rows).encode())
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError as e:
+        print("Nothing moved: the manifest %s cannot be written (%s)." % (shown(manifest), e.strerror))
+        return 1
+    print("manifest: %s (%d rows). Restore: python3 %s transcripts --restore %s" % (shown(manifest), len(rows), shown_self(), shlex.quote(manifest)))
+    pause()
+    failed = 0
+    for c, dest, dj, df in todo:
+        ctx.recheck()
+        now_st = lstat(c["path"])
+        e, why = aside_entry(ctx, c["slug"], c["sid"], c["path"], now_st) if now_st else (None, "gone")
+        if e is None:
+            print("kept at the re-check: %s: %s" % (shown(c["path"]), why))
+            continue
+        if not same_entry(c, e):
+            print("kept at the re-check: %s: it changed since the listing" % shown(c["path"]))
+            continue
+        try:
+            os.makedirs(dest, exist_ok=True)
+            if os.stat(dest).st_dev != c["dev"]:
+                raise OSError(errno.EXDEV, "another filesystem")
+            if lstat(dj) or lstat(df):
+                print("refused: %s: a destination exists" % shown(c["path"]))
+                failed += 1
+                continue
+            move_unit(c["path"], dj, c["folder"], df)
+        except OSError as ex:
+            print("could not move %s: %s; it stays where it was" % (shown(c["path"]), ex.strerror or ex))
+            failed += 1
+            continue
+        print("moved %s (%s%s) to %s" % (shown(c["path"]), fmt(c["bytes"]), " + folder " + fmt(c["folder_bytes"]) if c["folder"] else "", shown(dest)))
+    return 1 if failed or refused else 0
+
+
+def cmd_restore(a):
+    """Move each manifest entry back, a session's .jsonl and folder together, or neither."""
+    try:
+        with open(a.restore) as f:
+            lines = f.read().splitlines()
+    except OSError as e:
+        print("Nothing restored: %s cannot be read (%s)." % (shown(a.restore), e.strerror))
+        return 1
+    proj, aside = os.path.normpath(a.projects), os.path.normpath(a.aside)
+    groups, bad = {}, 0
+    for i, ln in enumerate(lines, 1):
+        if not ln.strip():
+            continue
+        try:
+            r = json.loads(ln)
+            o, s = r["original"], r["aside"]
+            assert isinstance(o, str) and isinstance(s, str) and o == os.path.normpath(o) and s == os.path.normpath(s)
+        except (ValueError, KeyError, TypeError, AssertionError):
+            print("refused: manifest line %d is not a row this wrote" % i)
+            bad += 1
+            continue
+        groups.setdefault((os.path.dirname(o), r.get("sessionId")), []).append((o, s))
+    restored = 0
+    for (_, sid), rows in groups.items():
+        problems = []
+        for o, s in rows:
+            ro, rs = os.path.relpath(o, proj).split(os.sep), os.path.relpath(s, aside).split(os.sep)
+            if o != os.path.join(proj, *ro) or len(ro) != 2 or ".." in ro or s != os.path.join(aside, *rs) or len(rs) != 3 or ".." in rs:
+                problems.append("%s: not a path this moves (outside %s or %s)" % (shown(o), shown(proj), shown(aside)))
+            elif lstat(s) is None:
+                problems.append("%s: nothing at %s (not moved, or already restored)" % (shown(o), shown(s)))
+            elif lstat(o) is not None:
+                problems.append("%s: something is already there" % shown(o))
+        if problems:
+            for p in problems:
+                print("refused: " + p)
+            bad += len(rows)
+            continue
+        done = []
+        try:
+            for o, s in rows:
+                os.makedirs(os.path.dirname(o), exist_ok=True)
+                os.rename(s, o)
+                done.append((o, s))
+        except OSError as ex:
+            for o, s in reversed(done):
+                try:
+                    os.rename(o, s)
+                except OSError:
+                    pass
+            print("refused: session %s: %s; nothing of it restored" % (sid, ex.strerror or ex))
+            bad += len(rows)
+            continue
+        restored += len(rows)
+        for o, _ in rows:
+            print("restored %s" % shown(o))
+    print("Restored %d paths, refused %d. A restored session shows in `claude --resume` again (inferred)." % (restored, bad))
+    return 1 if bad else 0
+
+
+def cmd_transcripts(a):
+    if a.apply is not None and a.restore:
+        print("transcripts: --apply and --restore are separate runs.", file=sys.stderr)
+        return 2
+    if a.restore:
+        return cmd_restore(a)
+    ctx = AsideCtx(a)
+    plan = aside_plan(ctx)
+    print_aside(a, plan)
+    if a.apply is None:
+        return 0
+    print("")
+    return apply_aside(ctx, plan, a.apply)
+
+
 def days_arg(v):
     f = float(v)
     if not f >= 0:
@@ -1506,7 +1941,7 @@ def main(argv=None):
     for s in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(s, stop)
     if apply_misplaced(argv):
-        print("disk-space: --apply goes right after `prune`, `clone` or `bazel --sweep`, as the listing"
+        print("disk-space: --apply goes right after `prune`, `clone`, `transcripts` or `bazel --sweep`, as the listing"
               " prints it, so the ask rule in settings.json sees it. Nothing deleted.", file=sys.stderr)
         return 2
     # No abbreviations: `--app` would be --apply where no ask rule looks.
@@ -1555,6 +1990,17 @@ def main(argv=None):
     p.add_argument("--live-hours", type=days_arg, default=24.0)
     p.add_argument("--allow-untracked", action="store_true")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("transcripts", help="idle, oversized session transcripts; --apply moves them aside", allow_abbrev=False)
+    p.add_argument("--projects", default=projects_default)
+    p.add_argument("--sessions", default=os.path.join(HOME, ".claude", "sessions"), help="the live-session registry")
+    p.add_argument("--jobs", default=jobs_default)
+    p.add_argument("--aside", default=os.path.join(HOME, ".claude", "transcripts-aside"))
+    p.add_argument("--days", type=days_arg, default=ASIDE_DAYS, help="idle this long (default 30)")
+    p.add_argument("--live-hours", type=days_arg, default=24.0)
+    p.add_argument("--transcript-mb", type=days_arg, default=transcript_mb_default(),
+                   help="this size or more (CLAUDE_TRANSCRIPT_WARN_MB, 150)")
+    p.add_argument("--apply", metavar="DIGEST", help="move exactly the listing with this digest")
+    p.add_argument("--restore", metavar="MANIFEST", help="move each entry of a manifest back")
     a = ap.parse_args(argv)
     if getattr(a, "root", None) is None and a.cmd in ("bazel", "stamp", "prune", "clone"):
         a.root = default_bazel_root()
@@ -1579,6 +2025,8 @@ def main(argv=None):
         return cmd_prune(a)
     if a.cmd == "clone":
         return cmd_clone(a)
+    if a.cmd == "transcripts":
+        return cmd_transcripts(a)
     if a.cmd == "bazel" and a.sweep:
         return cmd_sweep(a)
     if a.cmd == "bazel":
