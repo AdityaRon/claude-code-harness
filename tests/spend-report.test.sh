@@ -186,6 +186,12 @@ put('c', 's', [asst('07:00:00', 'r0', w1=100_000), syn('08:30:00', 'x1'), asst('
 c1, c2 = asst('09:50:00', 'c1', read=100_000), asst('09:55:00', 'c2', read=100_000)
 put('d', 'a', [asst('00:00:00', 'c0', w1=100_000), c1, c2, tick('10:00:00'), asst('10:00:05', 'c3', read=500_000)])
 put('d', 'b', [c1, c2, asst('10:30:00', 'd1', read=100_000)])
+# e: the tick's first call c1 is copied as line 1 of a fork subagent's transcript, which
+# sorts after the main one. The main copy is the counted one: c1 stays the tick's.
+e1 = asst('10:30:10', 'c1', w1=150_000)
+put('e', 's', [asst('07:00:00', 'c0', w1=100_000), tick('10:30:00'), e1, asst('10:31:00', 'c2', read=150_000)])
+T.write(os.path.join(root, 'e', 'proj', 's', 'subagents', 'agent-f1.jsonl'),
+        [{**e1, 'isSidechain': True}, asst('10:30:20', 'f1', read=150_000)])
 PY
 tickrun() {  # CASE [args]
   local c=$1; shift
@@ -210,6 +216,10 @@ OUT=$(TZ=UTC python3 "$SR" --root "$TMP/syn/c" --since 2026-10-20T00:00:00+00:00
 tickrun d
 has "first call: no rewrite, 5 min since this transcript's last call" "a call copied into a later file stays in its own file's chain: 5 min, not 600"
 has '5 calls;' "and its cost is counted once"
+tickrun e
+has "first call: ttl-gap rewrite, 150k written, 210 min since this transcript's last call (TTL 60 min)" \
+  "a parent call copied into a fork subagent stays the parent tick's first call"
+has ', 0 failed' "and that tick is not failed"
 
 echo "=== prices ==="
 # One call per model: 1M output, 1M cache read and 1M 1 h cache write.

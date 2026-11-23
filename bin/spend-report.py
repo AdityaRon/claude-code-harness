@@ -191,9 +191,12 @@ def load(root, oldest):
     for v in bounds.values():
         v.sort()
     # One copy of a call carries its cost; every copy sits in its own file's chain.
+    # A main transcript's copy first: a fork subagent's first line repeats its
+    # parent's call, which belongs to the parent's turn. Then the most output.
+    rank = lambda c: (not c['aid'], c['usage'].get('output_tokens') or 0)
     best = {}
     for (key, _), c in chain.items():
-        if key not in best or (c['usage'].get('output_tokens') or 0) >= (best[key]['usage'].get('output_tokens') or 0):
+        if key not in best or rank(c) >= rank(best[key]):
             best[key] = c
     for c in chain.values():
         c['counted'] = False
