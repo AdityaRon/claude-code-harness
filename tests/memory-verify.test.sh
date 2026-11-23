@@ -772,5 +772,48 @@ check_eq       "the testing seam is not called either" "0" "$(calls)"
 check_contains "and the run says why"                 "NOTE: --offline" "$OUT"
 rm -f "$STORE"/*.md
 
+echo ""
+echo "=== process starts: a run costs a few starts, not a few a row ==="
+# Every external tool the script can reach is a shim on a PATH of shims alone:
+# it logs its name, then runs the real binary by the ABSOLUTE path resolved before
+# PATH changed (a shim that looked itself up again recursed). A tool missing from
+# the list fails loudly, not uncounted.
+SHIMS="$TMP/shims"; SLOG="$TMP/starts.log"; mkdir -p "$SHIMS"
+for t in awk sed grep sort comm wc tr head cat date stat basename dirname mktemp rm jq uniq cut; do
+  real=$(command -v "$t") || continue
+  printf '#!%s\necho %s >> "%s"\nexec %s "$@"\n' "$BASH" "$t" "$SLOG" "$real" > "$SHIMS/$t"
+  chmod +x "$SHIMS/$t"
+done
+# starts <tool|all> <projects dir> <args...>: starts of the tool in one run
+starts() {
+  local tool="$1" proj="$2"; shift 2
+  : > "$SLOG"
+  PATH="$SHIMS" CLAUDE_MEMORY_PROJECTS_DIR="$proj" MEMORY_VERIFY_GH_CMD="" "$BASH" "$SCRIPT" "$@" >/dev/null 2>&1
+  if [ "$tool" = all ]; then wc -l < "$SLOG" | tr -d ' '; else grep -cx "$tool" "$SLOG" || true; fi
+}
+# A store of $2 open-state memories, each with an index line that is both a TRIAGE
+# line and a trailing-off hook. $3 = distinct: a stamp a day apart; same: one stamp.
+mkstarts() {  # mkstarts <projects dir> <n> <distinct|same>
+  local d="$1/s/memory" i stamp; rm -rf "$1"; mkdir -p "$d"
+  for i in $(seq 1 "$2"); do
+    if [ "$3" = distinct ]; then stamp=$(days_ago $((20 + i))); else stamp=$(days_ago 30); fi
+    printf -- '---\nname: m%s\ndescription: a description long enough to carry the payload\nmodified: %s\n---\nStill pending review of #%s.\n' \
+      "$i" "$stamp" "$((100 + i))" > "$d/m$i.md"
+    printf -- '- [m%s](m%s.md) \342\200\224 still pending review and\n' "$i" "$i" >> "$d/MEMORY.md"
+  done
+}
+mkstarts "$TMP/sa" 10 distinct; mkstarts "$TMP/sb" 20 distinct
+mkstarts "$TMP/sc" 10 same;     mkstarts "$TMP/sd" 20 same
+check_eq "json mode: one jq for the whole run"       "1" "$(starts jq "$TMP/sb" --offline --json)"
+check_eq "text mode: no jq at all"                   "0" "$(starts jq "$TMP/sb" --offline)"
+check_eq "the 20 files give 40 TRIAGE rows"          "40" "$(PATH="$SHIMS" CLAUDE_MEMORY_PROJECTS_DIR="$TMP/sb" "$BASH" "$SCRIPT" --offline --json | grep -c '"status":"TRIAGE"')"
+# Doubling the rows with distinct stamps costs one `date` a new file and nothing else.
+A=$(starts all "$TMP/sa" --offline --json); B=$(starts all "$TMP/sb" --offline --json)
+check_eq "10 more files, distinct stamps: 10 more starts, one a file" "10" "$((B - A))"
+check_eq "and they are all date, one per stamp"      "10" "$(( $(starts date "$TMP/sb" --offline --json) - $(starts date "$TMP/sa" --offline --json) ))"
+# Doubling rows that share one stamp costs nothing: the parse is memoised.
+C=$(starts all "$TMP/sc" --offline --json); D=$(starts all "$TMP/sd" --offline --json)
+check_eq "10 more files, one stamp: no more starts"  "0" "$((D - C))"
+
 echo "--- Results: $PASS passed, $FAIL failed"
 exit "$FAIL"

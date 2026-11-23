@@ -65,8 +65,9 @@ TRIAGE_MIN_AGE_DAYS="${MEMORY_TRIAGE_MIN_AGE_DAYS:-14}"
 # start, so the oldest entries stop reaching the model.
 # One copy, shared with memory-index and memory-lint: beside this file when
 # installed (~/.claude/hooks/lib), ../hooks/lib in the clone.
-LIMITS="$(dirname "$0")/hooks/lib/memory-limits.sh"
-[ -f "$LIMITS" ] || LIMITS="$(dirname "$0")/../hooks/lib/memory-limits.sh"
+case "$0" in */*) HERE=${0%/*}; [ -n "$HERE" ] || HERE=/ ;; *) HERE=. ;; esac
+LIMITS="$HERE/hooks/lib/memory-limits.sh"
+[ -f "$LIMITS" ] || LIMITS="$HERE/../hooks/lib/memory-limits.sh"
 # shellcheck source=../hooks/lib/memory-limits.sh
 . "$LIMITS" 2>/dev/null || { echo "FATAL: cannot read hooks/lib/memory-limits.sh near $0; run install.sh again" >&2; exit 3; }
 INDEX_MAX_LINES="$MEMORY_MAX_LINES"
@@ -124,6 +125,16 @@ N_HOOK=0
 N_ORPHAN=0
 N_WAIVED=0
 HEADER_SHOWN=""
+US=$'\037'
+JSON_ROWS=""
+
+# One jq for every buffered row, not one per row. A detail may hold any byte but
+# a newline; the fourth field onward is rejoined, so it is never cut short.
+flush_json() {
+  [ -n "$JSON_ROWS" ] || return 0
+  printf '%s' "$JSON_ROWS" | jq -Rnc 'inputs | split("\u001f")
+    | {status: .[0], store: .[1], file: .[2], detail: (.[3:] | join("\u001f"))}'
+}
 
 # Emit one finding. Fields are positional to stay bash-3.2 friendly.
 emit() {
@@ -142,8 +153,8 @@ emit() {
     WAIVED)   N_WAIVED=$((N_WAIVED+1)); [ "$SHOW_ALL" -eq 1 ] || return 0 ;;
   esac
   if [ "$AS_JSON" -eq 1 ]; then
-    jq -nc --arg s "$status" --arg st "$store" --arg f "$file" --arg d "$detail" \
-      '{status:$s, store:$st, file:$f, detail:$d}'
+    # Buffered, one row to a line: flush_json turns every row into JSON in one jq.
+    JSON_ROWS="$JSON_ROWS$status$US$store$US$file$US$detail$NL"
     return 0
   fi
   # Print the store name lazily, on its first finding — most stores are clean,
@@ -157,71 +168,97 @@ emit() {
 
 # Age in whole days, preferring the frontmatter `modified:` stamp over mtime —
 # mtime moves when anything rewrites the file, the stamp tracks the claim.
+# Sets AGE and runs in the caller's shell, so NOW and AGE_CACHE persist: `now`
+# is read once, and a stamp is parsed by `date` once however many files carry it.
+MODIFIED_RE='^[[:space:]]*modified:[[:space:]]*(.*)$'
+NOW0=""
+SECS0=0
+NOW=""
+AGE=0
+AGE_CACHE="$NL"
+DATE_BSD=0
+case "$OSTYPE" in darwin*|*bsd*) DATE_BSD=1 ;; esac
 age_days() {
-  local f="$1" stamp epoch now
-  stamp=$(sed -n 's/^[[:space:]]*modified:[[:space:]]*//p' "$f" 2>/dev/null | head -1 | tr -d '"')
-  epoch=""
+  local f="$1" stamp="" epoch="" line ent
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ $line =~ $MODIFIED_RE ]]; then stamp=${BASH_REMATCH[1]}; break; fi
+  done 2>/dev/null < "$f"
+  stamp=${stamp//\"/}
   if [ -n "$stamp" ]; then
-    # Three forms, because two writers disagree: Claude Code stamps an ISO
-    # datetime, memory-fix stamps a bare date. BSD `date -f` needs a format that
-    # matches the WHOLE string, so a datetime format silently rejects a bare
-    # date - which then fell through to mtime, i.e. to the day the last rewrite
-    # ran. That made every backfilled stamp read as 0d old.
-    epoch=$(date -j -f '%Y-%m-%dT%H:%M:%S' "${stamp%%.*}" +%s 2>/dev/null) \
-      || epoch=$(date -j -f '%Y-%m-%d' "${stamp%%T*}" +%s 2>/dev/null) \
-      || epoch=$(date -d "$stamp" +%s 2>/dev/null) || epoch=""
+    ent=""
+    case "$stamp" in *"$TAB"*) ;; *) ent=${AGE_CACHE#*"$NL$stamp$TAB"}; [ "$ent" = "$AGE_CACHE" ] && ent="" ;; esac
+    if [ -n "$ent" ]; then
+      epoch=${ent%%"$NL"*}
+    else
+      # Three forms, because two writers disagree: Claude Code stamps an ISO
+      # datetime, memory-fix stamps a bare date. BSD `date -f` needs a format that
+      # matches the WHOLE string, so a datetime format silently rejects a bare
+      # date - which then fell through to mtime, i.e. to the day the last rewrite
+      # ran. The -j forms run only where they can succeed (BSD date; a T to match).
+      if [ "$DATE_BSD" -eq 1 ]; then
+        case "${stamp%%.*}" in
+          *T*) epoch=$(date -j -f '%Y-%m-%dT%H:%M:%S' "${stamp%%.*}" +%s 2>/dev/null) || epoch="" ;;
+        esac
+        [ -n "$epoch" ] || epoch=$(date -j -f '%Y-%m-%d' "${stamp%%T*}" +%s 2>/dev/null) || epoch=""
+      fi
+      [ -n "$epoch" ] || epoch=$(date -d "$stamp" +%s 2>/dev/null) || epoch=""
+      case "$stamp" in *"$TAB"*) ;; *) AGE_CACHE="$AGE_CACHE$stamp$TAB$epoch$NL" ;; esac
+    fi
   fi
   if [ -z "$epoch" ]; then
     epoch=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)
   fi
-  now=$(date +%s)
-  echo $(( (now - epoch) / 86400 ))
+  # `date -f` fills a bare date's time of day from the clock, so `now` must not
+  # read earlier than that parse. Read once, then advanced by $SECONDS, rounded
+  # up: never behind the parse, and no `date` start per call.
+  if [ -n "${EPOCHSECONDS:-}" ]; then NOW=$EPOCHSECONDS
+  else
+    [ -n "$NOW0" ] || { NOW0=$(date +%s); SECS0=$SECONDS; }
+    NOW=$((NOW0 + SECONDS - SECS0 + 1))
+  fi
+  AGE=$(( (NOW - epoch) / 86400 ))
 }
 
-# Pull the `verify:` block: top-level key, one claim per `- ` line, each of the
-# form "<kind> <ref> <expected>". Kept whitespace-delimited on purpose so it
-# parses with sed in bash 3.2 rather than needing a YAML library.
-verify_lines() {
-  awk '
-    /^verify:[[:space:]]*$/ { inblock=1; next }
-    inblock && /^[[:space:]]*-[[:space:]]/ {
-      sub(/^[[:space:]]*-[[:space:]]*/, ""); print; next
-    }
-    inblock && /^[^[:space:]]/ { inblock=0 }
-  ' "$1" 2>/dev/null
-}
-
-# One awk pass over a store's memories, before any lookup. Prints, tab-separated:
-#   G <owner/repo> <number>   a gh claim resolve_gh will ask for
-#   J <key>                   a jira claim's key
-#   W <file> <reason>         a frontmatter `verify: none` waiver; reason may be empty
-#   V <file>                  the file has a verify: block
-# The block rules are verify_lines', and the ref shape is resolve_gh's: a claim
-# missing here is a lookup-failed SKIP there, never a silent pass.
-store_prepass() {
-  awk -v OFS='\t' '
+# One awk pass over a store, before any lookup. Given an output dir it writes
+# tab-separated files there: g <repo> <number> (a gh claim), w <file> <reason>
+# (a `verify: none` waiver), v <file> (has a verify: block), c <file> <claim> (a
+# line of that block, in order). Given "" it prints each jira claim's key.
+# A claim missing from g is a lookup-failed SKIP in resolve_gh, never a pass.
+store_prepass() {  # store_prepass <outdir or ""> <memory files>
+  local od="$1"; shift
+  awk -v OFS='\t' -v od="$od" '
     FNR == 1 {
-      skip = (FILENAME ~ /(^|\/)MEMORY(_ARCHIVE)?\.md$/); inblock = 0
+      skip = (FILENAME ~ /(^|\/)MEMORY(_ARCHIVE)?\.md$/); inblock = 0; vb = 0
       base = FILENAME; sub(/.*\//, "", base)
       fm = ($0 == "---"); if (fm) next
     }
     skip { next }
+    # The claims of the verify: block, whatever the frontmatter says: its own
+    # state (vb), ended by any unindented line, the closing --- included.
+    od != "" {
+      if ($0 ~ /^verify:[[:space:]]*$/) vb = 1
+      else if (vb && $0 ~ /^[[:space:]]*-[[:space:]]/) {
+        s = $0; sub(/^[[:space:]]*-[[:space:]]*/, "", s); print base, s > (od "/c")
+      } else if (vb && $0 ~ /^[^[:space:]]/) vb = 0
+    }
     fm && /^---[[:space:]]*$/ { fm = 0; next }
     # The same pattern hooks/memory-lint.sh accepts the waiver by.
     fm && /^[[:space:]]*verify:[[:space:]]*none([[:space:]]|$)/ {
       r = $0; sub(/^[[:space:]]*verify:[[:space:]]*none[[:space:]]*/, "", r); sub(/[[:space:]]+$/, "", r)
-      print "W", base, r; next
+      sub(/\t.*/, "", r)
+      if (od != "") print base, r > (od "/w")
+      next
     }
-    /^verify:[[:space:]]*$/ { inblock = 1; print "V", base; next }
+    /^verify:[[:space:]]*$/ { inblock = 1; if (od != "") print base > (od "/v"); next }
     inblock && /^[[:space:]]*-[[:space:]]/ {
       s = $0; sub(/^[[:space:]]*-[[:space:]]*/, "", s); n = split(s, a, " ")
-      if (n >= 3 && a[1] == "gh" && a[2] ~ /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+$/) {
+      if (od != "" && n >= 3 && a[1] == "gh" && a[2] ~ /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+$/) {
         k = index(a[2], "#"); num = substr(a[2], k + 1)
         # A GraphQL Int takes no leading zero; 9 digits keeps it inside 32 bits.
         sub(/^0+/, "", num); if (num == "") num = "0"
-        if (length(num) <= 9) print "G", substr(a[2], 1, k - 1), num
+        if (length(num) <= 9) print substr(a[2], 1, k - 1), num > (od "/g")
       }
-      if (n >= 3 && a[1] == "jira") print "J", a[2]
+      if (od == "" && n >= 3 && a[1] == "jira") print a[2]
       next
     }
     inblock && /^[^[:space:]]/ { inblock = 0 }
@@ -316,6 +353,7 @@ OPEN_RE='\b(pending (review|merge|approval|deploy|release|sign-?off)|(is|still) 
 # "resolved" — matching it would invert the signal entirely.
 TERMINAL_RE='^(Done|Closed|Resolved|Won.t Do|Mitigated|IR Published)$'
 CLOSED_RE='\b(merged|shipped|deployed|landed|resolved|verified in prod)\b'
+TYPE_RE='^[[:space:]]*type:[[:space:]]*([a-z]*)[[:space:]]*$'
 
 # True when this memory's index line has already been moved to the archive.
 # SETTLED's whole advice is "the index line can move to the archive section", so
@@ -324,9 +362,11 @@ CLOSED_RE='\b(merged|shipped|deployed|landed|resolved|verified in prod)\b'
 # SETTLED findings on one run were already archived. Matched on the link TARGET,
 # the same way memory-index.sh recognises its own pointer, so a line moved by
 # hand counts too.
+ARCH_DIR=""; ARCH_TXT=""
 archived_already() {
   [ -f "$1/MEMORY_ARCHIVE.md" ] || return 1
-  grep -qF "]($2)" "$1/MEMORY_ARCHIVE.md"
+  [ "$ARCH_DIR" = "$1" ] || { ARCH_DIR="$1"; ARCH_TXT=$(<"$1/MEMORY_ARCHIVE.md"); }
+  case "$ARCH_TXT" in *"]($2)"*) return 0 ;; *) return 1 ;; esac
 }
 
 # There is deliberately NO "retire this memory" heuristic here, and the reason
@@ -351,6 +391,7 @@ archived_already() {
 # Age-gate each line by the memory it links to, not by the index's own mtime:
 # the index is rewritten whenever any entry changes, so its mtime says nothing
 # about how long a given line has been wrong.
+LINK_RE='^.*\]\(([^)]*\.md)\)'   # the last `](x.md)` on a line: the greedy .* is the point
 scan_index() {
   local dir="$1" slug="$2" line target age
   # Separate statement: within one `local`, $dir is not yet assigned.
@@ -362,10 +403,10 @@ scan_index() {
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     n=${line%%:*}; line=${line#*:}
-    target=$(printf '%s' "$line" | sed -n 's/.*](\([^)]*\.md\)).*/\1/p' | head -1)
+    target=""; [[ $line =~ $LINK_RE ]] && target=${BASH_REMATCH[1]}
     [ -n "$target" ] && case "$WAIVED_FILES" in *"$NL$target$NL"*) continue ;; esac
     if [ -n "$target" ] && [ -f "$dir/$target" ]; then
-      age=$(age_days "$dir/$target")
+      age_days "$dir/$target"; age=$AGE
       [ "$age" -lt "$TRIAGE_MIN_AGE_DAYS" ] && continue
       emit TRIAGE "$slug" "MEMORY.md:$n" "index line asserts open state about ${target} (${age}d old)"
     else
@@ -381,26 +422,45 @@ EOF
 # the hubs memory-lint.sh reads. One `comm` of two sorted lists, so the cost
 # does not grow with a grep per file. No index, no finding: nothing to orphan from.
 scan_orphans() {
-  local dir="$1" slug="$2" f
+  local dir="$1" slug="$2" f list="" srcs orphans
   [ -f "$dir/MEMORY.md" ] || return 0
   for f in "$dir"/*.md; do
     [ -f "$f" ] || continue
     f=${f##*/}
-    [ "$f" = MEMORY.md ] || [ "$f" = MEMORY_ARCHIVE.md ] || printf '%s\n' "$f"
-  done | LC_ALL=C sort -u > "$TMP_DIR/files"
-  { grep -oh '](\([^)]*\))' "$dir/MEMORY.md" "$dir/MEMORY_ARCHIVE.md" 2>/dev/null \
-      | sed 's/^](//; s/)$//; s/#.*//; s#^\./##'
-    for f in "$dir"/feedback_hub_*.md; do
-      [ -f "$f" ] || break
-      grep -oh '\[\[[^]]*\]\]' "$dir"/feedback_hub_*.md 2>/dev/null | sed 's/^\[\[//; s/\]\]$/.md/'
-      break
-    done
-  } | LC_ALL=C sort -u > "$TMP_DIR/links"
+    [ "$f" = MEMORY.md ] || [ "$f" = MEMORY_ARCHIVE.md ] || list="$list$f$NL"
+  done
+  # Link sources: both indexes, then every hub if the first glob entry is a file.
+  srcs=("$dir/MEMORY.md"); [ -f "$dir/MEMORY_ARCHIVE.md" ] && srcs[1]="$dir/MEMORY_ARCHIVE.md"
+  for f in "$dir"/feedback_hub_*.md; do
+    [ -f "$f" ] || break
+    srcs=("${srcs[@]}" "$dir"/feedback_hub_*.md)
+    break
+  done
+  # One awk: the files no link names, in byte order (what `comm` of two C-sorted lists gave).
+  orphans=$(FILES_NL="$list" LC_ALL=C awk '
+    FNR == 1 { b = FILENAME; sub(/.*\//, "", b); hub = (b ~ /^feedback_hub_.*\.md$/) }
+    {
+      s = $0
+      if (hub) {
+        while (match(s, /\[\[[^]]*\]\]/)) { L[substr(s, RSTART + 2, RLENGTH - 4) ".md"] = 1; s = substr(s, RSTART + RLENGTH) }
+      } else {
+        while (match(s, /\]\([^)]*\)/)) {
+          t = substr(s, RSTART + 2, RLENGTH - 3); s = substr(s, RSTART + RLENGTH)
+          sub(/#.*/, "", t); sub(/^\.\//, "", t); L[t] = 1
+        }
+      }
+    }
+    END {
+      n = split(ENVIRON["FILES_NL"], a, "\n"); m = 0
+      for (i = 1; i <= n; i++) if (a[i] != "" && !(a[i] in L)) {
+        for (j = m; j > 0 && o[j] > a[i]; j--) o[j + 1] = o[j]
+        o[j + 1] = a[i]; m++
+      }
+      for (i = 1; i <= m; i++) print o[i]
+    }' "${srcs[@]}" 2>/dev/null)
   while IFS= read -r f; do
     [ -n "$f" ] && emit ORPHAN "$slug" "$f" "no index line, archive line or hub [[link]] reaches it, so nothing recalls it"
-  done <<EOF
-$(LC_ALL=C comm -23 "$TMP_DIR/files" "$TMP_DIR/links")
-EOF
+  done <<< "$orphans"
 }
 
 # The index is the one file loaded into context every session, so passing
@@ -412,12 +472,10 @@ scan_index_size() {
   local idx="$dir/MEMORY.md"
   [ -f "$idx" ] || return 0
   local lines bytes entries over
-  lines=$(wc -l < "$idx" | tr -d ' ')
   # BYTES, not characters: wc -c counts bytes and the upstream limit is 25KB.
   # Reporting this number as "chars" is how a 24,688-character index got called
   # compliant while measuring 25,150 bytes and still being truncated.
-  bytes=$(wc -c < "$idx" | tr -d ' ')
-  entries=$(grep -c '^- \[' "$idx" 2>/dev/null || true)
+  read -r lines bytes <<< "$(wc -lc < "$idx")"
   over=""
   [ "$lines" -gt "$INDEX_MAX_LINES" ] && over="${lines}/${INDEX_MAX_LINES} lines"
   if [ "$bytes" -gt "$INDEX_MAX_BYTES" ]; then
@@ -425,6 +483,7 @@ scan_index_size() {
     over="${over}${bytes}/${INDEX_MAX_BYTES} bytes"
   fi
   [ -n "$over" ] || return 0
+  entries=$(grep -c '^- \[' "$idx" 2>/dev/null || true)
   emit OVERSIZE "$slug" "MEMORY.md" \
     "index over the load limit ($over; $entries entries) — the tail is dropped at session start. One line per memory, so shortening hooks cannot fix the LINE limit; order by type so the tail is cheap, then retire settled entries."
 }
@@ -443,38 +502,44 @@ scan_index_size() {
 # a terse description is not a defect. Advisory: it does not change the exit
 # code, because a thin hook still loads and an oversize index does not.
 HOOK_MIN_DESC_RATIO="${MEMORY_HOOK_MIN_DESC_RATIO:-150}"
+TRAIL_RE='(…|\.\.\.|,|;)$|(^|[[:space:]])(and|or|not|the|but|with|is|of|to|for|an?)$'
+DESC_RE='^description: *(.*)$'
+char_len() {  # sets CLEN: characters, by dropping the UTF-8 continuation bytes
+  local LC_ALL=C s="$1"
+  s=${s//[$'\200'-$'\277']/}
+  CLEN=${#s}
+}
 
 scan_index_hooks() {
   local dir="$1" slug="$2" line target hook desc dlen hlen
   local idx="$dir/MEMORY.md"
   local n=0
   [ -f "$idx" ] || return 0
-  # Candidates from one grep: a hook ends where its line ends, so a line that
-  # does not end this way cannot hold one. The exact test still runs below.
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    n=${line%%:*}; line=${line#*:}
+  # Every line is tested in this shell: a grep to pick candidates, and then a
+  # grep, sed and tr per candidate, were most of the starts a run made.
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
     case "$line" in '- ['*) ;; *) continue ;; esac
     # Split on the separator the index format uses; no separator, no hook.
     hook=${line#*") — "}
     [ "$hook" = "$line" ] && continue
     # Trails off: an ellipsis, or a connective the writer meant to continue past.
-    printf '%s' "$hook" \
-      | grep -qE '(…|\.\.\.|,|;)$|(^|[[:space:]])(and|or|not|the|but|with|is|of|to|for|an?)$' \
-      || continue
-    target=$(printf '%s' "$line" | sed -n 's/.*](\([^)]*\.md\)).*/\1/p' | head -1)
+    [[ $hook =~ $TRAIL_RE ]] || continue
+    target=""; [[ $line =~ $LINK_RE ]] && target=${BASH_REMATCH[1]}
     [ -n "$target" ] && [ -f "$dir/$target" ] || continue
-    desc=$(sed -n 's/^description: *//p' "$dir/$target" | head -1 | sed 's/^"//; s/"$//')
+    desc=""
+    while IFS= read -r dline || [ -n "$dline" ]; do
+      if [[ $dline =~ $DESC_RE ]]; then desc=${BASH_REMATCH[1]}; break; fi
+    done 2>/dev/null < "$dir/$target"
+    desc=${desc#\"}; desc=${desc%\"}
     [ -n "$desc" ] || continue
     # Characters, not bytes: ${#var} counts bytes under a POSIX locale.
-    dlen=$(printf '%s' "$desc" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
-    hlen=$(printf '%s' "$hook" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
+    char_len "$desc"; dlen=$CLEN
+    char_len "$hook"; hlen=$CLEN
     [ $(( dlen * 100 )) -ge $(( hlen * HOOK_MIN_DESC_RATIO )) ] || continue
     emit HOOK "$slug" "MEMORY.md:$n" \
       "hook trails off (\"$hook\") but ${target} still has the payload: $(printf '%.120s' "$desc")"
-  done <<EOF
-$(grep -nE '(…|\.\.\.|,|;)$|[[:space:]](and|or|not|the|but|with|is|of|to|for|an?)$' "$idx")
-EOF
+  done < "$idx"
 }
 
 # Advisory overlap pass. Answers one question a size problem actually turns
@@ -499,7 +564,7 @@ scan_curation() {
   # and match everywhere, so they are excluded by the length floor.
   for f in "$dir"/*.md; do
     [ -f "$f" ] || continue
-    base=$(basename "$f")
+    base=${f##*/}
     [ "$base" = "MEMORY.md" ] && continue
     # MEMORY_ARCHIVE.md, not ARCHIVE.md: this guard named a file that has never
     # existed, so the archive's index lines were mined for claims like any
@@ -537,24 +602,70 @@ scan_curation() {
   rm -f "$tmp" "$tmp.p"
 }
 
+# "<file><TAB><ref>" for every issue-shaped ref in the given files, one line per
+# distinct pair, grouped by file and sorted within it as `sort -u` sorts the refs.
+# awk has no {n,m} in every build, so the interval is spelled out; the standards
+# tokens (SHA-256, ISO-8601) are dropped here and not by a second grep.
+store_ids() {
+  awk -v OFS='\t' '
+    FNR == 1 { base = FILENAME; sub(/.*\//, "", base) }
+    {
+      s = $0
+      while (match(s, "([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9][0-9][0-9]?[0-9]?[0-9]?[0-9]?|[A-Z][A-Z][A-Z]?[A-Z]?[A-Z]?[A-Z]?[A-Z]?[A-Z]?[A-Z]?[A-Z]?-[0-9][0-9][0-9]?[0-9]?[0-9]?[0-9]?")) {
+        id = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+        if (id !~ /^(SHA|ISO|UTF|RFC|AES|RSA|TLS|HMAC|UTC|BASE)-/) print base, id
+      }
+    }' "$@" 2>/dev/null | sort -u -t "$TAB" -k1,1 -k2,2
+}
+
+# BASES = a newline, then each path's file name and a newline: `case` matches "$NL$name$NL".
+base_list() {
+  local p out=""
+  while IFS= read -r p; do [ -n "$p" ] && out="$out${p##*/}$NL"; done <<< "$1"
+  BASES="$NL$out"
+}
+
+# Sets `claims` (in scan_store) to the verify: claims of <file>, one a line, from CLAIMS.
+claims_of() {
+  local b="$1" rest
+  claims=""
+  case "$CLAIMS" in *"$NL$b$TAB"*) ;; *) return 0 ;; esac
+  rest=${CLAIMS#*"$NL$b$TAB"}
+  while :; do
+    claims="$claims${rest%%"$NL"*}$NL"
+    rest=${rest#*"$NL"}
+    case "$rest" in "$b$TAB"*) rest=${rest#"$b$TAB"} ;; *) break ;; esac
+  done
+  while [ "${claims%"$NL"}" != "$claims" ]; do claims=${claims%"$NL"}; done
+}
+
 scan_store() {
   local dir="$1" slug="$2" f base claims line kind ref expected _rest age ids id_count note
-  local settled recorded_only mtype waived waiver
+  local settled recorded_only mtype waived waiver rest
 
   # Every gh claim in the store, looked up in batches before the first emit.
-  : > "$TMP_DIR/waivers"; : > "$TMP_DIR/vfiles"
-  store_prepass "$dir"/*.md \
-    | awk -F'\t' -v w="$TMP_DIR/waivers" -v v="$TMP_DIR/vfiles" '
-        $1 == "G" { print $2 "\t" $3 } $1 == "W" { print $2 "\t" $3 > w } $1 == "V" { print $2 > v }' \
-    | LC_ALL=C sort -u > "$TMP_DIR/gh-refs"
-  gh_prefetch "$TMP_DIR/gh-refs"
-  WAIVERS="$NL$(cat "$TMP_DIR/waivers")$NL"
+  : > "$TMP_DIR/g"; : > "$TMP_DIR/w"; : > "$TMP_DIR/v"; : > "$TMP_DIR/c"
+  store_prepass "$TMP_DIR" "$dir"/*.md
+  if [ "$HAVE_GH" -eq 1 ]; then
+    LC_ALL=C sort -u "$TMP_DIR/g" > "$TMP_DIR/gh-refs"
+    gh_prefetch "$TMP_DIR/gh-refs"
+  fi
+  WAIVERS="$NL$(<"$TMP_DIR/w")$NL"
   WAIVED_FILES="$NL"
   # One awk and two greps for the store, not one of each per file: on a few
   # hundred memories the per-file execs were most of the run once gh was batched.
-  VFILES="$NL$(cat "$TMP_DIR/vfiles")$NL"
-  OPEN_FILES="$NL$(grep -liE "$OPEN_RE" "$dir"/*.md 2>/dev/null | sed 's#.*/##')$NL"
-  CLOSED_FILES="$NL$(grep -liE "$CLOSED_RE" "$dir"/*.md 2>/dev/null | sed 's#.*/##')$NL"
+  # The verify: claims and the refs below come out of the store's one awk each too.
+  VFILES="$NL$(<"$TMP_DIR/v")$NL"
+  CLAIMS="$NL$(<"$TMP_DIR/c")$NL"
+  OPEN_FILES=$(grep -liE "$OPEN_RE" "$dir"/*.md 2>/dev/null)
+  base_list "$OPEN_FILES"; OPEN_FILES=$BASES
+  # Closed-state and refs are read only to annotate an open-state finding.
+  CLOSED_FILES="$NL"; IDS="$NL"
+  if [ "$OPEN_FILES" != "$NL" ]; then
+    CLOSED_FILES=$(grep -liE "$CLOSED_RE" "$dir"/*.md 2>/dev/null)
+    base_list "$CLOSED_FILES"; CLOSED_FILES=$BASES
+    IDS="$NL$(store_ids "$dir"/*.md)$NL"
+  fi
 
   for f in "$dir"/*.md; do
     [ -f "$f" ] || continue
@@ -578,7 +689,7 @@ scan_store() {
     esac
 
     claims=""
-    case "$VFILES" in *"$NL$base$NL"*) claims=$(verify_lines "$f") ;; esac
+    case "$VFILES" in *"$NL$base$NL"*) claims_of "$base" ;; esac
     if [ -n "$claims" ]; then
       # Track whether every claim in this memory has reached a terminal state.
       settled=1; recorded_only=0
@@ -612,7 +723,9 @@ scan_store() {
             # evidence there is. Good enough to SUGGEST retirement, which is
             # reversible - and if it ever diverges, the skill's next run says
             # STALE. Never good enough to act on unattended.
-            printf '%s' "$expected" | grep -qiE "$TERMINAL_RE" || settled=0
+            shopt -s nocasematch
+            [[ $expected =~ $TERMINAL_RE ]] || settled=0
+            shopt -u nocasematch
             recorded_only=1
             ;;
           *)
@@ -633,8 +746,11 @@ scan_store() {
       # should stay quiet on a default run, and a settled memory is not a
       # defect. It is only interesting when the index is being trimmed.
       mtype=""
-      [ "$CURATE" -eq 1 ] && [ "$settled" -eq 1 ] \
-        && mtype=$(sed -n 's/^[[:space:]]*type:[[:space:]]*\([a-z]*\)[[:space:]]*$/\1/p' "$f" | head -1)
+      if [ "$CURATE" -eq 1 ] && [ "$settled" -eq 1 ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+          if [[ $line =~ $TYPE_RE ]]; then mtype=${BASH_REMATCH[1]}; break; fi
+        done 2>/dev/null < "$f"
+      fi
       if [ "$mtype" = "project" ] \
          && case "$OPEN_FILES" in *"$NL$base$NL"*) false ;; *) true ;; esac \
          && ! archived_already "$dir" "$base"; then
@@ -658,16 +774,22 @@ scan_store() {
     # sat in the most-read block of the index the whole time.
     case "$OPEN_FILES" in *"$NL$base$NL"*) ;; *) continue ;; esac
     if [ "$waived" -eq 0 ]; then
-      age=$(age_days "$f")
+      age_days "$f"; age=$AGE
       # Advisory context for the skill, which reads the file itself anyway — so
       # bias to high signal over completeness. Standards tokens (SHA-256,
       # ISO-8601) match the Jira-key shape but are never tickets, and a file
       # citing thirty PRs produces an unreadable line, so cap the list.
-      ids=$(grep -oE '([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]{2,6}|[A-Z]{2,10}-[0-9]{2,6}' "$f" 2>/dev/null \
-              | grep -vE '^(SHA|ISO|UTF|RFC|AES|RSA|TLS|HMAC|UTC|BASE)-' \
-              | sort -u)
-      id_count=$(printf '%s\n' "$ids" | grep -c . || true)
-      ids=$(printf '%s\n' "$ids" | head -8 | tr '\n' ' ' | sed 's/ $//')
+      ids=""; id_count=0
+      case "$IDS" in
+        *"$NL$base$TAB"*)
+          rest=${IDS#*"$NL$base$TAB"}
+          while :; do
+            id_count=$((id_count + 1))
+            [ "$id_count" -le 8 ] && ids="$ids${ids:+ }${rest%%"$NL"*}"
+            rest=${rest#*"$NL"}
+            case "$rest" in "$base$TAB"*) rest=${rest#"$base$TAB"} ;; *) break ;; esac
+          done ;;
+      esac
       [ "$id_count" -gt 8 ] && ids="$ids …and $((id_count - 8)) more"
       note="${age}d old, asserts open state"
       case "$CLOSED_FILES" in
@@ -689,11 +811,11 @@ STORES_SCANNED=0
 : > "$TMP_DIR/jira-keys"
 for store in "$PROJECTS"/*; do
   [ -d "$store/memory" ] || continue
-  slug=$(basename "$store")
+  slug=${store##*/}
   [ -n "$ONLY_STORE" ] && [ "$slug" != "$ONLY_STORE" ] && continue
   STORES_SCANNED=$((STORES_SCANNED+1))
   if [ "$JIRA_KEYS" -eq 1 ]; then
-    store_prepass "$store/memory"/*.md | awk -F'\t' '$1 == "J" { print $2 }' >> "$TMP_DIR/jira-keys"
+    store_prepass "" "$store/memory"/*.md >> "$TMP_DIR/jira-keys"
     continue
   fi
   scan_store "$store/memory" "$slug"
@@ -726,6 +848,7 @@ if [ "$JIRA_KEYS" -eq 1 ]; then
   exit 0
 fi
 
+flush_json
 if [ "$AS_JSON" -eq 0 ]; then
   echo ""
   echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_NEEDS_MCP need-mcp, $N_SKIP skipped, $N_VERIFIED verified, $N_OVERSIZE oversize, $N_SETTLED settled, $N_CANDIDATE candidates, $N_HOOK thin-hooks, $N_ORPHAN orphans, $N_WAIVED waived"
