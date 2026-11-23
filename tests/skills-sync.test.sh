@@ -184,9 +184,17 @@ NCH=$(awk 'NR == FNR { c[$0] = 1; next } ($3 in c) { n++ } END { print n + 0 }' 
 [[ -n "$AFTER" && "$(unchanged "$AFTER")" == "$(unchanged "$BEFORE")" ]] && WHY=$(pinned_bytes "$AFTER" "$BEFORE") \
   && pass "~/.claude/skills and the templates: every path, mode and byte as $FROM left them, but the $NCH installed files the pin changed since v1.0.0, which hold its bytes" \
   || fail "the tree changed" "${WHY:-}$(diff <(unchanged "$BEFORE") <(unchanged "$AFTER") | head -8)"
-[[ "$OUT" == *"pick up what changed since $(git -C "$REPO" rev-parse --short=12 "$FROM^{commit}")"* && "$OUT" != *"$U/.claude/skills/"* ]] \
+[[ "$OUT" == *"pick up what changed since $(git -C "$REPO" rev-parse --short=12 "$FROM^{commit}")"* ]] \
+  && ! grep -E '^  Deleted from the clone' <<<"$OUT" | grep -qF "$U/.claude/skills/" \
   && pass "the report ran from $FROM, and names nothing under ~/.claude/skills as removed or kept" \
   || fail "the report" "$(grep -E 'since|Deleted' <<<"$OUT" | head -3) $(grep -F "$U/.claude/skills/" <<<"$OUT" | head -3)"
+# The skills installer names a changed panel file, for a restart; only one the pin changed.
+PANELS=$(grep -E '^skills/[^/]+/panel/' <<<"$CHANGED" | while IFS= read -r p; do
+           awk -v p="$p" '$3 == p { f = 1 } END { exit !f }' <<<"$AFTER" && printf '%s\n' "$p"; done \
+         | sed "s|^skills/|$U/.claude/skills/|" | sort)
+GOT=$(grep -F 'A panel changed' <<<"$OUT" | grep -oE "$U/\.claude/skills/[^ ]+" | sort)
+[[ "$GOT" == "$PANELS" ]] && pass "the panel line names exactly the $(grep -c . <<<"$PANELS") installed panel files the pin changed" \
+  || fail "the panel line" "wanted: $PANELS"$'\n'"    got: $GOT"
 [[ -f "$U/.claude/skills.manifest" && "$(wc -l < "$U/.claude/skills.manifest" | tr -d ' ')" == "$(grep -c '^-' <<<"$(sig "$U/.claude/skills")")" ]] \
   && pass "the skills installer's record lists every file there, outside the tree" || fail "manifest" "$(wc -l < "$U/.claude/skills.manifest" 2>&1)"
 
