@@ -8,6 +8,20 @@ installed machine to the newest tag. After v1.4.2 the skills live in
 [claude-code-skills](https://github.com/AdityaRon/claude-code-skills), with their
 own changelog; `config/skills.pin` names the release each version installs.
 
+## v1.4.24 (2026-11-23)
+
+Merged since v1.4.23: 2 PRs.
+
+### Other
+- friction cases: A2 (git push --force inside sh -c) is fixed (#333)
+- tests: spend-report's causes and prices cases on the transcript helpers (#332)
+
+### Benchmark vs v1.4.23
+
+Gate script and corpus from `0c106e9` (v1.4.23): 515 payloads, 0 of them new in this change.
+
+hooks/ and config/settings.json match v1.4.23; benchmark skipped (both sides would run the same files).
+
 ## v1.4.23 (2026-11-23)
 
 Merged since v1.4.22: 3 PRs.
