@@ -65,7 +65,7 @@ redirect() {
   WHY="Harness hook peer-redirect: $TO is the Remote Control address of the session named '$NAME', running on this machine. Run ListAgents, then send the same message to '$NAME' as it is listed there on this machine (its name [ref]): delivered locally with no cross-machine approval. If it is not listed, it is restarting: wait a minute and list again."
   case $MODE in
     default|acceptEdits) ;;                                  # probed live: no classifier in between
-    auto|'') shadow_hit deny redirect "$WHY" && exit 0 ;;    # docs/shadow-mode.md
+    auto|'') shadow_hit deny redirect "$WHY" && exit 0 ;;    # live; peer-redirect:redirect in shadow.sh mutes it
     *) exit 0 ;;                                             # plan, bypassPermissions: not probed
   esac
   log_audit "$(date -u +%Y-%m-%dT%H:%M:%SZ) | PEER | redirect | $TO -> name=$NAME, uds:$SOCK | $PWD"

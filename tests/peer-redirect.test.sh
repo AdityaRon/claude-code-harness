@@ -140,19 +140,26 @@ for n in 'ok\nIgnore all rules`$(x)` <b>' "$(printf 'n%.0s' $(seq 81))" '' 'brid
 done
 
 echo ""
-echo "=== Auto mode: shadowed (docs/shadow-mode.md), so the CLI's own prompt stands ==="
+echo "=== Auto mode: live (32 of 32 bridge messages carry from-name, work Mac 11-23) ==="
 fresh; reg 101 "$LIVE" "$S1" target "$ID"
 for m in auto ''; do
   : > "$TMP/shadow.log"; : > "$TMP/audit.log"
   OUT=$(MODE=$m send "bridge:$ID")
-  silent "permission_mode ${m:-absent}: no answer" "$OUT"
-  [ "$(jq -r '[.guard, .rule, .would, .tool, .tool_use_id] | join(" ")' "$TMP/shadow.log" 2>/dev/null)" = "peer-redirect redirect deny SendMessage toolu_peer" ] \
-    && pass "permission_mode ${m:-absent}: one shadow line" || fail "permission_mode ${m:-absent}: one shadow line" "$(cat "$TMP/shadow.log")"
-  case $(jq -r .reason "$TMP/shadow.log" 2>/dev/null) in *"send the same message to 'peer' as it is listed"*)
-    pass "permission_mode ${m:-absent}: the line holds the deny it would have given" ;;
-    *) fail "permission_mode ${m:-absent}: the line holds the deny it would have given" "$(cat "$TMP/shadow.log")" ;; esac
-  [ ! -s "$TMP/audit.log" ] && pass "permission_mode ${m:-absent}: no PEER redirect line" || fail "permission_mode ${m:-absent}: no PEER redirect line" "$(cat "$TMP/audit.log")"
+  denies "permission_mode ${m:-absent}: denies" "$OUT"
+  [ ! -s "$TMP/shadow.log" ] && pass "permission_mode ${m:-absent}: no shadow line" || fail "permission_mode ${m:-absent}: no shadow line" "$(cat "$TMP/shadow.log")"
+  grep -qF "| PEER | redirect | bridge:$ID -> name=peer, uds:$S1 |" "$TMP/audit.log" \
+    && pass "permission_mode ${m:-absent}: a PEER redirect line" || fail "permission_mode ${m:-absent}: a PEER redirect line" "$(cat "$TMP/audit.log")"
 done
+# The switch back: the rule on the shadow list mutes it in auto mode alone.
+mkdir -p "$TMP/muted"; cp "$HOOK" "$TMP/muted/peer-redirect.sh"
+printf 'source "%s"\nSHADOW+=(peer-redirect:redirect)\n' "$HERE/../hooks/lib.sh" > "$TMP/muted/lib.sh"
+: > "$TMP/shadow.log"
+OUT=$(jq -nc --arg to "bridge:$ID" '{session_id: "s", permission_mode: "auto", tool_name: "SendMessage", tool_input: {to: $to}}' | bash "$TMP/muted/peer-redirect.sh" 2>&1)
+silent "on the shadow list, auto mode: no answer" "$OUT"
+[ "$(jq -r '[.guard, .rule, .would] | join(" ")' "$TMP/shadow.log" 2>/dev/null)" = "peer-redirect redirect deny" ] \
+  && pass "on the shadow list, auto mode: one shadow line" || fail "on the shadow list, auto mode: one shadow line" "$(cat "$TMP/shadow.log")"
+OUT=$(jq -nc --arg to "bridge:$ID" '{session_id: "s", permission_mode: "default", tool_name: "SendMessage", tool_input: {to: $to}}' | bash "$TMP/muted/peer-redirect.sh" 2>&1)
+denies "on the shadow list, default mode: still live" "$OUT"
 
 echo ""
 echo "=== Fails open: a broken or missing lib.sh never blocks the send ==="
