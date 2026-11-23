@@ -22,6 +22,11 @@ cause, from the call before it in the same transcript file:
 A file's TTL is that of the majority of its cache-write tokens: 1 h, or 5 min
 (the API default, and what a write that names no TTL is priced at). Not the
 previous call's: one that only read the cache says nothing about the TTL.
+A `<synthetic>` record (written when not logged in, the login expired or the API
+was unreachable) is no call: it is left out, and a tick that got only those is
+counted as failed. A call copied into a forked or resumed transcript keeps its
+place in each file's own chain, so a gap is measured from the call before it in
+that file; its cost is still counted once.
 Away spend is what ran when no prompt had been typed in any session for --away
 minutes, such as a loop's ticks overnight or a subagent still running after you left.
 
@@ -134,7 +139,8 @@ def prompt_of(d):
 def load(root, oldest):
     """Every transcript written since `oldest`: calls, prompts, agent types, and the
     times of each file's compact_boundary records."""
-    best, prompts, agents, bounds = {}, collections.defaultdict(list), {}, collections.defaultdict(list)
+    chain, synth = {}, {}
+    prompts, agents, bounds = collections.defaultdict(list), {}, collections.defaultdict(list)
     for path in sorted(glob.glob(os.path.join(root, '**', '*.jsonl'), recursive=True)):
         try:
             if os.path.getmtime(path) < oldest.timestamp():
@@ -169,17 +175,34 @@ def load(root, oldest):
                 if not isinstance(m, dict) or not m.get('id') or not isinstance(m.get('usage'), dict):
                     continue
                 key = (m['id'], d.get('requestId'))
+                if m.get('model') == '<synthetic>':
+                    if not aid:
+                        synth[key] = (t, sid)
+                    continue
                 # A streamed message is logged once per content block; the last
                 # one carries the final output count.
-                if key in best and (m['usage'].get('output_tokens') or 0) < (best[key]['usage'].get('output_tokens') or 0):
+                k = (key, path)
+                if k in chain and (m['usage'].get('output_tokens') or 0) < (chain[k]['usage'].get('output_tokens') or 0):
                     continue
-                best[key] = {'t': t, 'model': m.get('model'), 'usage': m['usage'], 'sid': sid, 'aid': aid,
-                             'project': project, 'path': path}
+                chain[k] = {'t': t, 'model': m.get('model'), 'usage': m['usage'], 'sid': sid, 'aid': aid,
+                            'project': project, 'path': path}
     for v in prompts.values():
         v.sort(key=lambda p: p[0])
     for v in bounds.values():
         v.sort()
-    return list(best.values()), prompts, agents, bounds
+    # One copy of a call carries its cost; every copy sits in its own file's chain.
+    # A main transcript's copy first: a fork subagent's first line repeats its
+    # parent's call, which belongs to the parent's turn. Then the most output.
+    rank = lambda c: (not c['aid'], c['usage'].get('output_tokens') or 0)
+    best = {}
+    for (key, _), c in chain.items():
+        if key not in best or rank(c) >= rank(best[key]):
+            best[key] = c
+    for c in chain.values():
+        c['counted'] = False
+    for c in best.values():
+        c['counted'] = True
+    return list(chain.values()), list(synth.values()), prompts, agents, bounds
 
 
 def written(u):
@@ -226,13 +249,13 @@ def share(acc):
 
 def first_cause(turn):
     """The cause of the rewrite a turn's first call made, or 'none'."""
-    return turn['first']['cause'] or 'none'
+    return turn['first'] and turn['first']['cause'] or 'none'
 
 
 def report(args, now):
     since, until = when(args.since, now), when(args.until, now) if args.until else now
     away = dt.timedelta(minutes=args.away)
-    calls, prompts, agents, bounds = load(args.root, since - away)
+    calls, synth, prompts, agents, bounds = load(args.root, since - away)
     prices = dict(PRICES)
     if args.prices:
         prices.update({k: tuple(v) for k, v in json.load(open(args.prices)).items()})
@@ -253,7 +276,7 @@ def report(args, now):
         prev[c['path']] = c
         c['ctx'] = ctx
         c['written'] = cw
-        if not since <= c['t'] < until:
+        if not c['counted'] or not since <= c['t'] < until:
             continue
         c['own'], c['adv'] = call_cost(c['model'], u, prices, unpriced)
         i = bisect.bisect_right(typed, c['t'])
@@ -266,7 +289,7 @@ def report(args, now):
     tot, adv, away_acc = acc(), acc(), acc()
     sessions = collections.defaultdict(lambda: {'cost': acc(), 'calls': 0, 'rewrites': 0, 'away': 0.0, 'project': ''})
     subs = collections.defaultdict(lambda: {'cost': acc(), 'calls': 0, 'rewrites': 0, 'away': 0.0, 'first': None})
-    turns = collections.defaultdict(lambda: {'cost': acc(), 'calls': 0, 'ctx': 0, 'first': None})
+    turns = collections.defaultdict(lambda: {'cost': acc(), 'calls': 0, 'ctx': 0, 'first': None, 'synthetic': 0})
     # Cache-write tokens, and each cause's rewrite calls and tokens, main sessions and subagents apart.
     causes = {g: {'written': 0, **{k: {'calls': 0, 'tokens': 0} for k in CAUSES}} for g in ('main', 'subagents')}
     for c in rows:
@@ -300,6 +323,10 @@ def report(args, now):
             if tr['first'] is None or c['t'] < tr['first']['t']:
                 tr['first'] = c
 
+    for t, sid in synth:
+        j = bisect.bisect_right(starts.get(sid, []), t) - 1
+        if j >= 0 and since <= t < until:
+            turns[(sid, j)]['synthetic'] += 1
     alerts, out = [], []
     grand = {k: tot[k] + adv[k] for k in BUCKETS}
     loc = lambda t: t.astimezone().strftime('%Y-%m-%d %H:%M')
@@ -349,18 +376,23 @@ def report(args, now):
     if args.tick_prompt:
         cost = sum(total(x[4]['cost']) for x in listed)
         n = len(listed)
-        out.append(f"\nticks whose prompt contains {args.tick_prompt!r}: {n}, ${cost:.2f}"
+        failed = sum(x[4]['first'] is None for x in listed)
+        out.append(f"\nticks whose prompt contains {args.tick_prompt!r}: {n}, ${cost:.2f}, {failed} failed"
                    + (f", ${cost / n:.2f} and {sum(x[4]['calls'] for x in listed) / n:.1f} calls a tick, "
                       f"largest context {max(x[4]['ctx'] for x in listed) // 1000}k" if n else ''))
         if args.max_ticks is not None and cost > args.max_ticks:
             alerts.append(f"ticks cost ${cost:.2f}, over --max-ticks ${args.max_ticks:.2f}")
-        if n:
-            out.append(f"  first call a ttl-gap rewrite in {sum(first_cause(x[4]) == 'ttl-gap' for x in listed)} of {n} ticks")
+        if n > failed:
+            out.append(f"  first call a ttl-gap rewrite in {sum(first_cause(x[4]) == 'ttl-gap' for x in listed)} of {n - failed} ticks")
         for t, sid, _, _, tr in listed:
             f = tr['first']
+            if f is None:
+                out.append(f"  {loc(t)}  {sid[:8]}  failed: no API call")
+                continue
             what = (f"{first_cause(tr)} rewrite, {toks(f['written'])} written" if f['cause'] else 'no rewrite')
-            gap = f" after {f['gap'].total_seconds() / 60:.0f} min (TTL {f['ttl'].total_seconds() / 60:.0f} min)" if f['gap'] else ''
-            out.append(f"  {loc(t)}  {sid[:8]}  first call: {what}{gap}")
+            gap = f", {f['gap'].total_seconds() / 60:.0f} min since this transcript's last call" if f['gap'] else ''
+            ttl = f" (TTL {f['ttl'].total_seconds() / 60:.0f} min)" if f['gap'] and f['cause'] else ''
+            out.append(f"  {loc(t)}  {sid[:8]}  first call: {what}{gap}{ttl}")
     if args.turns:
         out.append('\nturns: started, cost, calls, write share, largest context, session, started by, prompt')
         for t, sid, kind, text, tr in listed:
@@ -375,7 +407,8 @@ def report(args, now):
                           'subagents': {'/'.join(k): {**v, 'first': v['first'] and v['first'].isoformat()}
                                         for k, v in subs.items()},
                           'turns': [{'start': t.isoformat(), 'session': sid, 'kind': kind, 'calls': tr['calls'],
-                                     'ctx': tr['ctx'], 'cost': tr['cost'], 'first_call': first_cause(tr)}
+                                     'ctx': tr['ctx'], 'cost': tr['cost'], 'first_call': first_cause(tr),
+                                     'failed': tr['first'] is None}
                                     for t, sid, kind, _, tr in listed]},
                          indent=1))
     else:

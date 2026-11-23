@@ -20,10 +20,13 @@ text, never a dollar amount (spend shows as a share), never a tool's own output.
 nothing, installs nothing and uses no network: memory-verify runs --offline, and disk-space is
 pointed at `false` for `claude agents`, so job liveness reads unknown (sizes do not need it).
 
+Each step prints its name and seconds on stderr as it ends (`spend-report 141 s`), and --json
+carries them as `steps`; stdout is unchanged. Nothing is cached between runs.
+
 Exit status: 0; 2 on a bad argument. A tool that fails is named, with its exit status, and its
 cost is left out of the ranking.
 """
-import argparse, datetime as dt, json, os, re, shutil, subprocess, sys
+import argparse, datetime as dt, json, os, re, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOME = os.path.expanduser('~')
@@ -177,8 +180,14 @@ def gather(days):
         ('memory-verify', ['bash', tool('memory-verify.sh'), '--offline', '--json'], env,
          lambda rows: memory(rows, projects)),
     ]
+    timings = []
     for name, argv, env, read in steps:
+        began = time.monotonic()
         d, why = run(name, argv, env)
+        took = time.monotonic() - began
+        # Progress goes to stderr only: stdout is the report, or the --json a caller parses.
+        print(f'{name} {took:.0f} s', file=sys.stderr, flush=True)
+        timings.append({'name': name, 'seconds': round(took, 1)})
         if d is None:
             errors.append(why)
             continue
@@ -192,7 +201,8 @@ def gather(days):
         else:
             errors.append(f'{name}: nothing to measure in the window')
     costs.sort(key=lambda c: -c['x'])
-    return {'generated': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'days': days, 'costs': costs, 'errors': errors}
+    return {'generated': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'days': days, 'costs': costs, 'errors': errors,
+            'steps': timings}
 
 
 def number(v, unit):

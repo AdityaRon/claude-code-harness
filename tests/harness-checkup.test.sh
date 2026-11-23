@@ -53,8 +53,9 @@ GIT=$(command -v git)
 printf '#!/usr/bin/env bash\necho "git $*" >> "%s.git"\nexec "%s" "$@"\n' "$LOG" "$GIT" > "$STUB/git"; chmod +x "$STUB/git"
 
 check() {  # check SCRIPT: run it as this HOME would, with the stubs first on PATH
-  OUT=$(HOME="$H" PATH="$STUB:$PATH" MEMORY_VERIFY_GH_CMD="" CLAUDE_GUARD_TIMING_LOG="" python3 "$1" 2>&1); RC=$?
-  JSON=$(HOME="$H" PATH="$STUB:$PATH" MEMORY_VERIFY_GH_CMD="" CLAUDE_GUARD_TIMING_LOG="" python3 "$1" --json 2>&1)
+  OUT=$(HOME="$H" PATH="$STUB:$PATH" MEMORY_VERIFY_GH_CMD="" CLAUDE_GUARD_TIMING_LOG="" python3 "$1" 2>"$TMP/err"); RC=$?
+  ERR=$(cat "$TMP/err")
+  JSON=$(HOME="$H" PATH="$STUB:$PATH" MEMORY_VERIFY_GH_CMD="" CLAUDE_GUARD_TIMING_LOG="" python3 "$1" --json 2>/dev/null)
 }
 has() { [[ "$OUT" == *"$1"* ]] && pass "$2" || fail "$2" "wanted: $1"$'\n'"$OUT"; }
 # Python's own bytecode cache for a fresh HOME (macOS's python3 keeps it there) is not the checkup's.
@@ -80,6 +81,14 @@ suite() {  # suite WHERE SCRIPT
   python3 -c 'import json,sys; d=json.loads(sys.argv[1]); x=[c["x"] for c in d["costs"]]
 assert len(x) == 5 and x == sorted(x, reverse=True) and not d["errors"]' "$JSON" 2>/dev/null \
     && pass "$1: --json has all five costs, ranked" || fail "$1: --json" "$JSON"
+  [[ "$(printf '%s\n' "$ERR" | grep -cE '^(spend-report|permission-friction|hook-latency|disk-space|memory-verify) [0-9]+ s$')" == 5 \
+    && "$(printf '%s\n' "$ERR" | wc -l | tr -d ' ')" == 5 ]] \
+    && pass "$1: stderr has one progress line per step, name and seconds" || fail "$1: progress lines" "$ERR"
+  python3 -c 'import json,sys; d=json.loads(sys.argv[1]); s=d["steps"]
+assert [x["name"] for x in s]==["spend-report","permission-friction","hook-latency","disk-space","memory-verify"]
+assert all(isinstance(x["seconds"],(int,float)) and x["seconds"]>=0 for x in s)' "$JSON" 2>/dev/null \
+    && pass "$1: stdout --json parses, with seconds per step" || fail "$1: --json steps" "$JSON"
+  ! grep -qE '^[a-z-]+ [0-9]+ s$' <<<"$OUT$JSON" && pass "$1: no progress line on stdout" || fail "$1: progress on stdout" "$OUT"
   [[ ! -s "$LOG" ]] && pass "$1: no gh, curl, wget, claude, ssh or nc ran" || fail "$1: a network client ran" "$(cat "$LOG")"
   ! grep -qE '^git (fetch|clone|pull|push|ls-remote|remote)' "$LOG.git" 2>/dev/null \
     && pass "$1: git never reached a remote" || fail "$1: git reached a remote" "$(cat "$LOG.git")"
@@ -105,7 +114,7 @@ check "$H/.claude/harness-checkup.py"
 has 'Not measured: spend-report exited 2.' "the failed tool is named with its exit status"
 has 'Not measured: hook-latency: nothing to measure in the window.' "no timing log: the guard cost is named as not measured"
 has '1. the largest memory index' "the others still rank"
-[[ $RC -eq 0 && "$OUT" != *Traceback* ]] && pass "and the checkup still exits 0" || fail "failed tool" "$OUT"
+[[ $RC -eq 0 && "$OUT$ERR" != *Traceback* ]] && pass "and the checkup still exits 0" || fail "failed tool" "$OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
