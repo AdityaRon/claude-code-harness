@@ -30,7 +30,7 @@ bin/                     ← every file installed flat to ~/.claude by install.s
   hooknames.py           ← names the hook a transcript record numbers, for the two above: by the guard
                            whose words are in the reason on its own stdout, else by settings.json
   harness-checkup.py     ← the three largest costs on this machine, from the tools above and
-                           memory-verify; offline, and it prints no prompt text and no dollar amounts
+                           each memory index; offline, and it prints no prompt text and no dollar amounts
 tools/                   ← run from the clone only, by CI, releases and whoever maintains a fork
   upstream-check.sh      ← the daily breakage check
   fork-setup.sh          ← what a fork's GitHub settings need before the workflows run
