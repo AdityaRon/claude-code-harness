@@ -8,7 +8,6 @@ PASS=0; FAIL=0
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 fail() { echo "  FAIL: $1"; [[ -n "${2:-}" ]] && printf '    %s\n' "$2"; FAIL=$((FAIL+1)); }
 command -v python3 >/dev/null || { echo "  SKIP: no python3"; echo "--- Results: 0 passed, 0 failed ---"; exit 0; }
-command -v jq >/dev/null || { echo "  SKIP: no jq (memory-verify needs it)"; echo "--- Results: 0 passed, 0 failed ---"; exit 0; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cch.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 REPO=$PWD
 H="$TMP/home"
@@ -39,7 +38,7 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
   printf 'toolu_t%s\tBash\tgit-guard=0.020:0:allow\tinterpreter-guard=1.500:0:allow\tat=%s\n' "$i" "$AT"
 done > "$H/.claude/logs/guard-timing.log"
 echo '{}' > "$H/.claude/jobs/0a1b2c3d/state.json"
-# A memory store: a 150-line index (75% of 200), and a GitHub claim offline mode must not look up.
+# A memory store: a 150-line index (75% of 200), and a GitHub claim nothing may look up.
 M="$H/.claude/projects/-work-proj/memory"; mkdir -p "$M"
 { echo "- [Fix](fix.md) — the fix"; for i in $(seq 2 150); do echo "- line $i"; done; } > "$M/MEMORY.md"
 printf -- '---\nname: fix\ndescription: d\nmetadata:\n  type: project\n---\nverify:\n  - gh acme/api#1 merged\n\nLanded.\n' > "$M/fix.md"
@@ -53,9 +52,9 @@ GIT=$(command -v git)
 printf '#!/usr/bin/env bash\necho "git $*" >> "%s.git"\nexec "%s" "$@"\n' "$LOG" "$GIT" > "$STUB/git"; chmod +x "$STUB/git"
 
 check() {  # check SCRIPT: run it as this HOME would, with the stubs first on PATH
-  OUT=$(HOME="$H" PATH="$STUB:$PATH" MEMORY_VERIFY_GH_CMD="" CLAUDE_GUARD_TIMING_LOG="" python3 "$1" 2>"$TMP/err"); RC=$?
+  OUT=$(HOME="$H" PATH="$STUB:$PATH" CLAUDE_GUARD_TIMING_LOG="" python3 "$1" 2>"$TMP/err"); RC=$?
   ERR=$(cat "$TMP/err")
-  JSON=$(HOME="$H" PATH="$STUB:$PATH" MEMORY_VERIFY_GH_CMD="" CLAUDE_GUARD_TIMING_LOG="" python3 "$1" --json 2>/dev/null)
+  JSON=$(HOME="$H" PATH="$STUB:$PATH" CLAUDE_GUARD_TIMING_LOG="" python3 "$1" --json 2>/dev/null)
 }
 has() { [[ "$OUT" == *"$1"* ]] && pass "$2" || fail "$2" "wanted: $1"$'\n'"$OUT"; }
 # Python's own bytecode cache for a fresh HOME (macOS's python3 keeps it there) is not the checkup's.
@@ -81,11 +80,11 @@ suite() {  # suite WHERE SCRIPT
   python3 -c 'import json,sys; d=json.loads(sys.argv[1]); x=[c["x"] for c in d["costs"]]
 assert len(x) == 5 and x == sorted(x, reverse=True) and not d["errors"]' "$JSON" 2>/dev/null \
     && pass "$1: --json has all five costs, ranked" || fail "$1: --json" "$JSON"
-  [[ "$(printf '%s\n' "$ERR" | grep -cE '^(spend-report|permission-friction|hook-latency|disk-space|memory-verify) [0-9]+ s$')" == 5 \
-    && "$(printf '%s\n' "$ERR" | wc -l | tr -d ' ')" == 5 ]] \
+  [[ "$(printf '%s\n' "$ERR" | grep -cE '^(spend-report|permission-friction|hook-latency|disk-space) [0-9]+ s$')" == 4 \
+    && "$(printf '%s\n' "$ERR" | wc -l | tr -d ' ')" == 4 ]] \
     && pass "$1: stderr has one progress line per step, name and seconds" || fail "$1: progress lines" "$ERR"
   python3 -c 'import json,sys; d=json.loads(sys.argv[1]); s=d["steps"]
-assert [x["name"] for x in s]==["spend-report","permission-friction","hook-latency","disk-space","memory-verify"]
+assert [x["name"] for x in s]==["spend-report","permission-friction","hook-latency","disk-space"]
 assert all(isinstance(x["seconds"],(int,float)) and x["seconds"]>=0 for x in s)' "$JSON" 2>/dev/null \
     && pass "$1: stdout --json parses, with seconds per step" || fail "$1: --json steps" "$JSON"
   ! grep -qE '^[a-z-]+ [0-9]+ s$' <<<"$OUT$JSON" && pass "$1: no progress line on stdout" || fail "$1: progress on stdout" "$OUT"
@@ -97,14 +96,17 @@ assert all(isinstance(x["seconds"],(int,float)) and x["seconds"]>=0 for x in s)'
 
 echo "=== from the clone ==="
 suite clone "$REPO/bin/harness-checkup.py"
-has 'memory-verify.sh --offline; 0 findings need attention; 1 GitHub claims not checked, offline' \
-  "memory-verify ran offline: its GitHub claim was skipped, not looked up"
+has 'each MEMORY.md, read here; its findings: bash ~/.claude/memory-verify.sh --offline' \
+  "the memory line is read in place and points at memory-verify for findings"
 
 echo ""
 echo "=== installed flat in ~/.claude, as install.sh does ==="
 for f in "$REPO"/bin/*; do [[ -f "$f" ]] && cp "$f" "$H/.claude/"; done
 mkdir -p "$H/.claude/hooks/lib"; cp "$REPO/hooks/lib/memory-limits.sh" "$H/.claude/hooks/lib/"
+# memory-verify took 214 of a 240 s checkup on the work machine (2026-11-23): the checkup must not run it.
+printf '#!/usr/bin/env bash\n: > "%s"\n' "$TMP/memory-verify-ran" > "$H/.claude/memory-verify.sh"
 suite installed "$H/.claude/harness-checkup.py"
+[[ ! -e "$TMP/memory-verify-ran" ]] && pass "installed: memory-verify.sh did not run" || fail "installed: memory-verify.sh ran"
 
 echo ""
 echo "=== a tool that fails, or finds nothing, is named, and the rest still rank ==="

@@ -9,7 +9,8 @@ Runs, from beside this file (installed: ~/.claude; in the clone: bin/):
   permission-friction.py --json      time calls were held by a prompt that was then approved
   hook-latency.py --total --json     the slowest Bash guard's p95 (bash-guards' timing log)
   disk-space.py report --json        what the job folders hold
-  memory-verify.sh --offline --json  each memory index against its load limit, and its findings
+and reads each memory index itself against its load limit. memory-verify.sh is left to its own
+command: it took 214 of a 240 s checkup on a machine with many stores (work machine, 2026-11-23).
 
 Each cost is measured against a line: the one session-start already warns at where there is one,
 else one set in LINES below. They are ranked by measured / line, and that multiplier is printed
@@ -17,8 +18,8 @@ with the value, its n and its window.
 
 It reads numbers from each tool's JSON and prints only those and fixed words: never prompt or chat
 text, never a dollar amount (spend shows as a share), never a tool's own output. It clones
-nothing, installs nothing and uses no network: memory-verify runs --offline, and disk-space is
-pointed at `false` for `claude agents`, so job liveness reads unknown (sizes do not need it).
+nothing, installs nothing and uses no network: disk-space is pointed at `false` for
+`claude agents`, so job liveness reads unknown (sizes do not need it).
 
 Each step prints its name and seconds on stderr as it ends (`spend-report 141 s`), and --json
 carries them as `steps`; stdout is unchanged. Nothing is cached between runs.
@@ -48,16 +49,6 @@ def run(name, argv, env=None):
     except (OSError, subprocess.SubprocessError) as e:
         return None, f'{name} did not run ({type(e).__name__})'
     out = p.stdout
-    if name == 'memory-verify':   # one JSON object a line; exit 1 and 2 report findings
-        if p.returncode not in (0, 1, 2):
-            return None, f'{name} exited {p.returncode}'
-        rows = []
-        for ln in out.splitlines():
-            try:
-                rows.append(json.loads(ln))
-            except ValueError:
-                pass
-        return rows, ''
     if p.returncode != 0:
         return None, f'{name} exited {p.returncode}'
     try:
@@ -141,7 +132,7 @@ def limits():
     return lines, chars
 
 
-def memory(rows, projects):
+def memory(projects):
     max_lines, max_chars = limits()
     worst, stores = 0.0, 0
     for name in sorted(os.listdir(projects)) if os.path.isdir(projects) else []:
@@ -154,11 +145,9 @@ def memory(rows, projects):
         worst = max(worst, 100.0 * data.count(b'\n') / max_lines, 100.0 * len(data) / max_chars)
     if not stores:
         return None
-    need = [r for r in rows if r.get('status') in ('STALE', 'TRIAGE', 'ORPHAN', 'OVERSIZE')]
-    offline = sum(r.get('status') == 'SKIP' and r.get('detail', '').endswith('offline') for r in rows)
     return cost('memory', 'the largest memory index', worst, f'{stores} stores', 'now',
-                'memory-verify.sh --offline',
-                f'{len(need)} findings need attention; {offline} GitHub claims not checked, offline')
+                'each MEMORY.md, read here',
+                'its findings: bash ~/.claude/memory-verify.sh --offline')
 
 
 def gather(days):
@@ -177,8 +166,6 @@ def gather(days):
         ('hook-latency', py('hook-latency.py', '--days', f'{days:g}', '--total', '--json'), env,
          lambda d: guard(d, window)),
         ('disk-space', py('disk-space.py', 'report', '--json'), jobs_env, jobs),
-        ('memory-verify', ['bash', tool('memory-verify.sh'), '--offline', '--json'], env,
-         lambda rows: memory(rows, projects)),
     ]
     timings = []
     for name, argv, env, read in steps:
@@ -200,6 +187,11 @@ def gather(days):
             costs.append(c)
         else:
             errors.append(f'{name}: nothing to measure in the window')
+    c = memory(projects)
+    if c:
+        costs.append(c)
+    else:
+        errors.append('memory: no memory index to measure')
     costs.sort(key=lambda c: -c['x'])
     return {'generated': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'days': days, 'costs': costs, 'errors': errors,
             'steps': timings}
