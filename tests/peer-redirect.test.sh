@@ -84,6 +84,9 @@ fresh; reg 101 "$LIVE" "$S1" target "$ID"; reg 102 "$DEAD" "$S2" gone "session_0
 OUT=$(send "bridge:$ID"); denies "a second row with the name whose process ended" "$OUT"
 fresh; reg 101 "$LIVE" "$S1" target "$ID"; reg 102 "$LIVE2" "$S2" sender "session_01Else" peer
 OUT=$(send "bridge:$ID"); denies "the sender shares the name" "$OUT"
+fresh; reg 101 "$LIVE" "$S1" target "$ID"; jq . "$SESS/101.json" > "$SESS/101.tmp" && mv "$SESS/101.tmp" "$SESS/101.json"
+case $(send "bridge:$ID") in *"message to 'peer' as it is listed"*) pass "a pretty-printed registry row: still redirected by name" ;;
+  *) fail "a pretty-printed registry row: still redirected by name" "$(send "bridge:$ID")" ;; esac
 
 echo ""
 echo "=== A send with no bridge:session_ in it loads nothing ==="

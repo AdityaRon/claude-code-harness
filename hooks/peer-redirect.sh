@@ -56,7 +56,7 @@ redirect() {
     [ -n "$NAME" ] || break
     [ -f "$f" ] || continue
     c=""; IFS= read -r -d '' c < "$f"
-    [[ $c == *"\"name\":\"$NAME\""* ]] || continue
+    [[ $c == *"$NAME"* ]] || continue   # cheap; jq checks the field, compact or not
     row=$(jq -r --arg n "$NAME" 'select(type == "object" and .name == $n)
       | [.pid, .sessionId, .procStart] | map(. // "" | tostring) | @tsv' "$f" 2>/dev/null)
     pid=${row%%$'\t'*}; row=${row#*$'\t'}; owner=${row%%$'\t'*}; start=${row#*$'\t'}
