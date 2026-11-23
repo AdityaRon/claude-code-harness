@@ -106,19 +106,15 @@ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["calls"]==8 and
 echo "=== rewrite causes ==="
 # Each case is a root of its own: one main session (1 h writes) or one subagent (5 min
 # writes), a first call that writes, then the calls named, minutes after the one before.
-python3 - "$TMP/causes" <<'PY'
-import json, os, sys, datetime as dt
+python3 - "$TMP/causes" "$(dirname "${BASH_SOURCE[0]}")/lib" <<'PY'
+import os, sys, datetime as dt
+sys.path.insert(0, sys.argv[2])
+import transcripts as T
 base = dt.datetime(2026, 10, 20, 9, 0, tzinfo=dt.timezone.utc)
-def at(m): return (base + dt.timedelta(seconds=round(m * 60))).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-def call(m, n, w1=0, w5=0, read=0):
-    u = {'input_tokens': 0, 'output_tokens': 10, 'cache_read_input_tokens': read,
-         'cache_creation_input_tokens': w1 + w5,
-         'cache_creation': {'ephemeral_1h_input_tokens': w1, 'ephemeral_5m_input_tokens': w5}}
-    return {'type': 'assistant', 'timestamp': at(m), 'requestId': f'r{n}',
-            'message': {'id': f'm{n}', 'model': 'claude-opus-5-5', 'usage': u}}
-def boundary(m): return {'type': 'system', 'subtype': 'compact_boundary', 'timestamp': at(m)}
-def tick(m): return {'type': 'user', 'timestamp': at(m), 'isMeta': True, 'scheduledFireId': 'f',
-                     'message': {'role': 'user', 'content': 'loop tick'}}
+def at(m): return base + dt.timedelta(seconds=round(m * 60))
+def call(m, n, w1=0, w5=0, read=0): return T.asst(at(m), f'm{n}', out=10, read=read, w5=w5, w1=w1)
+def boundary(m): return T.boundary(at(m))
+def tick(m): return T.scheduled(at(m), 'loop tick', fire='f')
 K = 100_000
 cases = {
     'gap70': [call(0, 1, w1=K), tick(69.5), call(70, 2, w1=K)],
@@ -133,8 +129,7 @@ cases = {
 for name, rows in cases.items():
     d = os.path.join(sys.argv[1], name, 'proj')
     f = os.path.join(d, 'sess', 'subagents', 'agent-a.jsonl') if name == 'sub' else os.path.join(d, 'sess.jsonl')
-    os.makedirs(os.path.dirname(f), exist_ok=True)
-    open(f, 'w').write(''.join(json.dumps(r) + '\n' for r in rows))
+    T.write(f, rows)
 PY
 causes() {  # ROOT -> "main ttl-gap/compaction/other, subagents ttl-gap/compaction/other" rewrite calls
   TZ=UTC python3 "$SR" --root "$TMP/causes/$1" --since 2026-10-20T00:00:00+00:00 --until 2026-10-21T00:00:00+00:00 --json \
@@ -223,15 +218,13 @@ has ', 0 failed' "and that tick is not failed"
 
 echo "=== prices ==="
 # One call per model: 1M output, 1M cache read and 1M 1 h cache write.
-python3 - "$TMP/prices" claude-fable-5-2 claude-sonnet-5-5 <<'PY'
-import json, os, sys
-u = {'input_tokens': 0, 'output_tokens': 1_000_000, 'cache_read_input_tokens': 1_000_000,
-     'cache_creation_input_tokens': 1_000_000, 'cache_creation': {'ephemeral_1h_input_tokens': 1_000_000}}
-for m in sys.argv[2:]:
-    os.makedirs(os.path.join(sys.argv[1], m, 'proj'))
-    with open(os.path.join(sys.argv[1], m, 'proj', 's.jsonl'), 'w') as f:
-        f.write(json.dumps({'type': 'assistant', 'timestamp': '2026-10-20T09:00:00Z', 'requestId': 'r',
-                            'message': {'id': 'm', 'model': m, 'usage': u}}) + '\n')
+python3 - "$TMP/prices" "$(dirname "${BASH_SOURCE[0]}")/lib" claude-fable-5-2 claude-sonnet-5-5 <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[2])
+import transcripts as T
+for m in sys.argv[3:]:
+    T.write(os.path.join(sys.argv[1], m, 'proj', 's.jsonl'),
+            [T.asst('2026-10-20T09:00:00Z', 'm', model=m, out=1_000_000, read=1_000_000, w1=1_000_000)])
 PY
 price_of() {  # MODEL -> the cost of its call, or what went unpriced
   TZ=UTC python3 "$SR" --root "$TMP/prices/$1" --since 2026-10-20T00:00:00+00:00 --until 2026-10-21T00:00:00+00:00 --json \
