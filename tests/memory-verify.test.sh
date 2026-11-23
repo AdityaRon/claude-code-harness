@@ -788,7 +788,7 @@ done
 starts() {
   local tool="$1" proj="$2"; shift 2
   : > "$SLOG"
-  PATH="$SHIMS" CLAUDE_MEMORY_PROJECTS_DIR="$proj" MEMORY_VERIFY_GH_CMD="" "$BASH" "$SCRIPT" "$@" >/dev/null 2>&1
+  PATH="${SHIMPATH:-$SHIMS}" CLAUDE_MEMORY_PROJECTS_DIR="$proj" MEMORY_VERIFY_GH_CMD="" "$BASH" "$SCRIPT" "$@" >/dev/null 2>&1
   if [ "$tool" = all ]; then wc -l < "$SLOG" | tr -d ' '; else grep -cx "$tool" "$SLOG" || true; fi
 }
 # A store of $2 open-state memories, each with an index line that is both a TRIAGE
@@ -796,12 +796,13 @@ starts() {
 mkstarts() {  # mkstarts <projects dir> <n> <distinct|same>
   local d="$1/s/memory" i stamp; rm -rf "$1"; mkdir -p "$d"
   for i in $(seq 1 "$2"); do
-    if [ "$3" = distinct ]; then stamp=$(days_ago $((20 + i))); else stamp=$(days_ago 30); fi
+    if [ "$3" = distinct ]; then stamp=$(days_ago $((20 + i))); else stamp=$SAME_STAMP; fi
     printf -- '---\nname: m%s\ndescription: a description long enough to carry the payload\nmodified: %s\n---\nStill pending review of #%s.\n' \
       "$i" "$stamp" "$((100 + i))" > "$d/m$i.md"
     printf -- '- [m%s](m%s.md) \342\200\224 still pending review and\n' "$i" "$i" >> "$d/MEMORY.md"
   done
 }
+SAME_STAMP=$(days_ago 30)   # once: two builds a second apart would otherwise be two stamps
 mkstarts "$TMP/sa" 10 distinct; mkstarts "$TMP/sb" 20 distinct
 mkstarts "$TMP/sc" 10 same;     mkstarts "$TMP/sd" 20 same
 check_eq "json mode: one jq for the whole run"       "1" "$(starts jq "$TMP/sb" --offline --json)"
@@ -812,8 +813,24 @@ A=$(starts all "$TMP/sa" --offline --json); B=$(starts all "$TMP/sb" --offline -
 check_eq "10 more files, distinct stamps: 10 more starts, one a file" "10" "$((B - A))"
 check_eq "and they are all date, one per stamp"      "10" "$(( $(starts date "$TMP/sb" --offline --json) - $(starts date "$TMP/sa" --offline --json) ))"
 # Doubling rows that share one stamp costs nothing: the parse is memoised.
-C=$(starts all "$TMP/sc" --offline --json); D=$(starts all "$TMP/sd" --offline --json)
+C=$(starts all "$TMP/sc" --offline --json); cp "$SLOG" "$TMP/starts.c"
+D=$(starts all "$TMP/sd" --offline --json)
 check_eq "10 more files, one stamp: no more starts"  "0" "$((D - C))"
+[ "$D" = "$C" ] || { echo "  per-tool starts, 10 files then 20:"; sort "$TMP/starts.c" | uniq -c | tr '\n' ' '; echo; sort "$SLOG" | uniq -c | tr '\n' ' '; echo; }
+
+# A tool that answers with text, not a number, must cost a day count, not the row:
+# GNU `stat -f %m` prints filesystem status and exits 1; a stamp `date` cannot read.
+BADSH="$TMP/badshims"; mkdir -p "$BADSH"; cp "$SHIMS"/* "$BADSH"/
+printf '#!%s\necho "File: not a number"\nexit 0\n' "$BASH" > "$BADSH/stat"
+printf '#!%s\ncase "$1" in -d|-j) echo "not a number"; exit 0 ;; esac\necho date >> "%s"\nexec %s "$@"\n' "$BASH" "$SLOG" "$(command -v date)" > "$BADSH/date"
+chmod +x "$BADSH/stat" "$BADSH/date"
+rm -rf "$TMP/sg"; mkdir -p "$TMP/sg/s/memory"
+printf -- '---\nname: nostamp\n---\nStill pending review.\n' > "$TMP/sg/s/memory/nostamp.md"
+printf -- '---\nname: badstamp\nmodified: 2026-01-01\n---\nStill pending review.\n' > "$TMP/sg/s/memory/badstamp.md"
+OUT=$(SHIMPATH="$BADSH" PATH="$BADSH" CLAUDE_MEMORY_PROJECTS_DIR="$TMP/sg" MEMORY_VERIFY_GH_CMD="" "$BASH" "$SCRIPT" --offline --json 2>&1)
+check_contains "a stat that prints text: the no-stamp file is still TRIAGE" '"file":"nostamp.md"' "$OUT"
+check_contains "a date that prints text: the stamped file is still TRIAGE"  '"file":"badstamp.md"' "$OUT"
+check_absent   "and nothing leaks from the arithmetic"                      "syntax error" "$OUT"
 
 echo "--- Results: $PASS passed, $FAIL failed"
 exit "$FAIL"

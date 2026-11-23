@@ -202,11 +202,15 @@ age_days() {
         [ -n "$epoch" ] || epoch=$(date -j -f '%Y-%m-%d' "${stamp%%T*}" +%s 2>/dev/null) || epoch=""
       fi
       [ -n "$epoch" ] || epoch=$(date -d "$stamp" +%s 2>/dev/null) || epoch=""
+      case "$epoch" in ''|-|*[!0-9-]*) epoch="" ;; esac
       case "$stamp" in *"$TAB"*) ;; *) AGE_CACHE="$AGE_CACHE$stamp$TAB$epoch$NL" ;; esac
     fi
   fi
   if [ -z "$epoch" ]; then
-    epoch=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)
+    # GNU `stat -f` is filesystem status: it prints text and exits 1 for %m.
+    if [ "$DATE_BSD" -eq 1 ]; then epoch=$(stat -f %m "$f" 2>/dev/null) || epoch=""
+    else epoch=$(stat -c %Y "$f" 2>/dev/null) || epoch=""; fi
+    case "$epoch" in ''|-|*[!0-9-]*) epoch=0 ;; esac
   fi
   # `date -f` fills a bare date's time of day from the clock, so `now` must not
   # read earlier than that parse. Read once, then advanced by $SECONDS, rounded
