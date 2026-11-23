@@ -28,6 +28,7 @@ covers one rule.
 | `network-guard:` each ask but one | No allow rule covers curl, wget, scp, rsync or sftp, so the classifier sees each call. |
 | `rm-guard:rf-outside-scratch` | `rm` has no allow rule, so the classifier sees it. |
 | `env-guard:bare-env` | `env` has no allow rule, so the classifier sees it. |
+| `peer-redirect:redirect-uds` | Not a guard: it removes a prompt, so shadowing it leaves Claude Code's own `isolatePeerMachines` prompt. Auto mode's classifier refused 4 of 5 resends to a `uds:` path named only in a hook's deny (headless haiku, CLI 2.1.330, 2026-11-22; [permissions.md](permissions.md)). |
 
 These stay live:
 
