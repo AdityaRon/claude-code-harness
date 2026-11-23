@@ -40,7 +40,12 @@ Traps we hit:
 
 ## Session crons belong to the session
 
-A fresh session, which is what the restart above gives you, has none, so list each cron under `Crons:` as its five fields and its prompt and recreate it there. `claude --resume` and `claude --continue` differ: the [scheduled-tasks page](https://code.claude.com/docs/en/scheduled-tasks) (read 2026-11-20) says they restore CronCreate tasks, except a recurring one past its 7-day expiry, a one-shot whose time has passed, anything after `Exit and stop tasks`, and a self-paced `/loop`, which has to be run again. CronCreate's own description in 2.1.328 says the job is gone when Claude exits; we have not tested which holds. After a resume, run CronList before recreating from `Crons:`, or a tick can run twice. A restored task does not catch up on missed runs. A one-shot that has to wait for a condition can re-arm itself with the same prompt.
+A fresh session, which is what the restart above gives you, has none, so list each cron under `Crons:` as its five fields and its prompt and recreate it there. `claude --resume` and `claude --continue` differ, and two sources disagree; we pick neither:
+- The [scheduled-tasks page](https://code.claude.com/docs/en/scheduled-tasks) (re-read 2026-11-23) says recurring tasks expire 7 days after creation, and that they restore CronCreate tasks, except a recurring one past its 7-day expiry, a one-shot whose time has passed, anything after `Exit and stop tasks`, and a self-paced `/loop`, which has to be run again.
+- CronCreate's own description in CLI 2.1.330 (read 2026-11-22) says recurring tasks auto-expire after 30 days, and that jobs are session-only, "gone when Claude exits".
+- One test: print mode on CLI 2.1.329 (`claude -p --resume <uuid> --fork-session`, work Mac, 2026-11-20) restored a recurring cron with its next run recomputed. An interactive resume is untested.
+
+After a resume, run CronList before recreating from `Crons:`, or a tick can run twice. A restored task does not catch up on missed runs. A one-shot that has to wait for a condition can re-arm itself with the same prompt.
 
 ## A reboot resumes everything at once
 

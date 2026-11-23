@@ -157,9 +157,59 @@ has 'main sessions: 200k written; ttl-gap 1 calls 100k (50%), compaction 0 calls
 has 'subagents:     0 written;' "subagents get a line of their own"
 OUT=$(TZ=UTC python3 "$SR" --root "$TMP/causes/gap70" --since 2026-10-20T00:00:00+00:00 --until 2026-10-21T00:00:00+00:00 --tick-prompt 'loop tick' 2>&1)
 has 'first call a ttl-gap rewrite in 1 of 1 ticks' "--tick-prompt counts the ticks whose first call was a ttl-gap rewrite"
-has '2026-10-20 10:09  sess  first call: ttl-gap rewrite, 100k written after 70 min (TTL 60 min)' "and says so on each tick's line"
+has '2026-10-20 10:09  sess  first call: ttl-gap rewrite, 100k written, 70 min since this transcript'"'"'s last call (TTL 60 min)' "and says so on each tick's line"
 [[ "$(printf '%s\n' "$OUT" | grep -c 'loop tick')" == 1 ]] \
   && pass "a tick's line carries no prompt text" || fail "prompt text on a tick line" "$OUT"
+
+echo "=== synthetic records and copied calls ==="
+# <synthetic>: written when not logged in, the login expired or the API was unreachable.
+python3 - "$TMP/syn" "$(dirname "${BASH_SOURCE[0]}")/lib" <<'PY'
+import datetime as dt, os, sys
+sys.path.insert(0, sys.argv[2])
+import transcripts as T
+root = sys.argv[1]
+day = lambda t: f'2026-10-20T{t}Z'
+asst = lambda t, mid, **kw: T.asst(day(t), mid, **kw)
+syn = lambda t, mid: T.asst(day(t), mid, model='<synthetic>', rec={'isApiErrorMessage': True})
+def put(case, name, rows):
+    T.write(os.path.join(root, case, 'proj', name + '.jsonl'), rows)
+tick = lambda t: T.scheduled(day(t), 'loop tick')
+# a: the tick got only a synthetic record.
+put('a', 's', [tick('09:00:00'), syn('09:00:05', 'x1')])
+# b: a real call 215 min before, then a tick: synthetic, then a real call that writes with 0 read.
+put('b', 's', [asst('07:00:00', 'r0', w1=100_000), tick('10:30:00'), syn('10:30:05', 'x1'),
+               asst('10:35:00', 'r1', w1=100_000)])
+# c: two real calls 120 min apart (1 h TTL) with a synthetic one 30 min before the second.
+put('c', 's', [asst('07:00:00', 'r0', w1=100_000), syn('08:30:00', 'x1'), asst('09:00:00', 'r1', w1=100_000)])
+# d: a's calls c1, c2 are copied into b (a fork: same ids, same times). b sorts after a, so
+# the copies used to move out of a, and a's tick read "600 min" since c0 instead of 5.
+c1, c2 = asst('09:50:00', 'c1', read=100_000), asst('09:55:00', 'c2', read=100_000)
+put('d', 'a', [asst('00:00:00', 'c0', w1=100_000), c1, c2, tick('10:00:00'), asst('10:00:05', 'c3', read=500_000)])
+put('d', 'b', [c1, c2, asst('10:30:00', 'd1', read=100_000)])
+PY
+tickrun() {  # CASE [args]
+  local c=$1; shift
+  OUT=$(TZ=UTC python3 "$SR" --root "$TMP/syn/$c" --since 2026-10-20T00:00:00+00:00 --until 2026-10-21T00:00:00+00:00 --tick-prompt 'loop tick' "$@" 2>&1)
+}
+tickrun a
+has ", \$0.00, 1 failed" "a tick with only synthetic records is counted failed"
+has 'failed: no API call' "and says so"
+[[ "$OUT" != *'first call:'* && "$OUT" != *'first call a ttl-gap'* ]] && pass "and has no first-call line" || fail "a first-call line for a failed tick" "$OUT"
+has '0 calls;' "a synthetic record is no call"
+tickrun a --json
+python3 -c 'import json,sys; t=json.loads(sys.argv[1])["turns"]; assert [x["failed"] for x in t]==[True]' "$OUT" 2>/dev/null \
+  && pass "--json marks the turn failed" || fail "--json failed flag" "$OUT"
+tickrun b
+[[ "$OUT" == *', 0 failed'* ]] && pass "a tick with a real call after the synthetic one is not failed" || fail "b counted failed" "$OUT"
+has "first call: ttl-gap rewrite, 100k written, 215 min since this transcript's last call (TTL 60 min)" \
+  "synthetic, then a real 0-read write: the real call is the first call, and its cause is ttl-gap"
+OUT=$(TZ=UTC python3 "$SR" --root "$TMP/syn/c" --since 2026-10-20T00:00:00+00:00 --until 2026-10-21T00:00:00+00:00 --json \
+  | python3 -c 'import json,sys; c=json.load(sys.stdin)["rewrite_causes"]["main"]; print("/".join(str(c[k]["calls"]) for k in ("ttl-gap","compaction","other")))')
+[[ "$OUT" == 1/0/0 ]] && pass "a synthetic record between two real calls more than a TTL apart: the second stays ttl-gap" \
+  || fail "ttl-gap across a synthetic record" "$OUT"
+tickrun d
+has "first call: no rewrite, 5 min since this transcript's last call" "a call copied into a later file stays in its own file's chain: 5 min, not 600"
+has '5 calls;' "and its cost is counted once"
 
 echo "=== prices ==="
 # One call per model: 1M output, 1M cache read and 1M 1 h cache write.
