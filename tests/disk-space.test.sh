@@ -265,18 +265,15 @@ except ValueError as e:
 [ "$CME" = "ValueError: count_mark: an empty mark" ] && pass "count_mark refuses an empty mark" || fail "empty mark" "[$CME]"
 [ "$(grep -c '^transcript=' "$TMP/state/disk-usage")" = 0 ] && pass "no projects folder: no transcript lines" || fail "no projects" "$(cat "$TMP/state/disk-usage")"
 sv2() { sed -n "s/^$1=//p" "$2"; }
-[ "$(sv2 transcripts_active "$TMP/state/tx")" = "4 $SB 1" ] && [ "$(sv2 transcript_mb "$TMP/state/tx")" = 1 ] \
-  && pass "transcripts_active: how many, the largest and its compactions; transcript_mb" || fail "active" "$(cat "$TMP/state/tx")"
+[ "$(sv2 transcript_mb "$TMP/state/tx")" = 1 ] && ! grep -q '^transcripts_active=' "$TMP/state/tx" \
+  && pass "transcript_mb is written; no transcripts_active line (young transcripts: no transcripts_idle either)" \
+  || fail "stamp keys" "$(cat "$TMP/state/tx")"
 PR12="$TMP/projects12"; mkdir -p "$PR12/-p"
 for i in $(seq 10 21); do head -c $((1000000 + i * 1000)) /dev/zero | tr '\0' q > "$PR12/-p/s$i-0000.jsonl"; done
-touch -t 202601010000 "$PR12/-p/s21-0000.jsonl"
 ds stamp --out "$TMP/state/t12" --projects "$PR12" --transcript-mb 1 >/dev/null 2>&1
-[ "$(grep -c '^transcript=' "$TMP/state/t12")" = 10 ] && [ "$(sv2 transcripts_active "$TMP/state/t12" | cut -d' ' -f1-2)" = "11 1020000" ] \
-  && pass "12 past the size: 10 transcript lines, 11 written this week counted, the oldest-written not" \
-  || fail "active count" "$(grep -c '^transcript=' "$TMP/state/t12") $(sv2 transcripts_active "$TMP/state/t12")"
-touch -t 202601010000 "$PR12"/-p/*.jsonl
-ds stamp --out "$TMP/state/t0" --projects "$PR12" --transcript-mb 1 >/dev/null 2>&1
-[ -z "$(sv2 transcripts_active "$TMP/state/t0")" ] && pass "none written this week: no transcripts_active line" || fail "none active" "$(cat "$TMP/state/t0")"
+[ "$(grep -c '^transcript=' "$TMP/state/t12")" = 10 ] && ! grep -q '^transcripts_\(active\|idle\)=' "$TMP/state/t12" \
+  && pass "12 past the size, all written now: 10 transcript lines, no transcripts_active, no transcripts_idle" \
+  || fail "12 past the size" "$(cat "$TMP/state/t12")"
 CLAUDE_TRANSCRIPT_WARN_MB=2 ds stamp --out "$TMP/state/te" --projects "$PR" >/dev/null 2>&1
 [ "$(grep '^transcript=' "$TMP/state/te" | cut -d' ' -f1)" = "transcript=bbbb-2222" ] && [ "$(sv2 transcript_mb "$TMP/state/te")" = 2 ] \
   && pass "CLAUDE_TRANSCRIPT_WARN_MB sets the size" || fail "env mb" "$(cat "$TMP/state/te")"
@@ -1063,6 +1060,51 @@ OUT3=$( (export HOME="$H2"; eval "$RCMD") 2>&1); RC=$?
 [ "$RC" = 0 ] && [ -f "$P2/-w/$S_N1.jsonl" ] && [ -d "$P2/-w/$S_N1/subagents" ] \
   && pass "the printed restore command, run as printed, restores (and the ./ form of --aside round-trips)" || fail "printed restore" "rc=$RC $RCMD $OUT3"
 rm -rf "$H2/.claude/aside3" "$P2"
+
+echo ""
+echo "=== stamp: transcripts_idle is what the transcripts listing would move, counted by its own function, never via claude ==="
+# Mutations: stamp counts with its own loop over the .jsonl mtime; each guard off (registry, jobs, idle
+# jsonl, idle folder); stamp calls claude_agents; an unknown registry row ignored; a cached list.
+H3="$TMP/h3" TJ3="$TMP/tj3" H3P="$TMP/h3/.claude/projects" H3S="$TMP/h3/.claude/sessions"
+mkdir -p "$H3P" "$H3S" "$TJ3"; printf '[]' > "$TMP/agents.json"; echo 0 > "$TMP/agents.rc"
+S3_A=a3333333-0000-4000-8000-000000000001 S3_B=a3333333-0000-4000-8000-000000000002 S3_REG=a3333333-0000-4000-8000-000000000003
+S3_JOB=a3333333-0000-4000-8000-000000000004 S3_YNG=a3333333-0000-4000-8000-000000000005 S3_YF=a3333333-0000-4000-8000-000000000006
+mk2 "$H3P" -w $S3_A 40 f; mk2 "$H3P" -w $S3_B 45; mk2 "$H3P" -w $S3_REG 40; mk2 "$H3P" -w $S3_JOB 40
+mk2 "$H3P" -w $S3_YNG 1; mk2 "$H3P" -w $S3_YF 40 f; age 1 "$H3P/-w/$S3_YF/subagents/a.jsonl"
+jq -n --argjson p "$SL1" --arg s "$S3_REG" --arg t "$(lstart "$SL1")" '{pid:$p,sessionId:$s,procStart:$t}' > "$H3S/$SL1.json"
+mkdir -p "$TJ3/c3000001" "$TJ3/d3000002"
+printf '{"state":"working","sessionId":"%s"}\n' $S3_JOB > "$TJ3/c3000001/state.json"; : > "$TJ3/c3000001/timeline.jsonl"
+printf '{"state":"done"}\n' > "$TJ3/d3000002/state.json"; : > "$TJ3/d3000002/timeline.jsonl"; age 5 "$TJ3/d3000002/state.json" "$TJ3/d3000002/timeline.jsonl"
+NOCLAUDE=/usr/bin:/bin:/usr/sbin:/sbin
+[ -z "$(PATH=$NOCLAUDE command -v claude)" ] || echo "  note: a claude is on the minimal PATH; the no-claude case is not exercised"
+st3() { HOME="$H3" python3 "${ST_DS:-$DS}" stamp --out "$H3/stamp" --jobs "$TJ3" --transcript-mb 1 "$@" >/dev/null 2>&1; sed -n 's/^transcripts_idle=//p' "$H3/stamp"; }
+tl3() { HOME="$H3" python3 "$DS" transcripts --jobs "$TJ3" --transcript-mb 1 "$@"; }
+LIST3=$(tl3); WANT_B=$(( 2 * 2 * MiB + 4 ))
+: > "$TMP/claude.calls"
+GOT=$(st3)
+[ "$GOT" = "2 $WANT_B 30" ] && [[ "$LIST3" == *"To move: 2 transcripts, "* ]] \
+  && pass "stamp writes transcripts_idle=2 BYTES 30 for two idle large transcripts (BYTES is .jsonl plus folders); the listing's To move says 2" \
+  || fail "transcripts_idle" "got [$GOT] want [2 $WANT_B 30] list: $(printf '%s\n' "$LIST3" | grep 'To move')"
+[ "$(printf '%s\n' "$LIST3" | grep -c "^move ")" = 2 ] && [ -z "$(printf '%s\n' "$LIST3" | grep "^move .*\($S3_REG\|$S3_JOB\|$S3_YNG\|$S3_YF\)")" ] \
+  && pass "a registry-live, a file-live-job, a young .jsonl and a young folder file are each left out of the listing, so out of the count" || fail "guards" "$LIST3"
+[ ! -s "$TMP/claude.calls" ] && pass "the stamp ran no claude, though a stand-in was first on PATH" || fail "stamp ran claude" "$(cat "$TMP/claude.calls")"
+GOT=$(PATH=$NOCLAUDE st3)
+[ "$GOT" = "2 $WANT_B 30" ] && pass "with no claude on PATH the stamp still counts" || fail "no claude" "[$GOT]"
+echo 1 > "$TMP/agents.rc"; GOT=$(st3); echo 0 > "$TMP/agents.rc"
+[ "$GOT" = "2 $WANT_B 30" ] && [ ! -s "$TMP/claude.calls" ] && pass "with a claude that exits 1 the stamp still counts, and never calls it" || fail "claude exit 1" "[$GOT] $(cat "$TMP/claude.calls")"
+! grep -q '^transcripts_active=' "$H3/stamp" && pass "no transcripts_active line is written" || fail "active written" "$(cat "$H3/stamp")"
+printf '{"pid":%s}\n' "$SL1" > "$H3S/$SL1.json"
+GOT=$(st3)
+[ -z "$GOT" ] && pass "a registry row with a live pid and no session (unknown): keep-all, no line" || fail "unknown registry" "[$GOT]"
+jq -n --argjson p "$SL1" --arg s "$S3_REG" --arg t "$(lstart "$SL1")" '{pid:$p,sessionId:$s,procStart:$t}' > "$H3S/$SL1.json"
+GOT=$(st3 --days 41)
+[ "$GOT" = "1 $((2 * MiB)) 41" ] && pass "stamp --days 41: only the 45-day transcript counts, and DAYS says 41" || fail "stamp --days" "[$GOT]"
+[ "$(st3)" = "2 $WANT_B 30" ] || fail "setup: line back" ""
+DG3=$(tl3 | digest_of); HOME="$H3" python3 "$DS" transcripts --apply "$DG3" --jobs "$TJ3" --transcript-mb 1 >/dev/null 2>&1
+GOT=$(st3)
+[ -z "$GOT" ] && ! grep -q '^transcripts_idle=' "$H3/stamp" && [ ! -e "$H3P/-w/$S3_A.jsonl" ] \
+  && pass "after --apply moved them, the next stamp has no transcripts_idle line" || fail "after apply" "[$GOT] $(cat "$H3/stamp")"
+rm -rf "$H3" "$TJ3"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

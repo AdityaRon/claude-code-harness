@@ -189,7 +189,7 @@ fi
 # numbers may no longer hold. The one process, date, runs once per measurement.
 DISK_STAMP=$(expand_tilde "${CLAUDE_DISK_STAMP:-$HOME/.claude/state/disk-usage}")
 if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
-  D_JOBS=0 D_BAZEL=0 D_ORPH=0 D_N=0 D_AT=0 D_DATE="" D_TB="" D_TC="" D_GP=0 D_GC=0 D_AN=0 D_AB=0 D_AC=0 D_TM=150
+  D_JOBS=0 D_BAZEL=0 D_ORPH=0 D_N=0 D_AT=0 D_DATE="" D_TB="" D_TC="" D_GP=0 D_GC=0 D_IN=0 D_IB=0 D_ID=0 D_TM=150
   while IFS='=' read -r k v || [[ -n "$k" ]]; do
     case "$k" in
       date) [[ "$v" =~ ^[0-9-]+$ ]] && D_DATE=$v; continue ;;
@@ -197,9 +197,9 @@ if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
         [[ ( "$SOURCE" == resume || "$SOURCE" == compact ) && -n "$SESSION_ID" && "$v" =~ ^([A-Za-z0-9_-]+)\ ([0-9]{1,15})\ ([0-9]{1,6})$ \
            && "${BASH_REMATCH[1]}" == "$SESSION_ID" ]] && D_TB=${BASH_REMATCH[2]} D_TC=${BASH_REMATCH[3]}
         continue ;;
-      transcripts_active)  # COUNT LARGEST_BYTES ITS_COMPACTIONS, written in the last 7 days
-        [[ "$v" =~ ^([0-9]{1,6})\ ([0-9]{1,15})\ ([0-9]{1,6})$ ]] \
-          && D_AN=${BASH_REMATCH[1]} D_AB=${BASH_REMATCH[2]} D_AC=${BASH_REMATCH[3]}
+      transcripts_idle)  # COUNT BYTES DAYS: what `disk-space.py transcripts` would list, from the stamp
+        [[ "$v" =~ ^([0-9]{1,6})\ ([0-9]{1,15})\ ([0-9]{1,4})$ ]] \
+          && D_IN=$((10#${BASH_REMATCH[1]})) D_IB=$((10#${BASH_REMATCH[2]})) D_ID=$((10#${BASH_REMATCH[3]}))
         continue ;;
     esac
     [[ "$v" =~ ^[0-9]{1,15}$ ]] || continue
@@ -243,17 +243,17 @@ if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
     fi
   fi
   # Machine-wide, any start, once per measurement.
-  if (( D_AN > 0 && D_AT > 0 )); then
+  if (( D_IN > 0 && D_AT > 0 )); then
     [[ -d "$STATE_DIR" ]] || mkdir -p "$STATE_DIR" 2>/dev/null
     if claim "$STATE_DIR/transcripts-warning" "$D_AT"; then
       NOW=${EPOCHSECONDS:-}
       [[ "$NOW" =~ ^[0-9]+$ ]] || NOW=$(date +%s)
       if (( NOW - D_AT <= 2 * 86400 )); then
-        if (( D_AN == 1 )); then t="1 session transcript written in the last 7 days is"
-        else t="$D_AN session transcripts written in the last 7 days are"; fi
+        if (( D_IN == 1 )); then t="Up to 1 session transcript"; else t="Up to $D_IN session transcripts"; fi
+        g=$(( (D_IB + 50000000) / 100000000 ))
         echo ""
-        echo "## Large session transcripts"
-        echo "$t past $D_TM MB; the largest held $(( (D_AB + 500000) / 1000000 )) MB after $D_AC compactions when harness-update.sh measured on ${D_DATE:-its last run}. In a session that large, write the handoff, then restart. Each one: python3 ~/.claude/disk-space.py report"
+        echo "## Idle session transcripts"
+        echo "$t past $D_TM MB, idle $D_ID days or more, hold $(( g / 10 )).$(( g % 10 )) GB in ~/.claude/projects (harness-update.sh, ${D_DATE:-its last run}). This is disk space; no speed effect was measured. The listing checks each against live sessions and jobs and moves nothing without its digest: python3 ~/.claude/disk-space.py transcripts"
       fi
     fi
   fi

@@ -17,7 +17,7 @@ Measured on the work Mac:
 
 On the personal Mac the folder held 78 transcripts, 342 MB, the largest 95 MB.
 
-session-start names a large transcript on resume and after compaction (v1.4.12), so you hear about it before it hurts. Once a day it also counts the large transcripts across the machine.
+session-start names a large transcript on resume and after compaction (v1.4.12), so you hear about it before it hurts. Once a day it also counts the idle large transcripts across the machine and points at `disk-space.py transcripts`.
 
 ## Restart from a handoff, not from the transcript
 
