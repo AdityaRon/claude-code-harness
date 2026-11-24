@@ -20,7 +20,7 @@ bin/                     ← every file installed flat to ~/.claude by install.s
   relocate-clones.sh     ← moves a clone out of ~/Desktop, ~/Documents or ~/Downloads (docs/known-limitations.md)
   spend-report.py        ← what sessions, subagents and loop ticks cost, and what caused each context
                            rewrite (a lapsed cache TTL, a compaction), from local transcripts
-  disk-space.py          ← what job folders and Bazel output bases hold (report, bazel); harness-update.sh
+  disk-space.py          ← what job folders and Bazel output bases hold (report, bazel), and moves idle large transcripts aside (transcripts); harness-update.sh
                            records the totals, large transcripts and the guards' p90 once a day for
                            session-start's warnings (doctor.sh --disk);
                            prune, clone and bazel --sweep list what is safe to delete and delete it by digest
