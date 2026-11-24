@@ -21,7 +21,7 @@
                                                ~/.claude/transcripts-aside/<date>/<slug>/, with a manifest
   disk-space.py transcripts --restore MANIFEST moves them back, never over anything
 
-Only --apply deletes or moves, and it must come right after prune, clone, transcripts or bazel --sweep, where the ask
+Only --apply deletes, and --apply and --restore move; --apply must come right after prune, clone, transcripts or bazel --sweep, where the ask
 rules in settings.json look for it; rm-guard asks on any other spelling. Commits only a reflog
 holds are not looked for. An apply stopped by TERM or HUP puts the entry it holds back; one stopped
 harder leaves it under a quarantine name, which each listing names with the mv that restores it.
@@ -1511,14 +1511,17 @@ def registry_live(sessions):
     """({sessionId: why} for each live row of the sessions registry, why every transcript is kept or ""). A
     row is live when its pid is alive and ps's start time matches its procStart; with no procStart, or ps
     giving none, a live pid counts. A row that cannot be read or names no session, with a live pid, is
-    "unknown", and then every transcript is kept."""
-    live, unknown = {}, ""
+    "unknown", and then every transcript is kept. A missing sessions folder is unknown too, except the
+    default one, which means no session has run: then NOTE says the guard did not run, as live_jobs does."""
+    live, unknown, note = {}, "", ""
     try:
         names = sorted(os.listdir(sessions))
     except FileNotFoundError:
-        return live, ""
+        if os.path.normpath(sessions) == os.path.join(HOME, ".claude", "sessions"):
+            return live, "", "the registry guard did not run: %s is absent; the jobs and idle guards still apply" % shown(sessions)
+        return live, "the sessions folder %s does not exist" % shown(sessions), ""
     except OSError as e:
-        return live, "the sessions folder %s cannot be read (%s)" % (shown(sessions), e.strerror)
+        return live, "the sessions folder %s cannot be read (%s)" % (shown(sessions), e.strerror), ""
     for n in names:
         if not n.endswith(".json"):
             continue
@@ -1547,7 +1550,7 @@ def registry_live(sessions):
             if now is not None and now != "".join(start.split()):
                 continue  # the pid is another process now
         live[sid] = "pid %d" % pid
-    return live, unknown
+    return live, unknown, note
 
 
 class AsideCtx:
@@ -1563,7 +1566,7 @@ class AsideCtx:
 
     def refresh(self):
         self.read_at = self.now = time.time()
-        self.reg, self.reg_unknown = registry_live(self.a.sessions)
+        self.reg, self.reg_unknown, self.reg_note = registry_live(self.a.sessions)
         self.pids, self.live_note = claude_agents()
         self.jobs_note = ""
         self.live, _, self.unreadable = live_jobs(self)
@@ -1709,11 +1712,21 @@ def aside_command(a, d):
     return "python3 %s %s" % (shown_self(), " ".join(shlex.quote(x) for x in parts))
 
 
-def print_aside(a, plan):
+def restore_command(a, manifest):
+    parts = ["transcripts", "--restore", manifest]
+    for flag, val, dflt in (("--projects", a.projects, "projects"), ("--aside", a.aside, "transcripts-aside")):
+        if os.path.normpath(val) != os.path.join(HOME, ".claude", dflt):
+            parts += [flag, val]
+    return "python3 %s %s" % (shown_self(), " ".join(shlex.quote(x) for x in parts))
+
+
+def print_aside(ctx, a, plan):
     print("Transcripts of %g MB or more (CLAUDE_TRANSCRIPT_WARN_MB) in %s, idle %g days or more by the newest write"
           % (a.transcript_mb, shown(a.projects), a.days))
     print("to the .jsonl or anything in its session folder. Kept: a session live in %s, a live job's session." % shown(a.sessions))
     print(RESUME_NOTE)
+    if ctx.reg_note:
+        print(ctx.reg_note + ".")
     if a.days < ASIDE_DAYS:
         print("--days %g is under %g: spend-report, permission-friction and hook-latency read only projects/, so a"
               " transcript moved from it drops out of their windows. Default windows: spend-report 7 days,"
@@ -1747,12 +1760,13 @@ def same_entry(c, e):
 
 
 def move_unit(src, dst, folder_src, folder_dst):
-    """Rename the .jsonl, then its folder; when the folder cannot move, the .jsonl goes back. Raises OSError."""
+    """Rename the .jsonl, then its folder; when the folder cannot move, or a signal arrives first, the
+    .jsonl goes back. Raises what stopped it."""
     os.rename(src, dst)
     if folder_src:
         try:
             os.rename(folder_src, folder_dst)
-        except OSError:
+        except BaseException:
             os.rename(dst, src)
             raise
 
@@ -1803,7 +1817,7 @@ def apply_aside(ctx, plan, want):
     except OSError as e:
         print("Nothing moved: the manifest %s cannot be written (%s)." % (shown(manifest), e.strerror))
         return 1
-    print("manifest: %s (%d rows). Restore: python3 %s transcripts --restore %s" % (shown(manifest), len(rows), shown_self(), shlex.quote(manifest)))
+    print("manifest: %s (%d rows). Restore: %s" % (shown(manifest), len(rows), restore_command(a, manifest)))
     pause()
     failed = 0
     for c, dest, dj, df in todo:
@@ -1848,9 +1862,11 @@ def cmd_restore(a):
             continue
         try:
             r = json.loads(ln)
-            o, s = r["original"], r["aside"]
-            assert isinstance(o, str) and isinstance(s, str) and o == os.path.normpath(o) and s == os.path.normpath(s)
-        except (ValueError, KeyError, TypeError, AssertionError):
+            o, s, sid_ = r["original"], r["aside"], r.get("sessionId")
+            if not (isinstance(o, str) and isinstance(s, str) and (sid_ is None or isinstance(sid_, str))
+                    and o == os.path.normpath(o) and s == os.path.normpath(s)):
+                raise ValueError("fields")
+        except (ValueError, KeyError, TypeError, AttributeError):
             print("refused: manifest line %d is not a row this wrote" % i)
             bad += 1
             continue
@@ -1859,15 +1875,20 @@ def cmd_restore(a):
             g.append((o, s))
     restored = 0
     for (_, sid), rows in groups.items():
-        problems = []
+        problems, skip = [], []
         for o, s in rows:
             ro, rs = os.path.relpath(o, proj).split(os.sep), os.path.relpath(s, aside).split(os.sep)
             if o != os.path.join(proj, *ro) or len(ro) != 2 or ".." in ro or s != os.path.join(aside, *rs) or len(rs) != 3 or ".." in rs:
                 problems.append("%s: not a path this moves (outside %s or %s)" % (shown(o), shown(proj), shown(aside)))
             elif lstat(s) is None:
-                problems.append("%s: nothing at %s (not moved, or already restored)" % (shown(o), shown(s)))
+                if lstat(o) is not None:
+                    print("in place: %s (nothing at %s; it was never moved, or is already back)" % (shown(o), shown(s)))
+                    skip.append((o, s))
+                else:
+                    problems.append("%s: nothing at %s (not moved, or already restored)" % (shown(o), shown(s)))
             elif lstat(o) is not None:
                 problems.append("%s: something is already there" % shown(o))
+        rows = [r for r in rows if r not in skip]
         if problems:
             for p in problems:
                 print("refused: " + p)
@@ -1903,7 +1924,7 @@ def cmd_transcripts(a):
         return cmd_restore(a)
     ctx = AsideCtx(a)
     plan = aside_plan(ctx)
-    print_aside(a, plan)
+    print_aside(ctx, a, plan)
     if a.apply is None:
         return 0
     print("")
@@ -2003,6 +2024,12 @@ def main(argv=None):
     p.add_argument("--apply", metavar="DIGEST", help="move exactly the listing with this digest")
     p.add_argument("--restore", metavar="MANIFEST", help="move each entry of a manifest back")
     a = ap.parse_args(argv)
+    if a.cmd == "transcripts":
+        for flag, val, floor in (("--days", a.days, 1), ("--live-hours", a.live_hours, 24), ("--transcript-mb", a.transcript_mb, 1)):
+            if val < floor:
+                print("transcripts: %s %g is under %g; a smaller value moves or lists what is still in use." % (flag, val, floor), file=sys.stderr)
+                return 2
+        a.projects, a.aside = os.path.abspath(a.projects), os.path.abspath(a.aside)
     if getattr(a, "root", None) is None and a.cmd in ("bazel", "stamp", "prune", "clone"):
         a.root = default_bazel_root()
     now = time.time()

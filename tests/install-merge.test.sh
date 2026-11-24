@@ -434,13 +434,14 @@ OUT=$(merge '{}' "$(cat config/settings.json)")
 for r in "Bash(python3 ~/.claude/disk-space.py prune --apply:*)" "Bash(python3 ~/.claude/disk-space.py bazel --sweep --apply:*)" \
          "Bash(~/.claude/disk-space.py prune --apply:*)" "Bash(~/.claude/disk-space.py bazel --sweep --apply:*)" \
          "Bash(python3 ~/.claude/disk-space.py clone --apply:*)" "Bash(~/.claude/disk-space.py clone --apply:*)" \
-         "Bash(python3 ~/.claude/disk-space.py transcripts --apply:*)" "Bash(~/.claude/disk-space.py transcripts --apply:*)"; do
+         "Bash(python3 ~/.claude/disk-space.py transcripts --apply:*)" "Bash(~/.claude/disk-space.py transcripts --apply:*)" \
+         "Bash(python3 ~/.claude/disk-space.py transcripts --restore:*)" "Bash(~/.claude/disk-space.py transcripts --restore:*)"; do
   jq -e --arg r "$r" '.permissions.ask | index($r)' config/settings.json >/dev/null || MISSING="$MISSING shipped:$r"
   printf '%s' "$OUT" | jq -e --arg r "$r" --arg t "${r//\~/$HOME}" '.permissions.ask | (index($r) != null) and (index($t) != null)' >/dev/null \
     || MISSING="$MISSING installed:$r"
   printf '%s' "$OUT" | jq -e --arg r "$r" '.permissions.allow | index($r) == null' >/dev/null || MISSING="$MISSING allowed:$r"
 done
-[[ -z "$MISSING" ]] && pass "disk-space.py prune, clone, transcripts and bazel --sweep --apply ask; the ~ and \$HOME spellings both install" || fail "disk-space ask rules" "$MISSING"
+[[ -z "$MISSING" ]] && pass "disk-space.py prune, clone, transcripts (--apply, --restore) and bazel --sweep --apply ask; the ~ and \$HOME spellings both install" || fail "disk-space ask rules" "$MISSING"
 unset RETIRED
 
 echo ""

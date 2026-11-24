@@ -912,7 +912,7 @@ OUT3=$(ds transcripts --restore "$M" 2>&1); RC=$?
 [ "$(sum "$TP/-work-a/$S_BIG.jsonl" "$TP/-work-a/$S_BIG/subagents/agent-1.jsonl")" = "$ORIG_SUM" ] && [ ! -e "$TA/$DAY/-work-a/$S_BIG.jsonl" ] \
   && pass "restore round-trips: files back at the original paths, byte-identical (cksum)" || fail "round trip" "rc=$RC $OUT3"
 OUT3=$(ds transcripts --restore "$M" 2>&1); RC=$?
-[ "$RC" = 1 ] && [[ "$OUT3" == *"nothing at"* && "$OUT3" == *"already restored"* ]] && pass "restoring again refuses: nothing at the aside paths" || fail "restore twice" "rc=$RC $OUT3"
+[ "$RC" = 0 ] && [[ "$OUT3" == *"in place: "* && "$OUT3" == *"already back"* ]] && pass "restoring again reports each row in place (nothing at the aside path, the original there), exit 0" || fail "restore twice" "rc=$RC $OUT3"
 printf '{"original":"%s/evil","aside":"%s/x/y/z"}\n' "$TMP" "$TA" > "$TMP/evil.jsonl"; : > "$TMP/evil"
 OUT3=$(ds transcripts --restore "$TMP/evil.jsonl" 2>&1); RC=$?
 [ "$RC" = 1 ] && [[ "$OUT3" == *"not a path this moves"* ]] && pass "a manifest row outside projects/ and the aside folder is refused" || fail "restore outside" "rc=$RC $OUT3"
@@ -941,6 +941,8 @@ M="$TA/$DAY/manifest.jsonl"; sed -n 1p "$M" >> "$M"    # the same row twice, as 
 OUT3=$(ds transcripts --restore "$M" 2>&1); RC=$?
 [ -f "$TP/-work-a/$S_DEAD.jsonl" ] && [ -f "$TP/-work-a/$S_BIG.jsonl" ] && [ -d "$TP/-work-a/$S_BIG" ] && [[ "$OUT3" != *"already there"* ]] \
   && pass "a manifest holding the same row twice restores it once" || fail "duplicate row" "rc=$RC $OUT3"
+[ "$RC" = 0 ] && [[ "$OUT3" == *"in place: $TP/-work-b/$S_R1.jsonl"* ]] \
+  && pass "rows kept at the re-check stay in the manifest: restore reports them in place and exits 0" || fail "kept rows at restore" "rc=$RC $OUT3"
 rm -rf "$TA" "$TJ/e0000005"; rm -f "$TP"/-work-b/"$S_R1".jsonl "$TP"/-work-b/"$S_R2".jsonl "$TP"/-work-b/"$S_R3".jsonl "$TP/-work-b/$S_R1" "$TR/$SL3.json"
 printf '[{"id":"c0000003","pid":4343}]' > "$TMP/agents.json"
 rm -rf "$TP/-work-b/$S_R1" "$TP/-work-b/$S_R2" "$TP/-work-b/$S_R3"
@@ -972,6 +974,95 @@ if [ -d "$SHM" ] && [ -w "$SHM" ] && [ "$(python3 -c 'import os,sys; print(os.st
 else
   echo "  SKIP: no second filesystem at /dev/shm; the cross-device refusal is not tested"
 fi
+
+echo ""
+echo "=== transcripts: the registry guard, the floors, a partial move, and the printed restore command ==="
+# A second HOME, so the default sessions folder can be absent. Mutations: a missing non-default
+# sessions folder read as "no sessions"; no floors; move_unit rolling back on OSError only; restore
+# refusing a row already in place; restore command without --aside/--projects; no normpath of --aside.
+H2="$TMP/h2" TJ2="$TMP/tj2" H2P="$TMP/h2/.claude/projects"
+mkdir -p "$H2P/-w" "$TJ2" "$H2/realsessions"; printf '[]' > "$TMP/agents.json"; echo 0 > "$TMP/agents.rc"
+h2() { HOME="$H2" python3 "$DS" transcripts --jobs "$TJ2" --transcript-mb 1 "$@"; }
+h2apply() { local d=$1; shift; HOME="$H2" python3 "$DS" transcripts --apply "$d" --jobs "$TJ2" --transcript-mb 1 "$@"; }
+mk2() {  # mk2 DIR SLUG SID AGE [FOLDER]: a 2 MiB transcript idle AGE days, with a session folder if a fifth argument
+  mkdir -p "$1/$2"; fill "$1/$2/$3.jsonl" $((2 * MiB)); age "$4" "$1/$2/$3.jsonl"
+  if [ -n "${5:-}" ]; then mkdir -p "$1/$2/$3/subagents"; printf 'sub\n' > "$1/$2/$3/subagents/a.jsonl"; age "$4" "$1/$2/$3/subagents/a.jsonl" "$1/$2/$3/subagents" "$1/$2/$3"; fi
+}
+S_X1=99999999-0000-4000-8000-000000000001
+mk2 "$H2P" -w $S_X1 40
+jq -n --argjson p "$SL1" --arg s "$S_X1" '{pid:$p,sessionId:$s}' > "$H2/realsessions/$SL1.json"
+OUT=$(h2 --sessions "$H2/typo")
+[ "$(printf '%s\n' "$OUT" | grep -c '^move ')" = 0 ] && [[ "$OUT" == *"keep "*"$S_X1.jsonl: registry: the sessions folder $H2/typo does not exist"* ]] \
+  && pass "--sessions at a path that does not exist keeps every transcript, and the listing says why" || fail "typo sessions" "$OUT"
+OUT=$(h2 --sessions "$H2/realsessions")
+[[ "$OUT" == *"keep "*"$S_X1.jsonl: live in the sessions registry"* ]] && pass "the same row at the right path keeps it as live" || fail "real sessions" "$OUT"
+OUT=$(h2)
+[[ "$OUT" == *"the registry guard did not run: "*"/.claude/sessions is absent; the jobs and idle guards still apply."* ]] && [ "$(printf '%s\n' "$OUT" | grep -c "^move .*$S_X1.jsonl")" = 1 ] \
+  && pass "the default sessions folder absent: a line says the registry guard did not run, and the other guards still list it" || fail "default sessions absent" "$OUT"
+for fl in "--days 0" "--live-hours 0" "--live-hours 23" "--transcript-mb 0"; do
+  OUT=$(h2 $fl 2>&1); RC=$?
+  [ "$RC" = 2 ] && [ "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" = 1 ] && [[ "$OUT" == *"${fl%% *} "*" is under "* ]] && [ "$(printf '%s\n' "$OUT" | grep -c '^move ')" = 0 ] \
+    && pass "transcripts $fl is refused with one line, exit 2" || fail "floor $fl" "rc=$RC $OUT"
+done
+OUT=$(h2 --days 1 --live-hours 24 2>&1); RC=$?
+[ "$RC" = 0 ] && pass "the floors themselves (--days 1, --live-hours 24, --transcript-mb 1) are accepted" || fail "at the floor" "rc=$RC $OUT"
+rm -rf "$H2P/-w"
+
+# A partial move: the .jsonl aside, the folder still in projects.
+S_P1=99999999-0000-4000-8000-000000000011 S_P2=99999999-0000-4000-8000-000000000012
+mk2 "$H2P" -w $S_P1 40 f; mk2 "$H2P" -w $S_P2 40 f
+DG=$(h2 | digest_of); OUT3=$(h2apply "$DG" 2>&1); RC=$?
+M2="$H2/.claude/transcripts-aside/$(date +%F)/manifest.jsonl"
+[ "$RC" = 0 ] && [ -f "$H2/.claude/transcripts-aside/$(date +%F)/-w/$S_P1.jsonl" ] || fail "setup: partial-move apply" "rc=$RC $OUT3"
+A2="$H2/.claude/transcripts-aside/$(date +%F)/-w"
+mv "$A2/$S_P1" "$H2P/-w/$S_P1"                    # what a signal between the two renames leaves
+OUT3=$(HOME="$H2" python3 "$DS" transcripts --restore "$M2" 2>&1); RC=$?
+[ "$RC" = 0 ] && [ -f "$H2P/-w/$S_P1.jsonl" ] && [ -d "$H2P/-w/$S_P1/subagents" ] && [[ "$OUT3" == *"in place: $H2P/-w/$S_P1 "* ]] \
+  && [ -f "$H2P/-w/$S_P2.jsonl" ] && [ -d "$H2P/-w/$S_P2" ] && [ ! -e "$A2/$S_P1.jsonl" ] \
+  && pass "restore after a partial move: the .jsonl comes back, the folder is reported in place, nothing refused, exit 0" || fail "partial restore" "rc=$RC $OUT3"
+OUT3=$(HOME="$H2" python3 "$DS" transcripts --restore "$M2" 2>&1); RC=$?
+[ "$RC" = 0 ] && [[ "$OUT3" == *"in place: "* && "$OUT3" == *"Restored 0 paths, refused 0"* ]] \
+  && pass "restoring a manifest whose rows are all back already reports them in place, exit 0" || fail "all in place" "rc=$RC $OUT3"
+cat > "$TMP/rollback.py" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("ds", sys.argv[1]); ds = importlib.util.module_from_spec(spec); spec.loader.exec_module(ds)
+d = sys.argv[2]
+os.makedirs(d + "/p/s", exist_ok=True); os.makedirs(d + "/a", exist_ok=True)
+open(d + "/p/s.jsonl", "w").close()
+real, calls = os.rename, []
+def rename(x, y):
+    calls.append(x)
+    if len(calls) == 2:
+        raise KeyboardInterrupt
+    real(x, y)
+os.rename = rename
+try:
+    ds.move_unit(d + "/p/s.jsonl", d + "/a/s.jsonl", d + "/p/s", d + "/a/s")
+except KeyboardInterrupt:
+    pass
+print(os.path.exists(d + "/p/s.jsonl"), os.path.exists(d + "/a/s.jsonl"), os.path.isdir(d + "/p/s"))
+PY
+[ "$(python3 "$TMP/rollback.py" "$DS" "$TMP/rb")" = "True False True" ] \
+  && pass "an interrupt between the .jsonl rename and the folder rename puts the .jsonl back" || fail "signal rollback" "$(python3 "$TMP/rollback.py" "$DS" "$TMP/rb2" 2>&1)"
+rm -rf "$H2/.claude/transcripts-aside"
+
+# A manifest row with a field of the wrong type is refused with a line, not a traceback.
+printf '{"original":"%s/-w/x.jsonl","aside":"%s/d/-w/x.jsonl","sessionId":[5]}\n' "$H2P" "$H2/.claude/transcripts-aside" > "$TMP/badrow.jsonl"
+OUT3=$(HOME="$H2" python3 "$DS" transcripts --restore "$TMP/badrow.jsonl" 2>&1); RC=$?
+[ "$RC" = 1 ] && [[ "$OUT3" == *"refused: manifest line 1 is not a row this wrote"* && "$OUT3" != *Traceback* ]] \
+  && pass "a manifest row whose sessionId is not a string (a list) is refused, not a traceback" || fail "bad row type" "rc=$RC $OUT3"
+
+# Non-default folders, one of them written with a ./ in it: the printed restore command works as printed.
+P2="$H2/p2" A3="$H2/.claude/./aside3" S_N1=99999999-0000-4000-8000-000000000021
+mk2 "$P2" -w $S_N1 40 f
+DG=$(h2 --projects "$P2" --aside "$A3" | digest_of); OUT3=$(h2apply "$DG" --projects "$P2" --aside "$A3" 2>&1); RC=$?
+RCMD=$(printf '%s\n' "$OUT3" | sed -n 's/.*Restore: //p')
+[ "$RC" = 0 ] && [ ! -e "$P2/-w/$S_N1.jsonl" ] && [[ "$RCMD" == *"--projects $P2"* && "$RCMD" == *"--aside $H2/.claude/aside3"* ]] \
+  && pass "apply with a ./ in --aside prints a restore command naming the non-default --projects and --aside, normalized" || fail "restore command text" "rc=$RC $OUT3"
+OUT3=$( (export HOME="$H2"; eval "$RCMD") 2>&1); RC=$?
+[ "$RC" = 0 ] && [ -f "$P2/-w/$S_N1.jsonl" ] && [ -d "$P2/-w/$S_N1/subagents" ] \
+  && pass "the printed restore command, run as printed, restores (and the ./ form of --aside round-trips)" || fail "printed restore" "rc=$RC $RCMD $OUT3"
+rm -rf "$H2/.claude/aside3" "$P2"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
