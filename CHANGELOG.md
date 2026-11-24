@@ -8,6 +8,23 @@ installed machine to the newest tag. After v1.4.2 the skills live in
 [claude-code-skills](https://github.com/AdityaRon/claude-code-skills), with their
 own changelog; `config/skills.pin` names the release each version installs.
 
+## v1.4.25 (2026-11-23)
+
+Merged since v1.4.24: 3 PRs.
+
+### Memory
+- memory-verify: far fewer process starts a row, byte-identical output (#336)
+- harness-checkup: stop running memory-verify; name a timed-out step's output size (#335)
+
+### Other
+- skills.pin: v1.4.2 (#337)
+
+### Benchmark vs v1.4.24
+
+Gate script and corpus from `55c32b9` (v1.4.24): 515 payloads, 0 of them new in this change.
+
+hooks/ and config/settings.json match v1.4.24; benchmark skipped (both sides would run the same files).
+
 ## v1.4.24 (2026-11-23)
 
 Merged since v1.4.23: 2 PRs.
