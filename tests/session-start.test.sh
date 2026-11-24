@@ -533,28 +533,45 @@ check_eq "a transcript line runs nothing" "" "$(ls "$TMP"/pwned4 2>/dev/null)"
 rm -f "$DSTAMP"
 
 echo ""
-echo "=== large transcripts across the machine: any start, once per measurement ==="
-astamp() {  # COUNT BYTES COMPACTIONS SECONDS_AGO [MB]
-  dstamp 0 0 "$4"; printf 'transcripts_active=%s %s %s\ntranscript_mb=%s\n' "$1" "$2" "$3" "${5:-150}" >> "$DSTAMP"
+echo "=== idle session transcripts across the machine: any start, once per measurement ==="
+astamp() {  # COUNT BYTES DAYS SECONDS_AGO [MB]
+  dstamp 0 0 "$4"; printf 'transcripts_idle=%s %s %s\ntranscript_mb=%s\n' "$1" "$2" "$3" "${5:-150}" >> "$DSTAMP"
   rm -f "$CLAUDE_STATE_DIR"/transcripts-warning*
 }
 startup() { jq -nc '{source:"startup", session_id:"sess-new", hook_event_name:"SessionStart"}' \
   | env CLAUDE_DISK_STAMP="$DSTAMP" "$@" bash "$TREE/hooks/session-start.sh" 2>/dev/null; }
-astamp 4 612000000 65 3600
+astamp 7 5240000000 30 3600
 OUT=$(startup)
-check_contains "a startup: the count, the largest and its compactions" "4 session transcripts written in the last 7 days are past 150 MB; the largest held 612 MB after 65 compactions" "$OUT"
-check_contains "and what to do" "write the handoff, then restart. Each one: python3 ~/.claude/disk-space.py report" "$OUT"
-check_not_contains "a second start, same measurement: silent" "## Large session transcripts" "$(startup)"
-astamp 1 200000000 2 3600 200
-check_contains "one, and the stamp's size" "1 session transcript written in the last 7 days is past 200 MB" "$(startup)"
-astamp 4 612000000 65 $((3 * 86400))
-check_not_contains "a stamp over two days old: silent" "## Large session transcripts" "$(startup)"
-astamp 0 0 0 3600
-check_not_contains "none: silent" "## Large session transcripts" "$(startup)"
-astamp 4 612000000 65 3600; printf 'transcripts_active=4 a[$(touch${IFS}%s/pwned5)] 1\n' "$TMP" >> "$DSTAMP"
-startup >/dev/null
-check_eq "a transcripts_active line runs nothing" "" "$(ls "$TMP"/pwned5 2>/dev/null)"
-astamp 4 612000000 65 3600
+check_contains "a startup: the count, the size line, the days, the GB and the date" "Up to 7 session transcripts past 150 MB, idle 30 days or more, hold 5.2 GB in ~/.claude/projects (harness-update.sh, 2026-11-17)." "$OUT"
+check_contains "it says what kind of cost, and the command" "This is disk space; no speed effect was measured. The listing checks each against live sessions and jobs and moves nothing without its digest: python3 ~/.claude/disk-space.py transcripts" "$OUT"
+check_contains "under its own heading" "## Idle session transcripts" "$OUT"
+check_not_contains "and not the old wording" "write the handoff, then restart. Each one" "$OUT"
+check_not_contains "a second start, same measurement: silent" "## Idle session transcripts" "$(startup)"
+astamp 3 900000000 45 3600
+check_contains "the days are the stamp's (45), not a fixed 30" "idle 45 days or more, hold 0.9 GB" "$(startup)"
+astamp 1 200000000 30 3600 200
+check_contains "one: singular, and the stamp's size line" "Up to 1 session transcript past 200 MB, idle 30 days or more" "$(startup)"
+check_not_contains "singular has no plural s" "Up to 1 session transcripts" "$(startup)"
+astamp 4 612000000 30 $((3 * 86400))
+check_not_contains "a stamp over two days old: silent" "## Idle session transcripts" "$(startup)"
+astamp 0 0 30 3600
+check_not_contains "COUNT 0: silent" "## Idle session transcripts" "$(startup)"
+dstamp 0 0 3600; printf 'transcript_mb=150\n' >> "$DSTAMP"; rm -f "$CLAUDE_STATE_DIR"/transcripts-warning*
+check_not_contains "no transcripts_idle line: silent" "## Idle session transcripts" "$(startup)"
+dstamp 0 0 3600; printf 'transcripts_active=4 612000000 65\ntranscript_mb=150\n' >> "$DSTAMP"; rm -f "$CLAUDE_STATE_DIR"/transcripts-warning*
+OUT=$(startup)
+check_not_contains "an old transcripts_active line alone: silent" "session transcripts" "$OUT"
+check_not_contains "and no old heading" "## Large session transcripts" "$OUT"
+for bad in 'transcripts_idle=4 a[$(touch${IFS}%s/pwned5)] 30' 'transcripts_idle=$(touch %s/pwned5) 5 30' 'transcripts_idle=`touch %s/pwned5` 5 30' \
+           'transcripts_idle=1; touch %s/pwned5' 'transcripts_idle=4 99999999999999999999 30' 'transcripts_idle=4 612000000 30 9' \
+           'transcripts_idle=4 612000000 12345' 'transcripts_idle=1234567 612000000 30' 'transcripts_idle=4  612000000 30'; do
+  astamp 0 0 30 3600; rm -f "$TMP/pwned5"
+  # shellcheck disable=SC2059
+  printf "$bad\n" "$TMP" >> "$DSTAMP"
+  OUT=$(startup)
+  check_eq "a crafted line prints nothing and runs nothing: ${bad:0:40}" "" "$(printf '%s' "$OUT" | grep -F 'Idle session transcripts')$(ls "$TMP"/pwned5 2>/dev/null)"
+done
+astamp 4 612000000 30 3600
 startup CLAUDE_SESSION_START_BUDGET=0 >/dev/null
 check_eq "a start past its budget claims nothing" "" "$(ls "$CLAUDE_STATE_DIR"/transcripts-warning* 2>/dev/null)"
 rm -f "$DSTAMP"

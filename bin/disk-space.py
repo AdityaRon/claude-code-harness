@@ -1460,10 +1460,12 @@ def cmd_stamp(a):
     big = big_transcripts(a.projects, a.transcript_mb * 1e6, limit=None)
     lines += ["transcript=%s %d %d" % (t["session"], t["bytes"], t["compactions"])
               for t in big[:10] if re.match(r"^[A-Za-z0-9_-]+$", t["session"])]
-    # Written in the last 7 days: an idle one cannot be acted on from a new session.
-    active = [t for t in big if now - t["mtime"] <= 7 * 86400]
-    if active:
-        lines.append("transcripts_active=%d %d %d" % (len(active), active[0]["bytes"], active[0]["compactions"]))
+    # What `transcripts` would list, by its own function; no `claude`, so a job live by pid alone is
+    # missed. Any keep-all state leaves no candidates, so no line.
+    cands = aside_plan(AsideCtx(a, agents=False))["candidates"]
+    if cands:
+        lines.append("transcripts_idle=%d %d %d" % (len(cands), sum(c["bytes"] + c["folder_bytes"] for c in cands),
+                                                    round(a.days)))
     lines.append("transcript_mb=%d" % round(a.transcript_mb))
     ms, n = guard_p90(a.timing_log)
     if ms is not None:
@@ -1557,8 +1559,9 @@ class AsideCtx:
     """What the registry and the jobs say is live. Each re-check reads both again, never an earlier
     read: the candidates are few, and a session may have started since the listing."""
 
-    def __init__(self, a):
+    def __init__(self, a, agents=True):
         self.a = a
+        self.agents = agents  # False: never run `claude`; liveness then comes from the job files alone
         self.refresh()
 
     def recheck(self):
@@ -1567,7 +1570,7 @@ class AsideCtx:
     def refresh(self):
         self.read_at = self.now = time.time()
         self.reg, self.reg_unknown, self.reg_note = registry_live(self.a.sessions)
-        self.pids, self.live_note = claude_agents()
+        self.pids, self.live_note = claude_agents() if self.agents else ({}, "")
         self.jobs_note = ""
         self.live, _, self.unreadable = live_jobs(self)
         self.job_ids, self.unmapped = {}, []
@@ -1991,6 +1994,9 @@ def main(argv=None):
     p.add_argument("--root", default=None)
     p.add_argument("--out", default=os.path.join(HOME, ".claude", "state", "disk-usage"))
     p.add_argument("--projects", default=projects_default)
+    p.add_argument("--sessions", default=os.path.join(HOME, ".claude", "sessions"), help="the live-session registry")
+    p.add_argument("--days", type=days_arg, default=ASIDE_DAYS, help="idle this long (default 30)")
+    p.add_argument("--live-hours", type=days_arg, default=24.0)
     p.add_argument("--transcript-mb", type=days_arg, default=transcript_mb_default(),
                    help="list session transcripts this size or more (CLAUDE_TRANSCRIPT_WARN_MB, 150)")
     p.add_argument("--timing-log", default=os.path.expanduser(
