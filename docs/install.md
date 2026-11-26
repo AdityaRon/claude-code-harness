@@ -75,7 +75,7 @@ Paths inside `~/.claude` are flat: every file in the repo's `bin/` lands at
   net-allowlist.sh  sandbox.sh  sandbox-trial.sh
   spend-report.py          ← what sessions, subagents and loop ticks cost; comms-hub's tick runs it daily
   disk-space.py            ← what job folders and Bazel output bases hold; harness-update.sh runs its
-                             stamp once a day, and again after an install that changes it, into state/disk-usage (sizes, idle transcripts of 150 MB
+                             stamp once a day, and again after each install, into state/disk-usage (sizes, idle transcripts of 150 MB
                              or more, the guards' p90), which session-start reads; report also
                              sizes ~/.claude/projects and pre-compact.sh's copies;
                              prune, clone and bazel --sweep delete by digest, behind ask rules
