@@ -25,21 +25,13 @@ sanitize() {
 
 case "$EVENT" in
   Stop|SessionEnd)
-    # Neither payload carries turn count or cost, so derive the turn count
-    # (assistant messages) from the transcript when available. Cost is not
-    # exposed to hooks; don't log a dead placeholder for it.
-    TURNS=$(jq_get '.num_turns')
-    if [[ -z "$TURNS" ]]; then
-      TRANSCRIPT=$(jq_get '.transcript_path')
-      TRANSCRIPT=$(expand_tilde "$TRANSCRIPT")
-      if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]] && command -v jq &>/dev/null; then
-        TURNS=$(jq -rs '[.[] | select((.message.role? // .role?) == "assistant")] | length' "$TRANSCRIPT" 2>/dev/null)
-      fi
-    fi
-    SID=$(jq_get '.session_id')
-    # SessionEnd carries why the session ended (clear / logout / exit / other);
-    # Stop does not, so the field is appended only when present.
-    REASON=$(sanitize "$(jq_get '.reason')")
+    # One jq, and never the transcript: jq -s over a 116 MB one took 1.27 s and
+    # 430 MB on one Mac, and a hook killed at SessionEnd's 1.5 s writes no line.
+    # turns= only when the payload carries num_turns. Cost is not exposed to hooks.
+    # SessionEnd carries why the session ended; Stop does not, so reason= is optional.
+    TURNS="" SID="" REASON=""
+    command -v jq &>/dev/null && eval "$(printf '%s\n' "$INPUT" | jq -r '@sh "TURNS=\((.num_turns | numbers) // "") SID=\((.session_id | strings) // "") REASON=\((.reason | strings) // "")"' 2>/dev/null)"
+    REASON=$(sanitize "$REASON") SID=${SID//[^A-Za-z0-9_.-]/_}
     log_audit "$TS | session_end | turns=${TURNS:-n/a} session=${SID:-?}${REASON:+ reason=$REASON} | $DIR"
     ;;
   PostToolUseFailure)

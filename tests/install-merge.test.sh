@@ -177,18 +177,20 @@ else
 fi
 
 echo ""
-echo "=== The SessionEnd snapshot carries a timeout past the 1.5 s SessionEnd budget ==="
-SNAP_T='[.hooks.SessionEnd[].hooks[] | select(.command | endswith("session-snapshot.sh")) | .timeout] | first // 0'
-[[ "$(jq -r "$SNAP_T" config/settings.json)" -ge 5 ]] \
-  && pass "shipped settings.json: session-snapshot's SessionEnd entry has a timeout of 5 s or more" \
-  || fail "shipped settings.json: session-snapshot's SessionEnd timeout" "$(jq -r "$SNAP_T" config/settings.json)"
+echo "=== Every SessionEnd hook carries its own timeout past the 1.5 s default ==="
+# Another entry's timeout raises only the shared budget, not this hook's own 1.5 s
+# (hooks page, read 2026-11-25; a claude -p probe on CLI 2.1.331 agreed).
+END_T='[.hooks.SessionEnd[].hooks[] | select(.command | test("(audit|session-snapshot)[.]sh$")) | (.timeout // 0)] | if length == 2 then min else 0 end'
+[[ "$(jq -r "$END_T" config/settings.json)" -ge 5 ]] \
+  && pass "shipped settings.json: audit's and session-snapshot's SessionEnd entries each have a timeout of 5 s or more" \
+  || fail "shipped settings.json: a SessionEnd timeout" "$(jq -c .hooks.SessionEnd config/settings.json)"
 OUT=$(merge '{}' "$(cat config/settings.json)")
-[[ "$(printf '%s' "$OUT" | jq -r "$SNAP_T")" -ge 5 ]] \
-  && pass "a fresh merge carries it" || fail "a fresh merge carries the SessionEnd timeout" "$(printf '%s' "$OUT" | jq -c .hooks.SessionEnd)"
-OLD='{"hooks":{"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"~/.claude/hooks/session-snapshot.sh"}]}]}}'
+[[ "$(printf '%s' "$OUT" | jq -r "$END_T")" -ge 5 ]] \
+  && pass "a fresh merge carries them" || fail "a fresh merge carries the SessionEnd timeouts" "$(printf '%s' "$OUT" | jq -c .hooks.SessionEnd)"
+OLD='{"hooks":{"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"~/.claude/hooks/audit.sh"}]},{"matcher":"","hooks":[{"type":"command","command":"~/.claude/hooks/session-snapshot.sh"}]}]}}'
 OUT=$(merge "$OLD" "$(cat config/settings.json)")
-[[ "$(printf '%s' "$OUT" | jq -r "$SNAP_T")" -ge 5 ]] \
-  && pass "an install from before the timeout gets it on merge" || fail "an older install gets the SessionEnd timeout" "$(printf '%s' "$OUT" | jq -c .hooks.SessionEnd)"
+[[ "$(printf '%s' "$OUT" | jq -r "$END_T")" -ge 5 ]] \
+  && pass "an install from before the timeouts gets them on merge" || fail "an older install gets the SessionEnd timeouts" "$(printf '%s' "$OUT" | jq -c .hooks.SessionEnd)"
 
 echo "=== Every hook settings.json registers actually exists in hooks/ ==="
 # install.sh used to copy an explicit list of filenames. It named 15 and hooks/
