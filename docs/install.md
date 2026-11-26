@@ -79,6 +79,10 @@ Paths inside `~/.claude` are flat: every file in the repo's `bin/` lands at
                              or more, the guards' p90), which session-start reads; report also
                              sizes ~/.claude/projects and pre-compact.sh's copies;
                              prune, clone and bazel --sweep delete by digest, behind ask rules
+                             after a stamp it wrote, harness-update.sh posts one desktop notification per
+                             condition that was not true at the previous stamp (jobs or Bazel past their limit, idle
+                             transcripts), edge-triggered through state/disk-notified; background-only machines see no
+                             session-start notice
   tracker-prune.py         ← moves a tracker's settled rows to <name>-archive.md; a dry run unless --write
   permission-friction.py  hook-latency.py  hooknames.py
                            ← which guard asks cost the most, and each hook's wall time, from transcripts

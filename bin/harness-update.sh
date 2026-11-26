@@ -146,17 +146,74 @@ cli_update() {
 }
 
 # Once a day, and again when the installed tool is newer than the stamp, what the
-# job folders and the Bazel output root hold, for session-start's warning, which
-# reads the stamp and sizes nothing. First in update(), so a run that stops at "up
-# to date" or a failed fetch measures too. After an install it runs again with
-# "force", since cp -p can date the new tool before today's stamp. Never fails
-# the run; a du that fails writes no stamp.
+# job folders and the Bazel output root hold, for session-start's warning. First
+# in update(), so a run that stops at "up to date" or a failed fetch measures
+# too; after an install again with "force", since cp -p can date the new tool
+# before today's stamp. Never fails the run. Only a stamp written here is
+# checked for notifications; a skipped or failed one posts nothing.
 disk_stamp() {
   local tool="$HOME/.claude/disk-space.py" stamp="$HOME/.claude/state/disk-usage" out
   [[ -f "$tool" ]] || return 0
   [[ "${1:-}" != force && "$(sed -n 's/^date=//p' "$stamp" 2>/dev/null)" == "$(date +%Y-%m-%d)" && ! "$tool" -nt "$stamp" ]] && return 0
-  if out=$(python3 "$tool" stamp --out "$stamp" 2>&1); then say "$out"
+  if out=$(python3 "$tool" stamp --out "$stamp" 2>&1); then say "$out"; disk_notify
   else say "disk-space: ${out:-no stamp written}"; fi
+  return 0
+}
+
+# Desktop notification, as hooks/notify.sh: osascript with the text as arguments,
+# else notify-send. CLAUDE_NOTIFY_DRY_RUN prints it instead (test seam).
+notify_desktop() {
+  local title="Claude Code harness"
+  say "$1"
+  if [[ -n "${CLAUDE_NOTIFY_DRY_RUN:-}" ]]; then printf '%s\n%s\n' "$title" "$1"
+  elif command -v osascript >/dev/null 2>&1; then
+    osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' \
+      -e 'end run' "$title" "$1" 2>/dev/null || true
+  elif command -v notify-send >/dev/null 2>&1; then notify-send -- "$title" "$1" 2>/dev/null || true
+  fi
+}
+
+# Called only after a stamp this run wrote: one notification per condition whose
+# flag in state/disk-notified goes 0 to 1 (jobs and bazel past their limits, any
+# idle transcripts). The launchd job gets no settings.json env, so the limits
+# are read from it here, then the process env, then the defaults.
+disk_notify() {
+  local stamp="$HOME/.claude/state/disk-usage" flags="$HOME/.claude/state/disk-notified"
+  local k v jobs=0 bazel=0 idn=0 idb=0 jl bl sj="" sb="" new f_jobs=0 f_bazel=0 f_idle=0 n_jobs=0 n_bazel=0 n_idle=0
+  [[ -f "$stamp" ]] || return 0
+  while IFS='=' read -r k v || [[ -n "$k" ]]; do
+    case "$k" in
+      transcripts_idle)  # COUNT BYTES DAYS
+        [[ "$v" =~ ^([0-9]{1,6})\ ([0-9]{1,15})\ ([0-9]{1,4})$ ]] && idn=$((10#${BASH_REMATCH[1]})) idb=$((10#${BASH_REMATCH[2]})) ;;
+      jobs_bytes) [[ "$v" =~ ^[0-9]{1,15}$ ]] && jobs=$((10#$v)) ;;
+      bazel_bytes) [[ "$v" =~ ^[0-9]{1,15}$ ]] && bazel=$((10#$v)) ;;
+    esac
+  done < "$stamp"
+  if command -v jq >/dev/null 2>&1 && [[ -f "$HOME/.claude/settings.json" ]]; then
+    { IFS='|' read -r sj sb; } < <(jq -r '(.env // {}) | [(.CLAUDE_DISK_WARN_JOBS_GB // "" | tostring), (.CLAUDE_DISK_WARN_BAZEL_GB // "" | tostring)] | join("|")' \
+      "$HOME/.claude/settings.json" 2>/dev/null) || true
+  fi
+  jl=${sj:-${CLAUDE_DISK_WARN_JOBS_GB:-50}} bl=${sb:-${CLAUDE_DISK_WARN_BAZEL_GB:-100}}
+  [[ "$jl" =~ ^[0-9]{1,6}$ ]] || jl=50
+  [[ "$bl" =~ ^[0-9]{1,6}$ ]] || bl=100
+  jl=$((10#$jl)) bl=$((10#$bl))
+  (( jobs > jl * 1000000000 )) && n_jobs=1
+  (( bazel > bl * 1000000000 )) && n_bazel=1
+  (( idn > 0 )) && n_idle=1
+  if [[ -f "$flags" ]]; then
+    while IFS='=' read -r k v || [[ -n "$k" ]]; do
+      [[ "$v" == 1 ]] || continue
+      case "$k" in jobs) f_jobs=1 ;; bazel) f_bazel=1 ;; idle) f_idle=1 ;; esac
+    done < "$flags"
+  fi
+  gb() { local t=$(( ($1 + 50000000) / 100000000 )); printf '%d.%d GB' $((t / 10)) $((t % 10)); }
+  (( n_jobs && ! f_jobs )) && notify_desktop "Job folders in ~/.claude/jobs hold $(gb "$jobs") (past $jl GB): python3 ~/.claude/disk-space.py report"
+  (( n_bazel && ! f_bazel )) && notify_desktop "The Bazel output root holds $(gb "$bazel") (past $bl GB): python3 ~/.claude/disk-space.py bazel"
+  (( n_idle && ! f_idle )) && notify_desktop "$idn idle session transcripts hold $(gb "$idb"): python3 ~/.claude/disk-space.py transcripts"
+  new=$(printf 'jobs=%s\nbazel=%s\nidle=%s' "$n_jobs" "$n_bazel" "$n_idle")
+  if [[ ! -f "$flags" || "$(< "$flags")" != "$new" ]]; then
+    printf '%s\n' "$new" > "$flags.tmp" 2>/dev/null && mv "$flags.tmp" "$flags" 2>/dev/null
+  fi
   return 0
 }
 
