@@ -27,6 +27,9 @@ export CLAUDE_GUARD_TIMING_LOG="$TMP/guard-timing.log"
 # first sections, and a case about a later one would then fail for the budget's
 # sake. The cases about the budget set their own, from this machine's speed.
 export CLAUDE_SESSION_START_BUDGET=60
+# A background session (or this suite run from one) sets it to 0 and takes no
+# machine-wide notice; unset is the case these sections are about.
+unset CLAUDE_CODE_SESSION_ATTENDED
 
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
@@ -644,6 +647,150 @@ fi
 rm -f "$ENVF"
 run_tree sess-clean CLAUDE_ENV_FILE="$ENVF" CLAUDE_ZSH_OPTS=off >/dev/null
 check_eq "CLAUDE_ZSH_OPTS=off writes nothing" "no" "$([ -e "$ENVF" ] && echo yes || echo no)"
+
+echo "=== machine-wide notices: only an attended start claims and prints them ==="
+# CLAUDE_CODE_SESSION_ATTENDED is 0 for a background or `claude -p` start. One stamp
+# holds all four notices: the release nudge, disk, idle transcripts, slow guards.
+HEADS=("Harness v1.0.3 is available" "## Disk, as harness-update.sh measured" "## Idle session transcripts" "## Bash guards")
+CLAIMS=(release-nudge disk-warning transcripts-warning guard-latency)
+allnotices() {  # arms every notice; the env words for a run go in ENVN
+  due
+  dstamp 145500000000 0 3600
+  printf 'transcripts_idle=7 5240000000 30\ntranscript_mb=150\nguard_p90_ms=1440\nguard_calls=200\n' >> "$DSTAMP"
+  rm -f "$CLAUDE_STATE_DIR"/transcripts-warning* "$CLAUDE_STATE_DIR"/guard-latency*
+  ENVN=(CLAUDE_HARNESS_LATEST="$LATEST" CLAUDE_HARNESS_VERSION="$VERSION" CLAUDE_DISK_STAMP="$DSTAMP")
+}
+claims_of() { local c; for c in "${CLAIMS[@]}"; do ls "$CLAUDE_STATE_DIR/$c".claim.* 2>/dev/null; done; }
+is_json() { printf '%s' "$1" | jq -e '.systemMessage and .hookSpecificOutput.additionalContext' >/dev/null 2>&1 && echo yes || echo no; }
+not_json() { printf '%s' "$1" | jq -e . >/dev/null 2>&1 && echo yes || echo no; }
+allnotices
+OUT=$(run_tree sess-clean "${ENVN[@]}" CLAUDE_CODE_SESSION_ATTENDED=0)
+for i in 0 1 2 3; do
+  check_not_contains "unattended prints none: ${HEADS[$i]}" "${HEADS[$i]}" "$OUT"
+  check_eq "unattended takes no claim: ${CLAIMS[$i]}" "" "$(ls "$CLAUDE_STATE_DIR/${CLAIMS[$i]}".claim.* 2>/dev/null)"
+done
+check_eq "unattended output is plain text, not JSON" "no" "$(not_json "$OUT")"
+check_contains "unattended still prints the git context" "## Git context" "$OUT"
+# The same stamps, not yet claimed: the first attended start gets every notice (the control).
+OUT=$(run_tree sess-clean "${ENVN[@]}" CLAUDE_CODE_SESSION_ATTENDED=1)
+for i in 0 1 2 3; do
+  check_contains "attended prints: ${HEADS[$i]}" "${HEADS[$i]}" "$OUT"
+  check_eq "attended claims: ${CLAIMS[$i]}" "1" "$(ls "$CLAUDE_STATE_DIR/${CLAIMS[$i]}".claim.* 2>/dev/null | wc -l | tr -d ' ')"
+done
+allnotices
+OUT=$(run_tree sess-clean "${ENVN[@]}")
+for i in 0 1 2 3; do check_contains "unset behaves as attended: ${HEADS[$i]}" "${HEADS[$i]}" "$OUT"; done
+check_eq "unset takes all four claims" "4" "$(claims_of | wc -l | tr -d ' ')"
+
+echo ""
+echo "=== an attended start with a notice: one JSON object, the notice shown and the whole text in context ==="
+allnotices
+OUT=$(run_tree sess-clean "${ENVN[@]}" CLAUDE_CODE_SESSION_ATTENDED=1)
+check_eq "jq -e: systemMessage and additionalContext" "yes" "$(is_json "$OUT")"
+check_eq "exactly one object, nothing around it" "1" "$(printf '%s' "$OUT" | jq -s 'length' 2>/dev/null)"
+check_eq "hookEventName" "SessionStart" "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.hookEventName' 2>/dev/null)"
+J_SYS=$(printf '%s' "$OUT" | jq -r '.systemMessage' 2>/dev/null); J_CTX=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+check_contains "the context holds the git context" "## Git context" "$J_CTX"
+for i in 0 1 2 3; do
+  check_contains "systemMessage names: ${HEADS[$i]}" "${HEADS[$i]}" "$J_SYS"
+  check_contains "context names: ${HEADS[$i]}" "${HEADS[$i]}" "$J_CTX"
+done
+check_not_contains "the git context is not shown to the person" "## Git context" "$J_SYS"
+# Resume with a notice, drift and a dev mod: still one whole object.
+write_snap "sess-drift" "$TARGET" "$STALE_HASH" "true"
+mkdir -p "$TMP/mods/sess-drift/m2/.claude-plugin"; : > "$TMP/mods/sess-drift/m2/.claude-plugin/plugin.json"
+allnotices
+OUT=$(run_tree sess-drift "${ENVN[@]}" CLAUDE_CODE_SESSION_ATTENDED=1 CLAUDE_DEV_MODS_DIR="$TMP/mods")
+check_eq "resume, notice, drift and a mod: parses whole" "yes" "$(is_json "$OUT")"
+J_CTX=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+check_contains "the context holds the drift" "drifted: $TARGET" "$J_CTX"
+check_contains "and the mod notice" "Mod loading from this session: $TMP/mods/sess-drift/m2" "$J_CTX"
+check_not_contains "and the drift is not in the shown message" "Resume drift" "$(printf '%s' "$OUT" | jq -r '.systemMessage' 2>/dev/null)"
+# The budget line is written by the EXIT trap. A slow rm in claim() runs after the disk
+# notice, so the later sections are skipped. Drift and a skip cannot meet (SECONDS only
+# grows, and resume-drift is the last section), so this run has the notice, a mod and the skip.
+SLOWSH="$TMP/slowsh"; mkdir -p "$SLOWSH"
+printf '#!/bin/sh\nsleep "$SLOW_RM"\nexec /bin/rm "$@"\n' > "$SLOWSH/rm"; chmod +x "$SLOWSH/rm"
+T2="$TMP/tree2"; mkdir -p "$T2"; cp -R hooks "$T2/hooks"
+sed "s#^export PATH=\"#export PATH=\"$SLOWSH:#" hooks/lib.sh > "$T2/hooks/lib.sh"
+printf 'small\n' > "$CLAUDE_GUARD_TIMING_LOG"
+due; dstamp 145500000000 0 3600; printf 'transcripts_idle=7 5240000000 30\ntranscript_mb=150\n' >> "$DSTAMP"
+rm -f "$CLAUDE_STATE_DIR"/transcripts-warning*; : > "$CLAUDE_STATE_DIR/transcripts-warning.claim.old"
+OUT=$(jq -nc '{source:"resume", session_id:"sess-drift", hook_event_name:"SessionStart"}' \
+  | env CLAUDE_DISK_STAMP="$DSTAMP" CLAUDE_CODE_SESSION_ATTENDED=1 CLAUDE_DEV_MODS_DIR="$TMP/mods" SLOW_RM=3 CLAUDE_SESSION_START_BUDGET=3 \
+    bash "$T2/hooks/session-start.sh" 2>/dev/null)
+check_eq "a start past its budget with a notice: parses whole" "yes" "$(is_json "$OUT")"
+J_CTX=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+check_contains "the trap's skipped line is in the context" "session-start: past its 3 s budget, skipped:" "$J_CTX"
+check_contains "and the notice came first" "## Disk, as harness-update.sh measured" "$J_CTX"
+check_not_contains "and the skipped line is not shown as a notice" "past its" "$(printf '%s' "$OUT" | jq -r '.systemMessage' 2>/dev/null)"
+check_contains "the mod notice is in the context too" "Mod loading from this session" "$J_CTX"
+rm -f "$CLAUDE_GUARD_TIMING_LOG"
+
+echo ""
+echo "=== a start with no machine-wide notice: plain text, and no process more than before ==="
+rm -f "$DSTAMP" "$CLAUDE_STATE_DIR"/*.claim.*
+OUT=$(run_tree sess-clean CLAUDE_CODE_SESSION_ATTENDED=1)
+check_eq "plain text, not JSON" "no" "$(not_json "$OUT")"
+check_contains "the git context as before" "## Git context" "$OUT"
+# Only the per-session transcript notice: not machine-wide, so plain too.
+tstamp 3600
+OUT=$(run_tree sess-clean CLAUDE_CODE_SESSION_ATTENDED=1 CLAUDE_DISK_STAMP="$DSTAMP")
+check_contains "the session's transcript notice prints" "This session's transcript" "$OUT"
+check_eq "and is plain text" "no" "$(not_json "$OUT")"
+# Counted, not timed. The programs the hook can start go through a logging shim. Subshells are
+# the rises in BASH_SUBSHELL between traced lines (BASHPID is bash 4 and later; macOS has 3.2).
+# Budgets are the counts before this change, for a startup with no state: one jq reads the
+# input, nothing else starts, and 8 subshells are entered.
+XSH="$TMP/xshim"; XLOG="$TMP/xlog"; mkdir -p "$XSH" "$TMP/x/hooks"; cp -R hooks/. "$TMP/x/hooks/"
+for n in jq git date head wc tr rm find mv sort ps sed awk cat basename dirname readlink; do
+  r=$(command -v "$n" 2>/dev/null) || continue
+  printf '#!/bin/sh\necho %s >> "%s"\nexec "%s" "$@"\n' "$n" "$XLOG" "$r" > "$XSH/$n"; chmod +x "$XSH/$n"
+done
+sed "s#^export PATH=\"#export PATH=\"$XSH:#" hooks/lib.sh > "$TMP/x/hooks/lib.sh"
+xcount() {  # sets XE (programs started) and XS (subshells entered)
+  local pl; pl=$(jq -nc --arg d "$TMP" '{source:"startup", session_id:"sess-x", cwd:$d}')
+  : > "$XLOG"
+  printf '%s' "$pl" | env CLAUDE_CODE_SESSION_ATTENDED=1 CLAUDE_HOST_BIN=/bin/sh CLAUDE_DISK_STAMP="$TMP/none" \
+    bash "$TMP/x/hooks/session-start.sh" >/dev/null 2>&1
+  XE=$(wc -l < "$XLOG" | tr -d ' ')
+  XS=$(printf '%s' "$pl" | env CLAUDE_CODE_SESSION_ATTENDED=1 CLAUDE_HOST_BIN=/bin/sh CLAUDE_DISK_STAMP="$TMP/none" \
+    PS4='+@${BASH_SUBSHELL}@ ' bash -x "$TMP/x/hooks/session-start.sh" 2>&1 >/dev/null \
+    | sed -n 's/^+*@\([0-9]*\)@.*/\1/p' | awk 'BEGIN { p = 0 } { if ($1 > p) n += $1 - p; p = $1 } END { print n + 0 }')
+}
+rm -f "$DSTAMP"
+xcount
+[ "$XE" -le 1 ] && pass "a plain start runs $XE program (the input's jq; before this change: 1)" || fail "plain start execs" "$XE programs: $(sort "$XLOG" | uniq -c | tr -s ' \n' ' ')"
+[ "$XS" -le 8 ] && pass "and enters $XS subshells in a trace (before this change: 8)" || fail "plain start subshells" "$XS subshells"
+
+echo ""
+echo "=== housekeeping is not a notice: an unattended start still does it ==="
+mkdir -p "$CLAUDE_STATE_DIR/lint-pending"; printf '1 /x/memory/a.md\n' > "$CLAUDE_STATE_DIR/lint-pending/old-session"
+touch -t "$(date -v-2d +%Y%m%d%H%M 2>/dev/null || date -d '2 days ago' +%Y%m%d%H%M)" "$CLAUDE_STATE_DIR/lint-pending/old-session"
+allnotices; rm -f "$CLAUDE_STATE_DIR"/lint-pending-prune.claim.*
+run_tree sess-clean "${ENVN[@]}" CLAUDE_CODE_SESSION_ATTENDED=0 >/dev/null
+check_eq "the lint-pending prune claim is taken" "1" "$(ls "$CLAUDE_STATE_DIR"/lint-pending-prune.claim.* 2>/dev/null | wc -l | tr -d ' ')"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$CLAUDE_STATE_DIR/lint-pending/old-session" ] || break; sleep 0.3; done
+check_eq "and the old pending list is removed" "gone" "$([ -e "$CLAUDE_STATE_DIR/lint-pending/old-session" ] && echo kept || echo gone)"
+rm -rf "$CLAUDE_STATE_DIR/lint-pending"
+tstamp 3600
+OUT=$(run_tree sess-clean CLAUDE_CODE_SESSION_ATTENDED=0 CLAUDE_DISK_STAMP="$DSTAMP")
+check_contains "the session's own transcript notice is not gated" "It held 612 MB after 13 compactions" "$OUT"
+check_eq "and its claim is taken" "1" "$(ls "$CLAUDE_STATE_DIR"/sess-clean.transcript.claim.* 2>/dev/null | wc -l | tr -d ' ')"
+
+echo ""
+echo "=== no jq: today's plain output, notice included ==="
+JQ_REAL=$(command -v jq)
+NOJQ="$TMP/nojq"; mkdir -p "$NOJQ" "$TMP/t3/hooks"; cp -R hooks/. "$TMP/t3/hooks/"
+for d in /usr/bin /bin /usr/sbin /sbin /opt/homebrew/bin; do
+  for f in "$d"/*; do n=${f##*/}; [ "$n" = jq ] || [ -e "$NOJQ/$n" ] || ln -s "$f" "$NOJQ/$n" 2>/dev/null; done
+done
+sed "s#^export PATH=.*#export PATH=\"$NOJQ\"#" hooks/lib.sh > "$TMP/t3/hooks/lib.sh"
+allnotices
+OUT=$(printf '%s' '{"source":"resume"}' | env "${ENVN[@]}" CLAUDE_CODE_SESSION_ATTENDED=1 PATH="$NOJQ" "$(command -v bash)" "$TMP/t3/hooks/session-start.sh" 2>/dev/null)
+check_contains "the notice prints as plain text" "## Disk, as harness-update.sh measured" "$OUT"
+check_eq "and it is not JSON" "no" "$(printf '%s' "$OUT" | "$JQ_REAL" -e . >/dev/null 2>&1 && echo yes || echo no)"
+rm -f "$DSTAMP"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

@@ -44,7 +44,7 @@ claude_host() {   # one awk walks the whole chain: an awk per ancestor cost as m
 # terminal app (that app's bundle-keyed grant covers it), or there is no host;
 # otherwise prints the diagnosis, markdown headed, and returns 1.
 host_binary_check() {
-  local pid comm above host now marker
+  local pid comm above host now marker say=echo
   if [[ -n "${CLAUDE_HOST_BIN:-}" ]]; then
     pid=${CLAUDE_HOST_PID:-0}; comm=$CLAUDE_HOST_BIN; above=${CLAUDE_HOST_PARENT:-launchd}
   else
@@ -54,12 +54,13 @@ host_binary_check() {
   [[ "$comm" == /* ]] || return 0          # Linux ps gives a bare name: nothing to test
   [[ -e "$comm" ]] && return 0
   case "$above" in *.app/*) return 0 ;; esac
+  declare -F out &>/dev/null && say=out   # session-start buffers its output in out
   now=$(command -v claude 2>/dev/null)
   [[ -n "$now" ]] && now=" claude on PATH is now $(readlink -f "$now" 2>/dev/null || printf '%s' "$now")."
-  echo "## This session's Claude Code binary is gone"
-  echo "The session host, pid $pid, runs from $comm, which no longer exists: an upgrade deleted it and the host runs on from memory.$now macOS keys a background host's Desktop, Documents and Downloads access to that path, so once tccd restarts every access there fails with 'Operation not permitted' (git: couldn't read packed-refs). Save work, then restart this session so it runs from the current binary. A clone outside those folders is unaffected: ~/.claude/relocate-clones.sh moves one. Check all hosts: bash -c 'source ~/.claude/hooks/lib.sh; stale_claude_hosts'."
+  $say "## This session's Claude Code binary is gone"
+  $say "The session host, pid $pid, runs from $comm, which no longer exists: an upgrade deleted it and the host runs on from memory.$now macOS keys a background host's Desktop, Documents and Downloads access to that path, so once tccd restarts every access there fails with 'Operation not permitted' (git: couldn't read packed-refs). Save work, then restart this session so it runs from the current binary. A clone outside those folders is unaffected: ~/.claude/relocate-clones.sh moves one. Check all hosts: bash -c 'source ~/.claude/hooks/lib.sh; stale_claude_hosts'."
   marker=$(expand_tilde "${CLAUDE_CLI_UPGRADED:-$HOME/.claude/state/cli-upgraded}")
-  [[ -f "$marker" ]] && echo "harness-update.sh's last CLI upgrade: $(head -1 "$marker")"
+  [[ -f "$marker" ]] && $say "harness-update.sh's last CLI upgrade: $(head -1 "$marker")"
   return 1
 }
 

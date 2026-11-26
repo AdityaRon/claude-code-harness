@@ -42,7 +42,33 @@ fi
 BUDGET=${CLAUDE_SESSION_START_BUDGET:-3} SECONDS=0
 SKIPPED=""
 in_budget() { (( SECONDS < BUDGET )) && return 0; SKIPPED="$SKIPPED $1"; return 1; }
-trap '[[ -z "$SKIPPED" ]] || printf "\nsession-start: past its %s s budget, skipped:%s\n" "$BUDGET" "$SKIPPED"' EXIT
+
+# Output is buffered and written once, at exit, so every early `exit 0` and the
+# line below pass through one place. out adds to what the model reads; out_n also
+# to NOTICE, the machine-wide notices a person sees. No subshell, no process.
+OUT="" NOTICE="" HAVE_JQ=""
+command -v jq &>/dev/null && HAVE_JQ=1
+out() { OUT+="$1"$'\n'; }
+out_n() { OUT+="$1"$'\n'; NOTICE+="$1"$'\n'; }
+finish() {
+  local l
+  if [[ -n "$SKIPPED" ]]; then
+    printf -v l '\nsession-start: past its %s s budget, skipped:%s\n' "$BUDGET" "$SKIPPED"; OUT+=$l
+  fi
+  if [[ -n "$NOTICE" && -n "$HAVE_JQ" ]]; then
+    jq -nc --arg m "${NOTICE#$'\n'}" --arg c "$OUT" \
+      '{systemMessage:($m | rtrimstr("\n")), hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$c}}' \
+      || printf '%s' "$OUT"
+  else
+    printf '%s' "$OUT"
+  fi
+}
+trap finish EXIT
+
+# CLAUDE_CODE_SESSION_ATTENDED is 0 for a background or `claude -p` start, whose
+# output nobody sees, and 1 in a terminal. Unset (undocumented) counts as attended.
+# The machine-wide notices claim and print only when attended.
+ATT=1; [[ "${CLAUDE_CODE_SESSION_ATTENDED-}" == 0 ]] && ATT=0
 
 # claim FILE STAMP: true for one of the sessions that race to do what STAMP names
 # (a day's nudge, one state of an index), so a resume storm does it once. A
@@ -66,23 +92,23 @@ if [[ "$SOURCE" != "startup" && "$SOURCE" != "clear" ]] && in_budget git-context
   COMMITS=$(git log --oneline -5 2>/dev/null)
   STASHES=$(git stash list 2>/dev/null | wc -l | tr -d ' ')
 
-  echo "## Git context"
-  echo "Branch: $BRANCH"
+  out "## Git context"
+  out "Branch: $BRANCH"
 
   if [[ -n "$DIRTY" ]]; then
-    echo "Uncommitted changes:"
-    echo "$DIRTY"
+    out "Uncommitted changes:"
+    out "$DIRTY"
   else
-    echo "Working tree: clean"
+    out "Working tree: clean"
   fi
 
-  echo ""
-  echo "Recent commits:"
-  echo "$COMMITS"
+  out ""
+  out "Recent commits:"
+  out "$COMMITS"
 
   if [[ "$STASHES" -gt 0 ]]; then
-    echo ""
-    echo "Stashes: $STASHES stash(es) present"
+    out ""
+    out "Stashes: $STASHES stash(es) present"
   fi
 fi
 
@@ -153,7 +179,7 @@ done
 # --- the host's binary is gone: an upgrade deleted it under a running session --
 # Every source, no stamp: a restart is the only fix, and each host is one.
 # One ps; CLAUDE_HOST_PS and CLAUDE_HOST_START are the test seams (lib.sh).
-if ! host_binary_check; then echo ""; fi
+if ! host_binary_check; then out ""; fi
 
 # --- a newer harness release ------------------------------------------------
 # harness-update.sh writes the newest tag it fetched; nothing here touches the
@@ -161,7 +187,7 @@ if ! host_binary_check; then echo ""; fi
 # the tag is being worked on.
 LATEST_FILE=$(expand_tilde "${CLAUDE_HARNESS_LATEST:-$HOME/.claude/state/harness-latest}")
 VERSION_FILE=$(expand_tilde "${CLAUDE_HARNESS_VERSION:-$HOME/.claude/harness.version}")
-if [[ -f "$LATEST_FILE" && -f "$VERSION_FILE" ]] && in_budget release-nudge; then
+if [[ "$ATT" == 1 && -f "$LATEST_FILE" && -f "$VERSION_FILE" ]] && in_budget release-nudge; then
   LATEST="" INSTALLED=""
   read -r LATEST _ < "$LATEST_FILE" || true
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -175,8 +201,8 @@ if [[ -f "$LATEST_FILE" && -f "$VERSION_FILE" ]] && in_budget release-nudge; the
     CUR="" && { { read -r CUR < "$STAMP_FILE"; } 2>/dev/null || true; }
     [[ "$CUR" != "$STAMP" && ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR" 2>/dev/null
     if [[ "$CUR" != "$STAMP" ]] && claim "$STAMP_FILE" "$STAMP"; then
-      echo ""
-      echo "## Harness $LATEST is available; $INSTALLED is installed. Run ~/.claude/harness-update.sh."
+      out_n ""
+      out_n "## Harness $LATEST is available; $INSTALLED is installed. Run ~/.claude/harness-update.sh."
       printf '%s\n' "$STAMP" > "$STAMP_FILE" 2>/dev/null
     fi
   fi
@@ -211,7 +237,7 @@ if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
   D_JL=${CLAUDE_DISK_WARN_JOBS_GB:-50} D_BL=${CLAUDE_DISK_WARN_BAZEL_GB:-100}
   [[ "$D_JL" =~ ^[0-9]{1,6}$ ]] || D_JL=50
   [[ "$D_BL" =~ ^[0-9]{1,6}$ ]] || D_BL=100
-  if (( D_AT > 0 )) && (( D_JOBS > D_JL * 1000000000 || D_BAZEL > D_BL * 1000000000 )); then
+  if [[ "$ATT" == 1 ]] && (( D_AT > 0 )) && (( D_JOBS > D_JL * 1000000000 || D_BAZEL > D_BL * 1000000000 )); then
     STAMP_FILE="$STATE_DIR/disk-warning"
     CUR="" && { { read -r CUR < "$STAMP_FILE"; } 2>/dev/null || true; }
     [[ "$CUR" != "$D_AT" && ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR" 2>/dev/null
@@ -221,10 +247,10 @@ if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
       if (( NOW - D_AT <= 2 * 86400 )); then
         gb() { local t=$(( ($2 + 50000000) / 100000000 )); printf -v "$1" '%d.%d GB' $((t / 10)) $((t % 10)); }
         gb G_JOBS "$D_JOBS"; gb G_BAZEL "$D_BAZEL"; gb G_ORPH "$D_ORPH"
-        echo ""
-        echo "## Disk, as harness-update.sh measured it on ${D_DATE:-its last run}"
-        (( D_JOBS > D_JL * 1000000000 )) && echo "Job folders in ~/.claude/jobs hold $G_JOBS (warns past $D_JL GB). Each job folder's size and tmp entries: python3 ~/.claude/disk-space.py report"
-        (( D_BAZEL > D_BL * 1000000000 )) && echo "The Bazel output root holds $G_BAZEL (warns past $D_BL GB), $G_ORPH of it in $D_N output bases whose workspace is gone. Each base: python3 ~/.claude/disk-space.py bazel"
+        out_n ""
+        out_n "## Disk, as harness-update.sh measured it on ${D_DATE:-its last run}"
+        (( D_JOBS > D_JL * 1000000000 )) && out_n "Job folders in ~/.claude/jobs hold $G_JOBS (warns past $D_JL GB). Each job folder's size and tmp entries: python3 ~/.claude/disk-space.py report"
+        (( D_BAZEL > D_BL * 1000000000 )) && out_n "The Bazel output root holds $G_BAZEL (warns past $D_BL GB), $G_ORPH of it in $D_N output bases whose workspace is gone. Each base: python3 ~/.claude/disk-space.py bazel"
       fi
       printf '%s\n' "$D_AT" > "$STAMP_FILE" 2>/dev/null
     fi
@@ -236,14 +262,14 @@ if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
       NOW=${EPOCHSECONDS:-}
       [[ "$NOW" =~ ^[0-9]+$ ]] || NOW=$(date +%s)
       if (( NOW - D_AT <= 2 * 86400 )); then
-        echo ""
-        echo "## This session's transcript"
-        echo "It held $(( (D_TB + 500000) / 1000000 )) MB after $D_TC compactions when harness-update.sh measured it on ${D_DATE:-its last run}. Write the handoff to trackers/<name>.md (Scope, Open, Owed, Settled, Next on restart; rules/working-agreement.md), then restart in a fresh session. Every large transcript: python3 ~/.claude/disk-space.py report"
+        out ""
+        out "## This session's transcript"
+        out "It held $(( (D_TB + 500000) / 1000000 )) MB after $D_TC compactions when harness-update.sh measured it on ${D_DATE:-its last run}. Write the handoff to trackers/<name>.md (Scope, Open, Owed, Settled, Next on restart; rules/working-agreement.md), then restart in a fresh session. Every large transcript: python3 ~/.claude/disk-space.py report"
       fi
     fi
   fi
   # Machine-wide, any start, once per measurement.
-  if (( D_IN > 0 && D_AT > 0 )); then
+  if [[ "$ATT" == 1 ]] && (( D_IN > 0 && D_AT > 0 )); then
     [[ -d "$STATE_DIR" ]] || mkdir -p "$STATE_DIR" 2>/dev/null
     if claim "$STATE_DIR/transcripts-warning" "$D_AT"; then
       NOW=${EPOCHSECONDS:-}
@@ -251,9 +277,9 @@ if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
       if (( NOW - D_AT <= 2 * 86400 )); then
         if (( D_IN == 1 )); then t="Up to 1 session transcript"; else t="Up to $D_IN session transcripts"; fi
         g=$(( (D_IB + 50000000) / 100000000 ))
-        echo ""
-        echo "## Idle session transcripts"
-        echo "$t past $D_TM MB, idle $D_ID days or more, hold $(( g / 10 )).$(( g % 10 )) GB in ~/.claude/projects (harness-update.sh, ${D_DATE:-its last run}). This is disk space; no speed effect was measured. The listing checks each against live sessions and jobs and moves nothing without its digest: python3 ~/.claude/disk-space.py transcripts"
+        out_n ""
+        out_n "## Idle session transcripts"
+        out_n "$t past $D_TM MB, idle $D_ID days or more, hold $(( g / 10 )).$(( g % 10 )) GB in ~/.claude/projects (harness-update.sh, ${D_DATE:-its last run}). This is disk space; no speed effect was measured. The listing checks each against live sessions and jobs and moves nothing without its digest: python3 ~/.claude/disk-space.py transcripts"
       fi
     fi
   fi
@@ -265,16 +291,16 @@ if [[ -f "$DISK_STAMP" ]] && in_budget disk-warning; then
   fi
   D_GL=${CLAUDE_GUARD_P90_WARN_MS:-1000}
   [[ "$D_GL" =~ ^[0-9]{1,7}$ ]] || D_GL=1000
-  if (( D_GP > D_GL && D_AT > 0 )); then
+  if [[ "$ATT" == 1 ]] && (( D_GP > D_GL && D_AT > 0 )); then
     [[ -d "$STATE_DIR" ]] || mkdir -p "$STATE_DIR" 2>/dev/null
     if claim "$STATE_DIR/guard-latency" "$D_AT"; then
       NOW=${EPOCHSECONDS:-}
       [[ "$NOW" =~ ^[0-9]+$ ]] || NOW=$(date +%s)
       if (( NOW - D_AT <= 2 * 86400 )); then
         t=$(( (D_GP + 50) / 100 )) l=$(( (D_GL + 50) / 100 ))
-        echo ""
-        echo "## Bash guards"
-        echo "In the last $D_GC Bash calls before ${D_DATE:-the last measurement}, 1 in 10 waited $((t / 10)).$((t % 10)) s or more for its slowest guard (says so past $((l / 10)).$((l % 10)) s). Which guard: bash ~/.claude/harness-src/doctor.sh --latency"
+        out_n ""
+        out_n "## Bash guards"
+        out_n "In the last $D_GC Bash calls before ${D_DATE:-the last measurement}, 1 in 10 waited $((t / 10)).$((t % 10)) s or more for its slowest guard (says so past $((l / 10)).$((l % 10)) s). Which guard: bash ~/.claude/harness-src/doctor.sh --latency"
       fi
     fi
   fi
@@ -299,7 +325,7 @@ fi
 DEV_MODS=$(expand_tilde "${CLAUDE_DEV_MODS_DIR:-$HOME/.claude/dev-mods}")/$SESSION_ID
 for m in "$DEV_MODS"/*/; do
   [[ -f "$m.claude-plugin/plugin.json" ]] || continue
-  echo "Mod loading from this session: ${m%/} (review: claude plugin validate ${m%/})"
+  out "Mod loading from this session: ${m%/} (review: claude plugin validate ${m%/})"
 done
 in_budget resume-drift || exit 0
 command -v jq &>/dev/null || exit 0
@@ -345,28 +371,28 @@ fi
 
 [[ ${#DRIFT_LINES[@]} -eq 0 && "$HEAD_CHANGED" -eq 0 ]] && exit 0
 
-echo ""
-echo "## Resume drift detected"
+out ""
+out "## Resume drift detected"
 if [[ ${#DRIFT_LINES[@]} -gt 0 ]]; then
-  echo "The prior session recorded edits to the files below, but the current"
-  echo "on-disk state no longer matches. Re-verify before trusting conclusions"
-  echo "from prior-session tool results."
-  echo ""
+  out "The prior session recorded edits to the files below, but the current"
+  out "on-disk state no longer matches. Re-verify before trusting conclusions"
+  out "from prior-session tool results."
+  out ""
 fi
 
 if [[ "$HEAD_CHANGED" -eq 1 ]]; then
-  echo "HEAD changed: ${SNAP_HEAD:0:12} → ${CUR_HEAD:0:12}"
+  out "HEAD changed: ${SNAP_HEAD:0:12} → ${CUR_HEAD:0:12}"
 fi
 
 MAX=20
 COUNT=${#DRIFT_LINES[@]}
 if [[ "$COUNT" -le "$MAX" ]]; then
   for line in "${DRIFT_LINES[@]}"; do
-    echo "$line"
+    out "$line"
   done
 else
   for ((i=0; i<MAX; i++)); do
-    echo "${DRIFT_LINES[$i]}"
+    out "${DRIFT_LINES[$i]}"
   done
-  echo "... and $((COUNT - MAX)) more"
+  out "... and $((COUNT - MAX)) more"
 fi
