@@ -1919,19 +1919,78 @@ def cmd_restore(a):
     return 1 if bad else 0
 
 
+def refresh_idle(a):
+    """After a move or a restore, rewrite only the stamp's transcripts_idle line, counted as `stamp`
+    counts it (no claude), so session-start stops naming files that moved. Never creates a stamp and
+    never changes the exit status; a failure is one line on stderr."""
+    path = os.path.join(HOME, ".claude", "state", "disk-usage")
+    # The stamp counts the default projects root only; another root says nothing about it.
+    if os.path.realpath(a.projects) != os.path.realpath(os.path.join(HOME, ".claude", "projects")):
+        return
+    try:
+        try:
+            with open(path) as f:
+                lines = f.read().splitlines()
+            mode = os.stat(path).st_mode & 0o7777
+        except FileNotFoundError:
+            return
+        kv = {ln.split("=", 1)[0]: ln.split("=", 1)[1] for ln in lines if "=" in ln}
+        idx = [i for i, ln in enumerate(lines) if ln.startswith("transcripts_idle=")]
+        if not idx and "measured" not in kv:
+            return
+        try:
+            days = float(kv["transcripts_idle"].split()[2]) if idx else ASIDE_DAYS
+        except (IndexError, ValueError):
+            days = ASIDE_DAYS
+        try:
+            mb = float(kv["transcript_mb"])
+        except (KeyError, ValueError):
+            mb = a.transcript_mb
+        b = argparse.Namespace(**vars(a))
+        b.days, b.transcript_mb, b.live_hours = days, mb, 24.0
+        cands = aside_plan(AsideCtx(b, agents=False))["candidates"]
+        new_line = ("transcripts_idle=%d %d %d" % (len(cands), sum(c["bytes"] + c["folder_bytes"] for c in cands),
+                                                   round(days))) if cands else None
+        if idx:
+            out = [new_line if i == idx[0] else ln for i, ln in enumerate(lines) if new_line or i != idx[0]]
+        elif new_line:
+            at = next((i for i, ln in enumerate(lines) if ln.startswith("transcript_mb=")), len(lines))
+            out = lines[:at] + [new_line] + lines[at:]
+        else:
+            return
+        tmp = "%s.new.%d" % (path, os.getpid())
+        try:
+            with open(tmp, "w") as f:
+                f.write("\n".join(out) + "\n")
+            os.chmod(tmp, mode)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except Exception as e:
+        print("disk-space: the stamp's idle count was not refreshed: %s" % e, file=sys.stderr)
+
+
 def cmd_transcripts(a):
     if a.apply is not None and a.restore:
         print("transcripts: --apply and --restore are separate runs.", file=sys.stderr)
         return 2
     if a.restore:
-        return cmd_restore(a)
+        rc = cmd_restore(a)
+        refresh_idle(a)
+        return rc
     ctx = AsideCtx(a)
     plan = aside_plan(ctx)
     print_aside(ctx, a, plan)
     if a.apply is None:
         return 0
     print("")
-    return apply_aside(ctx, plan, a.apply)
+    rc = apply_aside(ctx, plan, a.apply)
+    refresh_idle(a)
+    return rc
 
 
 def days_arg(v):

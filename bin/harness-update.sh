@@ -145,14 +145,16 @@ cli_update() {
   fi
 }
 
-# Once a day, what the job folders and the Bazel output root hold, for
-# session-start's warning, which reads the stamp and sizes nothing. First in
-# update(), so a run that stops at "up to date" or a failed fetch measures too.
-# Never fails the run; a du that fails writes no stamp.
+# Once a day, and again when the installed tool is newer than the stamp, what the
+# job folders and the Bazel output root hold, for session-start's warning, which
+# reads the stamp and sizes nothing. First in update(), so a run that stops at "up
+# to date" or a failed fetch measures too. After an install it runs again with
+# "force", since cp -p can date the new tool before today's stamp. Never fails
+# the run; a du that fails writes no stamp.
 disk_stamp() {
   local tool="$HOME/.claude/disk-space.py" stamp="$HOME/.claude/state/disk-usage" out
   [[ -f "$tool" ]] || return 0
-  [[ "$(sed -n 's/^date=//p' "$stamp" 2>/dev/null)" == "$(date +%Y-%m-%d)" ]] && return 0
+  [[ "${1:-}" != force && "$(sed -n 's/^date=//p' "$stamp" 2>/dev/null)" == "$(date +%Y-%m-%d)" && ! "$tool" -nt "$stamp" ]] && return 0
   if out=$(python3 "$tool" stamp --out "$stamp" 2>&1); then say "$out"
   else say "disk-space: ${out:-no stamp written}"; fi
   return 0
@@ -224,6 +226,7 @@ update() {
   fi
   if [[ "$OWN" == 1 ]]; then say "installed $LATEST (was ${INSTALLED:-none}) from $REPO"
   else say "installed $LATEST (was ${INSTALLED:-none}); to work on the clone again: git -C $REPO checkout $PREV"; fi
+  disk_stamp force   # cp -p can date the new tool before today's stamp
 }
 
 scheduler() {
