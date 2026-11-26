@@ -353,7 +353,7 @@
     "SessionEnd": [
       {
         "matcher": "",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh" }]
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh", "timeout": 10 }]
       },
       {
         "matcher": "",

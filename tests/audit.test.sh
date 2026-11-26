@@ -53,6 +53,27 @@ fi
   && pass "session end is one line" || fail "session end is one line" "$LINE"
 
 echo ""
+echo "=== SessionEnd never reads the transcript, and reads its fields with one jq ==="
+# A jq -s over a long transcript outran SessionEnd's 1.5 s and the line was lost.
+# lib.sh puts Homebrew first on PATH, so the shim goes first in a copy of it.
+SHIM="$TMP/shim"; mkdir -p "$SHIM"; REAL_JQ=$(command -v jq)
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/jq-calls"\nexec "%s" "$@"\n' "$TMP" "$REAL_JQ" > "$SHIM/jq"; chmod +x "$SHIM/jq"
+rm -rf "$TMP/hk"; cp -R hooks "$TMP/hk"
+sed "s#^export PATH=\"#export PATH=\"$SHIM:#" hooks/lib.sh > "$TMP/hk/lib.sh"
+printf '{"message":{"role":"assistant"}}\n{"message":{"role":"assistant"}}\n' > "$TMP/t.jsonl"
+: > "$TMP/jq-calls"
+printf '%s' "{\"hook_event_name\":\"SessionEnd\",\"session_id\":\"tr1\",\"reason\":\"exit\",\"transcript_path\":\"$TMP/t.jsonl\"}" \
+  | bash "$TMP/hk/audit.sh" >/dev/null 2>&1
+LINE=$(tail -1 "$CLAUDE_AUDIT_LOG")
+[[ "$LINE" == *"session_end | turns=n/a session=tr1 reason=exit |"* ]] \
+  && pass "no num_turns: turns=n/a, session and reason kept" || fail "no num_turns: turns=n/a" "$LINE"
+grep -qF "t.jsonl" "$TMP/jq-calls" && fail "the transcript is not read" "$(cat "$TMP/jq-calls")" || pass "the transcript is not read"
+N=$(wc -l < "$TMP/jq-calls" | tr -d ' ')
+[[ "$N" -eq 2 ]] && pass "two jq in all: the event name, then one for the arm's fields" || fail "jq starts at SessionEnd" "$N: $(cat "$TMP/jq-calls")"
+printf '%s' '{"hook_event_name":"SessionEnd","session_id":"x$(touch '"$TMP"'/pwned)`touch '"$TMP"'/pwned2`","reason":"exit"}' | bash "$HOOK" >/dev/null 2>&1
+[[ ! -e "$TMP/pwned" && ! -e "$TMP/pwned2" ]] && pass "a crafted session id runs nothing" || fail "a crafted session id runs nothing" "$(ls "$TMP")"
+
+echo ""
 echo "=== An unknown event still logs rather than dropping the call ==="
 run '{"hook_event_name":"SomeFutureEvent","tool_name":"Bash","tool_input":{"command":"echo hi"}}'
 grep -qF "| Bash | echo hi |" "$CLAUDE_AUDIT_LOG" && pass "unknown event falls through" || fail "unknown event falls through" "$(tail -1 "$CLAUDE_AUDIT_LOG")"
