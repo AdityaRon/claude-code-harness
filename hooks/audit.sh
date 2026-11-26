@@ -31,8 +31,8 @@ case "$EVENT" in
     # SessionEnd carries why the session ended; Stop does not, so reason= is optional.
     TURNS="" SID="" REASON=""
     command -v jq &>/dev/null && eval "$(printf '%s\n' "$INPUT" | jq -r '@sh "TURNS=\((.num_turns | numbers) // "") SID=\((.session_id | strings) // "") REASON=\((.reason | strings) // "")"' 2>/dev/null)"
-    REASON=$(sanitize "$REASON")
-    log_audit "$TS | session_end | turns=${TURNS:-n/a} session=$(sanitize "${SID:-?}")${REASON:+ reason=$REASON} | $DIR"
+    REASON=$(sanitize "$REASON") SID=${SID//[^A-Za-z0-9_.-]/_}
+    log_audit "$TS | session_end | turns=${TURNS:-n/a} session=${SID:-?}${REASON:+ reason=$REASON} | $DIR"
     ;;
   PostToolUseFailure)
     TOOL=$(sanitize "$(jq_get '.tool_name')")

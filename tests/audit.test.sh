@@ -72,6 +72,10 @@ N=$(wc -l < "$TMP/jq-calls" | tr -d ' ')
 [[ "$N" -eq 2 ]] && pass "two jq in all: the event name, then one for the arm's fields" || fail "jq starts at SessionEnd" "$N: $(cat "$TMP/jq-calls")"
 printf '%s' '{"hook_event_name":"SessionEnd","session_id":"x$(touch '"$TMP"'/pwned)`touch '"$TMP"'/pwned2`","reason":"exit"}' | bash "$HOOK" >/dev/null 2>&1
 [[ ! -e "$TMP/pwned" && ! -e "$TMP/pwned2" ]] && pass "a crafted session id runs nothing" || fail "a crafted session id runs nothing" "$(ls "$TMP")"
+BEFORE=$(wc -l < "$CLAUDE_AUDIT_LOG")
+run '{"hook_event_name":"SessionEnd","session_id":"a b\nc|d","reason":"exit"}'
+[[ $(( $(wc -l < "$CLAUDE_AUDIT_LOG") - BEFORE )) -eq 1 && "$(tail -1 "$CLAUDE_AUDIT_LOG")" == *"session=a_b_c_d reason=exit |"* ]] \
+  && pass "a session id with a newline or a pipe stays one field on one line" || fail "an odd session id" "$(tail -2 "$CLAUDE_AUDIT_LOG")"
 
 echo ""
 echo "=== An unknown event still logs rather than dropping the call ==="
