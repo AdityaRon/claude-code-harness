@@ -359,7 +359,8 @@ open(h + "/disk.calls", "a").write(" ".join(sys.argv[1:]) + "\n")
 if os.path.exists(h + "/disk.fail"):
     print("not stamped: du timed out")
     sys.exit(1)
-open(sys.argv[sys.argv.index("--out") + 1], "w").write("date=%s\n" % time.strftime("%Y-%m-%d"))
+extra = open(h + "/disk.extra").read() if os.path.exists(h + "/disk.extra") else ""
+open(sys.argv[sys.argv.index("--out") + 1], "w").write("date=%s\n" % time.strftime("%Y-%m-%d") + extra)
 print("disk: stand-in measured")
 PY
 calls() { wc -l < "$HOME/disk.calls" 2>/dev/null | tr -d ' '; }
@@ -405,6 +406,66 @@ push_tag v1.0.10 0
 OUT=$(bash "$UPD" --no-cli 2>&1); RC=$?
 [ "$RC" = 0 ] && [ "$(installed)" = v1.0.10 ] && [ "$DSP" -ot "$DST" ] && [ "$(calls)" = 1 ] && [[ "$OUT" == *"installed v1.0.10"*"disk: stand-in measured"* ]] \
   && pass "an installed tool dated before today's stamp is still stamped after the install" || fail "stamp after old-dated install" "rc=$RC $(calls) $OUT"
+
+echo ""
+echo "=== a stamp that crosses a disk limit posts one desktop notification, once per crossing ==="
+FLAGS="$HOME/.claude/state/disk-notified" SET_JSON="$HOME/.claude/settings.json"
+rm -f "$FLAGS" "$SET_JSON" "$HOME/disk.fail"; cp "$TMP/dsp.stand" "$DSP"
+# Each run starts from an old stamp, so the stand-in writes a new one from disk.extra.
+nrun() {
+  printf '%s\n' "$1" > "$HOME/disk.extra"; echo date=2000-01-01 > "$DST"; old_record; echo "origin=$TMP/origin.git" >> "$HV"
+  shift; NOUT=$(env -u CLAUDE_DISK_WARN_JOBS_GB -u CLAUDE_DISK_WARN_BAZEL_GB CLAUDE_NOTIFY_DRY_RUN=1 "$@" bash "$UPD" --no-cli --check 2>&1)
+  NN=$(grep -cx 'Claude Code harness' <<< "$NOUT")
+}
+flags() { tr '\n' ' ' < "$FLAGS" 2>/dev/null; }
+nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+[ "$NN" = 1 ] && [[ "$NOUT" == *"Job folders in ~/.claude/jobs hold 60.0 GB (past 50 GB): python3 ~/.claude/disk-space.py report"* ]] \
+  && [ "$(flags)" = "jobs=1 bazel=0 idle=0 " ] && pass "first run, jobs over: one notification, jobs=1 written" || fail "first crossing" "$NN $(flags) $NOUT"
+nrun $'jobs_bytes=61000000000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+[ "$NN" = 0 ] && [ "$(flags)" = "jobs=1 bazel=0 idle=0 " ] && pass "the same condition on the next stamp: no notification" || fail "level-triggered" "$NN $NOUT"
+nrun $'jobs_bytes=1000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+[ "$NN" = 0 ] && [ "$(flags)" = "jobs=0 bazel=0 idle=0 " ] && pass "back under: jobs=0 written, nothing posted" || fail "back under" "$NN $(flags) $NOUT"
+nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+[ "$NN" = 1 ] && [ "$(flags)" = "jobs=1 bazel=0 idle=0 " ] && pass "over again after a clear: posts again" || fail "re-cross" "$NN $NOUT"
+nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=3 3000000000 30'
+[ "$NN" = 1 ] && [[ "$NOUT" == *"3 idle session transcripts hold 3.0 GB: python3 ~/.claude/disk-space.py transcripts"* ]] && [ "$(flags)" = "jobs=1 bazel=0 idle=1 " ] \
+  && pass "idle transcripts appear: one notification" || fail "idle appears" "$NN $NOUT"
+nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=5 5000000000 30'
+[ "$NN" = 0 ] && pass "idle count 3 to 5: no notification" || fail "idle count change" "$NN $NOUT"
+nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=1 700000000 30'
+[ "$NN" = 1 ] && [[ "$NOUT" == *"1 idle session transcript holds 0.7 GB: python3"* ]] \
+  && pass "one idle transcript: singular text" || fail "idle singular" "$NN $NOUT"
+nrun $'jobs_bytes=1000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+nrun $'jobs_bytes=60000000000\nbazel_bytes=120000000000\ntranscripts_idle=0 0 0'
+[ "$NN" = 2 ] && [[ "$NOUT" == *"The Bazel output root holds 120.0 GB (past 100 GB): python3 ~/.claude/disk-space.py bazel"* ]] \
+  && pass "jobs and bazel crossing together: two notifications" || fail "two crossings" "$NN $NOUT"
+nrun $'jobs_bytes=1000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+printf '{"env":{"CLAUDE_DISK_WARN_JOBS_GB":"5"}}\n' > "$SET_JSON"
+nrun $'jobs_bytes=6000000000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+[ "$NN" = 1 ] && [[ "$NOUT" == *"(past 5 GB)"* ]] && pass "a limit in settings.json env applies though the process env is unset" || fail "settings.json limit" "$NN $NOUT"
+printf '{"env":{"CLAUDE_DISK_WARN_JOBS_GB":"5"}}\n' > "$SET_JSON"
+nrun $'jobs_bytes=1000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+nrun $'jobs_bytes=6000000000\nbazel_bytes=1000\ntranscripts_idle=0 0 0' CLAUDE_DISK_WARN_JOBS_GB=1
+[ "$NN" = 1 ] && [[ "$NOUT" == *"(past 5 GB)"* ]] && pass "settings.json wins over the process env" || fail "settings over env" "$NN $NOUT"
+printf '{"env":{"CLAUDE_DISK_WARN_JOBS_GB":"lots"}}\n' > "$SET_JSON"
+nrun $'jobs_bytes=1000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+[ "$NN" = 1 ] && [[ "$NOUT" == *"(past 50 GB)"* ]] && pass "a non-digit limit falls back to the default" || fail "non-digit limit" "$NN $NOUT"
+rm -f "$SET_JSON"
+nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+nrun $'jobs_bytes=1000\nbazel_bytes=500000000000\ntranscripts_idle=0 0 0'; : > "$HOME/disk.calls"
+printf '%s\n' 'x=1' > "$HOME/disk.extra"; echo date=2000-01-01 > "$DST"; touch "$HOME/disk.fail"
+NOUT=$(CLAUDE_NOTIFY_DRY_RUN=1 bash "$UPD" --no-cli --check 2>&1); NN=$(grep -cx 'Claude Code harness' <<< "$NOUT"); rm -f "$HOME/disk.fail"
+[ "$NN" = 0 ] && [ "$(flags)" = "jobs=0 bazel=1 idle=0 " ] && pass "a failed stamp posts nothing and leaves the flag file" || fail "failed stamp" "$NN $(flags) $NOUT"
+# Today's stamp and an older tool: nothing is re-measured, so nothing is notified, whatever the flags say.
+printf '%s\n' 'jobs_bytes=900000000000' > "$HOME/disk.extra"; printf 'date=%s\njobs_bytes=900000000000\n' "$(date +%Y-%m-%d)" > "$DST"
+touch -t 202301010000 "$DSP"; touch -t 202401010000 "$DST"; printf 'jobs=0\nbazel=0\nidle=0\n' > "$FLAGS"
+OUT=$(CLAUDE_NOTIFY_DRY_RUN=1 bash "$UPD" --no-cli --check 2>&1); NN=$(grep -cx 'Claude Code harness' <<< "$OUT")
+[ "$NN" = 0 ] && [ "$(flags)" = "jobs=0 bazel=0 idle=0 " ] && pass "a skipped stamp (today's, tool older) posts nothing" || fail "skipped stamp" "$NN $OUT"
+nrun $'jobs_bytes=1000\nbazel_bytes=1000\ntranscripts_idle=0 0 0\nguard_p90_ms=99999\nguard_calls=200'
+[ "$NN" = 0 ] && pass "guard latency over its line is never notified" || fail "guard latency" "$NN $NOUT"
+rm -f "$HOME/disk.extra" "$FLAGS"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
