@@ -398,6 +398,13 @@ push_tag v1.0.9 0
 OUT=$(bash "$UPD" --no-cli 2>&1); RC=$?
 [ "$RC" = 0 ] && [ "$(installed)" = v1.0.9 ] && [ "$(calls)" = 1 ] && [[ "$OUT" == *"installed v1.0.9"*"disk: stand-in measured"* ]] \
   && pass "an install that changes the tool stamps once more, after the install (first call early, second measures)" || fail "stamp after install" "rc=$RC $(calls) $OUT"
+# The clone already held the new tool before today's first stamp: cp -p installs a file dated before that stamp.
+printf 'date=%s\n' "$(date +%Y-%m-%d)" > "$DST"; touch -t 202001010000 "$DSP" "$HOME/new-tool.py"
+push_tag v1.0.10 0
+: > "$HOME/disk.calls"; old_record; echo "origin=$TMP/origin.git" >> "$HV"
+OUT=$(bash "$UPD" --no-cli 2>&1); RC=$?
+[ "$RC" = 0 ] && [ "$(installed)" = v1.0.10 ] && [ "$DSP" -ot "$DST" ] && [ "$(calls)" = 1 ] && [[ "$OUT" == *"installed v1.0.10"*"disk: stand-in measured"* ]] \
+  && pass "an installed tool dated before today's stamp is still stamped after the install" || fail "stamp after old-dated install" "rc=$RC $(calls) $OUT"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

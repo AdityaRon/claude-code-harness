@@ -1924,6 +1924,9 @@ def refresh_idle(a):
     counts it (no claude), so session-start stops naming files that moved. Never creates a stamp and
     never changes the exit status; a failure is one line on stderr."""
     path = os.path.join(HOME, ".claude", "state", "disk-usage")
+    # The stamp counts the default projects root only; another root says nothing about it.
+    if os.path.realpath(a.projects) != os.path.realpath(os.path.join(HOME, ".claude", "projects")):
+        return
     try:
         try:
             with open(path) as f:

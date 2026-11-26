@@ -1112,7 +1112,7 @@ echo "=== transcripts --apply and --restore refresh only the stamp's transcripts
 SD3="$H3/.claude/state" SF3="$SD3/disk-usage"
 M3=$(ls "$H3"/.claude/transcripts-aside/*/manifest.jsonl)
 ap3() { local d=$1; shift; HOME="$H3" python3 "$DS" transcripts --apply "$d" --jobs "$TJ3" --transcript-mb 1 "$@"; }
-rs3() { HOME="$H3" python3 "$DS" transcripts --restore "$M3" --jobs "$TJ3" --transcript-mb 1; }
+rs3() { HOME="$H3" python3 "$DS" transcripts --restore "$M3" --jobs "$TJ3" --transcript-mb 1 "$@"; }
 idle3() { sed -n 's/^transcripts_idle=//p' "$SF3"; }
 rest3() { grep -v '^transcripts_idle=' "$SF3"; }
 OUT=$(rs3 2>&1); RC=$?
@@ -1124,7 +1124,9 @@ DG3=$(tl3 --days 41 | digest_of); OUT_OK=$(ap3 "$DG3" --days 41 2>"$TMP/e3"); RC
 FRESH=$(HOME="$H3" python3 "$DS" stamp --out "$H3/fresh" --jobs "$TJ3" --transcript-mb 1 >/dev/null 2>&1; sed -n 's/^transcripts_idle=//p' "$H3/fresh")
 [ "$RC_OK" = 0 ] && [ "$(idle3)" = "$FRESH" ] && [[ "$FRESH" == "1 "*" 30" ]] && pass "--apply lowers transcripts_idle from 2 to 1 (days 30 kept), as a new stamp counts it" || fail "apply refresh" "rc=$RC_OK [$(idle3)] [$FRESH]"
 [ "$(rest3)" = "$BEFORE" ] && pass "measured, date, jobs_bytes and every other line are unchanged by the refresh" || fail "other lines" "$(rest3)"
-[ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o7777))' "$SF3")" = 0o640 ] && ls "$SD3" | grep -qv '^disk-usage$' && fail "temp left or mode" "$(ls "$SD3")" || pass "the stamp keeps its mode and no temp file is left beside it"
+MODE3=$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o7777))' "$SF3")
+[ "$MODE3" = 0o640 ] && pass "the stamp keeps its mode (640) through the refresh" || fail "stamp mode" "$MODE3"
+[ "$(ls "$SD3")" = disk-usage ] && pass "no temp file is left beside the stamp" || fail "temp left" "$(ls "$SD3")"
 OUT=$(rs3 2>&1); RC=$?
 [ "$RC" = 0 ] && [ "$(idle3)" = "2 $WANT_B 30" ] && [ "$(rest3)" = "$BEFORE" ] && pass "--restore raises transcripts_idle back to 2" || fail "restore refresh" "rc=$RC [$(idle3)] $OUT"
 chmod 555 "$SD3"
@@ -1140,6 +1142,10 @@ DG3=$(tl3 | digest_of); ap3 "$DG3" >/dev/null 2>&1
 [ -z "$(idle3)" ] && [ "$(rest3)" = "$BEFORE" ] && pass "moving every candidate drops the line and leaves measured and the rest" || fail "apply all" "$(cat "$SF3")"
 rs3 >/dev/null 2>&1
 [ "$(idle3)" = "2 $WANT_B 30" ] && pass "--restore adds the line back to a stamp that has measured=" || fail "restore adds" "$(cat "$SF3")"
+mkdir -p "$TMP/otherproj"; BEFORE_ALL=$(cat "$SF3")
+OUT=$(ap3 0000000000000000 --projects "$TMP/otherproj" 2>&1); RC=$?
+rs3 --projects "$TMP/otherproj" >/dev/null 2>&1
+[ "$(cat "$SF3")" = "$BEFORE_ALL" ] && pass "a run with a non-default --projects leaves the stamp untouched" || fail "other projects root" "rc=$RC $(idle3)"
 printf 'date=2000-01-01\njobs_bytes=7\n' > "$SF3"; cp "$SF3" "$TMP/nomeasured"
 DG3=$(tl3 --days 41 | digest_of); ap3 "$DG3" --days 41 >/dev/null 2>&1; rs3 >/dev/null 2>&1
 cmp -s "$SF3" "$TMP/nomeasured" && pass "a stamp with no measured= and no idle line gets none added" || fail "no measured" "$(cat "$SF3")"
