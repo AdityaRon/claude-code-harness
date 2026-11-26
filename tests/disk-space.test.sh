@@ -1104,6 +1104,45 @@ DG3=$(tl3 | digest_of); HOME="$H3" python3 "$DS" transcripts --apply "$DG3" --jo
 GOT=$(st3)
 [ -z "$GOT" ] && ! grep -q '^transcripts_idle=' "$H3/stamp" && [ ! -e "$H3P/-w/$S3_A.jsonl" ] \
   && pass "after --apply moved them, the next stamp has no transcripts_idle line" || fail "after apply" "[$GOT] $(cat "$H3/stamp")"
+
+echo ""
+echo "=== transcripts --apply and --restore refresh only the stamp's transcripts_idle line ==="
+# Mutations: no refresh after either; the whole stamp rewritten (measured changes); a write failure
+# changes the exit status; a stamp is created when none exists; a missing measured= still adds a line.
+SD3="$H3/.claude/state" SF3="$SD3/disk-usage"
+M3=$(ls "$H3"/.claude/transcripts-aside/*/manifest.jsonl)
+ap3() { local d=$1; shift; HOME="$H3" python3 "$DS" transcripts --apply "$d" --jobs "$TJ3" --transcript-mb 1 "$@"; }
+rs3() { HOME="$H3" python3 "$DS" transcripts --restore "$M3" --jobs "$TJ3" --transcript-mb 1; }
+idle3() { sed -n 's/^transcripts_idle=//p' "$SF3"; }
+rest3() { grep -v '^transcripts_idle=' "$SF3"; }
+OUT=$(rs3 2>&1); RC=$?
+[ "$RC" = 0 ] && [ ! -e "$SF3" ] && [ ! -e "$SD3" ] && pass "--restore with no stamp file creates none" || fail "restore, no stamp" "rc=$RC $(ls "$SD3" 2>&1) $OUT"
+HOME="$H3" python3 "$DS" stamp --jobs "$TJ3" --transcript-mb 1 >/dev/null 2>&1
+[ "$(idle3)" = "2 $WANT_B 30" ] || fail "setup: default stamp" "$(cat "$SF3")"
+chmod 640 "$SF3"; sleep 1; BEFORE=$(rest3)
+DG3=$(tl3 --days 41 | digest_of); OUT_OK=$(ap3 "$DG3" --days 41 2>"$TMP/e3"); RC_OK=$?
+FRESH=$(HOME="$H3" python3 "$DS" stamp --out "$H3/fresh" --jobs "$TJ3" --transcript-mb 1 >/dev/null 2>&1; sed -n 's/^transcripts_idle=//p' "$H3/fresh")
+[ "$RC_OK" = 0 ] && [ "$(idle3)" = "$FRESH" ] && [[ "$FRESH" == "1 "*" 30" ]] && pass "--apply lowers transcripts_idle from 2 to 1 (days 30 kept), as a new stamp counts it" || fail "apply refresh" "rc=$RC_OK [$(idle3)] [$FRESH]"
+[ "$(rest3)" = "$BEFORE" ] && pass "measured, date, jobs_bytes and every other line are unchanged by the refresh" || fail "other lines" "$(rest3)"
+[ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o7777))' "$SF3")" = 0o640 ] && ls "$SD3" | grep -qv '^disk-usage$' && fail "temp left or mode" "$(ls "$SD3")" || pass "the stamp keeps its mode and no temp file is left beside it"
+OUT=$(rs3 2>&1); RC=$?
+[ "$RC" = 0 ] && [ "$(idle3)" = "2 $WANT_B 30" ] && [ "$(rest3)" = "$BEFORE" ] && pass "--restore raises transcripts_idle back to 2" || fail "restore refresh" "rc=$RC [$(idle3)] $OUT"
+chmod 555 "$SD3"
+if [ -w "$SD3" ]; then echo "  note: the stamp folder stays writable (root?); the failing-write case is not exercised"
+else
+  OUT_BAD=$(ap3 "$DG3" --days 41 2>"$TMP/e3"); RC_BAD=$?
+  [ "$RC_BAD" = "$RC_OK" ] && [ "$OUT_BAD" = "$OUT_OK" ] && [ "$(wc -l < "$TMP/e3" | tr -d ' ')" = 1 ] && grep -q 'idle count was not refreshed' "$TMP/e3" \
+    && [ "$(idle3)" = "2 $WANT_B 30" ] && pass "a stamp that cannot be written: same exit status and output as a good one, one line on stderr, stamp untouched" || fail "failing write" "rc=$RC_BAD [$OUT_BAD] $(cat "$TMP/e3")"
+fi
+chmod 755 "$SD3"
+rs3 >/dev/null 2>&1
+DG3=$(tl3 | digest_of); ap3 "$DG3" >/dev/null 2>&1
+[ -z "$(idle3)" ] && [ "$(rest3)" = "$BEFORE" ] && pass "moving every candidate drops the line and leaves measured and the rest" || fail "apply all" "$(cat "$SF3")"
+rs3 >/dev/null 2>&1
+[ "$(idle3)" = "2 $WANT_B 30" ] && pass "--restore adds the line back to a stamp that has measured=" || fail "restore adds" "$(cat "$SF3")"
+printf 'date=2000-01-01\njobs_bytes=7\n' > "$SF3"; cp "$SF3" "$TMP/nomeasured"
+DG3=$(tl3 --days 41 | digest_of); ap3 "$DG3" --days 41 >/dev/null 2>&1; rs3 >/dev/null 2>&1
+cmp -s "$SF3" "$TMP/nomeasured" && pass "a stamp with no measured= and no idle line gets none added" || fail "no measured" "$(cat "$SF3")"
 rm -rf "$H3" "$TJ3"
 
 echo ""
