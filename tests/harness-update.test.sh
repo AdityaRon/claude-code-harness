@@ -432,6 +432,10 @@ nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=3 3000000000 3
   && pass "idle transcripts appear: one notification" || fail "idle appears" "$NN $NOUT"
 nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=5 5000000000 30'
 [ "$NN" = 0 ] && pass "idle count 3 to 5: no notification" || fail "idle count change" "$NN $NOUT"
+nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
+nrun $'jobs_bytes=60000000000\nbazel_bytes=1000\ntranscripts_idle=1 700000000 30'
+[ "$NN" = 1 ] && [[ "$NOUT" == *"1 idle session transcript holds 0.7 GB: python3"* ]] \
+  && pass "one idle transcript: singular text" || fail "idle singular" "$NN $NOUT"
 nrun $'jobs_bytes=1000\nbazel_bytes=1000\ntranscripts_idle=0 0 0'
 nrun $'jobs_bytes=60000000000\nbazel_bytes=120000000000\ntranscripts_idle=0 0 0'
 [ "$NN" = 2 ] && [[ "$NOUT" == *"The Bazel output root holds 120.0 GB (past 100 GB): python3 ~/.claude/disk-space.py bazel"* ]] \

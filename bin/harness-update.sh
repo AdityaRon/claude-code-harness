@@ -209,7 +209,8 @@ disk_notify() {
   gb() { local t=$(( ($1 + 50000000) / 100000000 )); printf '%d.%d GB' $((t / 10)) $((t % 10)); }
   (( n_jobs && ! f_jobs )) && notify_desktop "Job folders in ~/.claude/jobs hold $(gb "$jobs") (past $jl GB): python3 ~/.claude/disk-space.py report"
   (( n_bazel && ! f_bazel )) && notify_desktop "The Bazel output root holds $(gb "$bazel") (past $bl GB): python3 ~/.claude/disk-space.py bazel"
-  (( n_idle && ! f_idle )) && notify_desktop "$idn idle session transcripts hold $(gb "$idb"): python3 ~/.claude/disk-space.py transcripts"
+  if (( idn == 1 )); then k="1 idle session transcript holds"; else k="$idn idle session transcripts hold"; fi
+  (( n_idle && ! f_idle )) && notify_desktop "$k $(gb "$idb"): python3 ~/.claude/disk-space.py transcripts"
   new=$(printf 'jobs=%s\nbazel=%s\nidle=%s' "$n_jobs" "$n_bazel" "$n_idle")
   if [[ ! -f "$flags" || "$(< "$flags")" != "$new" ]]; then
     printf '%s\n' "$new" > "$flags.tmp" 2>/dev/null && mv "$flags.tmp" "$flags" 2>/dev/null
